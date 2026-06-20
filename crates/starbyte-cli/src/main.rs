@@ -11,6 +11,7 @@ use starbyte_core::{
     EmulatorBuilder,
     cartridge::Cartridge,
     manifest::{AssetConfig, RuntimeConfig},
+    testing,
 };
 
 #[derive(Debug, Parser)]
@@ -57,6 +58,8 @@ struct AssetArgs {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Inspect or validate external compliance corpora.
+    Compliance(ComplianceArgs),
     /// Inspect ROM metadata without running emulation.
     Inspect { rom: PathBuf },
     /// Run the bootstrap emulator for a fixed number of frames.
@@ -79,6 +82,69 @@ struct RunArgs {
     save_state: Option<PathBuf>,
 }
 
+#[derive(Debug, Args)]
+struct ComplianceArgs {
+    #[command(subcommand)]
+    command: ComplianceCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ComplianceCommand {
+    /// Count files and vectors in a compliance suite directory.
+    Summary {
+        #[arg(value_enum)]
+        suite: ComplianceSuite,
+        dir: PathBuf,
+    },
+    /// Parse a single opcode file and report whether the format is accepted.
+    VerifyFormat {
+        #[arg(value_enum)]
+        suite: ComplianceSuite,
+        dir: PathBuf,
+        #[arg(long)]
+        opcode: String,
+        #[arg(long)]
+        mode: Option<Cpu65816ModeArg>,
+    },
+    /// Execute one opcode file against the current in-tree core implementation.
+    RunCurrent {
+        #[arg(value_enum)]
+        suite: ComplianceSuite,
+        dir: PathBuf,
+        #[arg(long)]
+        opcode: String,
+        #[arg(long)]
+        mode: Option<Cpu65816ModeArg>,
+        #[arg(long, default_value_t = 8)]
+        max_failures: usize,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ComplianceSuite {
+    #[value(name = "cpu-65816", alias = "cpu65816")]
+    Cpu65816,
+    #[value(name = "spc700")]
+    Spc700,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum Cpu65816ModeArg {
+    #[value(name = "emulation")]
+    Emulation,
+    #[value(name = "native")]
+    Native,
+}
+
+impl From<Cpu65816ModeArg> for testing::cpu_65816::Mode {
+    fn from(value: Cpu65816ModeArg) -> Self {
+        match value {
+            Cpu65816ModeArg::Emulation => Self::Emulation,
+            Cpu65816ModeArg::Native => Self::Native,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum ConfigFormat {
     Toml,
@@ -96,6 +162,7 @@ fn main() -> Result<()> {
     };
 
     match cli.command {
+        Command::Compliance(args) => run_compliance(args),
         Command::Inspect { rom } => inspect_rom(rom),
         Command::Run(args) => run_rom(args, assets),
         Command::PrintConfig { format } => print_config(format),
@@ -125,7 +192,7 @@ fn default_filter(verbose: u8) -> String {
     }
 }
 
-fn level_from_verbosity(verbose: u8) -> Level {
+const fn level_from_verbosity(verbose: u8) -> Level {
     match verbose {
         0 => Level::INFO,
         1 => Level::DEBUG,
@@ -148,6 +215,89 @@ fn inspect_rom(path: PathBuf) -> Result<()> {
         "RAM size (declared): {} bytes",
         cartridge.header().ram_size_bytes()
     );
+    Ok(())
+}
+
+fn run_compliance(args: ComplianceArgs) -> Result<()> {
+    match args.command {
+        ComplianceCommand::Summary { suite, dir } => match suite {
+            ComplianceSuite::Cpu65816 => {
+                let summary = testing::cpu_65816::summarize(&dir)?;
+                println!("Suite: {}", summary.suite_name);
+                println!("Files: {}", summary.file_count);
+                println!("Vectors: {}", summary.vector_count);
+            }
+            ComplianceSuite::Spc700 => {
+                let summary = testing::spc700::summarize(&dir)?;
+                println!("Suite: {}", summary.suite_name);
+                println!("Files: {}", summary.file_count);
+                println!("Vectors: {}", summary.vector_count);
+            }
+        },
+        ComplianceCommand::VerifyFormat {
+            suite,
+            dir,
+            opcode,
+            mode,
+        } => {
+            let opcode = parse_hex_opcode(&opcode)?;
+            match suite {
+                ComplianceSuite::Cpu65816 => {
+                    let mode = mode.unwrap_or(Cpu65816ModeArg::Native).into();
+                    let vectors = testing::cpu_65816::load_opcode_file(&dir, opcode, mode)?;
+                    println!(
+                        "Verified 65816 opcode 0x{opcode:02X} in {:?} mode: {} vector(s)",
+                        mode,
+                        vectors.len()
+                    );
+                }
+                ComplianceSuite::Spc700 => {
+                    let vectors = testing::spc700::load_opcode_file(&dir, opcode)?;
+                    println!(
+                        "Verified SPC700 opcode 0x{opcode:02X}: {} vector(s)",
+                        vectors.len()
+                    );
+                }
+            }
+        }
+        ComplianceCommand::RunCurrent {
+            suite,
+            dir,
+            opcode,
+            mode,
+            max_failures,
+        } => {
+            let opcode = parse_hex_opcode(&opcode)?;
+            match suite {
+                ComplianceSuite::Cpu65816 => {
+                    let mode = mode.unwrap_or(Cpu65816ModeArg::Native).into();
+                    let vectors = testing::cpu_65816::load_opcode_file(&dir, opcode, mode)?;
+                    let summary = testing::cpu_65816::run_with_current_core(&vectors, max_failures);
+                    print_run_summary(&summary);
+                    if summary.failed > 0 {
+                        anyhow::bail!(
+                            "65816 compliance failures: {} of {} vectors failed",
+                            summary.failed,
+                            summary.total
+                        );
+                    }
+                }
+                ComplianceSuite::Spc700 => {
+                    let vectors = testing::spc700::load_opcode_file(&dir, opcode)?;
+                    let summary = testing::spc700::run_with_current_core(&vectors, max_failures);
+                    print_run_summary(&summary);
+                    if summary.failed > 0 {
+                        anyhow::bail!(
+                            "SPC700 compliance failures: {} of {} vectors failed",
+                            summary.failed,
+                            summary.total
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -186,4 +336,26 @@ fn print_config(format: ConfigFormat) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn parse_hex_opcode(input: &str) -> Result<u8> {
+    let trimmed = input
+        .strip_prefix("0x")
+        .or_else(|| input.strip_prefix("0X"))
+        .unwrap_or(input);
+    u8::from_str_radix(trimmed, 16)
+        .with_context(|| format!("invalid opcode `{input}`; expected hex such as 00 or 0xA9"))
+}
+
+fn print_run_summary(summary: &testing::RunSummary) {
+    println!("Suite: {}", summary.suite_name);
+    println!("Total: {}", summary.total);
+    println!("Passed: {}", summary.passed);
+    println!("Failed: {}", summary.failed);
+    for failure in &summary.failures {
+        println!("Failure: {}", failure.label);
+        for reason in &failure.reasons {
+            println!("  - {}", reason);
+        }
+    }
 }

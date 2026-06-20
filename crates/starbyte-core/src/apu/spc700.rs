@@ -37,4 +37,21 @@ impl Spc700 {
         self.pc = self.pc.wrapping_add(1);
         self.cycles = self.cycles.saturating_add(1);
     }
+
+    /// Load a register snapshot and reset cycle accounting for compliance work.
+    pub fn load_state(&mut self, pc: u16, a: u8, x: u8, y: u8, sp: u8, psw: u8) {
+        self.pc = pc;
+        self.a = a;
+        self.x = x;
+        self.y = y;
+        self.sp = sp;
+        self.psw = psw;
+        self.cycles = 0;
+    }
+
+    /// Total executed cycles in the placeholder model.
+    #[must_use]
+    pub const fn cycles(&self) -> u64 {
+        self.cycles
+    }
 }

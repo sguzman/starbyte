@@ -8,26 +8,23 @@ use tracing::trace;
 use crate::bus::Address;
 
 /// Minimal bootstrap CPU core state.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Cpu65816 {
     /// Architectural register file.
     pub registers: registers::Registers,
     cycles: u64,
 }
 
-impl Default for Cpu65816 {
-    fn default() -> Self {
-        Self {
-            registers: registers::Registers::default(),
-            cycles: 0,
-        }
-    }
-}
-
 impl Cpu65816 {
     /// Reset to a known power-on-like placeholder state.
     pub fn reset(&mut self) {
         self.registers = registers::Registers::default();
+        self.cycles = 0;
+    }
+
+    /// Load a register snapshot and reset cycle accounting for compliance work.
+    pub fn load_registers(&mut self, registers: registers::Registers) {
+        self.registers = registers;
         self.cycles = 0;
     }
 

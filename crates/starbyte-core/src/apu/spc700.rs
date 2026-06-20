@@ -76,6 +76,7 @@ impl Spc700 {
             0x3F => self.execute_call_abs(&mut read, &mut write, &mut trace),
             0x4D => self.execute_push_x(&mut read, &mut write, &mut trace),
             0x50 => self.execute_bvc(&mut read, &mut trace),
+            0x5C => self.execute_lsr_a(&mut read, &mut trace),
             0x5D => self.execute_mov_x_a(&mut read, &mut trace),
             0x5F => self.execute_jmp_abs(&mut read, &mut trace),
             0xE8 => self.execute_mov_a_imm(&mut read, &mut trace),
@@ -83,13 +84,16 @@ impl Spc700 {
             0x70 => self.execute_bvs(&mut read, &mut trace),
             0x6D => self.execute_push_y(&mut read, &mut write, &mut trace),
             0x6F => self.execute_ret(&mut read, &mut trace),
+            0x7C => self.execute_ror_a(&mut read, &mut trace),
             0x7D => self.execute_mov_a_x(&mut read, &mut trace),
             0xA0 => self.execute_ei(&mut read, &mut trace),
             0x8E => self.execute_pop_psw(&mut read, &mut trace),
             0x90 => self.execute_bcc(&mut read, &mut trace),
             0x9C => self.execute_dec_a(&mut read, &mut trace),
+            0x9D => self.execute_mov_x_sp(&mut read, &mut trace),
             0xB0 => self.execute_bcs(&mut read, &mut trace),
             0xBC => self.execute_inc_a(&mut read, &mut trace),
+            0xBD => self.execute_mov_sp_x(&mut read, &mut trace),
             0xC0 => self.execute_di(&mut read, &mut trace),
             0xCD => self.execute_mov_x_imm(&mut read, &mut trace),
             0xCE => self.execute_pop_x(&mut read, &mut trace),
@@ -280,6 +284,54 @@ impl Spc700 {
         self.push_read_trace(read, trace, self.pc.wrapping_add(1));
         self.y = self.a;
         self.update_nz_flags(self.y);
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_mov_x_sp<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.x = self.sp;
+        self.update_nz_flags(self.x);
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_mov_sp_x<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.sp = self.x;
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_lsr_a<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let carry = self.a & 0x01 != 0;
+        self.a >>= 1;
+        self.psw = (self.psw & !0x01) | u8::from(carry);
+        self.update_nz_flags(self.a);
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_ror_a<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let carry_in = (self.psw & 0x01) != 0;
+        let carry_out = self.a & 0x01 != 0;
+        self.a = (self.a >> 1) | (u8::from(carry_in) << 7);
+        self.psw = (self.psw & !0x01) | u8::from(carry_out);
+        self.update_nz_flags(self.a);
         self.pc = self.pc.wrapping_add(1);
         Ok(())
     }

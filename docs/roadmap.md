@@ -55,7 +55,7 @@ Starbyte is being bootstrapped as a correctness-first, CLI-first SNES emulator w
 ### SPC700 compliance harness and APU bootstrap
 
 - [x] Mirror the 65816 harness strategy for SPC700.
-- [x] Build an initial passing opcode base covering immediate loads, flag control, branches, calls/jumps, stack pushes/pops, returns, and basic register inc/dec behavior.
+- [x] Build an initial passing opcode base covering immediate loads, register transfers, flag control, branches, calls/jumps, stack pushes/pops, returns, and basic register inc/dec behavior.
 - [ ] Establish APU-side timing and communication boundaries before audio polish.
 - [x] Require user-supplied firmware only; do not ship blobs.
 

@@ -62,14 +62,22 @@ impl Spc700 {
 
         match opcode {
             0x00 => self.execute_nop(&mut read, &mut trace),
+            0x10 => self.execute_bpl(&mut read, &mut trace),
             0x20 => self.execute_clrp(&mut read, &mut trace),
+            0x30 => self.execute_bmi(&mut read, &mut trace),
+            0x50 => self.execute_bvc(&mut read, &mut trace),
             0xE8 => self.execute_mov_a_imm(&mut read, &mut trace),
             0x40 => self.execute_setp(&mut read, &mut trace),
+            0x70 => self.execute_bvs(&mut read, &mut trace),
             0xA0 => self.execute_ei(&mut read, &mut trace),
+            0x90 => self.execute_bcc(&mut read, &mut trace),
+            0xB0 => self.execute_bcs(&mut read, &mut trace),
             0xC0 => self.execute_di(&mut read, &mut trace),
             0xCD => self.execute_mov_x_imm(&mut read, &mut trace),
+            0xD0 => self.execute_bne(&mut read, &mut trace),
             0xED => self.execute_notc(&mut read, &mut trace),
             0x8D => self.execute_mov_y_imm(&mut read, &mut trace),
+            0xF0 => self.execute_beq(&mut read, &mut trace),
             0x60 => self.execute_clrc(&mut read, &mut trace),
             0x80 => self.execute_setc(&mut read, &mut trace),
             0x1D => self.execute_dec_x(&mut read, &mut trace),
@@ -119,6 +127,13 @@ impl Spc700 {
         self.psw &= !0x20;
         self.pc = self.pc.wrapping_add(1);
         Ok(())
+    }
+
+    fn execute_bpl<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.execute_branch_relative(read, trace, self.psw & 0x80 == 0)
     }
 
     fn execute_mov_a_imm<FRead>(
@@ -196,6 +211,41 @@ impl Spc700 {
         Ok(())
     }
 
+    fn execute_bmi<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.execute_branch_relative(read, trace, self.psw & 0x80 != 0)
+    }
+
+    fn execute_bvc<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.execute_branch_relative(read, trace, self.psw & 0x40 == 0)
+    }
+
+    fn execute_bvs<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.execute_branch_relative(read, trace, self.psw & 0x40 != 0)
+    }
+
+    fn execute_bcc<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.execute_branch_relative(read, trace, self.psw & 0x01 == 0)
+    }
+
+    fn execute_bcs<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.execute_branch_relative(read, trace, self.psw & 0x01 != 0)
+    }
+
     fn execute_ei<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
     where
         FRead: FnMut(u16) -> u8,
@@ -251,6 +301,20 @@ impl Spc700 {
         Ok(())
     }
 
+    fn execute_bne<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.execute_branch_relative(read, trace, self.psw & 0x02 == 0)
+    }
+
+    fn execute_beq<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.execute_branch_relative(read, trace, self.psw & 0x02 != 0)
+    }
+
     fn push_read_trace<FRead>(
         &self,
         read: &mut FRead,
@@ -277,6 +341,27 @@ impl Spc700 {
             access: AccessKind::Wait,
             cycle: trace.len() as u64,
         });
+    }
+
+    fn execute_branch_relative<FRead>(
+        &mut self,
+        read: &mut FRead,
+        trace: &mut Vec<BusEvent>,
+        condition: bool,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        let displacement = self.push_read_trace(read, trace, self.pc.wrapping_add(1)) as i8;
+        let next_pc = self.pc.wrapping_add(2);
+        if condition {
+            self.push_wait_trace(trace);
+            self.push_wait_trace(trace);
+            self.pc = next_pc.wrapping_add_signed(i16::from(displacement));
+        } else {
+            self.pc = next_pc;
+        }
+        Ok(())
     }
 
     fn update_nz_flags(&mut self, value: u8) {

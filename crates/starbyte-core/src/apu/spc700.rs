@@ -69,26 +69,35 @@ impl Spc700 {
             0x10 => self.execute_bpl(&mut read, &mut trace),
             0x1F => self.execute_jmp_abs_x_indirect(&mut read, &mut trace),
             0x20 => self.execute_clrp(&mut read, &mut trace),
+            0x2D => self.execute_push_a(&mut read, &mut write, &mut trace),
             0x30 => self.execute_bmi(&mut read, &mut trace),
             0x3F => self.execute_call_abs(&mut read, &mut write, &mut trace),
+            0x4D => self.execute_push_x(&mut read, &mut write, &mut trace),
             0x50 => self.execute_bvc(&mut read, &mut trace),
             0x5F => self.execute_jmp_abs(&mut read, &mut trace),
             0xE8 => self.execute_mov_a_imm(&mut read, &mut trace),
             0x40 => self.execute_setp(&mut read, &mut trace),
             0x70 => self.execute_bvs(&mut read, &mut trace),
+            0x6D => self.execute_push_y(&mut read, &mut write, &mut trace),
+            0x6F => self.execute_ret(&mut read, &mut trace),
             0xA0 => self.execute_ei(&mut read, &mut trace),
+            0x8E => self.execute_pop_psw(&mut read, &mut trace),
             0x90 => self.execute_bcc(&mut read, &mut trace),
             0xB0 => self.execute_bcs(&mut read, &mut trace),
             0xC0 => self.execute_di(&mut read, &mut trace),
             0xCD => self.execute_mov_x_imm(&mut read, &mut trace),
+            0xCE => self.execute_pop_x(&mut read, &mut trace),
             0xD0 => self.execute_bne(&mut read, &mut trace),
             0xED => self.execute_notc(&mut read, &mut trace),
+            0xEE => self.execute_pop_y(&mut read, &mut trace),
             0x8D => self.execute_mov_y_imm(&mut read, &mut trace),
             0xF0 => self.execute_beq(&mut read, &mut trace),
+            0x7F => self.execute_ret1(&mut read, &mut trace),
             0x60 => self.execute_clrc(&mut read, &mut trace),
             0x80 => self.execute_setc(&mut read, &mut trace),
             0x1D => self.execute_dec_x(&mut read, &mut trace),
             0x3D => self.execute_inc_x(&mut read, &mut trace),
+            0xAE => self.execute_pop_a(&mut read, &mut trace),
             _ => Err(Error::UnsupportedOpcode {
                 cpu: "SPC700",
                 opcode,
@@ -298,6 +307,82 @@ impl Spc700 {
         self.execute_branch_relative(read, trace, self.psw & 0x01 != 0)
     }
 
+    fn execute_push_a<FRead, FWrite>(
+        &mut self,
+        read: &mut FRead,
+        write: &mut FWrite,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+        FWrite: FnMut(u16, u8),
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.push_stack(write, trace, self.a);
+        self.push_wait_trace(trace);
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_push_x<FRead, FWrite>(
+        &mut self,
+        read: &mut FRead,
+        write: &mut FWrite,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+        FWrite: FnMut(u16, u8),
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.push_stack(write, trace, self.x);
+        self.push_wait_trace(trace);
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_push_y<FRead, FWrite>(
+        &mut self,
+        read: &mut FRead,
+        write: &mut FWrite,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+        FWrite: FnMut(u16, u8),
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.push_stack(write, trace, self.y);
+        self.push_wait_trace(trace);
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_ret<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.push_wait_trace(trace);
+        let low = self.pop_stack(read, trace);
+        let high = self.pop_stack(read, trace);
+        self.pc = u16::from_le_bytes([low, high]);
+        Ok(())
+    }
+
+    fn execute_ret1<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.push_wait_trace(trace);
+        self.psw = self.pop_stack(read, trace);
+        let low = self.pop_stack(read, trace);
+        let high = self.pop_stack(read, trace);
+        self.pc = u16::from_le_bytes([low, high]);
+        Ok(())
+    }
+
     fn execute_ei<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
     where
         FRead: FnMut(u16) -> u8,
@@ -316,6 +401,50 @@ impl Spc700 {
         self.push_read_trace(read, trace, self.pc.wrapping_add(1));
         self.push_wait_trace(trace);
         self.psw &= !0x04;
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_pop_psw<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.push_wait_trace(trace);
+        self.psw = self.pop_stack(read, trace);
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_pop_a<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.push_wait_trace(trace);
+        self.a = self.pop_stack(read, trace);
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_pop_x<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.push_wait_trace(trace);
+        self.x = self.pop_stack(read, trace);
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_pop_y<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.push_wait_trace(trace);
+        self.y = self.pop_stack(read, trace);
         self.pc = self.pc.wrapping_add(1);
         Ok(())
     }
@@ -454,6 +583,15 @@ impl Spc700 {
         let address = 0x0100 | u16::from(self.sp);
         self.push_write_trace(write, trace, address, value);
         self.sp = self.sp.wrapping_sub(1);
+    }
+
+    fn pop_stack<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> u8
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.sp = self.sp.wrapping_add(1);
+        let address = 0x0100 | u16::from(self.sp);
+        self.push_read_trace(read, trace, address)
     }
 
     fn execute_branch_relative<FRead>(

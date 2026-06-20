@@ -1,5 +1,6 @@
 //! 65816 compliance vector loading.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -274,8 +275,12 @@ impl RawVector {
 }
 
 fn evaluate_vector(cpu: &mut Cpu65816, vector: &TestVector) -> Vec<String> {
+    let mut bus = SparseBus::new(&vector.initial.ram);
     cpu.load_registers(vector.initial.registers.clone());
-    cpu.step();
+    let trace = match cpu.step_with_bus(&mut bus) {
+        Ok(trace) => trace,
+        Err(error) => return vec![error.to_string()],
+    };
 
     let mut reasons = Vec::new();
 
@@ -286,12 +291,42 @@ fn evaluate_vector(cpu: &mut Cpu65816, vector: &TestVector) -> Vec<String> {
         ));
     }
 
-    let expected_cycles = vector.cycles.len() as u64;
-    if cpu.cycles() != expected_cycles {
+    for expected in &vector.final_state.ram {
+        let actual = bus.read_byte(expected.address);
+        if actual != expected.value {
+            reasons.push(format!(
+                "RAM mismatch at 0x{:06X}: expected {:02X}, saw {:02X}",
+                expected.address, expected.value, actual
+            ));
+        }
+    }
+
+    if trace.len() != vector.cycles.len() {
         reasons.push(format!(
-            "cycle mismatch: expected {expected_cycles}, saw {}",
-            cpu.cycles()
+            "cycle mismatch: expected {}, saw {}",
+            vector.cycles.len(),
+            trace.len()
         ));
+    } else {
+        for (actual, expected) in trace.iter().zip(&vector.cycles) {
+            if actual.address != expected.address || actual.access != expected.access {
+                reasons.push(format!(
+                    "trace mismatch at cycle {}: expected {:?} @ 0x{:06X}, saw {:?} @ 0x{:06X}",
+                    actual.cycle, expected.access, expected.address, actual.access, actual.address
+                ));
+                break;
+            }
+
+            if let Some(value) = expected.value {
+                if actual.value != value {
+                    reasons.push(format!(
+                        "trace value mismatch at cycle {}: expected {:02X}, saw {:02X}",
+                        actual.cycle, value, actual.value
+                    ));
+                    break;
+                }
+            }
+        }
     }
 
     reasons
@@ -307,6 +342,35 @@ fn vector_label(vector: &TestVector) -> String {
     }
 }
 
+#[derive(Debug, Default)]
+struct SparseBus {
+    bytes: HashMap<Address, u8>,
+}
+
+impl SparseBus {
+    fn new(initial: &[MemoryByte]) -> Self {
+        let mut bytes = HashMap::with_capacity(initial.len());
+        for byte in initial {
+            bytes.insert(byte.address, byte.value);
+        }
+        Self { bytes }
+    }
+
+    fn read_byte(&self, address: Address) -> u8 {
+        self.bytes.get(&address).copied().unwrap_or(0)
+    }
+}
+
+impl crate::bus::Bus for SparseBus {
+    fn read(&mut self, address: Address) -> u8 {
+        self.read_byte(address)
+    }
+
+    fn write(&mut self, address: Address, value: u8) {
+        self.bytes.insert(address, value);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -317,8 +381,8 @@ mod tests {
     use crate::cpu_65816::registers::Registers;
 
     use super::{
-        CpuState, CycleExpectation, Mode, TestVector, discover_suite_files, load_opcode_file,
-        run_with_current_core, summarize,
+        CpuState, CycleExpectation, MemoryByte, Mode, TestVector, discover_suite_files,
+        load_opcode_file, run_with_current_core, summarize,
     };
 
     #[test]
@@ -369,7 +433,10 @@ mod tests {
                     pbr: 0,
                     ..Registers::default()
                 },
-                ram: Vec::new(),
+                ram: vec![MemoryByte {
+                    address: 0x1234,
+                    value: 0xEA,
+                }],
             },
             final_state: CpuState {
                 registers: Registers {
@@ -377,14 +444,25 @@ mod tests {
                     pbr: 0,
                     ..Registers::default()
                 },
-                ram: Vec::new(),
+                ram: vec![MemoryByte {
+                    address: 0x1234,
+                    value: 0xEA,
+                }],
             },
-            cycles: vec![CycleExpectation {
-                address: 0x1234,
-                value: Some(0xEA),
-                access: AccessKind::Read,
-                status: "pcrr".to_owned(),
-            }],
+            cycles: vec![
+                CycleExpectation {
+                    address: 0x1234,
+                    value: Some(0xEA),
+                    access: AccessKind::Read,
+                    status: "pcrr".to_owned(),
+                },
+                CycleExpectation {
+                    address: 0x1235,
+                    value: None,
+                    access: AccessKind::Read,
+                    status: "pcrr".to_owned(),
+                },
+            ],
         };
 
         let summary = run_with_current_core(&[vector], 4);

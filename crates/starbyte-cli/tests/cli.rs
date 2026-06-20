@@ -65,9 +65,9 @@ fn compliance_run_current_passes_for_matching_synthetic_65816_vector() {
         dir.path().join("ea.n.json"),
         r#"[{
           "name":"placeholder pass",
-          "initial":{"a":0,"x":0,"y":0,"s":0,"d":0,"pc":4660,"pbr":0,"dbr":0,"p":0,"e":0,"ram":[]},
-          "final":{"a":0,"x":0,"y":0,"s":0,"d":0,"pc":4661,"pbr":0,"dbr":0,"p":0,"e":0,"ram":[]},
-          "cycles":[[4660,234,"pcrr"]]
+          "initial":{"a":0,"x":0,"y":0,"s":0,"d":0,"pc":4660,"pbr":0,"dbr":0,"p":0,"e":0,"ram":[[4660,234]]},
+          "final":{"a":0,"x":0,"y":0,"s":0,"d":0,"pc":4661,"pbr":0,"dbr":0,"p":0,"e":0,"ram":[[4660,234]]},
+          "cycles":[[4660,234,"pcrr"],[4661,null,"pcrr"]]
         }]"#,
     )
     .unwrap();

@@ -31,6 +31,14 @@ pub enum Error {
     /// Requested functionality is intentionally deferred.
     #[error("feature not implemented yet: {0}")]
     Unimplemented(&'static str),
+    /// CPU opcode is not implemented by the current core.
+    #[error("unsupported opcode for {cpu}: 0x{opcode:02X}")]
+    UnsupportedOpcode {
+        /// CPU identifier.
+        cpu: &'static str,
+        /// Opcode byte.
+        opcode: u8,
+    },
     /// State or data serialization failure.
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),

@@ -1,5 +1,7 @@
 //! SPC700 compliance vector loading.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -235,6 +237,7 @@ impl RawVector {
 }
 
 fn evaluate_vector(cpu: &mut Spc700, vector: &TestVector) -> Vec<String> {
+    let memory = RefCell::new(SparseMemory::new(&vector.initial.ram));
     cpu.load_state(
         vector.initial.pc,
         vector.initial.a,
@@ -243,7 +246,15 @@ fn evaluate_vector(cpu: &mut Spc700, vector: &TestVector) -> Vec<String> {
         vector.initial.sp,
         vector.initial.psw,
     );
-    cpu.step();
+    let trace = match cpu.step_with_memory(
+        |address| memory.borrow().read(address),
+        |address, value| {
+            memory.borrow_mut().write(address, value);
+        },
+    ) {
+        Ok(trace) => trace,
+        Err(error) => return vec![error.to_string()],
+    };
 
     let mut reasons = Vec::new();
 
@@ -265,12 +276,42 @@ fn evaluate_vector(cpu: &mut Spc700, vector: &TestVector) -> Vec<String> {
         ));
     }
 
-    let expected_cycles = vector.cycles.len() as u64;
-    if cpu.cycles() != expected_cycles {
+    for expected in &vector.final_state.ram {
+        let actual = memory.borrow().read(expected.address);
+        if actual != expected.value {
+            reasons.push(format!(
+                "RAM mismatch at 0x{:04X}: expected {:02X}, saw {:02X}",
+                expected.address, expected.value, actual
+            ));
+        }
+    }
+
+    if trace.len() != vector.cycles.len() {
         reasons.push(format!(
-            "cycle mismatch: expected {expected_cycles}, saw {}",
-            cpu.cycles()
+            "cycle mismatch: expected {}, saw {}",
+            vector.cycles.len(),
+            trace.len()
         ));
+    } else {
+        for (actual, expected) in trace.iter().zip(&vector.cycles) {
+            if actual.address != u32::from(expected.address) || actual.access != expected.access {
+                reasons.push(format!(
+                    "trace mismatch at cycle {}: expected {:?} @ 0x{:04X}, saw {:?} @ 0x{:04X}",
+                    actual.cycle, expected.access, expected.address, actual.access, actual.address
+                ));
+                break;
+            }
+
+            if let Some(value) = expected.value {
+                if actual.value != value {
+                    reasons.push(format!(
+                        "trace value mismatch at cycle {}: expected {:02X}, saw {:02X}",
+                        actual.cycle, value, actual.value
+                    ));
+                    break;
+                }
+            }
+        }
     }
 
     reasons
@@ -283,6 +324,29 @@ fn vector_label(vector: &TestVector) -> String {
     }
 }
 
+#[derive(Debug, Default)]
+struct SparseMemory {
+    bytes: HashMap<u16, u8>,
+}
+
+impl SparseMemory {
+    fn new(initial: &[MemoryByte]) -> Self {
+        let mut bytes = HashMap::with_capacity(initial.len());
+        for byte in initial {
+            bytes.insert(byte.address, byte.value);
+        }
+        Self { bytes }
+    }
+
+    fn read(&self, address: u16) -> u8 {
+        self.bytes.get(&address).copied().unwrap_or(0)
+    }
+
+    fn write(&mut self, address: u16, value: u8) {
+        self.bytes.insert(address, value);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -292,7 +356,7 @@ mod tests {
     use crate::bus::AccessKind;
 
     use super::{
-        CpuState, CycleExpectation, TestVector, discover_suite_files, load_opcode_file,
+        CpuState, CycleExpectation, MemoryByte, TestVector, discover_suite_files, load_opcode_file,
         run_with_current_core, summarize,
     };
 
@@ -343,7 +407,10 @@ mod tests {
                 y: 3,
                 sp: 0xFF,
                 psw: 0x12,
-                ram: Vec::new(),
+                ram: vec![MemoryByte {
+                    address: 0x1000,
+                    value: 0x00,
+                }],
             },
             final_state: CpuState {
                 pc: 0x1001,
@@ -352,13 +419,23 @@ mod tests {
                 y: 3,
                 sp: 0xFF,
                 psw: 0x12,
-                ram: Vec::new(),
+                ram: vec![MemoryByte {
+                    address: 0x1000,
+                    value: 0x00,
+                }],
             },
-            cycles: vec![CycleExpectation {
-                address: 0x1000,
-                value: Some(0),
-                access: AccessKind::Read,
-            }],
+            cycles: vec![
+                CycleExpectation {
+                    address: 0x1000,
+                    value: Some(0),
+                    access: AccessKind::Read,
+                },
+                CycleExpectation {
+                    address: 0x1001,
+                    value: None,
+                    access: AccessKind::Read,
+                },
+            ],
         };
 
         let summary = run_with_current_core(&[vector], 4);

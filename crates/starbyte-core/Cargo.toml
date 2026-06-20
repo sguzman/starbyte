@@ -1,0 +1,28 @@
+[package]
+name = "starbyte-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "starbyte_core"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+thiserror = "2.0.18"
+toml = "1.1.2"
+tracing = "0.1.44"
+
+[dev-dependencies]
+criterion = "0.7.0"
+
+[[bench]]
+name = "core_bootstrap"
+harness = false
+
+[lints]
+workspace = true

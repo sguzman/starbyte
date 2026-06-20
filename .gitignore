@@ -2,3 +2,9 @@
 tmp
 .cache
 logs
+captures
+artifacts
+*.srm
+*.state.json
+*.trace.json
+*.spc700.rom

@@ -4,9 +4,9 @@ Starbyte is being bootstrapped as a correctness-first, CLI-first SNES emulator w
 
 ## Milestones
 
-- [ ] Workspace and developer foundation
+- [x] Workspace and developer foundation
 - [ ] Cartridge loading and ROM mapping
-- [ ] 65816 compliance harness
+- [x] 65816 compliance harness
 - [ ] 65816 execution core
 - [ ] SPC700 compliance harness and APU bootstrap
 - [ ] Main SNES memory map and interrupt/timing model
@@ -22,40 +22,42 @@ Starbyte is being bootstrapped as a correctness-first, CLI-first SNES emulator w
 - [ ] Additional frontends and advanced user features
 - [ ] Coprocessor support
 - [ ] Nice-to-have features such as filters, shaders, rewind, movie recording
-- [ ] Explicit non-feature for now: debugger tooling
+- [x] Explicit non-feature for now: debugger tooling
 
 ## Milestone Notes
 
 ### Workspace and developer foundation
 
-- [ ] Maintain a Cargo workspace with `starbyte-core` and `starbyte-cli`.
-- [ ] Keep frontend-facing traits in the core so CLI and future GUIs share the same host boundary.
-- [ ] Standardize structured logging with subsystem-oriented tracing filters.
-- [ ] Add linting, tests, integration tests, and benchmark harnesses early.
+- [x] Maintain a Cargo workspace with `starbyte-core` and `starbyte-cli`.
+- [x] Keep frontend-facing traits in the core so CLI and future GUIs share the same host boundary.
+- [x] Standardize structured logging with subsystem-oriented tracing filters.
+- [x] Add linting, tests, integration tests, and benchmark harnesses early.
 
 ### Cartridge loading and ROM mapping
 
-- [ ] Parse cartridge headers and normalize core metadata.
-- [ ] Detect LoROM and HiROM cleanly and surface actionable diagnostics for invalid images.
+- [x] Parse cartridge headers and normalize core metadata.
+- [x] Detect LoROM and HiROM cleanly and surface actionable diagnostics for invalid images.
 - [ ] Add save RAM plumbing and path management in the CLI layer.
 
 ### 65816 compliance harness
 
-- [ ] Build a local harness interface for single-step JSON vectors.
-- [ ] Validate registers, memory deltas, cycle counts, and bus traces.
-- [ ] Make the harness automation-friendly for CI and local iteration.
+- [x] Build a local harness interface for single-step JSON vectors.
+- [x] Validate registers, memory deltas, cycle counts, and bus traces.
+- [x] Make the harness automation-friendly for CI and local iteration.
 
 ### 65816 execution core
 
+- [x] Establish an initial passing opcode set for status, transfer, and stack-adjacent control behavior in native-mode compliance vectors.
 - [ ] Implement decode and execution with correctness ahead of optimization.
 - [ ] Track bus-visible behavior tightly enough to support compliance testing.
 - [ ] Iterate until the synthetic corpus reaches a trustworthy pass rate.
 
 ### SPC700 compliance harness and APU bootstrap
 
-- [ ] Mirror the 65816 harness strategy for SPC700.
+- [x] Mirror the 65816 harness strategy for SPC700.
+- [x] Build an initial passing opcode base covering immediate loads, flag control, branches, calls/jumps, stack pushes/pops, returns, and basic register inc/dec behavior.
 - [ ] Establish APU-side timing and communication boundaries before audio polish.
-- [ ] Require user-supplied firmware only; do not ship blobs.
+- [x] Require user-supplied firmware only; do not ship blobs.
 
 ### Main SNES memory map and interrupt/timing model
 
@@ -127,4 +129,4 @@ Starbyte is being bootstrapped as a correctness-first, CLI-first SNES emulator w
 
 ### Explicit non-feature for now: debugger tooling
 
-- [ ] Do not spend roadmap capacity on debugger UI or advanced introspection workflows during bootstrap.
+- [x] Do not spend roadmap capacity on debugger UI or advanced introspection workflows during bootstrap.

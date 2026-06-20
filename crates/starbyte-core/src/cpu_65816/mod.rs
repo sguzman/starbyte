@@ -58,10 +58,13 @@ impl Cpu65816 {
             0x38 => self.execute_sec(bus, &mut trace),
             0x58 => self.execute_cli(bus, &mut trace),
             0x78 => self.execute_sei(bus, &mut trace),
+            0xA8 => self.execute_tay(bus, &mut trace),
             0x8A => self.execute_txa(bus, &mut trace),
+            0xAA => self.execute_tax(bus, &mut trace),
             0x98 => self.execute_tya(bus, &mut trace),
             0x9A => self.execute_txs(bus, &mut trace),
             0xB8 => self.execute_clv(bus, &mut trace),
+            0xBA => self.execute_tsx(bus, &mut trace),
             0xC2 => self.execute_rep(bus, &mut trace),
             0xD8 => self.execute_cld(bus, &mut trace),
             0xE2 => self.execute_sep(bus, &mut trace),
@@ -122,6 +125,19 @@ impl Cpu65816 {
         Ok(())
     }
 
+    fn execute_tay<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        if self.index_registers_are_8_bit() {
+            self.registers.y = self.registers.a & 0x00FF;
+            self.update_nz_8(self.registers.y as u8);
+        } else {
+            self.registers.y = self.registers.a;
+            self.update_nz_16(self.registers.y);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
     fn execute_txa<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
         self.push_read_trace(bus, trace, self.fetch_address(1));
         if self.accumulator_is_8_bit() {
@@ -133,6 +149,19 @@ impl Cpu65816 {
         } else {
             self.registers.a = self.registers.x;
             self.update_nz_16(self.registers.a);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_tax<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        if self.index_registers_are_8_bit() {
+            self.registers.x = self.registers.a & 0x00FF;
+            self.update_nz_8(self.registers.x as u8);
+        } else {
+            self.registers.x = self.registers.a;
+            self.update_nz_16(self.registers.x);
         }
         self.registers.pc = self.registers.pc.wrapping_add(1);
         Ok(())
@@ -161,6 +190,19 @@ impl Cpu65816 {
         } else {
             self.registers.x
         };
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_tsx<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        if self.index_registers_are_8_bit() {
+            self.registers.x = self.registers.s & 0x00FF;
+            self.update_nz_8(self.registers.x as u8);
+        } else {
+            self.registers.x = self.registers.s;
+            self.update_nz_16(self.registers.x);
+        }
         self.registers.pc = self.registers.pc.wrapping_add(1);
         Ok(())
     }

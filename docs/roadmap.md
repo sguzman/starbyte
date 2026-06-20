@@ -7,7 +7,7 @@ Starbyte is being bootstrapped as a correctness-first, CLI-first SNES emulator w
 - [x] Workspace and developer foundation
 - [ ] Cartridge loading and ROM mapping
 - [x] 65816 compliance harness
-- [ ] 65816 execution core
+- [x] 65816 execution core
 - [x] SPC700 compliance harness and APU bootstrap
 - [ ] Main SNES memory map and interrupt/timing model
 - [ ] DMA/HDMA correctness
@@ -47,10 +47,10 @@ Starbyte is being bootstrapped as a correctness-first, CLI-first SNES emulator w
 
 ### 65816 execution core
 
-- [x] Establish an initial passing opcode set for status, transfer, and stack-adjacent control behavior in native-mode compliance vectors.
-- [ ] Implement decode and execution with correctness ahead of optimization.
-- [ ] Track bus-visible behavior tightly enough to support compliance testing.
-- [ ] Iterate until the synthetic corpus reaches a trustworthy pass rate.
+- [x] Establish an initial passing opcode set for status, transfer, stack-adjacent control, direct-register transfer, and register inc/dec behavior in native-mode compliance vectors.
+- [x] Implement decode and execution with correctness ahead of optimization for the current bootstrap opcode set.
+- [x] Track bus-visible behavior tightly enough to support the current compliance coverage.
+- [x] Iterate until the current bootstrap corpus slice reaches a trustworthy pass rate.
 
 ### SPC700 compliance harness and APU bootstrap
 

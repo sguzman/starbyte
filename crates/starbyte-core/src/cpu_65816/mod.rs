@@ -54,6 +54,10 @@ impl Cpu65816 {
         match opcode {
             0xEA => self.execute_nop(bus, &mut trace),
             0x00 => self.execute_brk(bus, &mut trace),
+            0x18 => self.execute_clc(bus, &mut trace),
+            0x38 => self.execute_sec(bus, &mut trace),
+            0xC2 => self.execute_rep(bus, &mut trace),
+            0xE2 => self.execute_sep(bus, &mut trace),
             _ => Err(Error::UnsupportedOpcode {
                 cpu: "65816",
                 opcode,
@@ -77,15 +81,44 @@ impl Cpu65816 {
     }
 
     fn execute_nop<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
-        let next_address = self.program_address().wrapping_add(1);
-        let value = bus.read(next_address);
-        trace.push(BusEvent {
-            address: next_address,
-            value,
-            access: AccessKind::Read,
-            cycle: trace.len() as u64,
-        });
+        self.push_read_trace(bus, trace, self.fetch_address(1));
         self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_clc<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        self.registers.p &= !0x01;
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_sec<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        self.registers.p |= 0x01;
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_rep<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        let operand_address = self.fetch_address(1);
+        let operand = self.push_read_trace(bus, trace, operand_address);
+        self.push_read_trace(bus, trace, operand_address);
+        self.registers.p &= !operand;
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_sep<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        let operand_address = self.fetch_address(1);
+        let operand = self.push_read_trace(bus, trace, operand_address);
+        self.push_read_trace(bus, trace, operand_address);
+        self.registers.p |= operand;
+        if operand & 0x10 != 0 {
+            self.registers.x &= 0x00FF;
+            self.registers.y &= 0x00FF;
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(2);
         Ok(())
     }
 
@@ -94,7 +127,7 @@ impl Cpu65816 {
             return Err(Error::Unimplemented("65816 BRK emulation mode"));
         }
 
-        let signature_address = self.program_address().wrapping_add(1);
+        let signature_address = self.fetch_address(1);
         let signature = bus.read(signature_address);
         trace.push(BusEvent {
             address: signature_address,
@@ -146,5 +179,25 @@ impl Cpu65816 {
         });
         self.registers.s = self.registers.s.wrapping_sub(1);
         Ok(())
+    }
+
+    fn push_read_trace<B: Bus>(
+        &self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        address: Address,
+    ) -> u8 {
+        let value = bus.read(address);
+        trace.push(BusEvent {
+            address,
+            value,
+            access: AccessKind::Read,
+            cycle: trace.len() as u64,
+        });
+        value
+    }
+
+    fn fetch_address(&self, offset: u16) -> Address {
+        (u32::from(self.registers.pbr) << 16) | u32::from(self.registers.pc.wrapping_add(offset))
     }
 }

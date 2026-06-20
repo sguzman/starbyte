@@ -63,6 +63,12 @@ impl Spc700 {
         match opcode {
             0x00 => self.execute_nop(&mut read, &mut trace),
             0xE8 => self.execute_mov_a_imm(&mut read, &mut trace),
+            0xCD => self.execute_mov_x_imm(&mut read, &mut trace),
+            0x8D => self.execute_mov_y_imm(&mut read, &mut trace),
+            0x60 => self.execute_clrc(&mut read, &mut trace),
+            0x80 => self.execute_setc(&mut read, &mut trace),
+            0x1D => self.execute_dec_x(&mut read, &mut trace),
+            0x3D => self.execute_inc_x(&mut read, &mut trace),
             _ => Err(Error::UnsupportedOpcode {
                 cpu: "SPC700",
                 opcode,
@@ -95,14 +101,7 @@ impl Spc700 {
     where
         FRead: FnMut(u16) -> u8,
     {
-        let next_address = self.pc.wrapping_add(1);
-        let value = read(next_address);
-        trace.push(BusEvent {
-            address: u32::from(next_address),
-            value,
-            access: AccessKind::Read,
-            cycle: trace.len() as u64,
-        });
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
         self.pc = self.pc.wrapping_add(1);
         Ok(())
     }
@@ -115,23 +114,111 @@ impl Spc700 {
     where
         FRead: FnMut(u16) -> u8,
     {
-        let operand_address = self.pc.wrapping_add(1);
-        let operand = read(operand_address);
+        let operand = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.a = operand;
+        self.update_nz_flags(self.a);
+        self.pc = self.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_mov_x_imm<FRead>(
+        &mut self,
+        read: &mut FRead,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        let operand = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.x = operand;
+        self.update_nz_flags(self.x);
+        self.pc = self.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_mov_y_imm<FRead>(
+        &mut self,
+        read: &mut FRead,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        let operand = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.y = operand;
+        self.update_nz_flags(self.y);
+        self.pc = self.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_clrc<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.psw &= !0x01;
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_setc<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.psw |= 0x01;
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_dec_x<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.x = self.x.wrapping_sub(1);
+        self.update_nz_flags(self.x);
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_inc_x<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.x = self.x.wrapping_add(1);
+        self.update_nz_flags(self.x);
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn push_read_trace<FRead>(
+        &self,
+        read: &mut FRead,
+        trace: &mut Vec<BusEvent>,
+        address: u16,
+    ) -> u8
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        let value = read(address);
         trace.push(BusEvent {
-            address: u32::from(operand_address),
-            value: operand,
+            address: u32::from(address),
+            value,
             access: AccessKind::Read,
             cycle: trace.len() as u64,
         });
-        self.a = operand;
+        value
+    }
+
+    fn update_nz_flags(&mut self, value: u8) {
         self.psw &= !(0x80 | 0x02);
-        if self.a & 0x80 != 0 {
+        if value & 0x80 != 0 {
             self.psw |= 0x80;
         }
-        if self.a == 0 {
+        if value == 0 {
             self.psw |= 0x02;
         }
-        self.pc = self.pc.wrapping_add(2);
-        Ok(())
     }
 }

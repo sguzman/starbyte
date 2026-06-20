@@ -62,10 +62,17 @@ impl Spc700 {
 
         match opcode {
             0x00 => self.execute_nop(&mut read, &mut trace),
+            0x01 | 0x11 | 0x21 | 0x31 | 0x41 | 0x51 | 0x61 | 0x71 | 0x81 | 0x91 | 0xA1 | 0xB1
+            | 0xC1 | 0xD1 | 0xE1 | 0xF1 => {
+                self.execute_tcall(opcode, &mut read, &mut write, &mut trace)
+            }
             0x10 => self.execute_bpl(&mut read, &mut trace),
+            0x1F => self.execute_jmp_abs_x_indirect(&mut read, &mut trace),
             0x20 => self.execute_clrp(&mut read, &mut trace),
             0x30 => self.execute_bmi(&mut read, &mut trace),
+            0x3F => self.execute_call_abs(&mut read, &mut write, &mut trace),
             0x50 => self.execute_bvc(&mut read, &mut trace),
+            0x5F => self.execute_jmp_abs(&mut read, &mut trace),
             0xE8 => self.execute_mov_a_imm(&mut read, &mut trace),
             0x40 => self.execute_setp(&mut read, &mut trace),
             0x70 => self.execute_bvs(&mut read, &mut trace),
@@ -88,7 +95,6 @@ impl Spc700 {
             }),
         }?;
 
-        let _ = &mut write;
         self.cycles = trace.len() as u64;
         Ok(trace)
     }
@@ -134,6 +140,33 @@ impl Spc700 {
         FRead: FnMut(u16) -> u8,
     {
         self.execute_branch_relative(read, trace, self.psw & 0x80 == 0)
+    }
+
+    fn execute_tcall<FRead, FWrite>(
+        &mut self,
+        opcode: u8,
+        read: &mut FRead,
+        write: &mut FWrite,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+        FWrite: FnMut(u16, u8),
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.push_wait_trace(trace);
+
+        let return_pc = self.pc.wrapping_add(1);
+        self.push_stack(write, trace, (return_pc >> 8) as u8);
+        self.push_stack(write, trace, (return_pc & 0x00FF) as u8);
+
+        self.push_wait_trace(trace);
+
+        let vector_base = 0xFFDEu16.wrapping_sub(u16::from(opcode >> 4) * 2);
+        let low = self.push_read_trace(read, trace, vector_base);
+        let high = self.push_read_trace(read, trace, vector_base.wrapping_add(1));
+        self.pc = u16::from_le_bytes([low, high]);
+        Ok(())
     }
 
     fn execute_mov_a_imm<FRead>(
@@ -218,6 +251,25 @@ impl Spc700 {
         self.execute_branch_relative(read, trace, self.psw & 0x80 != 0)
     }
 
+    fn execute_jmp_abs_x_indirect<FRead>(
+        &mut self,
+        read: &mut FRead,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        let low = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let high = self.push_read_trace(read, trace, self.pc.wrapping_add(2));
+        self.push_wait_trace(trace);
+
+        let pointer = u16::from_le_bytes([low, high]).wrapping_add(u16::from(self.x));
+        let target_low = self.push_read_trace(read, trace, pointer);
+        let target_high = self.push_read_trace(read, trace, pointer.wrapping_add(1));
+        self.pc = u16::from_le_bytes([target_low, target_high]);
+        Ok(())
+    }
+
     fn execute_bvc<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
     where
         FRead: FnMut(u16) -> u8,
@@ -265,6 +317,40 @@ impl Spc700 {
         self.push_wait_trace(trace);
         self.psw &= !0x04;
         self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_call_abs<FRead, FWrite>(
+        &mut self,
+        read: &mut FRead,
+        write: &mut FWrite,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+        FWrite: FnMut(u16, u8),
+    {
+        let low = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let high = self.push_read_trace(read, trace, self.pc.wrapping_add(2));
+        self.push_wait_trace(trace);
+
+        let return_pc = self.pc.wrapping_add(3);
+        self.push_stack(write, trace, (return_pc >> 8) as u8);
+        self.push_stack(write, trace, (return_pc & 0x00FF) as u8);
+        self.push_wait_trace(trace);
+        self.push_wait_trace(trace);
+
+        self.pc = u16::from_le_bytes([low, high]);
+        Ok(())
+    }
+
+    fn execute_jmp_abs<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        let low = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let high = self.push_read_trace(read, trace, self.pc.wrapping_add(2));
+        self.pc = u16::from_le_bytes([low, high]);
         Ok(())
     }
 
@@ -341,6 +427,33 @@ impl Spc700 {
             access: AccessKind::Wait,
             cycle: trace.len() as u64,
         });
+    }
+
+    fn push_write_trace<FWrite>(
+        &self,
+        write: &mut FWrite,
+        trace: &mut Vec<BusEvent>,
+        address: u16,
+        value: u8,
+    ) where
+        FWrite: FnMut(u16, u8),
+    {
+        write(address, value);
+        trace.push(BusEvent {
+            address: u32::from(address),
+            value,
+            access: AccessKind::Write,
+            cycle: trace.len() as u64,
+        });
+    }
+
+    fn push_stack<FWrite>(&mut self, write: &mut FWrite, trace: &mut Vec<BusEvent>, value: u8)
+    where
+        FWrite: FnMut(u16, u8),
+    {
+        let address = 0x0100 | u16::from(self.sp);
+        self.push_write_trace(write, trace, address, value);
+        self.sp = self.sp.wrapping_sub(1);
     }
 
     fn execute_branch_relative<FRead>(

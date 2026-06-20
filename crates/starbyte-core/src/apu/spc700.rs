@@ -62,8 +62,13 @@ impl Spc700 {
 
         match opcode {
             0x00 => self.execute_nop(&mut read, &mut trace),
+            0x20 => self.execute_clrp(&mut read, &mut trace),
             0xE8 => self.execute_mov_a_imm(&mut read, &mut trace),
+            0x40 => self.execute_setp(&mut read, &mut trace),
+            0xA0 => self.execute_ei(&mut read, &mut trace),
+            0xC0 => self.execute_di(&mut read, &mut trace),
             0xCD => self.execute_mov_x_imm(&mut read, &mut trace),
+            0xED => self.execute_notc(&mut read, &mut trace),
             0x8D => self.execute_mov_y_imm(&mut read, &mut trace),
             0x60 => self.execute_clrc(&mut read, &mut trace),
             0x80 => self.execute_setc(&mut read, &mut trace),
@@ -102,6 +107,16 @@ impl Spc700 {
         FRead: FnMut(u16) -> u8,
     {
         self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_clrp<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.psw &= !0x20;
         self.pc = self.pc.wrapping_add(1);
         Ok(())
     }
@@ -171,6 +186,38 @@ impl Spc700 {
         Ok(())
     }
 
+    fn execute_setp<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.psw |= 0x20;
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_ei<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.push_wait_trace(trace);
+        self.psw |= 0x04;
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_di<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.push_wait_trace(trace);
+        self.psw &= !0x04;
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
     fn execute_dec_x<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
     where
         FRead: FnMut(u16) -> u8,
@@ -193,6 +240,17 @@ impl Spc700 {
         Ok(())
     }
 
+    fn execute_notc<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.push_wait_trace(trace);
+        self.psw ^= 0x01;
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
     fn push_read_trace<FRead>(
         &self,
         read: &mut FRead,
@@ -210,6 +268,15 @@ impl Spc700 {
             cycle: trace.len() as u64,
         });
         value
+    }
+
+    fn push_wait_trace(&self, trace: &mut Vec<BusEvent>) {
+        trace.push(BusEvent {
+            address: 0,
+            value: 0,
+            access: AccessKind::Wait,
+            cycle: trace.len() as u64,
+        });
     }
 
     fn update_nz_flags(&mut self, value: u8) {

@@ -56,8 +56,16 @@ impl Cpu65816 {
             0x00 => self.execute_brk(bus, &mut trace),
             0x18 => self.execute_clc(bus, &mut trace),
             0x38 => self.execute_sec(bus, &mut trace),
+            0x58 => self.execute_cli(bus, &mut trace),
+            0x78 => self.execute_sei(bus, &mut trace),
+            0x8A => self.execute_txa(bus, &mut trace),
+            0x98 => self.execute_tya(bus, &mut trace),
+            0x9A => self.execute_txs(bus, &mut trace),
+            0xB8 => self.execute_clv(bus, &mut trace),
             0xC2 => self.execute_rep(bus, &mut trace),
+            0xD8 => self.execute_cld(bus, &mut trace),
             0xE2 => self.execute_sep(bus, &mut trace),
+            0xF8 => self.execute_sed(bus, &mut trace),
             _ => Err(Error::UnsupportedOpcode {
                 cpu: "65816",
                 opcode,
@@ -100,12 +108,90 @@ impl Cpu65816 {
         Ok(())
     }
 
+    fn execute_cli<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        self.registers.p &= !0x04;
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_sei<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        self.registers.p |= 0x04;
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_txa<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        if self.accumulator_is_8_bit() {
+            self.registers.a = (self.registers.a & 0xFF00) | (self.registers.x & 0x00FF);
+            self.update_nz_8(self.registers.a as u8);
+        } else if self.index_registers_are_8_bit() {
+            self.registers.a = self.registers.x & 0x00FF;
+            self.update_nz_16(self.registers.a);
+        } else {
+            self.registers.a = self.registers.x;
+            self.update_nz_16(self.registers.a);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_tya<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        if self.accumulator_is_8_bit() {
+            self.registers.a = (self.registers.a & 0xFF00) | (self.registers.y & 0x00FF);
+            self.update_nz_8(self.registers.a as u8);
+        } else if self.index_registers_are_8_bit() {
+            self.registers.a = self.registers.y & 0x00FF;
+            self.update_nz_16(self.registers.a);
+        } else {
+            self.registers.a = self.registers.y;
+            self.update_nz_16(self.registers.a);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_txs<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        self.registers.s = if self.index_registers_are_8_bit() {
+            self.registers.x & 0x00FF
+        } else {
+            self.registers.x
+        };
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_clv<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        self.registers.p &= !0x40;
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
     fn execute_rep<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
         let operand_address = self.fetch_address(1);
         let operand = self.push_read_trace(bus, trace, operand_address);
         self.push_read_trace(bus, trace, operand_address);
         self.registers.p &= !operand;
         self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_cld<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        self.registers.p &= !0x08;
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_sed<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        self.registers.p |= 0x08;
+        self.registers.pc = self.registers.pc.wrapping_add(1);
         Ok(())
     }
 
@@ -199,5 +285,33 @@ impl Cpu65816 {
 
     fn fetch_address(&self, offset: u16) -> Address {
         (u32::from(self.registers.pbr) << 16) | u32::from(self.registers.pc.wrapping_add(offset))
+    }
+
+    fn accumulator_is_8_bit(&self) -> bool {
+        self.registers.emulation || (self.registers.p & 0x20) != 0
+    }
+
+    fn index_registers_are_8_bit(&self) -> bool {
+        self.registers.emulation || (self.registers.p & 0x10) != 0
+    }
+
+    fn update_nz_8(&mut self, value: u8) {
+        self.registers.p &= !(0x80 | 0x02);
+        if value & 0x80 != 0 {
+            self.registers.p |= 0x80;
+        }
+        if value == 0 {
+            self.registers.p |= 0x02;
+        }
+    }
+
+    fn update_nz_16(&mut self, value: u16) {
+        self.registers.p &= !(0x80 | 0x02);
+        if value & 0x8000 != 0 {
+            self.registers.p |= 0x80;
+        }
+        if value == 0 {
+            self.registers.p |= 0x02;
+        }
     }
 }

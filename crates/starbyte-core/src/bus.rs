@@ -12,6 +12,8 @@ pub enum AccessKind {
     Read,
     /// Write access.
     Write,
+    /// Idle or wait cycle with no meaningful bus transfer.
+    Wait,
 }
 
 /// A single bus event captured for correctness work.

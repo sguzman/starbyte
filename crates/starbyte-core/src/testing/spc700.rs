@@ -46,7 +46,7 @@ pub struct CpuState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CycleExpectation {
     /// Address on the bus.
-    pub address: u16,
+    pub address: Option<u16>,
     /// Optional bus value.
     pub value: Option<u8>,
     /// Access direction.
@@ -179,7 +179,7 @@ struct RawVector {
     initial: RawState,
     #[serde(rename = "final")]
     final_state: RawState,
-    cycles: Vec<(u16, Option<u8>, String)>,
+    cycles: Vec<(Option<u16>, Option<u8>, String)>,
 }
 
 impl RawState {
@@ -212,6 +212,7 @@ impl RawVector {
                 let access = match access.as_str() {
                     "read" => AccessKind::Read,
                     "write" => AccessKind::Write,
+                    "wait" => AccessKind::Wait,
                     _ => {
                         return Err(Error::InvalidRom(format!(
                             "unsupported SPC700 cycle access `{access}`"
@@ -294,12 +295,24 @@ fn evaluate_vector(cpu: &mut Spc700, vector: &TestVector) -> Vec<String> {
         ));
     } else {
         for (actual, expected) in trace.iter().zip(&vector.cycles) {
-            if actual.address != u32::from(expected.address) || actual.access != expected.access {
+            if actual.access != expected.access {
                 reasons.push(format!(
-                    "trace mismatch at cycle {}: expected {:?} @ 0x{:04X}, saw {:?} @ 0x{:04X}",
-                    actual.cycle, expected.access, expected.address, actual.access, actual.address
+                    "trace mismatch at cycle {}: expected {:?}, saw {:?}",
+                    actual.cycle, expected.access, actual.access
                 ));
                 break;
+            }
+
+            if expected.access != AccessKind::Wait {
+                if expected.address.map(u32::from) != Some(actual.address) {
+                    reasons.push(format!(
+                        "trace address mismatch at cycle {}: expected 0x{:04X}, saw 0x{:04X}",
+                        actual.cycle,
+                        expected.address.unwrap_or_default(),
+                        actual.address
+                    ));
+                    break;
+                }
             }
 
             if let Some(value) = expected.value {
@@ -426,12 +439,12 @@ mod tests {
             },
             cycles: vec![
                 CycleExpectation {
-                    address: 0x1000,
+                    address: Some(0x1000),
                     value: Some(0),
                     access: AccessKind::Read,
                 },
                 CycleExpectation {
-                    address: 0x1001,
+                    address: Some(0x1001),
                     value: None,
                     access: AccessKind::Read,
                 },

@@ -310,6 +310,7 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
         .with_context(|| format!("failed to load ROM at {}", args.rom.display()))?;
 
     let mut emulator = EmulatorBuilder::new().assets(assets).build();
+    emulator.load_apu_ipl_rom()?;
     emulator.load_rom(cartridge);
     for _ in 0..args.frames {
         emulator.run_until_frame()?;
@@ -321,7 +322,13 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
             .with_context(|| format!("failed to write save state to {}", path.display()))?;
     }
 
-    info!(frames = args.frames, "completed bootstrap run");
+    let apu_status = emulator.apu_status();
+    info!(
+        frames = args.frames,
+        apu_has_ipl_rom = apu_status.has_ipl_rom,
+        apu_spc700_steps = apu_status.spc700_steps,
+        "completed bootstrap run"
+    );
     Ok(())
 }
 

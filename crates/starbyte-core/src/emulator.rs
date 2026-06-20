@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument};
 
-use crate::apu::{AudioFrame, spc700::Spc700};
+use crate::apu::{Apu, ApuStatus, AudioFrame};
 use crate::cartridge::Cartridge;
 use crate::cpu_65816::Cpu65816;
 use crate::error::{Error, Result};
@@ -11,13 +11,15 @@ use crate::manifest::AssetConfig;
 use crate::ppu::FrameBuffer;
 use crate::timing::TimingState;
 
+const CPU_STEP_MASTER_CYCLES: u64 = 6;
+
 /// Serializable emulator state snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SaveState {
     /// CPU state.
     pub cpu: Cpu65816,
-    /// APU CPU state.
-    pub apu: Spc700,
+    /// APU boundary state.
+    pub apu: Apu,
     /// Global timing state.
     pub timing: TimingState,
 }
@@ -48,7 +50,7 @@ impl EmulatorBuilder {
         Emulator {
             cartridge: None,
             cpu: Cpu65816::default(),
-            apu: Spc700::default(),
+            apu: Apu::with_ipl_path(self.assets.spc700_ipl.clone()),
             frame_buffer: FrameBuffer::default(),
             pending_audio: AudioFrame::default(),
             timing: TimingState::default(),
@@ -62,7 +64,7 @@ impl EmulatorBuilder {
 pub struct Emulator {
     cartridge: Option<Cartridge>,
     cpu: Cpu65816,
-    apu: Spc700,
+    apu: Apu,
     frame_buffer: FrameBuffer,
     pending_audio: AudioFrame,
     timing: TimingState,
@@ -88,6 +90,7 @@ impl Emulator {
     pub fn reset(&mut self) {
         self.cpu.reset();
         self.apu.reset();
+        self.apu.set_ipl_path(self.assets.spc700_ipl.clone());
         self.timing = TimingState::default();
         self.pending_audio = AudioFrame::default();
         self.frame_buffer = FrameBuffer::default();
@@ -115,7 +118,7 @@ impl Emulator {
         }
 
         self.cpu.step();
-        self.apu.step();
+        self.apu.step_master_cycles(CPU_STEP_MASTER_CYCLES);
         self.timing.tick_cpu_step();
         Ok(())
     }
@@ -163,6 +166,17 @@ impl Emulator {
     #[must_use]
     pub const fn assets(&self) -> &AssetConfig {
         &self.assets
+    }
+
+    /// Return a high-level APU bootstrap status snapshot.
+    #[must_use]
+    pub fn apu_status(&self) -> ApuStatus {
+        self.apu.status()
+    }
+
+    /// Load the configured user-supplied SPC700 IPL ROM if present.
+    pub fn load_apu_ipl_rom(&mut self) -> Result<bool> {
+        self.apu.load_configured_ipl_rom()
     }
 
     /// Return the loaded cartridge if any.

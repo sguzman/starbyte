@@ -28,6 +28,14 @@ pub enum Error {
         /// Firmware display name.
         name: &'static str,
     },
+    /// A user-supplied firmware blob failed validation.
+    #[error("invalid firmware for {name}: {details}")]
+    InvalidFirmware {
+        /// Firmware display name.
+        name: &'static str,
+        /// Validation details.
+        details: String,
+    },
     /// Requested functionality is intentionally deferred.
     #[error("feature not implemented yet: {0}")]
     Unimplemented(&'static str),

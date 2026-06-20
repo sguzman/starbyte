@@ -14,5 +14,6 @@ pub mod ppu;
 pub mod testing;
 pub mod timing;
 
+pub use crate::apu::{Apu, ApuStatus, AudioFrame, SPC700_IPL_ROM_LEN};
 pub use crate::emulator::{Emulator, EmulatorBuilder};
 pub use crate::error::{Error, Result};

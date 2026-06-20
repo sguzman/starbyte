@@ -8,7 +8,7 @@ Starbyte is being bootstrapped as a correctness-first, CLI-first SNES emulator w
 - [ ] Cartridge loading and ROM mapping
 - [x] 65816 compliance harness
 - [ ] 65816 execution core
-- [ ] SPC700 compliance harness and APU bootstrap
+- [x] SPC700 compliance harness and APU bootstrap
 - [ ] Main SNES memory map and interrupt/timing model
 - [ ] DMA/HDMA correctness
 - [ ] PPU register model and frame generation
@@ -56,7 +56,8 @@ Starbyte is being bootstrapped as a correctness-first, CLI-first SNES emulator w
 
 - [x] Mirror the 65816 harness strategy for SPC700.
 - [x] Build an initial passing opcode base covering immediate loads, register transfers including stack-pointer moves, flag control, branches, calls/jumps, stack pushes/pops, returns, accumulator shifts/rotates, and basic register inc/dec behavior.
-- [ ] Establish APU-side timing and communication boundaries before audio polish.
+- [x] Establish APU-side timing and communication boundaries before audio polish.
+- [x] Wrap the SPC700 core in an explicit APU bootstrap boundary with user-supplied IPL ROM loading, CPU/APU communication ports, and timing-facing step APIs.
 - [x] Require user-supplied firmware only; do not ship blobs.
 
 ### Main SNES memory map and interrupt/timing model

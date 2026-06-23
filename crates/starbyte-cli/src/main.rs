@@ -652,14 +652,46 @@ fn sanitize_file_stem(input: &str) -> String {
             }
         })
         .collect::<String>()
-        .trim_matches('_')
+        .trim_matches(|ch| ch == '_' || ch == '.' || ch == ' ')
         .to_owned();
 
     if stem.is_empty() {
         stem = "starbyte-save".to_owned();
     }
 
+    if is_windows_reserved_stem(&stem) {
+        stem.push_str("_rom");
+    }
+
     stem
+}
+
+fn is_windows_reserved_stem(stem: &str) -> bool {
+    matches!(
+        stem.to_ascii_uppercase().as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
 }
 
 fn print_config(format: ConfigFormat) -> Result<()> {
@@ -694,5 +726,47 @@ fn print_run_summary(summary: &testing::RunSummary) {
         for reason in &failure.reasons {
             println!("  - {}", reason);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use starbyte_core::cartridge::Cartridge;
+
+    use super::{resolve_state_path, sanitize_file_stem};
+
+    fn test_cartridge() -> Cartridge {
+        let mut rom = vec![0_u8; 0x10000];
+        let base = 0x7FC0;
+        rom[base..base + 20].copy_from_slice(b"STARBYTE PATH TEST  ");
+        rom[base + 0x15] = 0x20;
+        rom[base + 0x16] = 0x00;
+        rom[base + 0x17] = 0x09;
+        rom[base + 0x18] = 0x01;
+        rom[base + 0x19] = 0x01;
+        rom[base + 0x1C] = 0x00;
+        rom[base + 0x1D] = 0xFF;
+        rom[base + 0x1E] = 0xFF;
+        rom[base + 0x1F] = 0x00;
+        Cartridge::from_bytes(rom, Some(PathBuf::from("C:/ROMs/test game.sfc"))).unwrap()
+    }
+
+    #[test]
+    fn sanitizes_windows_hostile_file_stems() {
+        assert_eq!(sanitize_file_stem("CON"), "CON_rom");
+        assert_eq!(sanitize_file_stem("AUX"), "AUX_rom");
+        assert_eq!(sanitize_file_stem("bad:name*test"), "bad_name_test");
+        assert_eq!(sanitize_file_stem(" trailing. "), "trailing");
+    }
+
+    #[test]
+    fn resolves_state_path_inside_state_dir() {
+        let cartridge = test_cartridge();
+        let path = resolve_state_path(None, Some(PathBuf::from("states").as_path()), &cartridge)
+            .unwrap()
+            .unwrap();
+        assert_eq!(path, PathBuf::from("states/test game.state.json"));
     }
 }

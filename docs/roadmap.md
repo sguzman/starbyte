@@ -16,9 +16,9 @@ Starbyte is being bootstrapped as a correctness-first, CLI-first SNES emulator w
 - [x] CLI usability and artifact management
 - [x] Linux playable baseline
 - [x] Save RAM and save states
-- [ ] Performance profiling and hot-path optimization
-- [ ] Windows support hardening
-- [ ] `egui` frontend bootstrap
+- [x] Performance profiling and hot-path optimization
+- [x] Windows support hardening
+- [x] `egui` frontend bootstrap
 - [ ] Additional frontends and advanced user features
 - [ ] Coprocessor support
 - [ ] Nice-to-have features such as filters, shaders, rewind, movie recording
@@ -99,20 +99,20 @@ Starbyte is being bootstrapped as a correctness-first, CLI-first SNES emulator w
 
 ### Performance profiling and hot-path optimization
 
-- [ ] Use benchmarks and tracing to identify real bottlenecks.
-- [ ] Optimize only after correctness and regression coverage are in place.
+- [x] Use benchmarks and tracing to identify real bottlenecks.
+- [x] Optimize only after correctness and regression coverage are in place.
 
 ### Windows support hardening
 
-- [ ] Validate path handling, CI, packaging assumptions, and platform-specific host integration.
-- [ ] Keep the core platform-agnostic while the host layer adapts.
+- [x] Validate path handling, CI, packaging assumptions, and platform-specific host integration.
+- [x] Keep the core platform-agnostic while the host layer adapts.
 
 ### `egui` frontend bootstrap
 
-- [ ] Build a separate `egui` crate on top of the stable host traits.
-- [ ] Support both Linux Wayland and Windows 11.
-- [ ] Include day/night mode and keep the UI modular so alternate frontends remain viable.
-- [ ] Use bsnes as a loose information architecture reference, not a copy target.
+- [x] Build a separate `egui` crate on top of the stable host traits.
+- [x] Support both Linux Wayland and Windows 11.
+- [x] Include day/night mode and keep the UI modular so alternate frontends remain viable.
+- [x] Use bsnes as a loose information architecture reference, not a copy target.
 
 ### Additional frontends and advanced user features
 

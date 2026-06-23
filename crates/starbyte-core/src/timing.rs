@@ -36,38 +36,101 @@ pub struct TimingEvents {
 impl TimingState {
     /// Advance master-clock time and surface major timing transitions.
     pub fn advance_master_clocks(&mut self, clocks: u64) -> TimingEvents {
-        let mut events = TimingEvents::default();
-
-        for _ in 0..clocks {
-            self.master_clock = self.master_clock.saturating_add(1);
-            self.dot = self.dot.wrapping_add(1);
-
-            if self.dot < DOTS_PER_SCANLINE {
-                continue;
-            }
-
-            self.dot = 0;
-            self.scanline = self.scanline.wrapping_add(1);
-            events.crossed_scanline = true;
-
-            if self.scanline == VBLANK_START_SCANLINE {
-                events.entered_vblank = true;
-            }
-
-            if self.scanline < NTSC_SCANLINES_PER_FRAME {
-                continue;
-            }
-
-            self.scanline = 0;
-            self.frame = self.frame.saturating_add(1);
-            events.started_new_frame = true;
+        if clocks == 0 {
+            return TimingEvents::default();
         }
-        events
+
+        let dots_per_scanline = u64::from(DOTS_PER_SCANLINE);
+        let scanlines_per_frame = u64::from(NTSC_SCANLINES_PER_FRAME);
+        let dots_per_frame = dots_per_scanline * scanlines_per_frame;
+        let start_dot_index =
+            u64::from(self.scanline) * dots_per_scanline + u64::from(self.dot);
+        let end_dot_index = start_dot_index + clocks;
+
+        let start_frame_offset = start_dot_index / dots_per_frame;
+        let end_frame_offset = end_dot_index / dots_per_frame;
+        let start_scanline_index = start_dot_index / dots_per_scanline;
+        let end_scanline_index = end_dot_index / dots_per_scanline;
+        let wrapped_dot_index = end_dot_index % dots_per_frame;
+        let end_scanline = wrapped_dot_index / dots_per_scanline;
+        let end_dot = wrapped_dot_index % dots_per_scanline;
+
+        let entered_vblank = if self.scanline >= VBLANK_START_SCANLINE {
+            false
+        } else if end_frame_offset > start_frame_offset {
+            true
+        } else {
+            end_scanline >= u64::from(VBLANK_START_SCANLINE)
+        };
+
+        self.master_clock = self.master_clock.saturating_add(clocks);
+        self.frame = self
+            .frame
+            .saturating_add(end_frame_offset.saturating_sub(start_frame_offset));
+        self.scanline = end_scanline as u16;
+        self.dot = end_dot as u16;
+
+        TimingEvents {
+            crossed_scanline: end_scanline_index > start_scanline_index,
+            entered_vblank,
+            started_new_frame: end_frame_offset > start_frame_offset,
+        }
     }
 
     /// Whether the timing position is currently inside the vertical blank interval.
     #[must_use]
     pub const fn in_vblank(&self) -> bool {
         self.scanline >= VBLANK_START_SCANLINE
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        DOTS_PER_SCANLINE, NTSC_SCANLINES_PER_FRAME, TimingEvents, TimingState,
+        VBLANK_START_SCANLINE,
+    };
+
+    #[test]
+    fn zero_clock_advance_is_noop() {
+        let mut timing = TimingState::default();
+        let events = timing.advance_master_clocks(0);
+
+        assert_eq!(timing, TimingState::default());
+        assert_eq!(events, TimingEvents::default());
+    }
+
+    #[test]
+    fn large_advances_cross_vblank_and_frame_arithmetically() {
+        let mut timing = TimingState {
+            master_clock: 0,
+            scanline: VBLANK_START_SCANLINE - 2,
+            dot: DOTS_PER_SCANLINE - 2,
+            frame: 3,
+        };
+        let clocks = u64::from(DOTS_PER_SCANLINE) * 4;
+
+        let events = timing.advance_master_clocks(clocks);
+
+        assert!(events.crossed_scanline);
+        assert!(events.entered_vblank);
+        assert!(!events.started_new_frame);
+        assert_eq!(timing.frame, 3);
+        assert_eq!(timing.scanline, VBLANK_START_SCANLINE + 2);
+    }
+
+    #[test]
+    fn full_frame_advance_wraps_frame_counter() {
+        let mut timing = TimingState::default();
+        let clocks = u64::from(DOTS_PER_SCANLINE) * u64::from(NTSC_SCANLINES_PER_FRAME);
+
+        let events = timing.advance_master_clocks(clocks);
+
+        assert!(events.crossed_scanline);
+        assert!(events.entered_vblank);
+        assert!(events.started_new_frame);
+        assert_eq!(timing.frame, 1);
+        assert_eq!(timing.scanline, 0);
+        assert_eq!(timing.dot, 0);
     }
 }

@@ -36,6 +36,14 @@ pub enum Error {
         /// Validation details.
         details: String,
     },
+    /// User-supplied save RAM does not match cartridge expectations.
+    #[error("invalid save RAM: expected {expected} bytes, got {actual}")]
+    InvalidSaveRam {
+        /// Cartridge-advertised save RAM byte count.
+        expected: usize,
+        /// Actual supplied save RAM byte count.
+        actual: usize,
+    },
     /// Requested functionality is intentionally deferred.
     #[error("feature not implemented yet: {0}")]
     Unimplemented(&'static str),

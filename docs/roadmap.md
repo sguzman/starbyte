@@ -5,7 +5,7 @@ Starbyte is being bootstrapped as a correctness-first, CLI-first SNES emulator w
 ## Milestones
 
 - [x] Workspace and developer foundation
-- [ ] Cartridge loading and ROM mapping
+- [x] Cartridge loading and ROM mapping
 - [x] 65816 compliance harness
 - [x] 65816 execution core
 - [x] SPC700 compliance harness and APU bootstrap
@@ -37,7 +37,7 @@ Starbyte is being bootstrapped as a correctness-first, CLI-first SNES emulator w
 
 - [x] Parse cartridge headers and normalize core metadata.
 - [x] Detect LoROM and HiROM cleanly and surface actionable diagnostics for invalid images.
-- [ ] Add save RAM plumbing and path management in the CLI layer.
+- [x] Add save RAM plumbing and path management in the CLI layer.
 
 ### 65816 compliance harness
 

@@ -1,6 +1,6 @@
 //! Starbyte CLI bootstrap entrypoint.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -308,16 +308,21 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
 
     let cartridge = Cartridge::load(&args.rom)
         .with_context(|| format!("failed to load ROM at {}", args.rom.display()))?;
+    let save_ram_path = resolve_save_ram_path(&cartridge, assets.save_dir.as_deref())?;
 
     let mut emulator = EmulatorBuilder::new().assets(assets).build();
     emulator.load_apu_ipl_rom()?;
     emulator.load_rom(cartridge);
+    maybe_load_save_ram(&mut emulator, save_ram_path.as_deref())?;
     for _ in 0..args.frames {
         emulator.run_until_frame()?;
     }
 
+    maybe_write_save_ram(&emulator, save_ram_path.as_deref())?;
+
     if let Some(path) = args.save_state {
         let state = emulator.save_state()?;
+        ensure_parent_dir(&path)?;
         std::fs::write(&path, state)
             .with_context(|| format!("failed to write save state to {}", path.display()))?;
     }
@@ -330,6 +335,99 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
         "completed bootstrap run"
     );
     Ok(())
+}
+
+fn resolve_save_ram_path(
+    cartridge: &Cartridge,
+    save_dir: Option<&Path>,
+) -> Result<Option<PathBuf>> {
+    let save_len = cartridge.header().ram_size_bytes();
+    if save_len == 0 {
+        return Ok(None);
+    }
+
+    let stem = cartridge
+        .source()
+        .and_then(Path::file_stem)
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| sanitize_file_stem(&cartridge.header().title));
+
+    let path = match save_dir {
+        Some(dir) => dir.join(format!("{stem}.srm")),
+        None => {
+            let source = cartridge.source().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "cannot resolve save path for ROM loaded without a filesystem source"
+                )
+            })?;
+            source.with_extension("srm")
+        }
+    };
+
+    Ok(Some(path))
+}
+
+fn maybe_load_save_ram(emulator: &mut starbyte_core::Emulator, path: Option<&Path>) -> Result<()> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("failed to read save RAM from {}", path.display()))?;
+    emulator
+        .load_save_ram(&bytes)
+        .with_context(|| format!("failed to install save RAM from {}", path.display()))?;
+    info!(path = %path.display(), bytes = bytes.len(), "loaded save RAM");
+    Ok(())
+}
+
+fn maybe_write_save_ram(emulator: &starbyte_core::Emulator, path: Option<&Path>) -> Result<()> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    let Some(bytes) = emulator.save_ram() else {
+        return Ok(());
+    };
+
+    ensure_parent_dir(path)?;
+    std::fs::write(path, &bytes)
+        .with_context(|| format!("failed to write save RAM to {}", path.display()))?;
+    info!(path = %path.display(), bytes = bytes.len(), "wrote save RAM");
+    Ok(())
+}
+
+fn ensure_parent_dir(path: &Path) -> Result<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create directory {}", parent.display()))
+}
+
+fn sanitize_file_stem(input: &str) -> String {
+    let mut stem = input
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_owned();
+
+    if stem.is_empty() {
+        stem = "starbyte-save".to_owned();
+    }
+
+    stem
 }
 
 fn print_config(format: ConfigFormat) -> Result<()> {

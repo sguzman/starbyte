@@ -1,9 +1,35 @@
 //! CLI integration tests.
 
 use std::fs;
+use std::path::Path;
 
 use assert_cmd::Command;
 use tempfile::tempdir;
+
+const SPC700_IPL_ROM_LEN: usize = 64;
+
+fn write_test_rom(path: &Path) {
+    let mut rom = vec![0_u8; 0x10000];
+    let base = 0x7FC0;
+    rom[base..base + 21].copy_from_slice(b"STARBYTE CLI TEST    ");
+    rom[base + 0x15] = 0x20;
+    rom[base + 0x16] = 0x00;
+    rom[base + 0x17] = 0x09;
+    rom[base + 0x18] = 0x01;
+    rom[base + 0x19] = 0x01;
+    rom[base + 0x1C] = 0x00;
+    rom[base + 0x1D] = 0xFF;
+    rom[base + 0x1E] = 0xFF;
+    rom[base + 0x1F] = 0x00;
+    rom[0x7FFC] = 0x00;
+    rom[0x7FFD] = 0x80;
+    rom[0x0000] = 0xEA;
+    fs::write(path, rom).unwrap();
+}
+
+fn write_test_ipl(path: &Path) {
+    fs::write(path, vec![0_u8; SPC700_IPL_ROM_LEN]).unwrap();
+}
 
 #[test]
 fn print_config_toml_succeeds() {
@@ -111,6 +137,62 @@ fn compliance_run_current_fails_for_mismatching_synthetic_spc700_vector() {
             dir.path().to_str().unwrap(),
             "--opcode",
             "00",
+        ])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn run_persists_save_ram_to_configured_directory() {
+    let dir = tempdir().unwrap();
+    let rom = dir.path().join("sample.sfc");
+    let ipl = dir.path().join("spc700.rom");
+    let save_dir = dir.path().join("saves/nested");
+    write_test_rom(&rom);
+    write_test_ipl(&ipl);
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "--spc700-ipl",
+            ipl.to_str().unwrap(),
+            "--save-dir",
+            save_dir.to_str().unwrap(),
+            "run",
+            rom.to_str().unwrap(),
+            "--frames",
+            "0",
+        ])
+        .assert()
+        .success();
+
+    let save_path = save_dir.join("sample.srm");
+    assert!(save_path.exists());
+    assert_eq!(fs::read(save_path).unwrap().len(), 0x800);
+}
+
+#[test]
+fn run_fails_for_mismatched_existing_save_ram() {
+    let dir = tempdir().unwrap();
+    let rom = dir.path().join("sample.sfc");
+    let ipl = dir.path().join("spc700.rom");
+    let save_dir = dir.path().join("saves");
+    write_test_rom(&rom);
+    write_test_ipl(&ipl);
+    fs::create_dir_all(&save_dir).unwrap();
+    fs::write(save_dir.join("sample.srm"), [0xAA]).unwrap();
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "--spc700-ipl",
+            ipl.to_str().unwrap(),
+            "--save-dir",
+            save_dir.to_str().unwrap(),
+            "run",
+            rom.to_str().unwrap(),
+            "--frames",
+            "0",
         ])
         .assert()
         .failure();

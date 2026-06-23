@@ -139,7 +139,18 @@ impl Emulator {
     /// Save-RAM bytes if present.
     #[must_use]
     pub fn save_ram(&self) -> Option<Vec<u8>> {
-        self.system.save_ram_len().map(|len| vec![0; len])
+        self.system
+            .save_ram_len()
+            .map(|_| self.system.save_ram().to_vec())
+    }
+
+    /// Install externally persisted save RAM for the loaded cartridge.
+    pub fn load_save_ram(&mut self, bytes: &[u8]) -> Result<()> {
+        if self.system.cartridge().is_none() {
+            return Err(Error::InvalidRom("no ROM loaded".to_owned()));
+        }
+
+        self.system.load_save_ram(bytes)
     }
 
     /// Serialize a save-state snapshot.

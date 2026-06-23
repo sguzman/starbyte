@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use tracing::trace;
 
+use crate::Result;
 use crate::bus::{Address, Bus};
 use crate::cartridge::Cartridge;
 use crate::dma::DmaController;
@@ -18,6 +19,7 @@ const APU_IO_PORT_COUNT: usize = 4;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemBus {
     cartridge: Option<Cartridge>,
+    save_ram: Vec<u8>,
     wram: Vec<u8>,
     ppu_registers: Vec<u8>,
     apu_io: Vec<u8>,
@@ -35,6 +37,7 @@ impl Default for SystemBus {
     fn default() -> Self {
         Self {
             cartridge: None,
+            save_ram: Vec::new(),
             wram: vec![0; WRAM_SIZE],
             ppu_registers: vec![0; PPU_REGISTER_COUNT],
             apu_io: vec![0; APU_IO_PORT_COUNT],
@@ -53,6 +56,7 @@ impl Default for SystemBus {
 impl SystemBus {
     /// Install or replace the loaded cartridge.
     pub fn install_cartridge(&mut self, cartridge: Cartridge) {
+        self.save_ram = vec![0; cartridge.header().ram_size_bytes()];
         self.cartridge = Some(cartridge);
     }
 
@@ -107,6 +111,25 @@ impl SystemBus {
             .map(|cart| cart.header().ram_size_bytes())
     }
 
+    /// Replace the current battery-backed RAM image.
+    pub fn load_save_ram(&mut self, bytes: &[u8]) -> Result<()> {
+        if bytes.len() != self.save_ram.len() {
+            return Err(crate::Error::InvalidSaveRam {
+                expected: self.save_ram.len(),
+                actual: bytes.len(),
+            });
+        }
+
+        self.save_ram.copy_from_slice(bytes);
+        Ok(())
+    }
+
+    /// Borrow the current battery-backed RAM image.
+    #[must_use]
+    pub fn save_ram(&self) -> &[u8] {
+        &self.save_ram
+    }
+
     /// Reset vector advertised by the installed cartridge, if any.
     #[must_use]
     pub fn reset_vector(&self) -> Option<u16> {
@@ -141,6 +164,8 @@ impl Bus for SystemBus {
             self.wram[index]
         } else if let Some(index) = high_wram_index(address) {
             self.wram[index]
+        } else if let Some(index) = self.save_ram_index(address) {
+            self.save_ram[index]
         } else if let Some(value) = self.read_mmio(address) {
             value
         } else if let Some(value) = self
@@ -171,11 +196,28 @@ impl Bus for SystemBus {
             return;
         }
 
+        if let Some(index) = self.save_ram_index(address) {
+            self.save_ram[index] = value;
+            return;
+        }
+
         let _ = self.write_mmio(address, value);
     }
 }
 
 impl SystemBus {
+    fn save_ram_index(&self, address: Address) -> Option<usize> {
+        let len = self.save_ram.len();
+        if len == 0 {
+            return None;
+        }
+
+        match self.cartridge.as_ref()?.mapper() {
+            crate::cartridge::Mapper::LoRom => map_lorom_save_ram(address, len),
+            crate::cartridge::Mapper::HiRom => map_hirom_save_ram(address, len),
+        }
+    }
+
     fn read_mmio(&mut self, address: Address) -> Option<u8> {
         let register = (address & 0xFFFF) as u16;
 
@@ -329,6 +371,37 @@ fn high_wram_index(address: Address) -> Option<usize> {
     }
 }
 
+fn map_lorom_save_ram(address: Address, len: usize) -> Option<usize> {
+    let bank = ((address >> 16) & 0xFF) as u8;
+    let offset = (address & 0xFFFF) as usize;
+    let bank_index = usize::from(bank & 0x7F);
+
+    match bank {
+        0x70..=0x7D | 0xF0..=0xFF if offset <= 0x7FFF => {
+            Some((bank_index - 0x70) * 0x8000 + offset)
+        }
+        _ => None,
+    }
+    .map(|index| index % len)
+}
+
+fn map_hirom_save_ram(address: Address, len: usize) -> Option<usize> {
+    let bank = ((address >> 16) & 0xFF) as u8;
+    let offset = (address & 0xFFFF) as usize;
+
+    if !(0x6000..=0x7FFF).contains(&offset) {
+        return None;
+    }
+
+    let bank_slot = match bank {
+        0x20..=0x3F => usize::from(bank - 0x20),
+        0xA0..=0xBF => usize::from((bank - 0xA0) + 0x20),
+        _ => return None,
+    };
+
+    Some((bank_slot * 0x2000 + (offset - 0x6000)) % len)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::cartridge::{Cartridge, Mapper};
@@ -381,6 +454,45 @@ mod tests {
         bus.write(0x7E0010, 0x5A);
 
         assert_eq!(bus.read(0x006000), 0x5A);
+    }
+
+    #[test]
+    fn maps_lorom_save_ram_reads_and_writes() {
+        let mut bus = SystemBus::default();
+        bus.install_cartridge(make_cart(Mapper::LoRom));
+        bus.write(0x700010, 0xA5);
+        bus.write(0xF00020, 0x5A);
+
+        assert_eq!(bus.read(0x700010), 0xA5);
+        assert_eq!(bus.read(0xF00020), 0x5A);
+        assert!(!bus.save_ram().is_empty());
+    }
+
+    #[test]
+    fn maps_hirom_save_ram_reads_and_writes() {
+        let mut bus = SystemBus::default();
+        bus.install_cartridge(make_cart(Mapper::HiRom));
+        bus.write(0x206000, 0x11);
+        bus.write(0xA06001, 0x22);
+
+        assert_eq!(bus.read(0x206000), 0x11);
+        assert_eq!(bus.read(0xA06001), 0x22);
+        assert!(!bus.save_ram().is_empty());
+    }
+
+    #[test]
+    fn validates_external_save_ram_size() {
+        let mut bus = SystemBus::default();
+        bus.install_cartridge(make_cart(Mapper::LoRom));
+
+        let error = bus.load_save_ram(&[0xAA]).unwrap_err();
+        assert!(matches!(
+            error,
+            crate::Error::InvalidSaveRam {
+                expected: _,
+                actual: 1
+            }
+        ));
     }
 
     #[test]

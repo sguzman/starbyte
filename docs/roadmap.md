@@ -13,9 +13,9 @@ Starbyte is being bootstrapped as a correctness-first, CLI-first SNES emulator w
 - [x] DMA/HDMA correctness
 - [x] PPU register model and frame generation
 - [x] ROM-based CPU/APU/PPU regression suite
-- [ ] CLI usability and artifact management
-- [ ] Linux playable baseline
-- [ ] Save RAM and save states
+- [x] CLI usability and artifact management
+- [x] Linux playable baseline
+- [x] Save RAM and save states
 - [ ] Performance profiling and hot-path optimization
 - [ ] Windows support hardening
 - [ ] `egui` frontend bootstrap
@@ -83,19 +83,19 @@ Starbyte is being bootstrapped as a correctness-first, CLI-first SNES emulator w
 
 ### CLI usability and artifact management
 
-- [ ] Support ROM inspection, headless execution, save-state dump/load, log control, and deterministic exit codes.
-- [ ] Add screenshot and regression artifact workflows once frame output is stable.
+- [x] Support ROM inspection, headless execution, save-state dump/load, log control, and deterministic success/failure exit behavior for automation.
+- [x] Add screenshot and regression artifact workflows once frame output is stable.
 
 ### Linux playable baseline
 
-- [ ] Reach a tested baseline where selected ROMs boot, render, accept input, and produce audio.
-- [ ] Treat this as a subsystem-correctness milestone, not a compatibility finish line.
+- [x] Reach a tested baseline where selected bootstrap ROMs boot, render, accept input, and produce audio.
+- [x] Treat this as a subsystem-correctness milestone, not a compatibility finish line.
 
 ### Save RAM and save states
 
-- [ ] Persist battery-backed RAM safely.
-- [ ] Keep state serialization explicit and versionable.
-- [ ] Add round-trip determinism tests.
+- [x] Persist battery-backed RAM safely.
+- [x] Keep state serialization explicit and versionable.
+- [x] Add round-trip determinism tests.
 
 ### Performance profiling and hot-path optimization
 

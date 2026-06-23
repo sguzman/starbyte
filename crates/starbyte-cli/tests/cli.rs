@@ -246,3 +246,75 @@ fn rom_regression_run_current_works() {
         .assert()
         .success();
 }
+
+#[test]
+fn run_writes_screenshot_report_and_state_artifacts() {
+    let dir = tempdir().unwrap();
+    let rom = dir.path().join("sample.sfc");
+    let ipl = dir.path().join("spc700.rom");
+    let save_dir = dir.path().join("saves");
+    let state_dir = dir.path().join("states");
+    let screenshot = dir.path().join("artifacts/frame.ppm");
+    let report = dir.path().join("artifacts/run.json");
+    write_test_rom(&rom);
+    write_test_ipl(&ipl);
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "--spc700-ipl",
+            ipl.to_str().unwrap(),
+            "--save-dir",
+            save_dir.to_str().unwrap(),
+            "--state-dir",
+            state_dir.to_str().unwrap(),
+            "run",
+            rom.to_str().unwrap(),
+            "--frames",
+            "1",
+            "--controller1",
+            "start,a",
+            "--screenshot",
+            screenshot.to_str().unwrap(),
+            "--report-json",
+            report.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let screenshot_bytes = fs::read(&screenshot).unwrap();
+    assert!(screenshot_bytes.starts_with(b"P6\n256 224\n255\n"));
+
+    let report_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
+    assert_eq!(report_json["frame_counter"], 1);
+    assert!(report_json["audio_sample_count"].as_u64().unwrap() > 0);
+    assert_eq!(report_json["framebuffer"]["first_pixel_rgba"][3], 255);
+
+    let auto_state = state_dir.join("sample.state.json");
+    assert!(auto_state.exists());
+}
+
+#[test]
+fn rom_regression_run_current_can_dump_artifacts() {
+    let dir = tempdir().unwrap();
+    let artifact_dir = dir.path().join("regression-artifacts");
+    write_regression_suite(dir.path());
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "compliance",
+            "rom-run-current",
+            dir.path().to_str().unwrap(),
+            "--artifact-dir",
+            artifact_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let summary: serde_json::Value =
+        serde_json::from_slice(&fs::read(artifact_dir.join("summary.json")).unwrap()).unwrap();
+    assert_eq!(summary["failed"], 0);
+    assert_eq!(summary["passed"], 1);
+}

@@ -1,5 +1,10 @@
 [workspace]
-members = ["crates/starbyte-cli", "crates/starbyte-core", "crates/starbyte-egui"]
+members = [
+    "crates/starbyte-cli",
+    "crates/starbyte-core",
+    "crates/starbyte-egui",
+    "crates/starbyte-frontend",
+]
 default-members = ["crates/starbyte-cli"]
 resolver = "3"
 

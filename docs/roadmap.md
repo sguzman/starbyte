@@ -19,7 +19,7 @@ Starbyte is being bootstrapped as a correctness-first, CLI-first SNES emulator w
 - [x] Performance profiling and hot-path optimization
 - [x] Windows support hardening
 - [x] `egui` frontend bootstrap
-- [ ] Additional frontends and advanced user features
+- [x] Additional frontends and advanced user features
 - [ ] Coprocessor support
 - [ ] Nice-to-have features such as filters, shaders, rewind, movie recording
 - [x] Explicit non-feature for now: debugger tooling
@@ -116,8 +116,8 @@ Starbyte is being bootstrapped as a correctness-first, CLI-first SNES emulator w
 
 ### Additional frontends and advanced user features
 
-- [ ] Keep frontend work isolated from the emulation core.
-- [ ] Allow experimentation with multiple UI shells without changing subsystem behavior.
+- [x] Keep frontend work isolated from the emulation core.
+- [x] Allow experimentation with multiple UI shells without changing subsystem behavior.
 
 ### Coprocessor support
 

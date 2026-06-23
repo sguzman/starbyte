@@ -2520,8 +2520,18 @@ dependencies = [
  "clap",
  "eframe",
  "starbyte-core",
+ "starbyte-frontend",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "starbyte-frontend"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "starbyte-core",
+ "tempfile",
 ]
 
 [[package]]

@@ -1,0 +1,21 @@
+[package]
+name = "starbyte-frontend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "starbyte_frontend"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1.0.102"
+starbyte-core = { path = "../starbyte-core" }
+
+[dev-dependencies]
+tempfile = "3.23.0"
+
+[lints]
+workspace = true

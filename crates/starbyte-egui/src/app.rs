@@ -8,11 +8,10 @@ use tracing::warn;
 
 use starbyte_core::input::ControllerState;
 use starbyte_core::manifest::AssetConfig;
-
-use crate::session::EmulatorSession;
+use starbyte_frontend::FrontendSession;
 
 pub struct StarbyteApp {
-    session: EmulatorSession,
+    session: FrontendSession,
     framebuffer_texture: Option<TextureHandle>,
     prefer_dark_mode: bool,
     status_line: String,
@@ -28,10 +27,10 @@ impl StarbyteApp {
     ) -> Result<Self> {
         apply_theme(&cc.egui_ctx, prefer_dark_mode);
 
-        let mut session = EmulatorSession::new(assets)?;
+        let mut session = FrontendSession::new(assets)?;
         let mut status_line = "No ROM loaded".to_owned();
         if let Some(path) = rom_path {
-            session.load_rom(path.clone())?;
+            session.load_rom(&path)?;
             status_line = format!("Loaded {}", path.display());
         }
 
@@ -45,16 +44,11 @@ impl StarbyteApp {
     }
 
     fn run_frame(&mut self, ctx: &egui::Context) {
-        self.session.hold_controller1(self.held_input);
+        self.session.set_controller1(self.held_input);
         match self.session.run_frame() {
             Ok(()) => {
                 self.refresh_framebuffer(ctx);
-                self.status_line = format!(
-                    "Frame {} | APU steps {} | Audio samples {}",
-                    self.session.emulator().timing().frame,
-                    self.session.emulator().apu_status().spc700_steps,
-                    self.session.emulator().audio_samples().samples.len()
-                );
+                self.status_line = self.session.snapshot().status_line();
             }
             Err(error) => {
                 warn!("{error}");
@@ -64,10 +58,13 @@ impl StarbyteApp {
     }
 
     fn refresh_framebuffer(&mut self, ctx: &egui::Context) {
-        let framebuffer = self.session.emulator().framebuffer();
+        let snapshot = self.session.snapshot();
         let image = ColorImage::from_rgba_unmultiplied(
-            [framebuffer.width(), framebuffer.height()],
-            framebuffer.pixels(),
+            [
+                snapshot.framebuffer_width as usize,
+                snapshot.framebuffer_height as usize,
+            ],
+            self.session.framebuffer_rgba(),
         );
 
         if let Some(texture) = &mut self.framebuffer_texture {
@@ -83,7 +80,8 @@ impl StarbyteApp {
 
     fn draw_controls(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.heading("Session");
-        if let Some(path) = self.session.rom_path() {
+        let snapshot = self.session.snapshot();
+        if let Some(path) = &snapshot.rom_path {
             ui.label(path.display().to_string());
         } else {
             ui.label("No ROM selected");
@@ -95,8 +93,16 @@ impl StarbyteApp {
             self.run_frame(ctx);
         }
         if ui.button("Run 60 Frames").clicked() {
-            for _ in 0..60 {
-                self.run_frame(ctx);
+            self.session.set_controller1(self.held_input);
+            match self.session.run_frames(60) {
+                Ok(()) => {
+                    self.refresh_framebuffer(ctx);
+                    self.status_line = self.session.snapshot().status_line();
+                }
+                Err(error) => {
+                    warn!("{error}");
+                    self.status_line = error.to_string();
+                }
             }
         }
 

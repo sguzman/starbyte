@@ -1,7 +1,6 @@
 //! Native `egui` frontend bootstrap for Starbyte.
 
 mod app;
-mod session;
 
 use std::path::PathBuf;
 

@@ -11,6 +11,7 @@ pub mod frontend;
 pub mod input;
 pub mod manifest;
 pub mod ppu;
+pub mod system;
 pub mod testing;
 pub mod timing;
 

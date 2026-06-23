@@ -92,6 +92,24 @@ impl Cartridge {
     pub fn source(&self) -> Option<&Path> {
         self.source.as_deref()
     }
+
+    /// Read one ROM byte through the detected CPU address mapping.
+    #[must_use]
+    pub fn read_byte(&self, address: u32) -> Option<u8> {
+        let index = match self.mapper {
+            Mapper::LoRom => map_lorom(address),
+            Mapper::HiRom => map_hirom(address),
+        }?;
+        self.rom.get(index % self.rom.len()).copied()
+    }
+
+    /// Read the reset vector from the cartridge image if the mapping exposes it.
+    #[must_use]
+    pub fn reset_vector(&self) -> Option<u16> {
+        let lo = self.read_byte(0x00FFFC)?;
+        let hi = self.read_byte(0x00FFFD)?;
+        Some(u16::from_le_bytes([lo, hi]))
+    }
 }
 
 fn strip_smc_header(bytes: Vec<u8>) -> Result<(Vec<u8>, bool)> {
@@ -125,6 +143,34 @@ fn detect_header(rom: &[u8]) -> Result<(Mapper, CartridgeHeader)> {
 
     best.map(|(mapper, header, _)| (mapper, header))
         .ok_or_else(|| Error::InvalidRom("unable to detect a valid SNES header".to_owned()))
+}
+
+fn map_lorom(address: u32) -> Option<usize> {
+    let bank = ((address >> 16) & 0xFF) as u8;
+    let offset = (address & 0xFFFF) as u16;
+    let bank_index = usize::from(bank & 0x7F);
+
+    match bank {
+        0x00..=0x3F | 0x80..=0xBF if offset >= 0x8000 => {
+            Some(bank_index * 0x8000 + usize::from(offset - 0x8000))
+        }
+        0x40..=0x7D | 0xC0..=0xFF => Some(bank_index * 0x8000 + usize::from(offset & 0x7FFF)),
+        _ => None,
+    }
+}
+
+fn map_hirom(address: u32) -> Option<usize> {
+    let bank = ((address >> 16) & 0xFF) as u8;
+    let offset = (address & 0xFFFF) as u16;
+    let bank_index = usize::from(bank & 0x3F);
+
+    match bank {
+        0x00..=0x3F | 0x80..=0xBF if offset >= 0x8000 => {
+            Some(bank_index * 0x10000 + usize::from(offset))
+        }
+        0x40..=0x7D | 0xC0..=0xFF => Some(bank_index * 0x10000 + usize::from(offset)),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -170,5 +216,31 @@ mod tests {
         let cart = Cartridge::from_bytes(raw, None).unwrap();
         assert_eq!(cart.mapper(), Mapper::HiRom);
         assert_eq!(cart.rom().len(), 0x10000);
+    }
+
+    #[test]
+    fn maps_lorom_rom_reads() {
+        let mut rom = make_header(Mapper::LoRom);
+        rom[0] = 0x12;
+        rom[0x7FFF] = 0x34;
+        let cart = Cartridge::from_bytes(rom, None).unwrap();
+
+        assert_eq!(cart.read_byte(0x008000), Some(0x12));
+        assert_eq!(cart.read_byte(0x00FFFF), Some(0x34));
+        assert_eq!(cart.read_byte(0x7E0000), None);
+    }
+
+    #[test]
+    fn maps_hirom_rom_reads() {
+        let mut rom = vec![0_u8; 0x20000];
+        let header = make_header(Mapper::HiRom);
+        rom[..header.len()].copy_from_slice(&header);
+        rom[0x008000] = 0x56;
+        rom[0x01FFFF] = 0x78;
+        let cart = Cartridge::from_bytes(rom, None).unwrap();
+
+        assert_eq!(cart.read_byte(0x408000), Some(0x56));
+        assert_eq!(cart.read_byte(0x41FFFF), Some(0x78));
+        assert_eq!(cart.read_byte(0x001000), None);
     }
 }

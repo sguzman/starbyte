@@ -9,9 +9,9 @@ use crate::cpu_65816::Cpu65816;
 use crate::error::{Error, Result};
 use crate::manifest::AssetConfig;
 use crate::ppu::FrameBuffer;
-use crate::timing::TimingState;
+use crate::system::SystemBus;
 
-const CPU_STEP_MASTER_CYCLES: u64 = 6;
+const CPU_BUS_CYCLE_MASTER_CYCLES: u64 = 6;
 
 /// Serializable emulator state snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,8 +20,8 @@ pub struct SaveState {
     pub cpu: Cpu65816,
     /// APU boundary state.
     pub apu: Apu,
-    /// Global timing state.
-    pub timing: TimingState,
+    /// CPU-visible memory, MMIO, cartridge, and timing state.
+    pub system: SystemBus,
 }
 
 /// Builder for the emulator facade.
@@ -48,12 +48,11 @@ impl EmulatorBuilder {
     #[must_use]
     pub fn build(self) -> Emulator {
         Emulator {
-            cartridge: None,
             cpu: Cpu65816::default(),
             apu: Apu::with_ipl_path(self.assets.spc700_ipl.clone()),
             frame_buffer: FrameBuffer::default(),
             pending_audio: AudioFrame::default(),
-            timing: TimingState::default(),
+            system: SystemBus::default(),
             assets: self.assets,
         }
     }
@@ -62,12 +61,11 @@ impl EmulatorBuilder {
 /// Bootstrap emulator facade. The internal subsystem behavior is intentionally skeletal.
 #[derive(Debug, Clone)]
 pub struct Emulator {
-    cartridge: Option<Cartridge>,
     cpu: Cpu65816,
     apu: Apu,
     frame_buffer: FrameBuffer,
     pending_audio: AudioFrame,
-    timing: TimingState,
+    system: SystemBus,
     assets: AssetConfig,
 }
 
@@ -82,7 +80,7 @@ impl Emulator {
     #[instrument(skip_all)]
     pub fn load_rom(&mut self, rom: Cartridge) {
         debug!(title = rom.header().title, mapper = ?rom.mapper(), "installing cartridge");
-        self.cartridge = Some(rom);
+        self.system.install_cartridge(rom);
         self.reset();
     }
 
@@ -91,35 +89,38 @@ impl Emulator {
         self.cpu.reset();
         self.apu.reset();
         self.apu.set_ipl_path(self.assets.spc700_ipl.clone());
-        self.timing = TimingState::default();
+        self.system.reset();
+        if let Some(vector) = self.system.reset_vector() {
+            self.cpu.registers.pc = vector;
+        }
         self.pending_audio = AudioFrame::default();
         self.frame_buffer = FrameBuffer::default();
     }
 
     /// Execute placeholder work until one frame boundary.
     pub fn run_until_frame(&mut self) -> Result<()> {
-        if self.cartridge.is_none() {
+        if self.system.cartridge().is_none() {
             return Err(Error::InvalidRom("no ROM loaded".to_owned()));
         }
 
-        for _ in 0..(crate::ppu::SCREEN_WIDTH * crate::ppu::SCREEN_HEIGHT) {
+        let start_frame = self.system.timing().frame;
+        while self.system.timing().frame == start_frame {
             self.step_instruction()?;
         }
-
-        self.timing.frame = self.timing.frame.saturating_add(1);
-        debug!(frame = self.timing.frame, "produced placeholder frame");
+        debug!(frame = self.system.timing().frame, "advanced to next frame");
         Ok(())
     }
 
     /// Step one instruction in the placeholder model.
     pub fn step_instruction(&mut self) -> Result<()> {
-        if self.cartridge.is_none() {
+        if self.system.cartridge().is_none() {
             return Err(Error::InvalidRom("no ROM loaded".to_owned()));
         }
 
-        self.cpu.step();
-        self.apu.step_master_cycles(CPU_STEP_MASTER_CYCLES);
-        self.timing.tick_cpu_step();
+        let trace = self.cpu.step_with_bus(&mut self.system)?;
+        let master_cycles = (trace.len() as u64).saturating_mul(CPU_BUS_CYCLE_MASTER_CYCLES);
+        self.apu.step_master_cycles(master_cycles);
+        self.system.advance_master_clocks(master_cycles);
         Ok(())
     }
 
@@ -138,9 +139,7 @@ impl Emulator {
     /// Save-RAM bytes if present.
     #[must_use]
     pub fn save_ram(&self) -> Option<Vec<u8>> {
-        self.cartridge
-            .as_ref()
-            .map(|cartridge| vec![0; cartridge.header().ram_size_bytes()])
+        self.system.save_ram_len().map(|len| vec![0; len])
     }
 
     /// Serialize a save-state snapshot.
@@ -148,7 +147,7 @@ impl Emulator {
         serde_json::to_string_pretty(&SaveState {
             cpu: self.cpu.clone(),
             apu: self.apu.clone(),
-            timing: self.timing,
+            system: self.system.clone(),
         })
         .map_err(Into::into)
     }
@@ -158,7 +157,7 @@ impl Emulator {
         let state: SaveState = serde_json::from_str(state)?;
         self.cpu = state.cpu;
         self.apu = state.apu;
-        self.timing = state.timing;
+        self.system = state.system;
         Ok(())
     }
 
@@ -182,7 +181,7 @@ impl Emulator {
     /// Return the loaded cartridge if any.
     #[must_use]
     pub const fn cartridge(&self) -> Option<&Cartridge> {
-        self.cartridge.as_ref()
+        self.system.cartridge()
     }
 }
 
@@ -210,7 +209,11 @@ mod tests {
 
     #[test]
     fn state_roundtrip_preserves_timing() {
-        let cart = Cartridge::from_bytes(rom_bytes(), None).unwrap();
+        let mut rom = rom_bytes();
+        rom[0x7FFC] = 0x00;
+        rom[0x7FFD] = 0x80;
+        rom[0x0000] = 0xEA;
+        let cart = Cartridge::from_bytes(rom, None).unwrap();
         assert_eq!(cart.mapper(), Mapper::LoRom);
 
         let mut emulator = Emulator::default();
@@ -221,5 +224,21 @@ mod tests {
         let mut restored = Emulator::default();
         restored.load_state(&state).unwrap();
         assert_eq!(restored.save_state().unwrap(), state);
+    }
+
+    #[test]
+    fn step_instruction_uses_reset_vector_and_bus_timing() {
+        let mut rom = rom_bytes();
+        rom[0x7FFC] = 0x00;
+        rom[0x7FFD] = 0x80;
+        rom[0x0000] = 0xEA;
+        let cart = Cartridge::from_bytes(rom, None).unwrap();
+
+        let mut emulator = Emulator::default();
+        emulator.load_rom(cart);
+        emulator.step_instruction().unwrap();
+
+        assert_eq!(emulator.cpu.registers.pc, 0x8001);
+        assert_eq!(emulator.system.timing().master_clock, 12);
     }
 }

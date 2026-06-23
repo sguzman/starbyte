@@ -9,7 +9,7 @@ Starbyte is being bootstrapped as a correctness-first, CLI-first SNES emulator w
 - [x] 65816 compliance harness
 - [x] 65816 execution core
 - [x] SPC700 compliance harness and APU bootstrap
-- [ ] Main SNES memory map and interrupt/timing model
+- [x] Main SNES memory map and interrupt/timing model
 - [ ] DMA/HDMA correctness
 - [ ] PPU register model and frame generation
 - [ ] ROM-based CPU/APU/PPU regression suite
@@ -62,8 +62,8 @@ Starbyte is being bootstrapped as a correctness-first, CLI-first SNES emulator w
 
 ### Main SNES memory map and interrupt/timing model
 
-- [ ] Model WRAM, MMIO, DMA registers, joypad latching, NMI, IRQ, and open-bus behavior as needed for test coverage.
-- [ ] Prefer explicit timing state over hidden implicit ordering.
+- [x] Model WRAM, MMIO, DMA registers, joypad latching, NMI, IRQ, and open-bus behavior as needed for test coverage.
+- [x] Prefer explicit timing state over hidden implicit ordering.
 
 ### DMA/HDMA correctness
 

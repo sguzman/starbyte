@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument};
 
+use crate::coprocessor::CoprocessorKind;
 use crate::error::{Error, Result};
 
 pub use self::header::{CartridgeHeader, Region};
@@ -93,6 +94,12 @@ impl Cartridge {
         self.source.as_deref()
     }
 
+    /// Detected coprocessor family from the cartridge chipset byte, if any.
+    #[must_use]
+    pub fn coprocessor_kind(&self) -> Option<CoprocessorKind> {
+        CoprocessorKind::detect(&self.header)
+    }
+
     /// Read one ROM byte through the detected CPU address mapping.
     #[must_use]
     pub fn read_byte(&self, address: u32) -> Option<u8> {
@@ -175,6 +182,8 @@ fn map_hirom(address: u32) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use crate::coprocessor::CoprocessorKind;
+
     use super::{Cartridge, Mapper};
 
     fn make_header(mapper: Mapper) -> Vec<u8> {
@@ -207,6 +216,7 @@ mod tests {
         let cart = Cartridge::from_bytes(make_header(Mapper::LoRom), None).unwrap();
         assert_eq!(cart.mapper(), Mapper::LoRom);
         assert_eq!(cart.header().title.trim(), "STARBYTE TEST");
+        assert_eq!(cart.coprocessor_kind(), None);
     }
 
     #[test]
@@ -242,5 +252,13 @@ mod tests {
         assert_eq!(cart.read_byte(0x408000), Some(0x56));
         assert_eq!(cart.read_byte(0x41FFFF), Some(0x78));
         assert_eq!(cart.read_byte(0x001000), None);
+    }
+
+    #[test]
+    fn detects_dsp_chipset_from_header() {
+        let mut rom = make_header(Mapper::LoRom);
+        rom[0x7FC0 + 0x16] = 0x03;
+        let cart = Cartridge::from_bytes(rom, None).unwrap();
+        assert_eq!(cart.coprocessor_kind(), Some(CoprocessorKind::Dsp));
     }
 }

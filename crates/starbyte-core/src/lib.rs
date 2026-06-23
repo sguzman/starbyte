@@ -3,6 +3,7 @@
 pub mod apu;
 pub mod bus;
 pub mod cartridge;
+pub mod coprocessor;
 pub mod cpu_65816;
 pub mod dma;
 pub mod emulator;
@@ -16,5 +17,6 @@ pub mod testing;
 pub mod timing;
 
 pub use crate::apu::{Apu, ApuStatus, AudioFrame, SPC700_IPL_ROM_LEN};
+pub use crate::coprocessor::{Coprocessor, CoprocessorKind};
 pub use crate::emulator::{Emulator, EmulatorBuilder};
 pub use crate::error::{Error, Result};

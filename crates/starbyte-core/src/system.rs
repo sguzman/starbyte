@@ -6,6 +6,7 @@ use tracing::trace;
 use crate::Result;
 use crate::bus::{Address, Bus};
 use crate::cartridge::Cartridge;
+use crate::coprocessor::Coprocessor;
 use crate::dma::DmaController;
 use crate::input::ControllerState;
 use crate::ppu::{FrameBuffer, Ppu};
@@ -19,6 +20,7 @@ const APU_IO_PORT_COUNT: usize = 4;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemBus {
     cartridge: Option<Cartridge>,
+    coprocessor: Option<Coprocessor>,
     save_ram: Vec<u8>,
     wram: Vec<u8>,
     ppu: Ppu,
@@ -37,6 +39,7 @@ impl Default for SystemBus {
     fn default() -> Self {
         Self {
             cartridge: None,
+            coprocessor: None,
             save_ram: Vec::new(),
             wram: vec![0; WRAM_SIZE],
             ppu: Ppu::default(),
@@ -57,12 +60,16 @@ impl SystemBus {
     /// Install or replace the loaded cartridge.
     pub fn install_cartridge(&mut self, cartridge: Cartridge) {
         self.save_ram = vec![0; cartridge.header().ram_size_bytes()];
+        self.coprocessor = Coprocessor::for_cartridge(cartridge.header());
         self.cartridge = Some(cartridge);
     }
 
     /// Clear transient system state while keeping the current cartridge installed.
     pub fn reset(&mut self) {
         self.wram.fill(0);
+        if let Some(coprocessor) = &mut self.coprocessor {
+            coprocessor.reset();
+        }
         self.ppu = Ppu::default();
         self.apu_io.fill(0);
         self.dma = DmaController::default();
@@ -118,6 +125,12 @@ impl SystemBus {
     #[must_use]
     pub const fn cartridge(&self) -> Option<&Cartridge> {
         self.cartridge.as_ref()
+    }
+
+    /// Return the installed coprocessor if the cartridge exposes one.
+    #[must_use]
+    pub const fn coprocessor(&self) -> Option<&Coprocessor> {
+        self.coprocessor.as_ref()
     }
 
     /// Save-RAM byte count advertised by the installed cartridge, if any.
@@ -183,6 +196,8 @@ impl Bus for SystemBus {
             self.wram[index]
         } else if let Some(index) = self.save_ram_index(address) {
             self.save_ram[index]
+        } else if let Some(value) = self.read_coprocessor(address) {
+            value
         } else if let Some(value) = self.read_mmio(address) {
             value
         } else if let Some(value) = self
@@ -218,11 +233,29 @@ impl Bus for SystemBus {
             return;
         }
 
+        if self.write_coprocessor(address, value) {
+            return;
+        }
+
         let _ = self.write_mmio(address, value);
     }
 }
 
 impl SystemBus {
+    fn read_coprocessor(&mut self, address: Address) -> Option<u8> {
+        let mapper = self.cartridge.as_ref()?.mapper();
+        self.coprocessor.as_mut()?.read(mapper, address)
+    }
+
+    fn write_coprocessor(&mut self, address: Address, value: u8) -> bool {
+        let Some(cartridge) = self.cartridge.as_ref() else {
+            return false;
+        };
+        self.coprocessor
+            .as_mut()
+            .is_some_and(|coprocessor| coprocessor.write(cartridge.mapper(), address, value))
+    }
+
     fn save_ram_index(&self, address: Address) -> Option<usize> {
         let len = self.save_ram.len();
         if len == 0 {
@@ -615,6 +648,20 @@ mod tests {
         Cartridge::from_bytes(rom, None).unwrap()
     }
 
+    fn make_dsp_cart(mapper: Mapper) -> Cartridge {
+        let mut rom = make_cart(mapper).rom().to_vec();
+        let base = match mapper {
+            Mapper::LoRom => 0x7FC0,
+            Mapper::HiRom => 0xFFC0,
+        };
+        rom[base + 0x16] = 0x03;
+        if matches!(mapper, Mapper::LoRom) {
+            rom[base + 0x17] = 0x08;
+            rom[base + 0x18] = 0x00;
+        }
+        Cartridge::from_bytes(rom, None).unwrap()
+    }
+
     #[test]
     fn mirrors_low_wram_into_system_banks() {
         let mut bus = SystemBus::default();
@@ -655,6 +702,23 @@ mod tests {
         assert_eq!(bus.read(0x206000), 0x11);
         assert_eq!(bus.read(0xA06001), 0x22);
         assert!(!bus.save_ram().is_empty());
+    }
+
+    #[test]
+    fn routes_dsp_register_reads_and_writes_before_rom() {
+        let mut bus = SystemBus::default();
+        bus.install_cartridge(make_dsp_cart(Mapper::LoRom));
+
+        bus.write(0x308000, 0x78);
+        bus.write(0x308001, 0x56);
+
+        assert_eq!(bus.read(0x308000), 0x78);
+        assert_eq!(bus.read(0x308001), 0x56);
+        assert_eq!(bus.read(0x30C000), 0x80);
+        assert!(matches!(
+            bus.coprocessor().map(crate::coprocessor::Coprocessor::kind),
+            Some(crate::coprocessor::CoprocessorKind::Dsp)
+        ));
     }
 
     #[test]

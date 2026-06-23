@@ -123,6 +123,7 @@ Starbyte is being bootstrapped as a correctness-first, CLI-first SNES emulator w
 
 - [ ] Defer all enhancement chips until the base console is stable and well-tested.
 - [ ] Add chips behind clearly bounded subsystem work rather than widening the early core.
+- [ ] Track detailed chip-by-chip progress in [docs/coprocessor-roadmap.md](/win/linux/Code/rust/starbyte/docs/coprocessor-roadmap.md).
 
 ### Nice-to-have features such as filters, shaders, rewind, movie recording
 

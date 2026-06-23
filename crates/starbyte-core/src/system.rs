@@ -722,6 +722,22 @@ mod tests {
     }
 
     #[test]
+    fn dsp_bus_path_supports_buffered_command_execution() {
+        let mut bus = SystemBus::default();
+        bus.install_cartridge(make_dsp_cart(Mapper::LoRom));
+
+        for word in [0x0010_u16, 9, 4] {
+            bus.write(0x308000, (word & 0x00FF) as u8);
+            bus.write(0x308001, (word >> 8) as u8);
+        }
+
+        assert_eq!(bus.read(0x30C000), 0xC0);
+        assert_eq!(bus.read(0x308000), 13);
+        assert_eq!(bus.read(0x308001), 0);
+        assert_eq!(bus.read(0x30C000), 0x80);
+    }
+
+    #[test]
     fn validates_external_save_ram_size() {
         let mut bus = SystemBus::default();
         bus.install_cartridge(make_cart(Mapper::LoRom));

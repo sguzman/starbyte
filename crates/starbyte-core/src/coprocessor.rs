@@ -1,11 +1,15 @@
 //! Cartridge coprocessor metadata and bootstrap runtime models.
 
+use std::collections::VecDeque;
+
 use serde::{Deserialize, Serialize};
 
 use crate::bus::Address;
 use crate::cartridge::{CartridgeHeader, Mapper};
 
 const DSP_STATUS_READY: u8 = 0x80;
+const DSP_STATUS_DATA_AVAILABLE: u8 = 0x40;
+const DSP_STATUS_COMMAND_WAITING: u8 = 0x20;
 
 /// Coarse coprocessor family derived from the cartridge header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,41 +104,68 @@ impl Coprocessor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DspCoprocessor {
     map: DspAddressMap,
-    data_register: u16,
-    command_register: u16,
     status_register: u8,
+    write_latch: u16,
+    read_latch: u16,
     low_byte_latched: bool,
+    read_high_pending: bool,
+    active_command: Option<DspCommand>,
+    operand_words: Vec<i16>,
+    result_words: VecDeque<i16>,
 }
 
 impl DspCoprocessor {
     fn new(header: &CartridgeHeader) -> Self {
         Self {
             map: DspAddressMap::for_header(header),
-            data_register: 0,
-            command_register: 0,
             status_register: DSP_STATUS_READY,
+            write_latch: 0,
+            read_latch: 0,
             low_byte_latched: false,
+            read_high_pending: false,
+            active_command: None,
+            operand_words: Vec::new(),
+            result_words: VecDeque::new(),
         }
     }
 
     fn reset(&mut self) {
-        self.data_register = 0;
-        self.command_register = 0;
         self.status_register = DSP_STATUS_READY;
+        self.write_latch = 0;
+        self.read_latch = 0;
         self.low_byte_latched = false;
+        self.read_high_pending = false;
+        self.active_command = None;
+        self.operand_words.clear();
+        self.result_words.clear();
     }
 
     fn read(&mut self, mapper: Mapper, address: Address) -> Option<u8> {
         let register = self.map.decode(mapper, address)?;
         let value = match register {
-            DspRegister::DataLow => self.data_register.to_le_bytes()[0],
-            DspRegister::DataHigh => self.data_register.to_le_bytes()[1],
+            DspRegister::DataLow => {
+                self.refresh_read_latch();
+                self.read_latch.to_le_bytes()[0]
+            }
+            DspRegister::DataHigh => {
+                self.refresh_read_latch();
+                self.read_latch.to_le_bytes()[1]
+            }
             DspRegister::Status => self.status_register,
         };
 
-        if matches!(register, DspRegister::DataHigh) {
-            self.status_register = DSP_STATUS_READY;
-            self.low_byte_latched = false;
+        match register {
+            DspRegister::DataLow => {
+                self.read_high_pending = true;
+            }
+            DspRegister::DataHigh => {
+                if self.read_high_pending {
+                    let _ = self.result_words.pop_front();
+                    self.read_high_pending = false;
+                }
+                self.refresh_status();
+            }
+            DspRegister::Status => {}
         }
 
         Some(value)
@@ -147,14 +178,13 @@ impl DspCoprocessor {
 
         match register {
             DspRegister::DataLow => {
-                self.data_register = (self.data_register & 0xFF00) | u16::from(value);
+                self.write_latch = (self.write_latch & 0xFF00) | u16::from(value);
                 self.low_byte_latched = true;
             }
             DspRegister::DataHigh => {
-                self.data_register = (self.data_register & 0x00FF) | (u16::from(value) << 8);
+                self.write_latch = (self.write_latch & 0x00FF) | (u16::from(value) << 8);
                 if self.low_byte_latched {
-                    self.command_register = self.data_register;
-                    self.execute_bootstrap_command();
+                    self.accept_word(self.write_latch as i16);
                 }
                 self.low_byte_latched = false;
             }
@@ -166,13 +196,112 @@ impl DspCoprocessor {
         true
     }
 
-    fn execute_bootstrap_command(&mut self) {
-        self.status_register = DSP_STATUS_READY;
-        self.data_register = match self.command_register {
-            0x0000 => 0,
-            0x0001 => 0x8000,
-            value => value,
-        };
+    fn accept_word(&mut self, word: i16) {
+        if let Some(command) = self.active_command {
+            self.operand_words.push(word);
+            if self.operand_words.len() >= command.operand_count() {
+                let operands = std::mem::take(&mut self.operand_words);
+                let results = command.execute(&operands);
+                self.result_words = results.into();
+                self.active_command = None;
+                self.read_high_pending = false;
+                self.refresh_status();
+            } else {
+                self.refresh_status();
+            }
+            return;
+        }
+
+        let command = DspCommand::from_opcode(word as u16);
+        if command.operand_count() == 0 {
+            self.result_words = command.execute(&[]).into();
+        } else {
+            self.active_command = Some(command);
+            self.operand_words.clear();
+            self.result_words.clear();
+        }
+        self.read_high_pending = false;
+        self.refresh_status();
+    }
+
+    fn refresh_read_latch(&mut self) {
+        self.read_latch = self.result_words.front().copied().unwrap_or_default() as u16;
+    }
+
+    fn refresh_status(&mut self) {
+        let mut status = DSP_STATUS_READY;
+        if !self.result_words.is_empty() {
+            status |= DSP_STATUS_DATA_AVAILABLE;
+        }
+        if self.active_command.is_some() {
+            status |= DSP_STATUS_COMMAND_WAITING;
+        }
+        self.status_register = status;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum DspCommand {
+    Reset,
+    Signature,
+    Add,
+    Subtract,
+    Multiply,
+    Abs,
+    Dot2,
+    Unknown(u16),
+}
+
+impl DspCommand {
+    fn from_opcode(opcode: u16) -> Self {
+        match opcode {
+            0x0000 => Self::Reset,
+            0x0001 => Self::Signature,
+            0x0010 => Self::Add,
+            0x0011 => Self::Subtract,
+            0x0012 => Self::Multiply,
+            0x0013 => Self::Abs,
+            0x0014 => Self::Dot2,
+            value => Self::Unknown(value),
+        }
+    }
+
+    const fn operand_count(self) -> usize {
+        match self {
+            Self::Reset | Self::Signature | Self::Unknown(_) => 0,
+            Self::Abs => 1,
+            Self::Add | Self::Subtract | Self::Multiply => 2,
+            Self::Dot2 => 4,
+        }
+    }
+
+    fn execute(self, operands: &[i16]) -> Vec<i16> {
+        match self {
+            Self::Reset => vec![0],
+            Self::Signature => vec![i16::MIN],
+            Self::Add => vec![operands[0].saturating_add(operands[1])],
+            Self::Subtract => vec![operands[0].saturating_sub(operands[1])],
+            Self::Abs => vec![operands[0].saturating_abs()],
+            Self::Multiply => {
+                let product = i32::from(operands[0]) * i32::from(operands[1]);
+                let bytes = product.to_le_bytes();
+                vec![
+                    i16::from_le_bytes([bytes[0], bytes[1]]),
+                    i16::from_le_bytes([bytes[2], bytes[3]]),
+                ]
+            }
+            Self::Dot2 => {
+                let left = i32::from(operands[0]) * i32::from(operands[2]);
+                let right = i32::from(operands[1]) * i32::from(operands[3]);
+                let sum = left.saturating_add(right);
+                let bytes = sum.to_le_bytes();
+                vec![
+                    i16::from_le_bytes([bytes[0], bytes[1]]),
+                    i16::from_le_bytes([bytes[2], bytes[3]]),
+                ]
+            }
+            Self::Unknown(opcode) => vec![opcode as i16],
+        }
     }
 }
 
@@ -323,5 +452,57 @@ mod tests {
         assert_eq!(dsp.read(Mapper::HiRom, 0x006001), Some(0x80));
         assert_eq!(dsp.read(Mapper::HiRom, 0x007000), Some(DSP_STATUS_READY));
         assert_eq!(dsp.read(Mapper::HiRom, 0x108000), None);
+    }
+
+    #[test]
+    fn dsp_buffers_operands_before_emitting_result_words() {
+        let mut dsp = DspCoprocessor::new(&header(Mapper::LoRom, 0x03, 0x08, 0x00));
+
+        assert!(dsp.write(Mapper::LoRom, 0x308000, 0x10));
+        assert!(dsp.write(Mapper::LoRom, 0x308001, 0x00));
+        assert_eq!(
+            dsp.read(Mapper::LoRom, 0x30C000),
+            Some(DSP_STATUS_READY | DSP_STATUS_COMMAND_WAITING)
+        );
+
+        assert!(dsp.write(Mapper::LoRom, 0x308000, 0x05));
+        assert!(dsp.write(Mapper::LoRom, 0x308001, 0x00));
+        assert_eq!(
+            dsp.read(Mapper::LoRom, 0x30C000),
+            Some(DSP_STATUS_READY | DSP_STATUS_COMMAND_WAITING)
+        );
+
+        assert!(dsp.write(Mapper::LoRom, 0x308000, 0x07));
+        assert!(dsp.write(Mapper::LoRom, 0x308001, 0x00));
+        assert_eq!(
+            dsp.read(Mapper::LoRom, 0x30C000),
+            Some(DSP_STATUS_READY | DSP_STATUS_DATA_AVAILABLE)
+        );
+        assert_eq!(dsp.read(Mapper::LoRom, 0x308000), Some(12));
+        assert_eq!(dsp.read(Mapper::LoRom, 0x308001), Some(0));
+        assert_eq!(dsp.read(Mapper::LoRom, 0x30C000), Some(DSP_STATUS_READY));
+    }
+
+    #[test]
+    fn dsp_multiply_and_dot_commands_return_two_word_results() {
+        let mut dsp = DspCoprocessor::new(&header(Mapper::LoRom, 0x03, 0x08, 0x00));
+
+        for word in [0x0012_u16, 300, 4] {
+            assert!(dsp.write(Mapper::LoRom, 0x308000, (word & 0xFF) as u8));
+            assert!(dsp.write(Mapper::LoRom, 0x308001, (word >> 8) as u8));
+        }
+        assert_eq!(dsp.read(Mapper::LoRom, 0x308000), Some(0xB0));
+        assert_eq!(dsp.read(Mapper::LoRom, 0x308001), Some(0x04));
+        assert_eq!(dsp.read(Mapper::LoRom, 0x308000), Some(0x00));
+        assert_eq!(dsp.read(Mapper::LoRom, 0x308001), Some(0x00));
+
+        for word in [0x0014_u16, 3, 4, 5, 6] {
+            assert!(dsp.write(Mapper::LoRom, 0x308000, (word & 0xFF) as u8));
+            assert!(dsp.write(Mapper::LoRom, 0x308001, (word >> 8) as u8));
+        }
+        assert_eq!(dsp.read(Mapper::LoRom, 0x308000), Some(39));
+        assert_eq!(dsp.read(Mapper::LoRom, 0x308001), Some(0));
+        assert_eq!(dsp.read(Mapper::LoRom, 0x308000), Some(0));
+        assert_eq!(dsp.read(Mapper::LoRom, 0x308001), Some(0));
     }
 }

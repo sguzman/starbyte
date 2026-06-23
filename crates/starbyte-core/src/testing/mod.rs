@@ -1,6 +1,7 @@
 //! Compliance and regression harness scaffolding.
 
 pub mod cpu_65816;
+pub mod rom;
 pub mod spc700;
 
 use std::path::{Path, PathBuf};

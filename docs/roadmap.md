@@ -10,9 +10,9 @@ Starbyte is being bootstrapped as a correctness-first, CLI-first SNES emulator w
 - [x] 65816 execution core
 - [x] SPC700 compliance harness and APU bootstrap
 - [x] Main SNES memory map and interrupt/timing model
-- [ ] DMA/HDMA correctness
-- [ ] PPU register model and frame generation
-- [ ] ROM-based CPU/APU/PPU regression suite
+- [x] DMA/HDMA correctness
+- [x] PPU register model and frame generation
+- [x] ROM-based CPU/APU/PPU regression suite
 - [ ] CLI usability and artifact management
 - [ ] Linux playable baseline
 - [ ] Save RAM and save states
@@ -67,19 +67,19 @@ Starbyte is being bootstrapped as a correctness-first, CLI-first SNES emulator w
 
 ### DMA/HDMA correctness
 
-- [ ] Implement DMA and HDMA around a testable controller model.
-- [ ] Verify timing-sensitive cases before optimizing transfer paths.
+- [x] Implement DMA and HDMA around a testable controller model.
+- [x] Verify timing-sensitive bootstrap cases before optimizing transfer paths.
 
 ### PPU register model and frame generation
 
-- [ ] Start with correctness-oriented register behavior and software rendering.
-- [ ] Target enough fidelity for test ROMs and early game boot before frontend polish.
-- [ ] Defer shaders, filters, and high-end presentation features.
+- [x] Start with correctness-oriented register behavior and software rendering.
+- [x] Target enough fidelity for bootstrap test ROMs and early game boot scaffolding before frontend polish.
+- [x] Defer shaders, filters, and high-end presentation features.
 
 ### ROM-based CPU/APU/PPU regression suite
 
-- [ ] Add pass/fail ROM execution support for CPU, APU, and PPU regression cases.
-- [ ] Keep test inputs local-only and configurable rather than vendor-shipped.
+- [x] Add pass/fail ROM execution support for CPU, APU, and PPU regression cases.
+- [x] Keep test inputs local-only and configurable rather than vendor-shipped.
 
 ### CLI usability and artifact management
 

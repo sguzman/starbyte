@@ -8,11 +8,11 @@ use crate::bus::{Address, Bus};
 use crate::cartridge::Cartridge;
 use crate::dma::DmaController;
 use crate::input::ControllerState;
+use crate::ppu::{FrameBuffer, Ppu};
 use crate::timing::TimingState;
 
 const WRAM_SIZE: usize = 128 * 1024;
 const LOW_WRAM_MIRROR_SIZE: usize = 0x2000;
-const PPU_REGISTER_COUNT: usize = 0x40;
 const APU_IO_PORT_COUNT: usize = 4;
 
 /// CPU-visible system bus state needed for bootstrap correctness work.
@@ -21,7 +21,7 @@ pub struct SystemBus {
     cartridge: Option<Cartridge>,
     save_ram: Vec<u8>,
     wram: Vec<u8>,
-    ppu_registers: Vec<u8>,
+    ppu: Ppu,
     apu_io: Vec<u8>,
     dma: DmaController,
     timing: TimingState,
@@ -39,7 +39,7 @@ impl Default for SystemBus {
             cartridge: None,
             save_ram: Vec::new(),
             wram: vec![0; WRAM_SIZE],
-            ppu_registers: vec![0; PPU_REGISTER_COUNT],
+            ppu: Ppu::default(),
             apu_io: vec![0; APU_IO_PORT_COUNT],
             dma: DmaController::default(),
             timing: TimingState::default(),
@@ -63,7 +63,7 @@ impl SystemBus {
     /// Clear transient system state while keeping the current cartridge installed.
     pub fn reset(&mut self) {
         self.wram.fill(0);
-        self.ppu_registers.fill(0);
+        self.ppu = Ppu::default();
         self.apu_io.fill(0);
         self.dma = DmaController::default();
         self.timing = TimingState::default();
@@ -78,6 +78,12 @@ impl SystemBus {
     /// Advance global timing and derive pending interrupt state from it.
     pub fn advance_master_clocks(&mut self, clocks: u64) {
         let events = self.timing.advance_master_clocks(clocks);
+        if events.started_new_frame {
+            self.initialize_hdma_channels();
+        }
+        if events.crossed_scanline {
+            self.step_hdma_for_scanline();
+        }
         if events.entered_vblank {
             trace!(
                 frame = self.timing.frame,
@@ -95,6 +101,17 @@ impl SystemBus {
     #[must_use]
     pub const fn timing(&self) -> &TimingState {
         &self.timing
+    }
+
+    /// Borrow the bootstrap PPU model.
+    #[must_use]
+    pub const fn ppu(&self) -> &Ppu {
+        &self.ppu
+    }
+
+    /// Render the current frame through the PPU model.
+    pub fn render_frame(&self, framebuffer: &mut FrameBuffer) {
+        self.ppu.render_frame(framebuffer);
     }
 
     /// Return the installed cartridge if present.
@@ -218,14 +235,160 @@ impl SystemBus {
         }
     }
 
+    fn execute_dma(&mut self, mask: u8) {
+        for channel_index in 0..8 {
+            if mask & (1 << channel_index) == 0 {
+                continue;
+            }
+
+            let mut channel = self.dma.channel(channel_index).copied().unwrap_or_default();
+            let pattern = DmaController::b_bus_offsets_for_mode(channel.transfer_mode());
+            let mut a_bus_address = channel.a_bus_address;
+            let transfer_length = channel.dma_length();
+
+            for offset_index in 0..transfer_length {
+                let a_full = (u32::from(channel.a_bus_bank) << 16) | u32::from(a_bus_address);
+                let b_full = 0x002100_u32
+                    + u32::from(channel.b_bus_address)
+                    + u32::from(pattern[offset_index % pattern.len()]);
+
+                if channel.reverse_transfer() {
+                    let value = self.read(b_full);
+                    self.write(a_full, value);
+                } else {
+                    let value = self.read(a_full);
+                    self.write(b_full, value);
+                }
+
+                if !channel.fixed_transfer() {
+                    a_bus_address = if channel.decrement_transfer() {
+                        a_bus_address.wrapping_sub(1)
+                    } else {
+                        a_bus_address.wrapping_add(1)
+                    };
+                }
+            }
+
+            channel.a_bus_address = a_bus_address;
+            channel.byte_count = 0;
+            self.dma.transfer_count = self
+                .dma
+                .transfer_count
+                .saturating_add(transfer_length as u64);
+            self.dma.set_channel(channel_index, channel);
+        }
+    }
+
+    fn initialize_hdma_channels(&mut self) {
+        let mask = self.dma.hdma_enable_mask();
+        for channel_index in 0..8 {
+            let Some(existing) = self.dma.channel(channel_index).copied() else {
+                continue;
+            };
+            let mut channel = existing;
+            if mask & (1 << channel_index) == 0 {
+                channel.hdma_active = false;
+                self.dma.set_channel(channel_index, channel);
+                continue;
+            }
+
+            channel.hdma_table_address = channel.a_bus_address;
+            channel.hdma_active = true;
+            self.reload_hdma_block(channel_index, &mut channel);
+            self.dma.set_channel(channel_index, channel);
+        }
+    }
+
+    fn step_hdma_for_scanline(&mut self) {
+        if self.timing.in_vblank() {
+            return;
+        }
+
+        let mask = self.dma.hdma_enable_mask();
+        for channel_index in 0..8 {
+            if mask & (1 << channel_index) == 0 {
+                continue;
+            }
+            let Some(existing) = self.dma.channel(channel_index).copied() else {
+                continue;
+            };
+            let mut channel = existing;
+            if !channel.hdma_active || channel.hdma_line_counter == 0 {
+                continue;
+            }
+
+            if !channel.hdma_repeat {
+                self.perform_hdma_transfer(&mut channel);
+            }
+
+            channel.hdma_line_counter = channel.hdma_line_counter.saturating_sub(1);
+            if channel.hdma_line_counter == 0 {
+                self.reload_hdma_block(channel_index, &mut channel);
+            } else {
+                channel.hdma_repeat = false;
+            }
+            self.dma.set_channel(channel_index, channel);
+        }
+    }
+
+    fn reload_hdma_block(&mut self, channel_index: usize, channel: &mut crate::dma::DmaChannel) {
+        let table_full =
+            (u32::from(channel.a_bus_bank) << 16) | u32::from(channel.hdma_table_address);
+        let line_descriptor = self.read(table_full);
+        channel.hdma_table_address = channel.hdma_table_address.wrapping_add(1);
+
+        if line_descriptor == 0 {
+            channel.hdma_active = false;
+            channel.hdma_line_counter = 0;
+            channel.hdma_repeat = false;
+            return;
+        }
+
+        channel.hdma_active = true;
+        channel.hdma_line_counter = line_descriptor & 0x7F;
+        channel.hdma_repeat = line_descriptor & 0x80 != 0;
+
+        if channel.hdma_indirect() {
+            let low = self.read(
+                (u32::from(channel.a_bus_bank) << 16) | u32::from(channel.hdma_table_address),
+            );
+            channel.hdma_table_address = channel.hdma_table_address.wrapping_add(1);
+            let high = self.read(
+                (u32::from(channel.a_bus_bank) << 16) | u32::from(channel.hdma_table_address),
+            );
+            channel.hdma_table_address = channel.hdma_table_address.wrapping_add(1);
+            channel.indirect_address = u16::from_le_bytes([low, high]);
+            channel.hdma_data_address = channel.indirect_address;
+        } else {
+            channel.hdma_data_address = channel.hdma_table_address;
+        }
+
+        let _ = channel_index;
+    }
+
+    fn perform_hdma_transfer(&mut self, channel: &mut crate::dma::DmaChannel) {
+        let pattern = DmaController::b_bus_offsets_for_mode(channel.transfer_mode());
+        for pattern_offset in pattern {
+            let source_address =
+                (u32::from(channel.a_bus_bank) << 16) | u32::from(channel.hdma_data_address);
+            let target_address =
+                0x002100_u32 + u32::from(channel.b_bus_address) + u32::from(*pattern_offset);
+            let value = self.read(source_address);
+            self.write(target_address, value);
+            channel.hdma_data_address = channel.hdma_data_address.wrapping_add(1);
+            self.dma.transfer_count = self.dma.transfer_count.saturating_add(1);
+        }
+
+        if !channel.hdma_indirect() {
+            channel.hdma_table_address = channel.hdma_data_address;
+        }
+    }
+
     fn read_mmio(&mut self, address: Address) -> Option<u8> {
         let register = (address & 0xFFFF) as u16;
 
         match register {
-            0x2100..=0x213F => {
-                let value = self.ppu_registers[usize::from(register - 0x2100)];
-                Some(value)
-            }
+            0x2100..=0x213F => Some(self.ppu.read_register(register)),
             0x2140..=0x2143 => Some(self.apu_io[usize::from(register - 0x2140)]),
             0x2180 => {
                 let value = self.wram[self.wram_address as usize % WRAM_SIZE];
@@ -266,7 +429,7 @@ impl SystemBus {
 
         match register {
             0x2100..=0x213F => {
-                self.ppu_registers[usize::from(register - 0x2100)] = value;
+                self.ppu.write_register(register, value);
                 Some(())
             }
             0x2140..=0x2143 => {
@@ -301,6 +464,19 @@ impl SystemBus {
                 self.nmitimen = value;
                 if self.nmi_enabled() && !nmi_was_enabled && self.timing.in_vblank() {
                     self.rdnmi = true;
+                }
+                Some(())
+            }
+            0x420B => {
+                self.dma.set_dma_enable_mask(value);
+                self.execute_dma(value);
+                self.dma.set_dma_enable_mask(0);
+                Some(())
+            }
+            0x420C => {
+                self.dma.set_hdma_enable_mask(value);
+                if self.timing.frame == 0 && self.timing.scanline == 0 && self.timing.dot == 0 {
+                    self.initialize_hdma_channels();
                 }
                 Some(())
             }
@@ -405,6 +581,7 @@ fn map_hirom_save_ram(address: Address, len: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use crate::cartridge::{Cartridge, Mapper};
+    use crate::ppu::FrameBuffer;
     use crate::timing::{DOTS_PER_SCANLINE, NTSC_SCANLINES_PER_FRAME, VBLANK_START_SCANLINE};
 
     use super::*;
@@ -527,6 +704,45 @@ mod tests {
     }
 
     #[test]
+    fn dma_can_stream_bytes_into_ppu_cgram() {
+        let mut bus = SystemBus::default();
+        bus.install_cartridge(make_cart(Mapper::LoRom));
+        bus.write(0x7E0000, 0x1F);
+        bus.write(0x7E0001, 0x00);
+        bus.write(0x002121, 0x00);
+        bus.write(0x004300, 0x02);
+        bus.write(0x004301, 0x22);
+        bus.write(0x004302, 0x00);
+        bus.write(0x004303, 0x00);
+        bus.write(0x004304, 0x7E);
+        bus.write(0x004305, 0x02);
+        bus.write(0x004306, 0x00);
+        bus.write(0x00420B, 0x01);
+
+        assert_eq!(&bus.ppu().cgram()[..2], &[0x1F, 0x00]);
+    }
+
+    #[test]
+    fn hdma_applies_one_line_of_direct_data() {
+        let mut bus = SystemBus::default();
+        bus.install_cartridge(make_cart(Mapper::LoRom));
+        bus.write(0x002121, 0x00);
+        bus.write(0x7E0100, 0x01);
+        bus.write(0x7E0101, 0x00);
+        bus.write(0x7E0102, 0x7C);
+        bus.write(0x7E0103, 0x00);
+        bus.write(0x004300, 0x02);
+        bus.write(0x004301, 0x22);
+        bus.write(0x004302, 0x00);
+        bus.write(0x004303, 0x01);
+        bus.write(0x004304, 0x7E);
+        bus.write(0x00420C, 0x01);
+        bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE));
+
+        assert_eq!(&bus.ppu().cgram()[..2], &[0x00, 0x7C]);
+    }
+
+    #[test]
     fn raises_nmi_and_irq_from_timing_progression() {
         let mut bus = SystemBus::default();
         bus.write(0x004200, 0x90);
@@ -551,5 +767,18 @@ mod tests {
         assert_eq!(bus.timing().frame, 1);
         assert_eq!(bus.timing().scanline, 0);
         assert_eq!(bus.timing().dot, 0);
+    }
+
+    #[test]
+    fn ppu_register_writes_drive_rendered_frame() {
+        let mut bus = SystemBus::default();
+        let mut frame = FrameBuffer::default();
+        bus.write(0x002121, 0x00);
+        bus.write(0x002122, 0x00);
+        bus.write(0x002122, 0x7C);
+        bus.write(0x00212C, 0x01);
+        bus.render_frame(&mut frame);
+
+        assert_eq!(&frame.pixels()[..4], &[248, 0, 0, 0xFF]);
     }
 }

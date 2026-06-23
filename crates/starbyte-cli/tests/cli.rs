@@ -31,6 +31,27 @@ fn write_test_ipl(path: &Path) {
     fs::write(path, vec![0_u8; SPC700_IPL_ROM_LEN]).unwrap();
 }
 
+fn write_regression_suite(dir: &Path) {
+    let rom = dir.join("regression.sfc");
+    write_test_rom(&rom);
+    fs::write(
+        dir.join("suite.json"),
+        r#"[{
+          "name":"ppu regression",
+          "rom":"regression.sfc",
+          "frames":1,
+          "setup_writes":[[8481,0],[8482,0],[8482,124],[8492,1]],
+          "expected":{
+            "frame":1,
+            "save_ram_len":2048,
+            "min_apu_steps":1,
+            "first_pixel_rgba":[248,0,0,255]
+          }
+        }]"#,
+    )
+    .unwrap();
+}
+
 #[test]
 fn print_config_toml_succeeds() {
     Command::cargo_bin("starbyte")
@@ -196,4 +217,32 @@ fn run_fails_for_mismatched_existing_save_ram() {
         ])
         .assert()
         .failure();
+}
+
+#[test]
+fn rom_regression_summary_works() {
+    let dir = tempdir().unwrap();
+    write_regression_suite(dir.path());
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args(["compliance", "rom-summary", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
+fn rom_regression_run_current_works() {
+    let dir = tempdir().unwrap();
+    write_regression_suite(dir.path());
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "compliance",
+            "rom-run-current",
+            dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
 }

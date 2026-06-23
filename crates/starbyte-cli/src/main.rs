@@ -118,6 +118,14 @@ enum ComplianceCommand {
         #[arg(long, default_value_t = 8)]
         max_failures: usize,
     },
+    /// Count files and fixtures in a ROM-based regression suite directory.
+    RomSummary { dir: PathBuf },
+    /// Execute ROM-based regression fixtures against the current emulator.
+    RomRunCurrent {
+        dir: PathBuf,
+        #[arg(long, default_value_t = 8)]
+        max_failures: usize,
+    },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -162,7 +170,7 @@ fn main() -> Result<()> {
     };
 
     match cli.command {
-        Command::Compliance(args) => run_compliance(args),
+        Command::Compliance(args) => run_compliance(args, assets),
         Command::Inspect { rom } => inspect_rom(rom),
         Command::Run(args) => run_rom(args, assets),
         Command::PrintConfig { format } => print_config(format),
@@ -218,7 +226,7 @@ fn inspect_rom(path: PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn run_compliance(args: ComplianceArgs) -> Result<()> {
+fn run_compliance(args: ComplianceArgs, assets: AssetConfig) -> Result<()> {
     match args.command {
         ComplianceCommand::Summary { suite, dir } => match suite {
             ComplianceSuite::Cpu65816 => {
@@ -294,6 +302,24 @@ fn run_compliance(args: ComplianceArgs) -> Result<()> {
                         );
                     }
                 }
+            }
+        }
+        ComplianceCommand::RomSummary { dir } => {
+            let summary = testing::rom::summarize(&dir)?;
+            println!("Suite: {}", summary.suite_name);
+            println!("Files: {}", summary.file_count);
+            println!("Vectors: {}", summary.vector_count);
+        }
+        ComplianceCommand::RomRunCurrent { dir, max_failures } => {
+            let fixtures = testing::rom::load_suite(&dir)?;
+            let summary = testing::rom::run_with_current_core(&fixtures, &assets, max_failures);
+            print_run_summary(&summary);
+            if summary.failed > 0 {
+                anyhow::bail!(
+                    "ROM regression failures: {} of {} fixtures failed",
+                    summary.failed,
+                    summary.total
+                );
             }
         }
     }

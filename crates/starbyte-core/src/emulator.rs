@@ -4,12 +4,15 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument};
 
 use crate::apu::{Apu, ApuStatus, AudioFrame};
+use crate::bus::Bus;
 use crate::cartridge::Cartridge;
 use crate::cpu_65816::Cpu65816;
+use crate::cpu_65816::registers::Registers;
 use crate::error::{Error, Result};
 use crate::manifest::AssetConfig;
 use crate::ppu::FrameBuffer;
 use crate::system::SystemBus;
+use crate::timing::TimingState;
 
 const CPU_BUS_CYCLE_MASTER_CYCLES: u64 = 6;
 
@@ -107,6 +110,7 @@ impl Emulator {
         while self.system.timing().frame == start_frame {
             self.step_instruction()?;
         }
+        self.system.render_frame(&mut self.frame_buffer);
         debug!(frame = self.system.timing().frame, "advanced to next frame");
         Ok(())
     }
@@ -189,6 +193,29 @@ impl Emulator {
         self.apu.load_configured_ipl_rom()
     }
 
+    /// Host-side write access used by bootstrap tests and regression fixtures.
+    pub fn host_write_u8(&mut self, address: u32, value: u8) {
+        self.system.write(address, value);
+    }
+
+    /// Host-side read access used by bootstrap tests and regression fixtures.
+    #[must_use]
+    pub fn host_read_u8(&mut self, address: u32) -> u8 {
+        self.system.read(address)
+    }
+
+    /// Borrow the current CPU register file.
+    #[must_use]
+    pub const fn cpu_registers(&self) -> &Registers {
+        &self.cpu.registers
+    }
+
+    /// Borrow the current timing state.
+    #[must_use]
+    pub const fn timing(&self) -> &TimingState {
+        self.system.timing()
+    }
+
     /// Return the loaded cartridge if any.
     #[must_use]
     pub const fn cartridge(&self) -> Option<&Cartridge> {
@@ -251,5 +278,24 @@ mod tests {
 
         assert_eq!(emulator.cpu.registers.pc, 0x8001);
         assert_eq!(emulator.system.timing().master_clock, 12);
+    }
+
+    #[test]
+    fn run_until_frame_renders_framebuffer() {
+        let mut rom = rom_bytes();
+        rom[0x7FFC] = 0x00;
+        rom[0x7FFD] = 0x80;
+        rom[0x0000] = 0xEA;
+        let cart = Cartridge::from_bytes(rom, None).unwrap();
+
+        let mut emulator = Emulator::default();
+        emulator.load_rom(cart);
+        emulator.host_write_u8(0x002121, 0x00);
+        emulator.host_write_u8(0x002122, 0x00);
+        emulator.host_write_u8(0x002122, 0x7C);
+        emulator.host_write_u8(0x00212C, 0x01);
+        emulator.run_until_frame().unwrap();
+
+        assert_eq!(emulator.framebuffer().pixels()[..4], [248, 0, 0, 0xFF]);
     }
 }

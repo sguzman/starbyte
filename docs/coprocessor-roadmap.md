@@ -35,29 +35,29 @@ This document tracks the coprocessor milestone at a lower level than the main ro
 - [x] Add deterministic bootstrap commands for validation of the protocol shape.
 - Variant-aware DSP scaffolding now distinguishes likely `DSP-1`, `DSP-1B`, `DSP-2`, `DSP-3`, and `DSP-4` titles, and the `0x1F` dump-style command path is in place for expanded validation.
 - The DSP FSM now also models a freeze command family and a broader opcode envelope so future command-accurate work has a better scaffold.
-- [ ] Replace bootstrap command behavior with authentic `DSP-1` command semantics.
+- [x] Replace bootstrap command behavior with authentic `DSP-1` command semantics.
 - [ ] Add command coverage for the real `DSP-1` operations needed by early target software.
-- [ ] Add regression inputs that validate operand packing and result ordering against known-good behavior.
+- [x] Add regression inputs that validate operand packing and result ordering against known-good behavior.
 - [ ] Reach a point where at least one `DSP-1` title or dedicated test path boots meaningfully.
+- The current DSP runtime now executes real `DSP-1` math/geometry commands for multiply, inverse, triangle, radius, range, distance, rotate, and polar paths, with command-latency staging and chip-level regression tests.
 
 ## Phase 3: DSP Family Maturity
 
-- [ ] Distinguish `DSP-1`, `DSP-1B`, `DSP-2`, `DSP-3`, and `DSP-4` where behavior diverges.
-- [ ] Add per-variant detection rules that do not break generic DSP cartridges.
-- [ ] Add timing/latency behavior only after command correctness is established.
+- [x] Distinguish `DSP-1`, `DSP-1B`, `DSP-2`, `DSP-3`, and `DSP-4` where behavior diverges.
+- [x] Add per-variant detection rules that do not break generic DSP cartridges.
+- [x] Add timing/latency behavior only after command correctness is established.
 - [ ] Add ROM-based regressions for each supported DSP variant.
-- Current code now has a `DspVariant` classification layer, but behavioral divergence still needs real chip-specific command semantics and regression coverage before this phase can be called complete.
-- The variant layer now sits alongside a freeze-aware DSP command path, but the real per-chip math still needs to be ported before this phase is done.
+- The current code now has a `DspVariant` classification layer plus variant-specific command-availability and dump behavior, but ROM-backed per-variant validation is still the main blocker before this phase can be called complete.
 
 ## Phase 4: SuperFX
 
 - [x] Define a bounded `SuperFX` coprocessor interface and memory-view model.
-- [ ] Model register file, instruction stepping, ROM/RAM access, and framebuffer interaction.
-- [ ] Integrate `SuperFX` timing with the main bus without destabilizing CPU correctness.
-- [ ] Add focused command/instruction tests before game-level compatibility claims.
+- [x] Model register file, instruction stepping, ROM/RAM access, and framebuffer interaction.
+- [x] Integrate `SuperFX` timing with the main bus without destabilizing CPU correctness.
+- [x] Add focused command/instruction tests before game-level compatibility claims.
 - [ ] Reach a meaningful boot/render baseline for an early `SuperFX` target.
-- The current runtime scaffold covers register routing, cache-window access, and timing hooks, but not full instruction execution or framebuffer production yet.
-- The scaffold now also has a visible cache-window roundtrip test so the boundary stays exercised while instruction emulation is still pending.
+- The current runtime now includes a bounded executable SuperFX core with cache-backed fetch, immediate loads, prefix handling, plotting, ROM-buffer reads, and framebuffer overlay output, all covered by targeted regression tests.
+- A synthetic execute-and-draw bootstrap path is now in place; the remaining gap is validating the same boundary with an actual early `SuperFX` software target rather than only a purpose-built test program.
 
 ## Phase 5: SA-1
 

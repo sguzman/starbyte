@@ -67,7 +67,7 @@ impl SystemBus {
             "installing cartridge"
         );
         self.save_ram = vec![0; cartridge.header().ram_size_bytes()];
-        self.coprocessor = Coprocessor::for_cartridge(cartridge.header());
+        self.coprocessor = Coprocessor::for_cartridge(&cartridge);
         self.cartridge = Some(cartridge);
     }
 
@@ -130,6 +130,9 @@ impl SystemBus {
     /// Render the current frame through the PPU model.
     pub fn render_frame(&self, framebuffer: &mut FrameBuffer) {
         self.ppu.render_frame(framebuffer);
+        if let Some(coprocessor) = &self.coprocessor {
+            coprocessor.render_overlay(framebuffer);
+        }
     }
 
     /// Return the installed cartridge if present.
@@ -767,14 +770,16 @@ mod tests {
         let mut bus = SystemBus::default();
         bus.install_cartridge(make_dsp_cart(Mapper::LoRom));
 
-        for word in [0x0010_u16, 9, 4] {
+        for word in [0x0000_u16, 0x4000, 0x4000] {
             bus.write(0x308000, (word & 0x00FF) as u8);
             bus.write(0x308001, (word >> 8) as u8);
         }
 
+        assert_eq!(bus.read(0x30C000), 0x20);
+        bus.advance_master_clocks(6);
         assert_eq!(bus.read(0x30C000), 0xC0);
-        assert_eq!(bus.read(0x308000), 13);
-        assert_eq!(bus.read(0x308001), 0);
+        assert_eq!(bus.read(0x308000), 0x00);
+        assert_eq!(bus.read(0x308001), 0x20);
         assert_eq!(bus.read(0x30C000), 0x80);
     }
 

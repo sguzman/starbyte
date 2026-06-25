@@ -27,6 +27,25 @@ fn write_test_rom(path: &Path) {
     fs::write(path, rom).unwrap();
 }
 
+fn write_test_rom_with_rom_type(path: &Path, rom_type: u8, title: &[u8; 21]) {
+    let mut rom = vec![0_u8; 0x10000];
+    let base = 0x7FC0;
+    rom[base..base + 21].copy_from_slice(title);
+    rom[base + 0x15] = 0x20;
+    rom[base + 0x16] = rom_type;
+    rom[base + 0x17] = 0x09;
+    rom[base + 0x18] = 0x01;
+    rom[base + 0x19] = 0x01;
+    rom[base + 0x1C] = 0x00;
+    rom[base + 0x1D] = 0xFF;
+    rom[base + 0x1E] = 0xFF;
+    rom[base + 0x1F] = 0x00;
+    rom[0x7FFC] = 0x00;
+    rom[0x7FFD] = 0x80;
+    rom[0x0000] = 0xEA;
+    fs::write(path, rom).unwrap();
+}
+
 fn write_test_ipl(path: &Path) {
     fs::write(path, vec![0_u8; SPC700_IPL_ROM_LEN]).unwrap();
 }
@@ -59,6 +78,22 @@ fn print_config_toml_succeeds() {
         .args(["print-config", "toml"])
         .assert()
         .success();
+}
+
+#[test]
+fn inspect_reports_detected_coprocessor() {
+    let dir = tempdir().unwrap();
+    let rom = dir.path().join("dsp.sfc");
+    write_test_rom_with_rom_type(&rom, 0x03, b"STARBYTE DSP TEST    ");
+
+    let assert = Command::cargo_bin("starbyte")
+        .unwrap()
+        .args(["inspect", rom.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    assert!(stdout.contains("Coprocessor: DSP"));
 }
 
 #[test]

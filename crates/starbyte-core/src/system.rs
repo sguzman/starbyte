@@ -1,7 +1,7 @@
 //! Bootstrap SNES system bus, WRAM, and timing-visible MMIO model.
 
 use serde::{Deserialize, Serialize};
-use tracing::trace;
+use tracing::{debug, trace};
 
 use crate::Result;
 use crate::bus::{Address, Bus};
@@ -59,6 +59,13 @@ impl Default for SystemBus {
 impl SystemBus {
     /// Install or replace the loaded cartridge.
     pub fn install_cartridge(&mut self, cartridge: Cartridge) {
+        let coprocessor_kind = cartridge.coprocessor_kind();
+        debug!(
+            title = %cartridge.header().title,
+            mapper = ?cartridge.mapper(),
+            coprocessor = ?coprocessor_kind,
+            "installing cartridge"
+        );
         self.save_ram = vec![0; cartridge.header().ram_size_bytes()];
         self.coprocessor = Coprocessor::for_cartridge(cartridge.header());
         self.cartridge = Some(cartridge);
@@ -68,6 +75,7 @@ impl SystemBus {
     pub fn reset(&mut self) {
         self.wram.fill(0);
         if let Some(coprocessor) = &mut self.coprocessor {
+            trace!(coprocessor = ?coprocessor.kind(), "resetting coprocessor runtime");
             coprocessor.reset();
         }
         self.ppu = Ppu::default();

@@ -234,6 +234,13 @@ fn inspect_rom(path: PathBuf) -> Result<()> {
 
     println!("Title: {}", cartridge.header().title);
     println!("Mapper: {:?}", cartridge.mapper());
+    println!(
+        "Coprocessor: {}",
+        cartridge
+            .coprocessor_kind()
+            .map(|kind| kind.to_string())
+            .unwrap_or_else(|| "none".to_owned())
+    );
     println!("Region: {:?}", cartridge.header().region);
     println!(
         "ROM size (declared): {} bytes",

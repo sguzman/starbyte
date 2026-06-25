@@ -1,7 +1,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
+use starbyte_core::Emulator;
 use starbyte_core::cartridge::Cartridge;
 use starbyte_core::timing::{DOTS_PER_SCANLINE, NTSC_SCANLINES_PER_FRAME, TimingState};
-use starbyte_core::Emulator;
 
 fn benchmark_step_instruction_without_rom(criterion: &mut Criterion) {
     criterion.bench_function("emulator_step_without_rom_error", |bench| {

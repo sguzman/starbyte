@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 
 use serde::{Deserialize, Serialize};
+use tracing::trace;
 
 use crate::bus::Address;
 use crate::cartridge::{CartridgeHeader, Mapper};
@@ -48,6 +49,20 @@ impl CoprocessorKind {
             0x5 => Some(Self::SRtc),
             0xF => Some(Self::Custom(0)),
             _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for CoprocessorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Dsp => f.write_str("DSP"),
+            Self::SuperFx => f.write_str("SuperFX"),
+            Self::Obc1 => f.write_str("OBC1"),
+            Self::Sa1 => f.write_str("SA-1"),
+            Self::Sdd1 => f.write_str("S-DD1"),
+            Self::SRtc => f.write_str("S-RTC"),
+            Self::Custom(value) => write!(f, "Custom(0x{value:02X})"),
         }
     }
 }
@@ -116,8 +131,17 @@ pub struct DspCoprocessor {
 
 impl DspCoprocessor {
     fn new(header: &CartridgeHeader) -> Self {
+        let map = DspAddressMap::for_header(header);
+        trace!(
+            target: "starbyte_core::coprocessor::dsp",
+            title = %header.title,
+            mapper = ?header.mapper,
+            map = ?map,
+            rom_type = header.rom_type,
+            "initializing DSP coprocessor"
+        );
         Self {
-            map: DspAddressMap::for_header(header),
+            map,
             status_register: DSP_STATUS_READY,
             write_latch: 0,
             read_latch: 0,
@@ -130,6 +154,10 @@ impl DspCoprocessor {
     }
 
     fn reset(&mut self) {
+        trace!(
+            target: "starbyte_core::coprocessor::dsp",
+            "resetting DSP coprocessor"
+        );
         self.status_register = DSP_STATUS_READY;
         self.write_latch = 0;
         self.read_latch = 0;
@@ -157,6 +185,13 @@ impl DspCoprocessor {
         match register {
             DspRegister::DataLow => {
                 self.read_high_pending = true;
+                trace!(
+                    target: "starbyte_core::coprocessor::dsp",
+                    address = %format_args!("{address:#08X}"),
+                    register = %register,
+                    value = value,
+                    "read DSP data low"
+                );
             }
             DspRegister::DataHigh => {
                 if self.read_high_pending {
@@ -164,8 +199,22 @@ impl DspCoprocessor {
                     self.read_high_pending = false;
                 }
                 self.refresh_status();
+                trace!(
+                    target: "starbyte_core::coprocessor::dsp",
+                    address = %format_args!("{address:#08X}"),
+                    register = %register,
+                    value = value,
+                    "read DSP data high"
+                );
             }
-            DspRegister::Status => {}
+            DspRegister::Status => {
+                trace!(
+                    target: "starbyte_core::coprocessor::dsp",
+                    address = %format_args!("{address:#08X}"),
+                    value = value,
+                    "read DSP status"
+                );
+            }
         }
 
         Some(value)
@@ -180,6 +229,13 @@ impl DspCoprocessor {
             DspRegister::DataLow => {
                 self.write_latch = (self.write_latch & 0xFF00) | u16::from(value);
                 self.low_byte_latched = true;
+                trace!(
+                    target: "starbyte_core::coprocessor::dsp",
+                    address = %format_args!("{address:#08X}"),
+                    register = %register,
+                    value = value,
+                    "latched DSP data low byte"
+                );
             }
             DspRegister::DataHigh => {
                 self.write_latch = (self.write_latch & 0x00FF) | (u16::from(value) << 8);
@@ -187,9 +243,23 @@ impl DspCoprocessor {
                     self.accept_word(self.write_latch as i16);
                 }
                 self.low_byte_latched = false;
+                trace!(
+                    target: "starbyte_core::coprocessor::dsp",
+                    address = %format_args!("{address:#08X}"),
+                    register = %register,
+                    value = value,
+                    word = self.write_latch,
+                    "latched DSP data high byte"
+                );
             }
             DspRegister::Status => {
                 self.status_register = value;
+                trace!(
+                    target: "starbyte_core::coprocessor::dsp",
+                    address = %format_args!("{address:#08X}"),
+                    value = value,
+                    "wrote DSP status"
+                );
             }
         }
 
@@ -199,9 +269,24 @@ impl DspCoprocessor {
     fn accept_word(&mut self, word: i16) {
         if let Some(command) = self.active_command {
             self.operand_words.push(word);
+            trace!(
+                target: "starbyte_core::coprocessor::dsp",
+                command = ?command,
+                operand = word,
+                collected = self.operand_words.len(),
+                required = command.operand_count(),
+                "accepted DSP operand"
+            );
             if self.operand_words.len() >= command.operand_count() {
                 let operands = std::mem::take(&mut self.operand_words);
                 let results = command.execute(&operands);
+                trace!(
+                    target: "starbyte_core::coprocessor::dsp",
+                    command = ?command,
+                    operands = ?operands,
+                    results = ?results,
+                    "executed DSP command"
+                );
                 self.result_words = results.into();
                 self.active_command = None;
                 self.read_high_pending = false;
@@ -213,8 +298,23 @@ impl DspCoprocessor {
         }
 
         let command = DspCommand::from_opcode(word as u16);
+        trace!(
+            target: "starbyte_core::coprocessor::dsp",
+            opcode = word as u16,
+            command = ?command,
+            operand_count = command.operand_count(),
+            "accepted DSP command opcode"
+        );
         if command.operand_count() == 0 {
-            self.result_words = command.execute(&[]).into();
+            let results = command.execute(&[]);
+            trace!(
+                target: "starbyte_core::coprocessor::dsp",
+                opcode = word as u16,
+                command = ?command,
+                results = ?results,
+                "executed DSP command"
+            );
+            self.result_words = results.into();
         } else {
             self.active_command = Some(command);
             self.operand_words.clear();
@@ -229,6 +329,7 @@ impl DspCoprocessor {
     }
 
     fn refresh_status(&mut self) {
+        let previous = self.status_register;
         let mut status = DSP_STATUS_READY;
         if !self.result_words.is_empty() {
             status |= DSP_STATUS_DATA_AVAILABLE;
@@ -237,6 +338,16 @@ impl DspCoprocessor {
             status |= DSP_STATUS_COMMAND_WAITING;
         }
         self.status_register = status;
+        if previous != status {
+            trace!(
+                target: "starbyte_core::coprocessor::dsp",
+                previous = previous,
+                current = status,
+                has_result = !self.result_words.is_empty(),
+                waiting_for_operand = self.active_command.is_some(),
+                "updated DSP status"
+            );
+        }
     }
 }
 
@@ -316,7 +427,9 @@ impl DspAddressMap {
     fn for_header(header: &CartridgeHeader) -> Self {
         match header.mapper {
             Mapper::HiRom => Self::HiRom,
-            Mapper::LoRom if header.rom_size_bytes() > (1024 * 1024) || header.ram_size_bytes() > 0 => {
+            Mapper::LoRom
+                if header.rom_size_bytes() > (1024 * 1024) || header.ram_size_bytes() > 0 =>
+            {
                 Self::LoRom2MiB
             }
             Mapper::LoRom => Self::LoRom1MiB,
@@ -388,6 +501,16 @@ enum DspRegister {
     Status,
 }
 
+impl std::fmt::Display for DspRegister {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DataLow => f.write_str("data-low"),
+            Self::DataHigh => f.write_str("data-high"),
+            Self::Status => f.write_str("status"),
+        }
+    }
+}
+
 const fn byte_register(offset: u16) -> DspRegister {
     if offset & 0x0001 == 0 {
         DspRegister::DataLow
@@ -402,7 +525,12 @@ mod tests {
 
     use super::*;
 
-    fn header(mapper: Mapper, rom_type: u8, rom_size_code: u8, ram_size_code: u8) -> CartridgeHeader {
+    fn header(
+        mapper: Mapper,
+        rom_type: u8,
+        rom_size_code: u8,
+        ram_size_code: u8,
+    ) -> CartridgeHeader {
         CartridgeHeader {
             title: "DSP TEST".to_owned(),
             mapper,
@@ -430,7 +558,10 @@ mod tests {
             CoprocessorKind::detect(&header(Mapper::LoRom, 0x35, 0x09, 0)),
             Some(CoprocessorKind::Sa1)
         );
-        assert_eq!(CoprocessorKind::detect(&header(Mapper::LoRom, 0x00, 0x09, 0)), None);
+        assert_eq!(
+            CoprocessorKind::detect(&header(Mapper::LoRom, 0x00, 0x09, 0)),
+            None
+        );
     }
 
     #[test]

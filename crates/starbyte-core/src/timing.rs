@@ -43,8 +43,7 @@ impl TimingState {
         let dots_per_scanline = u64::from(DOTS_PER_SCANLINE);
         let scanlines_per_frame = u64::from(NTSC_SCANLINES_PER_FRAME);
         let dots_per_frame = dots_per_scanline * scanlines_per_frame;
-        let start_dot_index =
-            u64::from(self.scanline) * dots_per_scanline + u64::from(self.dot);
+        let start_dot_index = u64::from(self.scanline) * dots_per_scanline + u64::from(self.dot);
         let end_dot_index = start_dot_index + clocks;
 
         let start_frame_offset = start_dot_index / dots_per_frame;

@@ -5,10 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use starbyte_core::{
-    Emulator, EmulatorBuilder,
-    cartridge::Cartridge,
-    input::ControllerState,
-    manifest::AssetConfig,
+    Emulator, EmulatorBuilder, cartridge::Cartridge, input::ControllerState, manifest::AssetConfig,
 };
 
 /// Read-only session status exported to frontend shells.
@@ -78,7 +75,9 @@ impl FrontendSession {
 
     /// Advance the emulator by one frame.
     pub fn run_frame(&mut self) -> Result<()> {
-        self.emulator.run_until_frame().context("failed to run frame")
+        self.emulator
+            .run_until_frame()
+            .context("failed to run frame")
     }
 
     /// Advance the emulator by a fixed number of frames.

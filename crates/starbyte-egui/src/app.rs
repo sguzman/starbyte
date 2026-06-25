@@ -1,9 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use eframe::egui::{
-    self, ColorImage, RichText, TextureHandle, TextureOptions, Vec2,
-};
+use eframe::egui::{self, ColorImage, RichText, TextureHandle, TextureOptions, Vec2};
 use tracing::warn;
 
 use starbyte_core::input::ControllerState;
@@ -70,11 +68,8 @@ impl StarbyteApp {
         if let Some(texture) = &mut self.framebuffer_texture {
             texture.set(image, TextureOptions::NEAREST);
         } else {
-            self.framebuffer_texture = Some(ctx.load_texture(
-                "starbyte-framebuffer",
-                image,
-                TextureOptions::NEAREST,
-            ));
+            self.framebuffer_texture =
+                Some(ctx.load_texture("starbyte-framebuffer", image, TextureOptions::NEAREST));
         }
     }
 
@@ -131,7 +126,10 @@ impl StarbyteApp {
 
     fn draw_frame(&mut self, ui: &mut egui::Ui) {
         ui.heading("Display");
-        ui.label(RichText::new("bsnes-inspired information density, but still intentionally modular").small());
+        ui.label(
+            RichText::new("bsnes-inspired information density, but still intentionally modular")
+                .small(),
+        );
         ui.separator();
 
         if let Some(texture) = &self.framebuffer_texture {
@@ -174,7 +172,9 @@ fn fit_size(source: Vec2, available: Vec2) -> Vec2 {
     if source.x <= 0.0 || source.y <= 0.0 {
         return source;
     }
-    let scale = (available.x / source.x).min(available.y / source.y).max(1.0);
+    let scale = (available.x / source.x)
+        .min(available.y / source.y)
+        .max(1.0);
     Vec2::new(source.x * scale, source.y * scale)
 }
 

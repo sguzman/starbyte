@@ -23,8 +23,8 @@ This document tracks the coprocessor milestone at a lower level than the main ro
 - [x] Install coprocessor runtime state when a cartridge is loaded.
 - [x] Route mapped bus reads and writes through the coprocessor before ROM fallback.
 - [x] Keep coprocessor state serializable for save states.
-- [ ] Add tracing domains for per-chip command traffic and timing.
-- [ ] Add CLI-facing ROM inspection output for detected coprocessor family.
+- [x] Add tracing domains for per-chip command traffic and timing.
+- [x] Add CLI-facing ROM inspection output for detected coprocessor family.
 
 ## Phase 2: DSP Family Bootstrap
 

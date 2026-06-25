@@ -72,6 +72,8 @@ impl std::fmt::Display for CoprocessorKind {
 pub enum Coprocessor {
     /// Bootstrap DSP register model with minimal command plumbing.
     Dsp(DspCoprocessor),
+    /// Bounded SuperFX register and cache model.
+    SuperFx(SuperFxCoprocessor),
 }
 
 impl Coprocessor {
@@ -80,6 +82,7 @@ impl Coprocessor {
     pub fn for_cartridge(header: &CartridgeHeader) -> Option<Self> {
         match CoprocessorKind::detect(header)? {
             CoprocessorKind::Dsp => Some(Self::Dsp(DspCoprocessor::new(header))),
+            CoprocessorKind::SuperFx => Some(Self::SuperFx(SuperFxCoprocessor::new(header))),
             _ => None,
         }
     }
@@ -89,6 +92,7 @@ impl Coprocessor {
     pub const fn kind(&self) -> CoprocessorKind {
         match self {
             Self::Dsp(_) => CoprocessorKind::Dsp,
+            Self::SuperFx(_) => CoprocessorKind::SuperFx,
         }
     }
 
@@ -96,6 +100,7 @@ impl Coprocessor {
     pub fn reset(&mut self) {
         match self {
             Self::Dsp(dsp) => dsp.reset(),
+            Self::SuperFx(superfx) => superfx.reset(),
         }
     }
 
@@ -104,6 +109,7 @@ impl Coprocessor {
     pub fn read(&mut self, mapper: Mapper, address: Address) -> Option<u8> {
         match self {
             Self::Dsp(dsp) => dsp.read(mapper, address),
+            Self::SuperFx(superfx) => superfx.read(mapper, address),
         }
     }
 
@@ -111,6 +117,69 @@ impl Coprocessor {
     pub fn write(&mut self, mapper: Mapper, address: Address, value: u8) -> bool {
         match self {
             Self::Dsp(dsp) => dsp.write(mapper, address, value),
+            Self::SuperFx(superfx) => superfx.write(mapper, address, value),
+        }
+    }
+
+    /// Advance coprocessor-internal timing, if the active chip model uses it.
+    pub fn step_master_cycles(&mut self, clocks: u64) {
+        match self {
+            Self::Dsp(_) => {}
+            Self::SuperFx(superfx) => superfx.step(clocks),
+        }
+    }
+}
+
+/// Coarse DSP family revision derived from the cartridge metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DspVariant {
+    /// DSP-1 baseline behavior.
+    Dsp1,
+    /// DSP-1B with the alternate data ROM observed in later boards.
+    Dsp1B,
+    /// DSP-2 family.
+    Dsp2,
+    /// DSP-3 family.
+    Dsp3,
+    /// DSP-4 family.
+    Dsp4,
+    /// We detected a DSP cartridge but could not refine the revision.
+    Unknown,
+}
+
+impl DspVariant {
+    /// Detect a likely DSP revision from the cartridge title and chipset byte.
+    #[must_use]
+    pub fn detect(header: &CartridgeHeader) -> Self {
+        let title = header.title.to_ascii_uppercase();
+        if title.contains("DSP-4") {
+            return Self::Dsp4;
+        }
+        if title.contains("DSP-3") {
+            return Self::Dsp3;
+        }
+        if title.contains("DSP-2") {
+            return Self::Dsp2;
+        }
+        if title.contains("DSP-1B") || title.contains("DSP1B") || title.contains("1B") {
+            return Self::Dsp1B;
+        }
+        if header.rom_type >= 0x03 {
+            return Self::Dsp1;
+        }
+        Self::Unknown
+    }
+}
+
+impl std::fmt::Display for DspVariant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Dsp1 => f.write_str("DSP-1"),
+            Self::Dsp1B => f.write_str("DSP-1B"),
+            Self::Dsp2 => f.write_str("DSP-2"),
+            Self::Dsp3 => f.write_str("DSP-3"),
+            Self::Dsp4 => f.write_str("DSP-4"),
+            Self::Unknown => f.write_str("unknown DSP"),
         }
     }
 }
@@ -118,6 +187,7 @@ impl Coprocessor {
 /// Bootstrap DSP-family runtime model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DspCoprocessor {
+    variant: DspVariant,
     map: DspAddressMap,
     status_register: u8,
     write_latch: u16,
@@ -131,16 +201,19 @@ pub struct DspCoprocessor {
 
 impl DspCoprocessor {
     fn new(header: &CartridgeHeader) -> Self {
+        let variant = DspVariant::detect(header);
         let map = DspAddressMap::for_header(header);
         trace!(
             target: "starbyte_core::coprocessor::dsp",
             title = %header.title,
             mapper = ?header.mapper,
+            variant = %variant,
             map = ?map,
             rom_type = header.rom_type,
             "initializing DSP coprocessor"
         );
         Self {
+            variant,
             map,
             status_register: DSP_STATUS_READY,
             write_latch: 0,
@@ -156,6 +229,7 @@ impl DspCoprocessor {
     fn reset(&mut self) {
         trace!(
             target: "starbyte_core::coprocessor::dsp",
+            variant = %self.variant,
             "resetting DSP coprocessor"
         );
         self.status_register = DSP_STATUS_READY;
@@ -279,10 +353,11 @@ impl DspCoprocessor {
             );
             if self.operand_words.len() >= command.operand_count() {
                 let operands = std::mem::take(&mut self.operand_words);
-                let results = command.execute(&operands);
+                let results = command.execute(&operands, self.variant);
                 trace!(
                     target: "starbyte_core::coprocessor::dsp",
                     command = ?command,
+                    variant = %self.variant,
                     operands = ?operands,
                     results = ?results,
                     "executed DSP command"
@@ -302,15 +377,17 @@ impl DspCoprocessor {
             target: "starbyte_core::coprocessor::dsp",
             opcode = word as u16,
             command = ?command,
+            variant = %self.variant,
             operand_count = command.operand_count(),
             "accepted DSP command opcode"
         );
         if command.operand_count() == 0 {
-            let results = command.execute(&[]);
+            let results = command.execute(&[], self.variant);
             trace!(
                 target: "starbyte_core::coprocessor::dsp",
                 opcode = word as u16,
                 command = ?command,
+                variant = %self.variant,
                 results = ?results,
                 "executed DSP command"
             );
@@ -360,6 +437,7 @@ enum DspCommand {
     Multiply,
     Abs,
     Dot2,
+    MemoryDump,
     Unknown(u16),
 }
 
@@ -373,6 +451,7 @@ impl DspCommand {
             0x0012 => Self::Multiply,
             0x0013 => Self::Abs,
             0x0014 => Self::Dot2,
+            0x001F => Self::MemoryDump,
             value => Self::Unknown(value),
         }
     }
@@ -380,16 +459,24 @@ impl DspCommand {
     const fn operand_count(self) -> usize {
         match self {
             Self::Reset | Self::Signature | Self::Unknown(_) => 0,
+            Self::MemoryDump => 1,
             Self::Abs => 1,
             Self::Add | Self::Subtract | Self::Multiply => 2,
             Self::Dot2 => 4,
         }
     }
 
-    fn execute(self, operands: &[i16]) -> Vec<i16> {
+    fn execute(self, operands: &[i16], variant: DspVariant) -> Vec<i16> {
         match self {
             Self::Reset => vec![0],
-            Self::Signature => vec![i16::MIN],
+            Self::Signature => vec![match variant {
+                DspVariant::Dsp1B => i16::MIN + 1,
+                DspVariant::Dsp2 => i16::MIN + 2,
+                DspVariant::Dsp3 => i16::MIN + 3,
+                DspVariant::Dsp4 => i16::MIN + 4,
+                DspVariant::Unknown => i16::MIN,
+                DspVariant::Dsp1 => i16::MIN,
+            }],
             Self::Add => vec![operands[0].saturating_add(operands[1])],
             Self::Subtract => vec![operands[0].saturating_sub(operands[1])],
             Self::Abs => vec![operands[0].saturating_abs()],
@@ -410,6 +497,22 @@ impl DspCommand {
                     i16::from_le_bytes([bytes[0], bytes[1]]),
                     i16::from_le_bytes([bytes[2], bytes[3]]),
                 ]
+            }
+            Self::MemoryDump => {
+                let seed: u16 = match variant {
+                    DspVariant::Dsp1B => 0x1B1B,
+                    DspVariant::Dsp2 => 0x2D2D,
+                    DspVariant::Dsp3 => 0x3D3D,
+                    DspVariant::Dsp4 => 0x4D4D,
+                    DspVariant::Unknown | DspVariant::Dsp1 => 0x1111,
+                };
+                let seed = seed.wrapping_add(operands.first().copied().unwrap_or_default() as u16);
+                (0..1024)
+                    .map(|index| {
+                        let value = seed.wrapping_add(index as u16);
+                        i16::from_le_bytes(value.to_le_bytes())
+                    })
+                    .collect()
             }
             Self::Unknown(opcode) => vec![opcode as i16],
         }
@@ -490,6 +593,307 @@ impl DspAddressMap {
             0x6000..=0x6FFF => Some(byte_register(offset)),
             0x7000..=0x7FFF => Some(DspRegister::Status),
             _ => None,
+        }
+    }
+}
+
+/// Minimal SuperFX address-map classification used for register routing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum SuperFxMap {
+    /// SuperFX-1 style board layout.
+    SuperFx1,
+    /// SuperFX-2 style board layout.
+    SuperFx2,
+}
+
+impl SuperFxMap {
+    fn for_header(header: &CartridgeHeader) -> Self {
+        if header.mapper == Mapper::HiRom || header.rom_size_bytes() > (2 * 1024 * 1024) {
+            Self::SuperFx2
+        } else {
+            Self::SuperFx1
+        }
+    }
+}
+
+impl std::fmt::Display for SuperFxMap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SuperFx1 => f.write_str("SuperFX-1"),
+            Self::SuperFx2 => f.write_str("SuperFX-2"),
+        }
+    }
+}
+
+/// Bounded SuperFX register and cache model.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SuperFxCoprocessor {
+    map: SuperFxMap,
+    regs: [u16; 16],
+    sfr: u16,
+    bramr: u8,
+    pbr: u8,
+    rombr: u8,
+    cfgr: u8,
+    scbr: u8,
+    clsr: u8,
+    scmr: u8,
+    vcr: u8,
+    rambr: u8,
+    cbr: u16,
+    cache: Vec<u8>,
+    cache_valid: Vec<bool>,
+    running: bool,
+    cycles: u64,
+}
+
+impl SuperFxCoprocessor {
+    fn new(header: &CartridgeHeader) -> Self {
+        let map = SuperFxMap::for_header(header);
+        trace!(
+            target: "starbyte_core::coprocessor::superfx",
+            title = %header.title,
+            mapper = ?header.mapper,
+            map = %map,
+            rom_type = header.rom_type,
+            "initializing SuperFX coprocessor"
+        );
+        Self {
+            map,
+            regs: [0; 16],
+            sfr: 0,
+            bramr: 0,
+            pbr: 0,
+            rombr: 0,
+            cfgr: 0,
+            scbr: 0,
+            clsr: 0,
+            scmr: 0,
+            vcr: 0,
+            rambr: 0,
+            cbr: 0,
+            cache: vec![0xFF; 0x200],
+            cache_valid: vec![false; 0x20],
+            running: false,
+            cycles: 0,
+        }
+    }
+
+    fn reset(&mut self) {
+        trace!(
+            target: "starbyte_core::coprocessor::superfx",
+            map = %self.map,
+            "resetting SuperFX coprocessor"
+        );
+        self.regs = [0; 16];
+        self.sfr = 0;
+        self.bramr = 0;
+        self.pbr = 0;
+        self.rombr = 0;
+        self.cfgr = 0;
+        self.scbr = 0;
+        self.clsr = 0;
+        self.scmr = 0;
+        self.vcr = 0;
+        self.rambr = 0;
+        self.cbr = 0;
+        self.cache.fill(0xFF);
+        self.cache_valid.fill(false);
+        self.running = false;
+        self.cycles = 0;
+    }
+
+    fn step(&mut self, clocks: u64) {
+        self.cycles = self.cycles.saturating_add(clocks);
+        if self.running {
+            trace!(
+                target: "starbyte_core::coprocessor::superfx",
+                cycles = self.cycles,
+                "advanced SuperFX runtime"
+            );
+        }
+    }
+
+    fn read(&mut self, mapper: Mapper, address: Address) -> Option<u8> {
+        self.decode(mapper, address).map(|register| match register {
+            SuperFxRegister::R(index, half) => {
+                let value = self.regs[index];
+                let byte = if half {
+                    (value >> 8) as u8
+                } else {
+                    value as u8
+                };
+                trace!(
+                    target: "starbyte_core::coprocessor::superfx",
+                    address = %format_args!("{address:#08X}"),
+                    register = %register,
+                    value = byte,
+                    "read SuperFX register"
+                );
+                byte
+            }
+            SuperFxRegister::SfrLow => (self.sfr & 0x00FF) as u8,
+            SuperFxRegister::SfrHigh => {
+                let value = (self.sfr >> 8) as u8;
+                trace!(
+                    target: "starbyte_core::coprocessor::superfx",
+                    address = %format_args!("{address:#08X}"),
+                    register = %register,
+                    value = value,
+                    "read SuperFX status"
+                );
+                value
+            }
+            SuperFxRegister::Bramr => self.bramr,
+            SuperFxRegister::Pbr => self.pbr,
+            SuperFxRegister::Rombr => self.rombr,
+            SuperFxRegister::Cfgr => self.cfgr,
+            SuperFxRegister::Scbr => self.scbr,
+            SuperFxRegister::Clsr => self.clsr,
+            SuperFxRegister::Scmr => self.scmr,
+            SuperFxRegister::Vcr => self.vcr,
+            SuperFxRegister::Rambr => self.rambr,
+            SuperFxRegister::CbrLow => (self.cbr & 0x00FF) as u8,
+            SuperFxRegister::CbrHigh => (self.cbr >> 8) as u8,
+            SuperFxRegister::Cache(offset) => self.cache[offset],
+        })
+    }
+
+    fn write(&mut self, mapper: Mapper, address: Address, value: u8) -> bool {
+        let Some(register) = self.decode(mapper, address) else {
+            return false;
+        };
+
+        match register {
+            SuperFxRegister::R(index, half) => {
+                let current = self.regs[index];
+                self.regs[index] = if half {
+                    (current & 0x00FF) | (u16::from(value) << 8)
+                } else {
+                    (current & 0xFF00) | u16::from(value)
+                };
+                if index == 14 && half {
+                    self.rombr = (self.regs[index] & 0x7F) as u8;
+                }
+                if index == 15 && half {
+                    self.running = true;
+                }
+                trace!(
+                    target: "starbyte_core::coprocessor::superfx",
+                    address = %format_args!("{address:#08X}"),
+                    register = %register,
+                    value = value,
+                    "wrote SuperFX register"
+                );
+            }
+            SuperFxRegister::SfrLow => {
+                let prior = self.sfr;
+                self.sfr = (self.sfr & 0xFF00) | u16::from(value);
+                if (prior & 0x0001) != 0 && (self.sfr & 0x0001) == 0 {
+                    self.cbr = 0;
+                    self.flush_cache();
+                }
+            }
+            SuperFxRegister::SfrHigh => {
+                self.sfr = (u16::from(value) << 8) | (self.sfr & 0x00FF);
+            }
+            SuperFxRegister::Bramr => self.bramr = value & 0x01,
+            SuperFxRegister::Pbr => {
+                self.pbr = value & 0x7F;
+                self.flush_cache();
+            }
+            SuperFxRegister::Rombr => self.rombr = value & 0x7F,
+            SuperFxRegister::Cfgr => self.cfgr = value,
+            SuperFxRegister::Scbr => self.scbr = value,
+            SuperFxRegister::Clsr => self.clsr = value & 0x01,
+            SuperFxRegister::Scmr => self.scmr = value,
+            SuperFxRegister::Vcr => self.vcr = value,
+            SuperFxRegister::Rambr => self.rambr = value & 0x01,
+            SuperFxRegister::CbrLow => self.cbr = (self.cbr & 0xFF00) | u16::from(value),
+            SuperFxRegister::CbrHigh => self.cbr = (u16::from(value) << 8) | (self.cbr & 0x00FF),
+            SuperFxRegister::Cache(offset) => self.cache[offset] = value,
+        }
+
+        true
+    }
+
+    fn flush_cache(&mut self) {
+        self.cache_valid.fill(false);
+    }
+
+    fn decode(&self, mapper: Mapper, address: Address) -> Option<SuperFxRegister> {
+        let _ = mapper;
+        let bank = ((address >> 16) & 0xFF) as u8;
+        let offset = (address & 0xFFFF) as u16;
+
+        match offset {
+            0x3000..=0x301F => {
+                let index = usize::from((offset & 0x1E) >> 1);
+                Some(SuperFxRegister::R(index, offset & 1 == 1))
+            }
+            0x3030 => Some(SuperFxRegister::SfrLow),
+            0x3031 => Some(SuperFxRegister::SfrHigh),
+            0x3033 => Some(SuperFxRegister::Bramr),
+            0x3034 => Some(SuperFxRegister::Pbr),
+            0x3036 => Some(SuperFxRegister::Rombr),
+            0x3037 => Some(SuperFxRegister::Cfgr),
+            0x3038 => Some(SuperFxRegister::Scbr),
+            0x3039 => Some(SuperFxRegister::Clsr),
+            0x303A => Some(SuperFxRegister::Scmr),
+            0x303B => Some(SuperFxRegister::Vcr),
+            0x303C => Some(SuperFxRegister::Rambr),
+            0x303E => Some(SuperFxRegister::CbrLow),
+            0x303F => Some(SuperFxRegister::CbrHigh),
+            0x3100..=0x32FF => {
+                let offset = usize::from(offset - 0x3100);
+                Some(SuperFxRegister::Cache(offset))
+            }
+            _ => match self.map {
+                SuperFxMap::SuperFx1 if bank <= 0x7F => None,
+                SuperFxMap::SuperFx2 if bank <= 0x7F => None,
+                _ => None,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum SuperFxRegister {
+    R(usize, bool),
+    SfrLow,
+    SfrHigh,
+    Bramr,
+    Pbr,
+    Rombr,
+    Cfgr,
+    Scbr,
+    Clsr,
+    Scmr,
+    Vcr,
+    Rambr,
+    CbrLow,
+    CbrHigh,
+    Cache(usize),
+}
+
+impl std::fmt::Display for SuperFxRegister {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::R(index, half) => write!(f, "r{index}{}", if *half { ".hi" } else { ".lo" }),
+            Self::SfrLow => f.write_str("sfr.lo"),
+            Self::SfrHigh => f.write_str("sfr.hi"),
+            Self::Bramr => f.write_str("bramr"),
+            Self::Pbr => f.write_str("pbr"),
+            Self::Rombr => f.write_str("rombr"),
+            Self::Cfgr => f.write_str("cfgr"),
+            Self::Scbr => f.write_str("scbr"),
+            Self::Clsr => f.write_str("clsr"),
+            Self::Scmr => f.write_str("scmr"),
+            Self::Vcr => f.write_str("vcr"),
+            Self::Rambr => f.write_str("rambr"),
+            Self::CbrLow => f.write_str("cbr.lo"),
+            Self::CbrHigh => f.write_str("cbr.hi"),
+            Self::Cache(offset) => write!(f, "cache[{offset:#04X}]"),
         }
     }
 }
@@ -635,5 +1039,36 @@ mod tests {
         assert_eq!(dsp.read(Mapper::LoRom, 0x308001), Some(0));
         assert_eq!(dsp.read(Mapper::LoRom, 0x308000), Some(0));
         assert_eq!(dsp.read(Mapper::LoRom, 0x308001), Some(0));
+    }
+
+    #[test]
+    fn dsp_variant_detection_prefers_specific_titles() {
+        let mut dsp1b = header(Mapper::LoRom, 0x03, 0x08, 0x00);
+        dsp1b.title = "STARBYTE DSP-1B TEST".to_owned();
+        assert_eq!(DspVariant::detect(&dsp1b), DspVariant::Dsp1B);
+
+        let mut dsp4 = header(Mapper::LoRom, 0x03, 0x08, 0x00);
+        dsp4.title = "STARBYTE DSP-4 TEST".to_owned();
+        assert_eq!(DspVariant::detect(&dsp4), DspVariant::Dsp4);
+    }
+
+    #[test]
+    fn dsp_memory_dump_returns_a_large_result_set() {
+        let mut dsp = DspCoprocessor::new(&header(Mapper::LoRom, 0x03, 0x08, 0x00));
+        assert!(dsp.write(Mapper::LoRom, 0x308000, 0x1f));
+        assert!(dsp.write(Mapper::LoRom, 0x308001, 0x00));
+        assert!(dsp.write(Mapper::LoRom, 0x308000, 0x34));
+        assert!(dsp.write(Mapper::LoRom, 0x308001, 0x12));
+
+        assert_eq!(dsp.result_words.len(), 1024);
+        assert_eq!(dsp.read(Mapper::LoRom, 0x308000), Some(0x45));
+        assert_eq!(dsp.read(Mapper::LoRom, 0x308001), Some(0x23));
+    }
+
+    #[test]
+    fn coprocessor_factory_routes_superfx_carts() {
+        let header = header(Mapper::LoRom, 0x13, 0x09, 0x00);
+        let coprocessor = Coprocessor::for_cartridge(&header).unwrap();
+        assert_eq!(coprocessor.kind(), CoprocessorKind::SuperFx);
     }
 }

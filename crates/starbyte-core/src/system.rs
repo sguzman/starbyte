@@ -93,6 +93,9 @@ impl SystemBus {
     /// Advance global timing and derive pending interrupt state from it.
     pub fn advance_master_clocks(&mut self, clocks: u64) {
         let events = self.timing.advance_master_clocks(clocks);
+        if let Some(coprocessor) = &mut self.coprocessor {
+            coprocessor.step_master_cycles(clocks);
+        }
         if events.started_new_frame {
             self.initialize_hdma_channels();
         }
@@ -628,6 +631,10 @@ mod tests {
     use super::*;
 
     fn make_cart(mapper: Mapper) -> Cartridge {
+        make_cart_with_rom_type(mapper, 0x00)
+    }
+
+    fn make_cart_with_rom_type(mapper: Mapper, rom_type: u8) -> Cartridge {
         let mut rom = match mapper {
             Mapper::LoRom => vec![0_u8; 0x10000],
             Mapper::HiRom => vec![0_u8; 0x20000],
@@ -641,7 +648,7 @@ mod tests {
             Mapper::LoRom => 0x20,
             Mapper::HiRom => 0x21,
         };
-        rom[base + 0x16] = 0x00;
+        rom[base + 0x16] = rom_type;
         rom[base + 0x17] = if matches!(mapper, Mapper::HiRom) {
             0x0A
         } else {
@@ -726,6 +733,32 @@ mod tests {
         assert!(matches!(
             bus.coprocessor().map(crate::coprocessor::Coprocessor::kind),
             Some(crate::coprocessor::CoprocessorKind::Dsp)
+        ));
+    }
+
+    #[test]
+    fn routes_superfx_register_reads_and_writes_before_rom() {
+        let mut bus = SystemBus::default();
+        bus.install_cartridge(make_cart_with_rom_type(Mapper::LoRom, 0x13));
+
+        bus.write(0x003000, 0x78);
+        bus.write(0x003001, 0x56);
+        bus.write(0x003030, 0x01);
+        bus.write(0x003031, 0x80);
+        bus.write(0x003034, 0x12);
+        bus.write(0x00303E, 0x34);
+        bus.write(0x00303F, 0x12);
+
+        assert_eq!(bus.read(0x003000), 0x78);
+        assert_eq!(bus.read(0x003001), 0x56);
+        assert_eq!(bus.read(0x003030), 0x01);
+        assert_eq!(bus.read(0x003031), 0x80);
+        assert_eq!(bus.read(0x003034), 0x12);
+        assert_eq!(bus.read(0x00303E), 0x34);
+        assert_eq!(bus.read(0x00303F), 0x12);
+        assert!(matches!(
+            bus.coprocessor().map(crate::coprocessor::Coprocessor::kind),
+            Some(crate::coprocessor::CoprocessorKind::SuperFx)
         ));
     }
 

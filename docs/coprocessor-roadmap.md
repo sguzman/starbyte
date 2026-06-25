@@ -33,6 +33,7 @@ This document tracks the coprocessor milestone at a lower level than the main ro
 - [x] Implement a command/operand/result state machine instead of a single-word stub.
 - [x] Expose status bits for ready, operand wait, and result availability.
 - [x] Add deterministic bootstrap commands for validation of the protocol shape.
+- Variant-aware DSP scaffolding now distinguishes likely `DSP-1`, `DSP-1B`, `DSP-2`, `DSP-3`, and `DSP-4` titles, and the `0x1F` dump-style command path is in place for expanded validation.
 - [ ] Replace bootstrap command behavior with authentic `DSP-1` command semantics.
 - [ ] Add command coverage for the real `DSP-1` operations needed by early target software.
 - [ ] Add regression inputs that validate operand packing and result ordering against known-good behavior.
@@ -44,14 +45,16 @@ This document tracks the coprocessor milestone at a lower level than the main ro
 - [ ] Add per-variant detection rules that do not break generic DSP cartridges.
 - [ ] Add timing/latency behavior only after command correctness is established.
 - [ ] Add ROM-based regressions for each supported DSP variant.
+- Current code now has a `DspVariant` classification layer, but behavioral divergence still needs real chip-specific command semantics and regression coverage before this phase can be called complete.
 
 ## Phase 4: SuperFX
 
-- [ ] Define a bounded `SuperFX` coprocessor interface and memory-view model.
+- [x] Define a bounded `SuperFX` coprocessor interface and memory-view model.
 - [ ] Model register file, instruction stepping, ROM/RAM access, and framebuffer interaction.
 - [ ] Integrate `SuperFX` timing with the main bus without destabilizing CPU correctness.
 - [ ] Add focused command/instruction tests before game-level compatibility claims.
 - [ ] Reach a meaningful boot/render baseline for an early `SuperFX` target.
+- The current runtime scaffold covers register routing, cache-window access, and timing hooks, but not full instruction execution or framebuffer production yet.
 
 ## Phase 5: SA-1
 

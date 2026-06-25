@@ -638,6 +638,10 @@ mod tests {
     }
 
     fn make_cart_with_rom_type(mapper: Mapper, rom_type: u8) -> Cartridge {
+        make_cart_with_title_and_rom_type(mapper, rom_type, b"STARBYTE SYSTEM BUS  ")
+    }
+
+    fn make_cart_with_title_and_rom_type(mapper: Mapper, rom_type: u8, title: &[u8; 21]) -> Cartridge {
         let mut rom = match mapper {
             Mapper::LoRom => vec![0_u8; 0x10000],
             Mapper::HiRom => vec![0_u8; 0x20000],
@@ -646,7 +650,7 @@ mod tests {
             Mapper::LoRom => 0x7FC0,
             Mapper::HiRom => 0xFFC0,
         };
-        rom[base..base + 21].copy_from_slice(b"STARBYTE SYSTEM BUS  ");
+        rom[base..base + 21].copy_from_slice(title);
         rom[base + 0x15] = match mapper {
             Mapper::LoRom => 0x20,
             Mapper::HiRom => 0x21,
@@ -762,6 +766,87 @@ mod tests {
         assert!(matches!(
             bus.coprocessor().map(crate::coprocessor::Coprocessor::kind),
             Some(crate::coprocessor::CoprocessorKind::SuperFx)
+        ));
+    }
+
+    #[test]
+    fn routes_sa1_mmio_and_shared_ram_before_rom() {
+        let mut bus = SystemBus::default();
+        bus.install_cartridge(make_cart_with_rom_type(Mapper::LoRom, 0x34));
+
+        bus.write(0x002202, 0x78);
+        bus.write(0x002203, 0x56);
+        bus.write(0x002206, 0x08);
+        bus.write(0x002208, 0x55);
+        bus.write(0x00220A, 0x01);
+        bus.write(0x002200, 0x80);
+        bus.write(0x003000, 0xAA);
+        bus.write(0x406000, 0xCC);
+        bus.advance_master_clocks(8);
+
+        assert_eq!(bus.read(0x002201), 0xC0);
+        assert_eq!(bus.read(0x002209), 0x88);
+        assert_eq!(bus.read(0x003000), 0xAA);
+        assert_eq!(bus.read(0x406000), 0xCC);
+        assert!(matches!(
+            bus.coprocessor().map(crate::coprocessor::Coprocessor::kind),
+            Some(crate::coprocessor::CoprocessorKind::Sa1)
+        ));
+    }
+
+    #[test]
+    fn routes_cx4_command_window_before_rom() {
+        let mut bus = SystemBus::default();
+        bus.install_cartridge(make_cart_with_title_and_rom_type(Mapper::LoRom, 0xF3, b"STARBYTE CX4 TEST    "));
+
+        for (address, value) in [
+            (0x006000, 3),
+            (0x006001, 0),
+            (0x006002, 4),
+            (0x006003, 0),
+            (0x006004, 12),
+            (0x006005, 0),
+            (0x007F40, 0x10),
+        ] {
+            bus.write(address, value);
+        }
+        bus.advance_master_clocks(10);
+
+        assert_eq!(bus.read(0x006010), 13);
+        assert_eq!(bus.read(0x006011), 0);
+        assert_eq!(bus.read(0x007F41), 0x81);
+        assert!(matches!(
+            bus.coprocessor().map(crate::coprocessor::Coprocessor::kind),
+            Some(crate::coprocessor::CoprocessorKind::Cx4)
+        ));
+    }
+
+    #[test]
+    fn routes_secondary_chip_register_windows_before_rom() {
+        let mut sdd1 = SystemBus::default();
+        sdd1.install_cartridge(make_cart_with_rom_type(Mapper::LoRom, 0x43));
+        sdd1.write(0x004800, 0x01);
+        sdd1.write(0x004801, 0x01);
+        sdd1.write(0x004804, 0x82);
+        sdd1.write(0x004804, 0x41);
+        sdd1.advance_master_clocks(4);
+        assert_eq!(sdd1.read(0x004806), 0x81);
+        assert_eq!(sdd1.read(0x004805), 0x41);
+
+        let mut obc1 = SystemBus::default();
+        obc1.install_cartridge(make_cart_with_rom_type(Mapper::LoRom, 0x23));
+        obc1.write(0x007FF6, 0x05);
+        obc1.write(0x007FF0, 0x12);
+        assert_eq!(obc1.read(0x007FF0), 0x12);
+
+        let mut srtc = SystemBus::default();
+        srtc.install_cartridge(make_cart_with_rom_type(Mapper::LoRom, 0x53));
+        srtc.write(0x002801, 0x0E);
+        srtc.write(0x002801, 0x0F);
+        assert_eq!(srtc.read(0x002800), 0x01);
+        assert!(matches!(
+            srtc.coprocessor().map(crate::coprocessor::Coprocessor::kind),
+            Some(crate::coprocessor::CoprocessorKind::SRtc)
         ));
     }
 

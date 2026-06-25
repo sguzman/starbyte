@@ -405,12 +405,22 @@ mod tests {
         let dsp3 = dir.path().join("dsp3.sfc");
         let dsp4 = dir.path().join("dsp4.sfc");
         let superfx = dir.path().join("superfx.sfc");
+        let sa1 = dir.path().join("sa1.sfc");
+        let cx4 = dir.path().join("cx4.sfc");
+        let sdd1 = dir.path().join("sdd1.sfc");
+        let obc1 = dir.path().join("obc1.sfc");
+        let srtc = dir.path().join("srtc.sfc");
 
         write_coprocessor_rom(&dsp1, b"STARBYTE DSP-1 TEST  ", 0x03, 0x00, &[]);
         write_coprocessor_rom(&dsp1b, b"STARBYTE DSP-1B TEST ", 0x03, 0x00, &[]);
         write_coprocessor_rom(&dsp2, b"STARBYTE DSP-2 TEST  ", 0x03, 0x00, &[]);
         write_coprocessor_rom(&dsp3, b"STARBYTE DSP-3 TEST  ", 0x03, 0x00, &[]);
         write_coprocessor_rom(&dsp4, b"STARBYTE DSP-4 TEST  ", 0x03, 0x00, &[]);
+        write_coprocessor_rom(&sa1, b"STARBYTE SA-1 TEST   ", 0x34, 0x01, &[]);
+        write_coprocessor_rom(&cx4, b"STARBYTE CX4 TEST    ", 0xF3, 0x01, &[]);
+        write_coprocessor_rom(&sdd1, b"STARBYTE S-DD1 TEST  ", 0x43, 0x00, &[]);
+        write_coprocessor_rom(&obc1, b"STARBYTE OBC1 TEST   ", 0x23, 0x00, &[]);
+        write_coprocessor_rom(&srtc, b"STARBYTE SRTC TEST   ", 0x53, 0x00, &[]);
         write_coprocessor_rom(
             &superfx,
             b"STARBYTE SUPERFX ROM ",
@@ -473,6 +483,41 @@ mod tests {
                   "expected_reads":[[3178496,13],[3178497,0]],
                   "expected":{{"frame":1,"save_ram_len":0,"min_apu_steps":1}}
                 }},{{
+                  "name":"sa1 boot baseline",
+                  "rom":"sa1.sfc",
+                  "frames":1,
+                  "setup_writes":[[8706,120],[8707,86],[8710,8],[8712,85],[8714,1],[8704,128],[12288,170],[4210688,204]],
+                  "expected_reads":[[8705,192],[8713,136],[8716,120],[8717,86],[12288,170],[4210688,204]],
+                  "expected":{{"frame":1,"save_ram_len":2048,"min_apu_steps":1}}
+                }},{{
+                  "name":"cx4 length",
+                  "rom":"cx4.sfc",
+                  "frames":1,
+                  "setup_writes":[[24576,3],[24577,0],[24578,4],[24579,0],[24580,12],[24581,0],[32576,16]],
+                  "expected_reads":[[24592,13],[24593,0],[32577,129]],
+                  "expected":{{"frame":1,"save_ram_len":2048,"min_apu_steps":1}}
+                }},{{
+                  "name":"sdd1 decompress",
+                  "rom":"sdd1.sfc",
+                  "frames":1,
+                  "setup_writes":[[18432,1],[18433,1],[18436,130],[18436,65]],
+                  "expected_reads":[[18438,129],[18437,65],[18437,65],[18437,65]],
+                  "expected":{{"frame":1,"save_ram_len":0,"min_apu_steps":1}}
+                }},{{
+                  "name":"obc1 object window",
+                  "rom":"obc1.sfc",
+                  "frames":1,
+                  "setup_writes":[[32758,5],[32752,18],[32753,52]],
+                  "expected_reads":[[32752,18],[32753,52]],
+                  "expected":{{"frame":1,"save_ram_len":0,"min_apu_steps":1}}
+                }},{{
+                  "name":"srtc latched digits",
+                  "rom":"srtc.sfc",
+                  "frames":1,
+                  "setup_writes":[[10241,14],[10241,15]],
+                  "expected_reads":[[10240,1],[10240,0]],
+                  "expected":{{"frame":1,"save_ram_len":0,"min_apu_steps":1}}
+                }},{{
                   "name":"superfx overlay",
                   "rom":"superfx.sfc",
                   "frames":1,
@@ -487,6 +532,6 @@ mod tests {
         let fixtures = load_suite(dir.path()).unwrap();
         let run = run_with_current_core(&fixtures, &AssetConfig::default(), 8);
         assert_eq!(run.failed, 0, "{run:#?}");
-        assert_eq!(run.passed, 6);
+        assert_eq!(run.passed, 11);
     }
 }

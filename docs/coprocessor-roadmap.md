@@ -63,30 +63,33 @@ This document tracks the coprocessor milestone at a lower level than the main ro
 
 ## Phase 5: SA-1
 
-- [ ] Design the `SA-1` boundary as a second CPU-class subsystem rather than a lightweight peripheral.
-- [ ] Model shared memory, MMIO, interrupts, and synchronization with the base 65816.
-- [ ] Add dedicated compliance-style tests for `SA-1` host interaction.
-- [ ] Reach a deterministic boot baseline for an early `SA-1` target.
+- [x] Design the `SA-1` boundary as a second CPU-class subsystem rather than a lightweight peripheral.
+- [x] Model shared memory, MMIO, interrupts, and synchronization with the base 65816.
+- [x] Add dedicated compliance-style tests for `SA-1` host interaction.
+- [x] Reach a deterministic boot baseline for an early `SA-1` target.
+- The current SA-1 runtime exposes a bounded second-CPU boundary with MMIO control, internal RAM, BW-RAM, host mailboxes, interrupt signaling, and a deterministic boot-complete handshake that is covered by system and ROM-regression tests.
 
 ## Phase 6: Cx4
 
-- [ ] Add `Cx4` detection and register interface.
-- [ ] Implement core math/transform behavior needed by target software.
-- [ ] Add regression cases for command inputs and outputs.
-- [ ] Reach a meaningful in-game execution baseline for a `Cx4` title.
+- [x] Add `Cx4` detection and register interface.
+- [x] Implement core math/transform behavior needed by target software.
+- [x] Add regression cases for command inputs and outputs.
+- [x] Reach a meaningful in-game execution baseline for a `Cx4` title.
+- The current Cx4 runtime now detects dedicated boards, exposes a bounded register/RAM window, and executes length, rotate, and perspective-style transform commands with system and ROM-regression coverage.
 
 ## Phase 7: S-DD1 And Others
 
-- [ ] Add `S-DD1` detection and decompression-path modeling.
-- [ ] Add `OBC1` support.
-- [ ] Add `S-RTC` support.
-- [ ] Reassess any other enhancement chips after the major compatibility chips are stable.
+- [x] Add `S-DD1` detection and decompression-path modeling.
+- [x] Add `OBC1` support.
+- [x] Add `S-RTC` support.
+- [x] Reassess any other enhancement chips after the major compatibility chips are stable.
+- The secondary-chip pass now includes a bounded S-DD1 stream/decompression model, an OBC1 object-window controller, and a deterministic S-RTC serial time source, all routed through the system bus and regression harness.
 
 ## Completion Criteria
 
 - [x] `DSP-1` is meaningfully usable and regression-tested.
 - [x] `SuperFX` has a tested boot/render baseline.
-- [ ] `SA-1` has a tested boot baseline.
-- [ ] `Cx4` has targeted command or game-path validation.
-- [ ] At least one secondary chip from the `S-DD1` / `OBC1` / `S-RTC` group is implemented correctly.
+- [x] `SA-1` has a tested boot baseline.
+- [x] `Cx4` has targeted command or game-path validation.
+- [x] At least one secondary chip from the `S-DD1` / `OBC1` / `S-RTC` group is implemented correctly.
 - [ ] The top-level `Coprocessor support` milestone can be checked off without overstating compatibility.

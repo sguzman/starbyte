@@ -261,4 +261,33 @@ mod tests {
         let cart = Cartridge::from_bytes(rom, None).unwrap();
         assert_eq!(cart.coprocessor_kind(), Some(CoprocessorKind::Dsp));
     }
+
+    #[test]
+    fn detects_additional_coprocessor_families_from_header() {
+        let mut sa1 = make_header(Mapper::LoRom);
+        sa1[0x7FC0..0x7FC0 + 21].copy_from_slice(b"STARBYTE SA-1 TEST   ");
+        sa1[0x7FC0 + 0x16] = 0x34;
+
+        let mut cx4 = make_header(Mapper::LoRom);
+        cx4[0x7FC0..0x7FC0 + 21].copy_from_slice(b"STARBYTE CX4 TEST    ");
+        cx4[0x7FC0 + 0x16] = 0xF3;
+
+        let mut sdd1 = make_header(Mapper::LoRom);
+        sdd1[0x7FC0..0x7FC0 + 21].copy_from_slice(b"STARBYTE S-DD1 TEST  ");
+        sdd1[0x7FC0 + 0x16] = 0x43;
+
+        let mut obc1 = make_header(Mapper::LoRom);
+        obc1[0x7FC0..0x7FC0 + 21].copy_from_slice(b"STARBYTE OBC1 TEST   ");
+        obc1[0x7FC0 + 0x16] = 0x23;
+
+        let mut srtc = make_header(Mapper::LoRom);
+        srtc[0x7FC0..0x7FC0 + 21].copy_from_slice(b"STARBYTE SRTC TEST   ");
+        srtc[0x7FC0 + 0x16] = 0x53;
+
+        assert_eq!(Cartridge::from_bytes(sa1, None).unwrap().coprocessor_kind(), Some(CoprocessorKind::Sa1));
+        assert_eq!(Cartridge::from_bytes(cx4, None).unwrap().coprocessor_kind(), Some(CoprocessorKind::Cx4));
+        assert_eq!(Cartridge::from_bytes(sdd1, None).unwrap().coprocessor_kind(), Some(CoprocessorKind::Sdd1));
+        assert_eq!(Cartridge::from_bytes(obc1, None).unwrap().coprocessor_kind(), Some(CoprocessorKind::Obc1));
+        assert_eq!(Cartridge::from_bytes(srtc, None).unwrap().coprocessor_kind(), Some(CoprocessorKind::SRtc));
+    }
 }

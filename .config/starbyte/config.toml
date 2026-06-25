@@ -14,7 +14,36 @@ integer_scale = true
 scale = 3
 vsync = true
 
-[input.bindings]
+[input]
+active_device = "keyboard"
+
+[input.keyboard_bindings]
+a = "Space"
+b = "J"
+down = "D"
+l = "A"
+left = "S"
+r = "Semicolon"
+right = "F"
+select = "G"
+start = "H"
+up = "E"
+x = "K"
+y = "L"
+
+[input.gamepad_bindings]
+a = "South"
+b = "East"
+down = "DPadDown"
+l = "LeftTrigger2"
+left = "DPadLeft"
+r = "RightTrigger2"
+right = "DPadRight"
+select = "Select"
+start = "Start"
+up = "DPadUp"
+x = "West"
+y = "North"
 
 [cheats]
 show_cheat_badges = false
@@ -46,5 +75,5 @@ log_auto_scroll = true
 left_panel_width = 400.9375
 library_panel_width = 420.0
 details_panel_width = 260.0
-right_panel_width = 320.0
-log_panel_height = 160.5625
+right_panel_width = 328.0
+log_panel_height = 157.5625

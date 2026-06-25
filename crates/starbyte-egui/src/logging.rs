@@ -7,6 +7,7 @@ use std::{
 };
 
 use anyhow::Result;
+use starbyte_core::manifest::AppMode;
 use tracing_subscriber::{EnvFilter, fmt::writer::MakeWriter};
 
 pub type SharedLogBuffer = Arc<Mutex<VecDeque<String>>>;
@@ -15,12 +16,12 @@ const MAX_LOG_LINES: usize = 2_000;
 
 #[derive(Clone)]
 struct GuiLogWriterFactory {
-    file: Arc<Mutex<File>>,
+    file: Option<Arc<Mutex<File>>>,
     lines: SharedLogBuffer,
 }
 
 struct GuiLogWriter {
-    file: Arc<Mutex<File>>,
+    file: Option<Arc<Mutex<File>>>,
     lines: SharedLogBuffer,
     pending: Vec<u8>,
 }
@@ -39,7 +40,9 @@ impl<'a> MakeWriter<'a> for GuiLogWriterFactory {
 
 impl Write for GuiLogWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if let Ok(mut file) = self.file.lock() {
+        if let Some(file) = &self.file
+            && let Ok(mut file) = file.lock()
+        {
             file.write_all(buf)?;
             file.flush()?;
         }
@@ -65,24 +68,32 @@ impl Write for GuiLogWriter {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        if let Ok(mut file) = self.file.lock() {
+        if let Some(file) = &self.file
+            && let Ok(mut file) = file.lock()
+        {
             file.flush()?;
         }
         io::stderr().flush()
     }
 }
 
-pub fn install_tracing(cache_root: &Path, filter: &str) -> Result<SharedLogBuffer> {
-    let log_dir = cache_root.join("logs");
-    fs::create_dir_all(&log_dir)?;
-    let log_path = log_dir.join("starbyte-egui.log");
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)?;
+pub fn install_tracing(cache_root: &Path, filter: &str, mode: AppMode) -> Result<SharedLogBuffer> {
+    let file = if mode == AppMode::Dev {
+        let log_dir = cache_root.join("logs");
+        fs::create_dir_all(&log_dir)?;
+        let log_path = log_dir.join("starbyte-egui.log");
+        Some(Arc::new(Mutex::new(
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_path)?,
+        )))
+    } else {
+        None
+    };
     let lines = Arc::new(Mutex::new(VecDeque::new()));
     let writer = GuiLogWriterFactory {
-        file: Arc::new(Mutex::new(file)),
+        file,
         lines: lines.clone(),
     };
 

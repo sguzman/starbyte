@@ -53,7 +53,7 @@ fn main() -> Result<()> {
         config_path: args.config.clone(),
     };
     let config_path = assets.config_path();
-    let mut config = RuntimeConfig::load_or_default(&config_path)?;
+    let mut config = load_runtime_config(&assets)?;
     let cache_root = config
         .library
         .cache_dir
@@ -61,10 +61,11 @@ fn main() -> Result<()> {
         .or_else(|| assets.cache_dir.clone())
         .unwrap_or_else(|| assets.cache_root());
     let filter = env::var("STARBYTE_LOG").unwrap_or_else(|_| config.log_filter.clone());
-    let log_lines = install_tracing(&cache_root, &filter)?;
+    let log_lines = install_tracing(&cache_root, &filter, config.mode)?;
     info!(
         config_path = %config_path.display(),
         cache_root = %cache_root.display(),
+        mode = ?config.mode,
         filter = %filter,
         "starting starbyte egui"
     );
@@ -103,4 +104,20 @@ fn main() -> Result<()> {
         }),
     )
     .map_err(|error| anyhow::anyhow!("failed to launch egui frontend: {error}"))
+}
+
+fn load_runtime_config(assets: &AssetConfig) -> Result<RuntimeConfig> {
+    let config_path = assets.config_path();
+    if assets.config_path.is_some() || config_path.exists() {
+        return RuntimeConfig::load_or_default(&config_path)
+            .map_err(anyhow::Error::from);
+    }
+
+    let legacy_path = assets.legacy_config_path();
+    if legacy_path.exists() {
+        return RuntimeConfig::load_or_default(&legacy_path)
+            .map_err(anyhow::Error::from);
+    }
+
+    Ok(RuntimeConfig::default())
 }

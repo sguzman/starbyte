@@ -274,6 +274,24 @@ fn main() -> Result<()> {
     }
 }
 
+fn load_runtime_config(assets: &AssetConfig) -> Result<RuntimeConfig> {
+    let config_path = assets.config_path();
+    if assets.config_path.is_some() || config_path.exists() {
+        return RuntimeConfig::load_or_default(&config_path)
+            .with_context(|| format!("failed to load config from {}", config_path.display()))
+            .map_err(anyhow::Error::from);
+    }
+
+    let legacy_path = assets.legacy_config_path();
+    if legacy_path.exists() {
+        return RuntimeConfig::load_or_default(&legacy_path)
+            .with_context(|| format!("failed to load legacy config from {}", legacy_path.display()))
+            .map_err(anyhow::Error::from);
+    }
+
+    Ok(RuntimeConfig::default())
+}
+
 fn install_tracing(logging: &LoggingArgs) -> Result<()> {
     let filter = logging
         .log_filter
@@ -333,8 +351,7 @@ fn inspect_rom(path: PathBuf) -> Result<()> {
 fn run_library(args: LibraryArgs, assets: AssetConfig) -> Result<()> {
     let config_path = assets.config_path();
     info!(config_path = %config_path.display(), cache_root = %assets.cache_root().display(), "starting library command");
-    let mut config = RuntimeConfig::load_or_default(&config_path)
-        .with_context(|| format!("failed to load config from {}", config_path.display()))?;
+    let mut config = load_runtime_config(&assets)?;
 
     let target_args = match &args.command {
         LibraryCommand::Scan(scan) => scan.target.clone(),

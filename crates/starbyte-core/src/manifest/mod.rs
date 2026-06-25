@@ -39,7 +39,13 @@ impl AssetConfig {
     pub fn config_path(&self) -> PathBuf {
         self.config_path
             .clone()
-            .unwrap_or_else(|| self.cache_root().join("config.toml"))
+            .unwrap_or_else(|| PathBuf::from(".config").join("starbyte").join("config.toml"))
+    }
+
+    /// Resolve the legacy configuration path used before config relocation.
+    #[must_use]
+    pub fn legacy_config_path(&self) -> PathBuf {
+        self.cache_root().join("config.toml")
     }
 }
 
@@ -203,6 +209,22 @@ impl Default for AdvancedSettings {
     }
 }
 
+/// Runtime shell mode used to tune logging and diagnostics defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppMode {
+    /// Development mode with verbose local diagnostics.
+    Dev,
+    /// Production mode with quieter local side effects.
+    Prod,
+}
+
+impl Default for AppMode {
+    fn default() -> Self {
+        Self::Dev
+    }
+}
+
 /// Persistent GUI layout and logging panel settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiSettings {
@@ -248,6 +270,9 @@ impl Default for UiSettings {
 /// User-tunable runtime options that should survive frontend changes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeConfig {
+    /// Runtime operating mode.
+    #[serde(default)]
+    pub mode: AppMode,
     /// Logging filter used by `tracing_subscriber`.
     #[serde(default = "default_log_filter")]
     pub log_filter: String,
@@ -281,7 +306,7 @@ impl RuntimeConfig {
     /// Return the default configuration path used by CLI and GUI shells.
     #[must_use]
     pub fn default_path() -> PathBuf {
-        PathBuf::from(".cache").join("starbyte").join("config.toml")
+        PathBuf::from(".config").join("starbyte").join("config.toml")
     }
 
     /// Load a config file if it exists, otherwise return defaults.
@@ -309,6 +334,7 @@ impl RuntimeConfig {
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
+            mode: AppMode::default(),
             log_filter: default_log_filter(),
             prefer_dark_mode: default_prefer_dark_mode(),
             audio: AudioSettings::default(),
@@ -334,13 +360,14 @@ const fn default_prefer_dark_mode() -> bool {
 mod tests {
     use tempfile::tempdir;
 
-    use super::{AssetConfig, LibraryViewMode, RuntimeConfig};
+    use super::{AppMode, AssetConfig, LibraryViewMode, RuntimeConfig};
 
     #[test]
     fn asset_config_resolves_default_paths() {
         let config = AssetConfig::default();
         assert_eq!(config.cache_root(), std::path::PathBuf::from(".cache").join("starbyte"));
-        assert_eq!(config.config_path(), std::path::PathBuf::from(".cache").join("starbyte").join("config.toml"));
+        assert_eq!(config.config_path(), std::path::PathBuf::from(".config").join("starbyte").join("config.toml"));
+        assert_eq!(config.legacy_config_path(), std::path::PathBuf::from(".cache").join("starbyte").join("config.toml"));
     }
 
     #[test]
@@ -350,6 +377,7 @@ mod tests {
         let mut config = RuntimeConfig::default();
         config.library.active_view = LibraryViewMode::Detailed;
         config.library.rom_dirs.push(temp_dir.path().join("roms"));
+        config.mode = AppMode::Prod;
         config.ui.show_log_panel = false;
         config.ui.details_panel_width = 512.0;
         config.cheats
@@ -360,6 +388,7 @@ mod tests {
         let loaded = RuntimeConfig::load_or_default(&path).unwrap();
         assert_eq!(loaded.library.active_view, LibraryViewMode::Detailed);
         assert_eq!(loaded.library.rom_dirs.len(), 1);
+        assert_eq!(loaded.mode, AppMode::Prod);
         assert!(!loaded.ui.show_log_panel);
         assert_eq!(loaded.ui.details_panel_width, 512.0);
         assert_eq!(
@@ -371,5 +400,28 @@ mod tests {
                 .unwrap_or_default(),
             vec!["infinite-lives".to_owned()]
         );
+    }
+
+    #[test]
+    fn legacy_config_without_mode_loads_with_defaults() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("legacy.toml");
+        std::fs::write(
+            &path,
+            r#"
+log_filter = "info"
+prefer_dark_mode = true
+
+[library]
+rom_dirs = []
+active_view = "grid"
+show_installed_only = false
+"#,
+        )
+        .unwrap();
+
+        let loaded = RuntimeConfig::load_or_default(&path).unwrap();
+        assert_eq!(loaded.mode, AppMode::Dev);
+        assert!(loaded.ui.show_log_panel);
     }
 }

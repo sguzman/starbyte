@@ -439,7 +439,9 @@ impl StarbyteApp {
 
             ui.separator();
             ui.checkbox(&mut self.config.ui.show_left_panel, "Left");
-            ui.checkbox(&mut self.config.ui.show_details_panel, "Details");
+            ui.add_enabled_ui(self.config.library.active_view == LibraryViewMode::List, |ui| {
+                ui.checkbox(&mut self.config.ui.show_details_panel, "Details");
+            });
             ui.checkbox(&mut self.config.ui.show_right_panel, "Session");
             ui.checkbox(&mut self.config.ui.show_log_panel, "Logs");
             if ui.button("Save Layout").clicked() {
@@ -766,32 +768,68 @@ impl StarbyteApp {
     }
 
     fn draw_grid_entry(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, entry: &LibraryEntry) {
-        ui.group(|ui| {
-            ui.set_width(200.0);
-            if let Some(texture) = self.ensure_cover_texture(ctx, entry) {
-                let size = fit_size(texture.size_vec2(), Vec2::new(180.0, 180.0));
-                ui.add(egui::Image::new((texture.id(), size)));
-            } else {
-                ui.allocate_space(Vec2::new(180.0, 120.0));
-                ui.label("No cover");
-            }
+        const CARD_WIDTH: f32 = 196.0;
+        const CARD_HEIGHT: f32 = 292.0;
+        const COVER_BOX: Vec2 = Vec2::new(164.0, 190.0);
 
-            let response = ui.selectable_label(
-                self.selected_game_id.as_deref() == Some(entry.game_id.as_str()),
-                entry.display_title.as_str(),
-            );
-            if response.clicked() {
-                self.selected_game_id = Some(entry.game_id.clone());
-            }
-            if response.double_clicked() {
-                self.queue_load_entry(entry);
-            }
-            ui.label(match entry.installed_status {
-                InstalledStatus::Installed => "Installed",
-                InstalledStatus::Missing => "Missing",
-            });
-            response.context_menu(|ui| self.draw_entry_context_menu(ui, ctx, entry));
-        });
+        ui.allocate_ui_with_layout(
+            Vec2::new(CARD_WIDTH, CARD_HEIGHT),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                let inner = egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.set_min_size(Vec2::new(CARD_WIDTH - 12.0, CARD_HEIGHT - 12.0));
+                    ui.vertical_centered(|ui| {
+                        ui.allocate_ui_with_layout(
+                            COVER_BOX,
+                            egui::Layout::top_down(egui::Align::Center),
+                            |ui| {
+                                if let Some(texture) = self.ensure_cover_texture(ctx, entry) {
+                                    let size = fit_size(texture.size_vec2(), COVER_BOX);
+                                    ui.add(egui::Image::new((texture.id(), size)));
+                                } else {
+                                    ui.centered_and_justified(|ui| {
+                                        ui.label(RichText::new("No cover").small());
+                                    });
+                                }
+                            },
+                        );
+                    });
+                    ui.add_space(6.0);
+                    let title = abbreviate_title(&entry.display_title, 28);
+                    let title_response = ui.add_sized(
+                        [CARD_WIDTH - 24.0, 36.0],
+                        egui::Label::new(RichText::new(title).size(13.0).strong()).wrap(),
+                    );
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(match entry.installed_status {
+                            InstalledStatus::Installed => "Installed",
+                            InstalledStatus::Missing => "Missing",
+                        })
+                        .size(12.0),
+                    );
+                    ui.label(
+                        RichText::new(format!("Cheats {}", entry.cheats.len())).size(11.0),
+                    );
+
+                    if title_response.clicked() {
+                        self.selected_game_id = Some(entry.game_id.clone());
+                    }
+                    if title_response.double_clicked() {
+                        self.queue_load_entry(entry);
+                    }
+                });
+
+                let response = inner.response.interact(egui::Sense::click());
+                if response.clicked() {
+                    self.selected_game_id = Some(entry.game_id.clone());
+                }
+                if response.double_clicked() {
+                    self.queue_load_entry(entry);
+                }
+                response.context_menu(|ui| self.draw_entry_context_menu(ui, ctx, entry));
+            },
+        );
     }
 
     fn draw_detailed_entry(
@@ -941,6 +979,10 @@ impl StarbyteApp {
                     if ui.button("Open Log Folder").clicked() {
                         let _ = open_path(&self.cache_root.join("logs"));
                     }
+                    if ui.button("Copy All").clicked() {
+                        let text = snapshot_logs(&self.logs).join("\n");
+                        ctx.copy_text(text);
+                    }
                     if ui.button("Clear View").clicked()
                         && let Ok(mut lines) = self.logs.lock()
                     {
@@ -995,7 +1037,9 @@ impl eframe::App for StarbyteApp {
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            if self.config.ui.show_details_panel {
+            if self.config.library.active_view == LibraryViewMode::List
+                && self.config.ui.show_details_panel
+            {
                 let response = egui::SidePanel::right("details")
                     .resizable(true)
                     .default_width(self.config.ui.details_panel_width)
@@ -1023,6 +1067,18 @@ fn empty_snapshot() -> LibrarySnapshot {
         installed_count: 0,
         missing_count: 0,
     }
+}
+
+fn abbreviate_title(title: &str, max_chars: usize) -> String {
+    let mut value = String::new();
+    for (index, ch) in title.chars().enumerate() {
+        if index >= max_chars {
+            value.push_str("...");
+            return value;
+        }
+        value.push(ch);
+    }
+    value
 }
 
 fn resolve_cache_root(config: &RuntimeConfig, assets: &AssetConfig) -> PathBuf {

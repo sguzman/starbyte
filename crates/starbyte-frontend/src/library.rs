@@ -10,7 +10,7 @@ use anyhow::{Context, Result, anyhow};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 use urlencoding::encode;
 use zip::ZipArchive;
 
@@ -328,17 +328,41 @@ impl LibraryService {
     /// Scan configured ROM directories and return installed entries.
     pub fn scan_roms(&self) -> Result<Vec<LocalRomInfo>> {
         info!(rom_dirs = ?self.config.library.rom_dirs, "scanning ROM directories");
+        let manifest_path = self.scan_manifest_path();
+        let mut manifest: ScanCacheManifest = read_json_or_default(manifest_path.clone())?;
+        let mut seen_keys = BTreeSet::new();
         let mut discovered = BTreeMap::<GameId, LocalRomInfo>::new();
         for rom_dir in &self.config.library.rom_dirs {
             for candidate in discover_rom_files(rom_dir)? {
+                let cache_key = candidate.cache_key();
+                seen_keys.insert(cache_key.clone());
+                let signature = candidate.source_signature()?;
+                if let Some(record) = manifest.records.get(&cache_key)
+                    && record.source_signature == signature
+                {
+                    discovered
+                        .entry(record.rom_info.game_id.clone())
+                        .or_insert_with(|| record.rom_info.clone());
+                    continue;
+                }
                 match inspect_rom_candidate(&candidate, &self.cache_root()) {
                     Ok(info) => {
+                        manifest.records.insert(
+                            cache_key,
+                            ScanCacheRecord {
+                                source_signature: signature,
+                                rom_info: info.clone(),
+                            },
+                        );
+                        write_json(manifest_path.clone(), &manifest)?;
                         discovered.entry(info.game_id.clone()).or_insert(info);
                     }
-                    Err(error) => warn!("skipping ROM candidate {}: {error}", candidate.display_label()),
+                    Err(error) => debug!("skipping ROM candidate {}: {error}", candidate.display_label()),
                 }
             }
         }
+        manifest.records.retain(|key, _| seen_keys.contains(key));
+        write_json(manifest_path, &manifest)?;
         info!(discovered = discovered.len(), "completed ROM scan");
         Ok(discovered.into_values().collect())
     }
@@ -475,6 +499,10 @@ impl LibraryService {
 
     fn load_cached_metadata_index(&self) -> Result<Vec<GameMetadata>> {
         read_json_or_default(self.metadata_index_path())
+    }
+
+    fn scan_manifest_path(&self) -> PathBuf {
+        self.cache_root().join("manifests").join("library-scan.json")
     }
 
     /// Resolve a local library entry to a playable ROM path, extracting archive members into cache when needed.
@@ -677,6 +705,17 @@ struct GitTreeNode {
     kind: String,
 }
 
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct ScanCacheManifest {
+    records: BTreeMap<String, ScanCacheRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ScanCacheRecord {
+    source_signature: String,
+    rom_info: LocalRomInfo,
+}
+
 #[derive(Debug, Clone)]
 enum RomCandidate {
     File(PathBuf),
@@ -696,6 +735,26 @@ impl RomCandidate {
             } => format!("{}::{member_path}", archive_path.display()),
         }
     }
+
+    fn cache_key(&self) -> String {
+        match self {
+            Self::File(path) => format!("file::{}", path.display()),
+            Self::ZipMember {
+                archive_path,
+                member_path,
+            } => format!("zip::{}::{member_path}", archive_path.display()),
+        }
+    }
+
+    fn source_signature(&self) -> Result<String> {
+        match self {
+            Self::File(path) => file_signature(path),
+            Self::ZipMember {
+                archive_path,
+                member_path,
+            } => Ok(format!("{}::{member_path}", file_signature(archive_path)?)),
+        }
+    }
 }
 
 fn merge_library_entries(
@@ -706,7 +765,16 @@ fn merge_library_entries(
 ) -> Result<Vec<LibraryEntry>> {
     let mut local_by_id = BTreeMap::new();
     for local in local_roms {
-        local_by_id.insert(local.game_id.clone(), local.clone());
+        let key = metadata_records
+            .iter()
+            .filter_map(|metadata| {
+                title_match_score(local, metadata).map(|score| (score, metadata.game_id.clone()))
+            })
+            .max_by_key(|(score, _)| *score)
+            .filter(|(score, _)| *score >= 80)
+            .map(|(_, game_id)| game_id)
+            .unwrap_or_else(|| local.game_id.clone());
+        local_by_id.insert(key, local.clone());
     }
     let mut metadata_by_id = BTreeMap::new();
     for metadata in metadata_records {
@@ -749,6 +817,36 @@ fn merge_library_entries(
         });
     }
     Ok(entries)
+}
+
+fn title_match_score(local: &LocalRomInfo, metadata: &GameMetadata) -> Option<usize> {
+    if local.normalized_title.is_empty() || metadata.normalized_title.is_empty() {
+        return None;
+    }
+    if local.normalized_title == metadata.normalized_title {
+        return Some(1_000);
+    }
+    if metadata
+        .normalized_title
+        .starts_with(&local.normalized_title)
+        || local
+            .normalized_title
+            .starts_with(&metadata.normalized_title)
+    {
+        return Some(800 + local.normalized_title.len().min(metadata.normalized_title.len()));
+    }
+
+    let local_tokens = local.normalized_title.split_whitespace().collect::<Vec<_>>();
+    let metadata_tokens = metadata.normalized_title.split_whitespace().collect::<Vec<_>>();
+    let overlap = local_tokens
+        .iter()
+        .filter(|token| metadata_tokens.contains(token))
+        .count();
+    if overlap >= local_tokens.len().min(metadata_tokens.len()).saturating_sub(1) && overlap >= 2 {
+        return Some(100 + overlap * 10);
+    }
+
+    None
 }
 
 fn load_cached_cover(
@@ -825,6 +923,16 @@ fn extracted_rom_cache_path(
     Ok(cache_root
         .join("extracted-roms")
         .join(format!("{:x}.{extension}", hasher.finalize())))
+}
+
+fn file_signature(path: &Path) -> Result<String> {
+    let metadata = fs::metadata(path)?;
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |duration| duration.as_secs());
+    Ok(format!("{}:{modified}", metadata.len()))
 }
 
 fn resolve_cache_root(config: &RuntimeConfig, assets: &AssetConfig) -> PathBuf {

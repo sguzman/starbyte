@@ -116,10 +116,43 @@ impl Default for VideoSettings {
 }
 
 /// Persistent input options for frontend shells.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputDeviceMode {
+    /// Keyboard bindings drive the controller state.
+    Keyboard,
+    /// A connected gamepad drives the controller state.
+    Gamepad,
+}
+
+impl Default for InputDeviceMode {
+    fn default() -> Self {
+        Self::Keyboard
+    }
+}
+
+/// Persistent input options for frontend shells.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InputSettings {
-    /// Optional keyboard/controller bindings keyed by frontend-facing action name.
-    pub bindings: BTreeMap<String, String>,
+    /// Active input backend.
+    #[serde(default)]
+    pub active_device: InputDeviceMode,
+    /// Keyboard bindings keyed by frontend-facing action name.
+    #[serde(default = "default_keyboard_bindings")]
+    pub keyboard_bindings: BTreeMap<String, String>,
+    /// Gamepad bindings keyed by frontend-facing action name.
+    #[serde(default = "default_gamepad_bindings")]
+    pub gamepad_bindings: BTreeMap<String, String>,
+}
+
+impl Default for InputSettings {
+    fn default() -> Self {
+        Self {
+            active_device: InputDeviceMode::Keyboard,
+            keyboard_bindings: default_keyboard_bindings(),
+            gamepad_bindings: default_gamepad_bindings(),
+        }
+    }
 }
 
 /// Persistent cheat-management settings.
@@ -349,11 +382,45 @@ impl Default for RuntimeConfig {
 }
 
 fn default_log_filter() -> String {
-    "info,starbyte_core=debug,starbyte_frontend=debug,starbyte_egui=debug".to_owned()
+    "info,starbyte_frontend=debug,starbyte_egui=debug".to_owned()
 }
 
 const fn default_prefer_dark_mode() -> bool {
     true
+}
+
+fn default_keyboard_bindings() -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("up".to_owned(), "ArrowUp".to_owned()),
+        ("down".to_owned(), "ArrowDown".to_owned()),
+        ("left".to_owned(), "ArrowLeft".to_owned()),
+        ("right".to_owned(), "ArrowRight".to_owned()),
+        ("start".to_owned(), "Enter".to_owned()),
+        ("select".to_owned(), "Space".to_owned()),
+        ("a".to_owned(), "X".to_owned()),
+        ("b".to_owned(), "Z".to_owned()),
+        ("x".to_owned(), "S".to_owned()),
+        ("y".to_owned(), "A".to_owned()),
+        ("l".to_owned(), "Q".to_owned()),
+        ("r".to_owned(), "W".to_owned()),
+    ])
+}
+
+fn default_gamepad_bindings() -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("up".to_owned(), "DPadUp".to_owned()),
+        ("down".to_owned(), "DPadDown".to_owned()),
+        ("left".to_owned(), "DPadLeft".to_owned()),
+        ("right".to_owned(), "DPadRight".to_owned()),
+        ("start".to_owned(), "Start".to_owned()),
+        ("select".to_owned(), "Select".to_owned()),
+        ("a".to_owned(), "East".to_owned()),
+        ("b".to_owned(), "South".to_owned()),
+        ("x".to_owned(), "North".to_owned()),
+        ("y".to_owned(), "West".to_owned()),
+        ("l".to_owned(), "LeftTrigger".to_owned()),
+        ("r".to_owned(), "RightTrigger".to_owned()),
+    ])
 }
 
 #[cfg(test)]

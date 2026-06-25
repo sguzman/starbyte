@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     process::Command,
     time::Duration,
@@ -7,6 +7,7 @@ use std::{
 
 use anyhow::Result;
 use eframe::egui::{self, ColorImage, RichText, TextureHandle, TextureOptions, Vec2};
+use gilrs::{EventType, Gilrs};
 use image::ImageReader;
 use tracing::{debug, info, warn};
 
@@ -17,7 +18,7 @@ use crate::{
 
 use starbyte_core::{
     input::ControllerState,
-    manifest::{AssetConfig, LibraryViewMode, RuntimeConfig},
+    manifest::{AssetConfig, InputDeviceMode, LibraryViewMode, RuntimeConfig},
 };
 use starbyte_frontend::{
     FrontendSession, InstalledStatus, LibraryEntry, LibraryFilter, LibrarySnapshot, LibraryTarget,
@@ -40,6 +41,7 @@ pub struct StarbyteApp {
     library_snapshot: LibrarySnapshot,
     framebuffer_texture: Option<TextureHandle>,
     cover_textures: BTreeMap<String, TextureHandle>,
+    failed_cover_ids: BTreeSet<String>,
     held_input: ControllerState,
     status_line: String,
     search_query: String,
@@ -50,6 +52,10 @@ pub struct StarbyteApp {
     logs: SharedLogBuffer,
     jobs: Vec<JobRecord>,
     next_job_id: u64,
+    gilrs: Option<Gilrs>,
+    gamepad_buttons_down: BTreeSet<String>,
+    pending_keyboard_bind: Option<String>,
+    pending_gamepad_bind: Option<String>,
 }
 
 impl StarbyteApp {
@@ -99,6 +105,7 @@ impl StarbyteApp {
         }
 
         let worker = AppWorker::spawn(assets.clone());
+        let gilrs = Gilrs::new().ok();
         let mut app = Self {
             assets,
             config,
@@ -108,6 +115,7 @@ impl StarbyteApp {
             library_snapshot: empty_snapshot(),
             framebuffer_texture: None,
             cover_textures: BTreeMap::new(),
+            failed_cover_ids: BTreeSet::new(),
             held_input: ControllerState::default(),
             status_line,
             search_query: String::new(),
@@ -118,6 +126,10 @@ impl StarbyteApp {
             logs,
             jobs: Vec::new(),
             next_job_id: 1,
+            gilrs,
+            gamepad_buttons_down: BTreeSet::new(),
+            pending_keyboard_bind: None,
+            pending_gamepad_bind: None,
         };
         app.persist_config();
         if app.config.advanced.refresh_on_startup {
@@ -130,10 +142,22 @@ impl StarbyteApp {
 
     fn current_filter(&self) -> LibraryFilter {
         LibraryFilter {
-            query: self.search_query.clone(),
-            installed_only: self.config.library.show_installed_only,
+            query: String::new(),
+            installed_only: false,
             view_mode: self.config.library.active_view,
         }
+    }
+
+    fn visible_entries(&self) -> Vec<LibraryEntry> {
+        let mut entries = self.library_snapshot.entries.clone();
+        if self.config.library.show_installed_only {
+            entries.retain(|entry| entry.installed_status == InstalledStatus::Installed);
+        }
+        if !self.search_query.trim().is_empty() {
+            let needle = normalize_query(&self.search_query);
+            entries.retain(|entry| normalize_query(&entry.display_title).contains(&needle));
+        }
+        entries
     }
 
     fn persist_config(&mut self) {
@@ -237,11 +261,16 @@ impl StarbyteApp {
 
     fn selected_entry(&self) -> Option<LibraryEntry> {
         let selected = self.selected_game_id.as_deref()?;
-        self.library_snapshot
-            .entries
-            .iter()
+        self.visible_entries()
+            .into_iter()
             .find(|entry| entry.game_id == selected)
-            .cloned()
+            .or_else(|| {
+                self.library_snapshot
+                    .entries
+                    .iter()
+                    .find(|entry| entry.game_id == selected)
+                    .cloned()
+            })
     }
 
     fn sync_loaded_game_cheats(&mut self) {
@@ -294,8 +323,84 @@ impl StarbyteApp {
         }
     }
 
+    fn effective_controller_state(&self, ctx: &egui::Context) -> ControllerState {
+        let mut state = self.held_input;
+        match self.config.input.active_device {
+            InputDeviceMode::Keyboard => {
+                for &action in input_actions() {
+                    if let Some(binding) = self.config.input.keyboard_bindings.get(action)
+                        && let Some(key) = parse_egui_key(binding)
+                        && ctx.input(|input| input.key_down(key))
+                    {
+                        set_controller_flag(&mut state, action, true);
+                    }
+                }
+            }
+            InputDeviceMode::Gamepad => {
+                for &action in input_actions() {
+                    if let Some(binding) = self.config.input.gamepad_bindings.get(action)
+                        && self.gamepad_buttons_down.contains(binding)
+                    {
+                        set_controller_flag(&mut state, action, true);
+                    }
+                }
+            }
+        }
+        state
+    }
+
+    fn capture_keyboard_binding(&mut self, ctx: &egui::Context) {
+        let Some(action) = self.pending_keyboard_bind.clone() else {
+            return;
+        };
+        let events = ctx.input(|input| input.events.clone());
+        for event in events {
+            if let egui::Event::Key { key, pressed: true, .. } = event {
+                self.config
+                    .input
+                    .keyboard_bindings
+                    .insert(action.clone(), format!("{key:?}"));
+                self.pending_keyboard_bind = None;
+                self.persist_config();
+                self.status_line = format!("Bound {} to {key:?}.", action_label(&action));
+                break;
+            }
+        }
+    }
+
+    fn poll_gamepad_events(&mut self) {
+        let Some(gilrs) = self.gilrs.as_mut() else {
+            return;
+        };
+        let mut new_binding: Option<(String, String)> = None;
+        while let Some(event) = gilrs.next_event() {
+            match event.event {
+                EventType::ButtonPressed(button, _) => {
+                    let name = format!("{button:?}");
+                    self.gamepad_buttons_down.insert(name.clone());
+                    if let Some(action) = self.pending_gamepad_bind.clone() {
+                        new_binding = Some((action, name));
+                    }
+                }
+                EventType::ButtonReleased(button, _) => {
+                    self.gamepad_buttons_down.remove(&format!("{button:?}"));
+                }
+                _ => {}
+            }
+        }
+        if let Some((action, name)) = new_binding {
+            self.config
+                .input
+                .gamepad_bindings
+                .insert(action.clone(), name.clone());
+            self.pending_gamepad_bind = None;
+            self.persist_config();
+            self.status_line = format!("Bound {} to {}.", action_label(&action), name);
+        }
+    }
+
     fn run_frame(&mut self, ctx: &egui::Context) {
-        self.session.set_controller1(self.held_input);
+        self.session.set_controller1(self.effective_controller_state(ctx));
         match self.session.run_frame() {
             Ok(()) => {
                 self.refresh_framebuffer(ctx);
@@ -326,13 +431,18 @@ impl StarbyteApp {
         if let Some(texture) = self.cover_textures.get(&entry.game_id) {
             return Some(texture.clone());
         }
+        if self.failed_cover_ids.contains(&entry.game_id) {
+            return None;
+        }
         let cover = entry.cover.as_ref()?;
         let Ok(reader) = ImageReader::open(&cover.cache_path) else {
             warn!("failed to open cached cover {}", cover.cache_path.display());
+            self.failed_cover_ids.insert(entry.game_id.clone());
             return None;
         };
         let Ok(image) = reader.decode() else {
             warn!("failed to decode cached cover {}", cover.cache_path.display());
+            self.failed_cover_ids.insert(entry.game_id.clone());
             return None;
         };
         let rgba = image.to_rgba8();
@@ -345,6 +455,7 @@ impl StarbyteApp {
         );
         self.cover_textures
             .insert(entry.game_id.clone(), texture.clone());
+        self.failed_cover_ids.remove(&entry.game_id);
         Some(texture)
     }
 
@@ -381,7 +492,7 @@ impl StarbyteApp {
                 )
                 .changed()
             {
-                self.queue_job(WorkerCommandKind::RefreshSnapshot);
+                self.status_line = format!("Filtered to {} entries.", self.visible_entries().len());
             }
 
             if ui
@@ -389,9 +500,10 @@ impl StarbyteApp {
                 .changed()
             {
                 self.persist_config();
-                self.queue_job(WorkerCommandKind::RefreshSnapshot);
+                self.status_line = format!("Filtered to {} entries.", self.visible_entries().len());
             }
 
+            let previous_view = self.config.library.active_view;
             egui::ComboBox::from_label("View")
                 .selected_text(match self.config.library.active_view {
                     LibraryViewMode::List => "List",
@@ -415,6 +527,9 @@ impl StarbyteApp {
                         "Detailed",
                     );
                 });
+            if self.config.library.active_view != previous_view {
+                self.persist_config();
+            }
 
             if ui.button("Refresh Metadata").clicked() {
                 self.queue_job(WorkerCommandKind::RefreshMetadata);
@@ -451,58 +566,59 @@ impl StarbyteApp {
     }
 
     fn draw_settings_panel(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Library");
-        ui.label(format!(
-            "Showing {} of {} entries",
-            self.library_snapshot.entries.len(),
-            self.library_snapshot.total_count
-        ));
-        ui.label(self.status_line.as_str());
-        ui.separator();
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.heading("Library");
+            ui.label(format!(
+                "Showing {} of {} entries",
+                self.visible_entries().len(),
+                self.library_snapshot.total_count
+            ));
+            ui.label(self.status_line.as_str());
+            ui.separator();
 
-        ui.label("ROM Directories");
-        ui.horizontal(|ui| {
-            ui.text_edit_singleline(&mut self.rom_dir_input);
-            if ui.button("Add").clicked() {
-                let path = PathBuf::from(self.rom_dir_input.trim());
-                if !self.rom_dir_input.trim().is_empty()
+            ui.label("ROM Directories");
+            ui.horizontal(|ui| {
+                ui.text_edit_singleline(&mut self.rom_dir_input);
+                if ui.button("Add").clicked() {
+                    let path = PathBuf::from(self.rom_dir_input.trim());
+                    if !self.rom_dir_input.trim().is_empty()
+                        && !self.config.library.rom_dirs.contains(&path)
+                    {
+                        self.config.library.rom_dirs.push(path);
+                        self.rom_dir_input.clear();
+                        self.persist_config();
+                        self.queue_job(WorkerCommandKind::RefreshSnapshot);
+                    }
+                }
+                if ui.button("Browse").clicked()
+                    && let Some(path) = rfd::FileDialog::new().pick_folder()
                     && !self.config.library.rom_dirs.contains(&path)
                 {
                     self.config.library.rom_dirs.push(path);
-                    self.rom_dir_input.clear();
                     self.persist_config();
                     self.queue_job(WorkerCommandKind::RefreshSnapshot);
                 }
+            });
+
+            let mut remove_index = None;
+            for (index, rom_dir) in self.config.library.rom_dirs.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.label(rom_dir.display().to_string());
+                    if ui.button("Remove").clicked() {
+                        remove_index = Some(index);
+                    }
+                });
             }
-            if ui.button("Browse").clicked()
-                && let Some(path) = rfd::FileDialog::new().pick_folder()
-                && !self.config.library.rom_dirs.contains(&path)
-            {
-                self.config.library.rom_dirs.push(path);
+            if let Some(index) = remove_index {
+                self.config.library.rom_dirs.remove(index);
                 self.persist_config();
                 self.queue_job(WorkerCommandKind::RefreshSnapshot);
             }
-        });
 
-        let mut remove_index = None;
-        for (index, rom_dir) in self.config.library.rom_dirs.iter().enumerate() {
-            ui.horizontal(|ui| {
-                ui.label(rom_dir.display().to_string());
-                if ui.button("Remove").clicked() {
-                    remove_index = Some(index);
-                }
-            });
-        }
-        if let Some(index) = remove_index {
-            self.config.library.rom_dirs.remove(index);
-            self.persist_config();
-            self.queue_job(WorkerCommandKind::RefreshSnapshot);
-        }
-
-        ui.separator();
-        egui::CollapsingHeader::new("Audio")
-            .default_open(true)
-            .show(ui, |ui| {
+            ui.separator();
+            egui::CollapsingHeader::new("Audio")
+                .default_open(true)
+                .show(ui, |ui| {
                 let audio = &mut self.config.audio;
                 let mut changed = false;
                 changed |= ui.checkbox(&mut audio.enabled, "Enabled").changed();
@@ -523,9 +639,9 @@ impl StarbyteApp {
                 }
             });
 
-        egui::CollapsingHeader::new("Video")
-            .default_open(true)
-            .show(ui, |ui| {
+            egui::CollapsingHeader::new("Video")
+                .default_open(true)
+                .show(ui, |ui| {
                 let video = &mut self.config.video;
                 let mut changed = false;
                 changed |= ui.checkbox(&mut video.fullscreen, "Fullscreen").changed();
@@ -539,27 +655,15 @@ impl StarbyteApp {
                 }
             });
 
-        egui::CollapsingHeader::new("Input")
-            .default_open(false)
-            .show(ui, |ui| {
-                ui.label("Controller 1");
-                input_checkbox(ui, &mut self.held_input.up, "Up");
-                input_checkbox(ui, &mut self.held_input.down, "Down");
-                input_checkbox(ui, &mut self.held_input.left, "Left");
-                input_checkbox(ui, &mut self.held_input.right, "Right");
-                input_checkbox(ui, &mut self.held_input.start, "Start");
-                input_checkbox(ui, &mut self.held_input.select, "Select");
-                input_checkbox(ui, &mut self.held_input.a, "A");
-                input_checkbox(ui, &mut self.held_input.b, "B");
-                input_checkbox(ui, &mut self.held_input.x, "X");
-                input_checkbox(ui, &mut self.held_input.y, "Y");
-                input_checkbox(ui, &mut self.held_input.l, "L");
-                input_checkbox(ui, &mut self.held_input.r, "R");
+            egui::CollapsingHeader::new("Input")
+                .default_open(false)
+                .show(ui, |ui| {
+                self.draw_input_settings(ui);
             });
 
-        egui::CollapsingHeader::new("Cheats")
-            .default_open(false)
-            .show(ui, |ui| {
+            egui::CollapsingHeader::new("Cheats")
+                .default_open(false)
+                .show(ui, |ui| {
                 if ui
                     .checkbox(&mut self.config.cheats.show_cheat_badges, "Show cheat badges")
                     .changed()
@@ -568,9 +672,9 @@ impl StarbyteApp {
                 }
             });
 
-        egui::CollapsingHeader::new("Advanced / Cache")
-            .default_open(false)
-            .show(ui, |ui| {
+            egui::CollapsingHeader::new("Advanced / Cache")
+                .default_open(false)
+                .show(ui, |ui| {
                 ui.label(format!("Cache Root: {}", self.cache_root.display()));
                 let advanced = &mut self.config.advanced;
                 let mut changed = false;
@@ -592,11 +696,12 @@ impl StarbyteApp {
                 }
             });
 
-        ui.separator();
-        ui.heading("Jobs");
-        for job in self.jobs.iter().rev().take(8) {
-            ui.label(format!("[{}] {}: {}", job.state, job.label, job.detail));
-        }
+            ui.separator();
+            ui.heading("Jobs");
+            for job in self.jobs.iter().rev().take(8) {
+                ui.label(format!("[{}] {}: {}", job.state, job.label, job.detail));
+            }
+        });
     }
 
     fn draw_details_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -682,6 +787,76 @@ impl StarbyteApp {
         }
     }
 
+    fn draw_input_settings(&mut self, ui: &mut egui::Ui) {
+        egui::ComboBox::from_label("Active Device")
+            .selected_text(match self.config.input.active_device {
+                InputDeviceMode::Keyboard => "Keyboard",
+                InputDeviceMode::Gamepad => "Gamepad",
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut self.config.input.active_device,
+                    InputDeviceMode::Keyboard,
+                    "Keyboard",
+                );
+                ui.selectable_value(
+                    &mut self.config.input.active_device,
+                    InputDeviceMode::Gamepad,
+                    "Gamepad",
+                );
+            });
+
+        if ui.button("Save Input").clicked() {
+            self.persist_config();
+        }
+        ui.separator();
+
+        ui.label("Keyboard Bindings");
+        for &action in input_actions() {
+            ui.horizontal(|ui| {
+                ui.label(action_label(action));
+                let current = self
+                    .config
+                    .input
+                    .keyboard_bindings
+                    .get(action)
+                    .cloned()
+                    .unwrap_or_else(|| "Unbound".to_owned());
+                ui.label(current);
+                if ui.button("Rebind").clicked() {
+                    self.pending_keyboard_bind = Some(action.to_string());
+                    self.pending_gamepad_bind = None;
+                }
+            });
+        }
+        if let Some(action) = &self.pending_keyboard_bind {
+            ui.label(format!("Press a key to bind {}...", action_label(action)));
+        }
+
+        ui.separator();
+        ui.label("Gamepad Bindings");
+        for &action in input_actions() {
+            ui.horizontal(|ui| {
+                ui.label(action_label(action));
+                let current = self
+                    .config
+                    .input
+                    .gamepad_bindings
+                    .get(action)
+                    .cloned()
+                    .unwrap_or_else(|| "Unbound".to_owned());
+                ui.label(current);
+                if ui.button("Rebind Pad").clicked() {
+                    self.pending_gamepad_bind = Some(action.to_string());
+                    self.pending_keyboard_bind = None;
+                }
+            });
+        }
+        if let Some(action) = &self.pending_gamepad_bind {
+            ui.label(format!("Press a gamepad button to bind {}...", action_label(action)));
+        }
+    }
+
     fn draw_session_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.heading("Session");
         let snapshot = self.session.snapshot();
@@ -694,7 +869,7 @@ impl StarbyteApp {
             self.run_frame(ctx);
         }
         if ui.button("Run 60 Frames").clicked() {
-            self.session.set_controller1(self.held_input);
+            self.session.set_controller1(self.effective_controller_state(ctx));
             match self.session.run_frames(60) {
                 Ok(()) => {
                     self.refresh_framebuffer(ctx);
@@ -714,7 +889,7 @@ impl StarbyteApp {
     }
 
     fn draw_library_browser(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let entries = self.library_snapshot.entries.clone();
+        let entries = self.visible_entries();
         match self.config.library.active_view {
             LibraryViewMode::List => {
                 egui::ScrollArea::vertical().show(ui, |ui| {
@@ -1013,6 +1188,9 @@ impl StarbyteApp {
 
 impl eframe::App for StarbyteApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        apply_theme(ctx, self.config.prefer_dark_mode);
+        self.capture_keyboard_binding(ctx);
+        self.poll_gamepad_events();
         self.poll_worker_events(ctx);
 
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| self.draw_top_bar(ui, ctx));
@@ -1066,6 +1244,94 @@ fn empty_snapshot() -> LibrarySnapshot {
         total_count: 0,
         installed_count: 0,
         missing_count: 0,
+    }
+}
+
+fn normalize_query(input: &str) -> String {
+    input
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch.to_ascii_lowercase() } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn input_actions() -> &'static [&'static str] {
+    &["up", "down", "left", "right", "start", "select", "a", "b", "x", "y", "l", "r"]
+}
+
+fn action_label(action: &str) -> &'static str {
+    match action {
+        "up" => "Up",
+        "down" => "Down",
+        "left" => "Left",
+        "right" => "Right",
+        "start" => "Start",
+        "select" => "Select",
+        "a" => "A",
+        "b" => "B",
+        "x" => "X",
+        "y" => "Y",
+        "l" => "L",
+        "r" => "R",
+        _ => "Unknown",
+    }
+}
+
+fn set_controller_flag(state: &mut ControllerState, action: &str, pressed: bool) {
+    match action {
+        "up" => state.up |= pressed,
+        "down" => state.down |= pressed,
+        "left" => state.left |= pressed,
+        "right" => state.right |= pressed,
+        "start" => state.start |= pressed,
+        "select" => state.select |= pressed,
+        "a" => state.a |= pressed,
+        "b" => state.b |= pressed,
+        "x" => state.x |= pressed,
+        "y" => state.y |= pressed,
+        "l" => state.l |= pressed,
+        "r" => state.r |= pressed,
+        _ => {}
+    }
+}
+
+fn parse_egui_key(binding: &str) -> Option<egui::Key> {
+    match binding {
+        "ArrowUp" => Some(egui::Key::ArrowUp),
+        "ArrowDown" => Some(egui::Key::ArrowDown),
+        "ArrowLeft" => Some(egui::Key::ArrowLeft),
+        "ArrowRight" => Some(egui::Key::ArrowRight),
+        "Enter" => Some(egui::Key::Enter),
+        "Space" => Some(egui::Key::Space),
+        "A" => Some(egui::Key::A),
+        "B" => Some(egui::Key::B),
+        "C" => Some(egui::Key::C),
+        "D" => Some(egui::Key::D),
+        "E" => Some(egui::Key::E),
+        "F" => Some(egui::Key::F),
+        "G" => Some(egui::Key::G),
+        "H" => Some(egui::Key::H),
+        "I" => Some(egui::Key::I),
+        "J" => Some(egui::Key::J),
+        "K" => Some(egui::Key::K),
+        "L" => Some(egui::Key::L),
+        "M" => Some(egui::Key::M),
+        "N" => Some(egui::Key::N),
+        "O" => Some(egui::Key::O),
+        "P" => Some(egui::Key::P),
+        "Q" => Some(egui::Key::Q),
+        "R" => Some(egui::Key::R),
+        "S" => Some(egui::Key::S),
+        "T" => Some(egui::Key::T),
+        "U" => Some(egui::Key::U),
+        "V" => Some(egui::Key::V),
+        "W" => Some(egui::Key::W),
+        "X" => Some(egui::Key::X),
+        "Y" => Some(egui::Key::Y),
+        "Z" => Some(egui::Key::Z),
+        _ => None,
     }
 }
 
@@ -1123,10 +1389,6 @@ fn fit_size(source: Vec2, available: Vec2) -> Vec2 {
         .min(available.y / source.y)
         .clamp(0.1, 4.0);
     Vec2::new(source.x * scale, source.y * scale)
-}
-
-fn input_checkbox(ui: &mut egui::Ui, value: &mut bool, label: &str) {
-    ui.checkbox(value, label);
 }
 
 fn open_path(path: &Path) -> Result<()> {

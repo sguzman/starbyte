@@ -1,0 +1,50 @@
+mode = "dev"
+log_filter = "info,starbyte_core=debug,starbyte_cli=debug"
+prefer_dark_mode = true
+
+[audio]
+enabled = true
+volume = 1.0
+sample_rate_hz = 48000
+mute_on_startup = false
+
+[video]
+fullscreen = false
+integer_scale = true
+scale = 3
+vsync = true
+
+[input.bindings]
+
+[cheats]
+show_cheat_badges = false
+
+[cheats.enabled_by_game]
+
+[library]
+rom_dirs = ['Y:\torrents\data\emu\Super Nintendo']
+active_view = "grid"
+show_installed_only = true
+
+[advanced]
+show_missing_games = true
+refresh_on_startup = false
+
+[advanced.providers]
+enable_network = true
+metadata_index_url = "https://api.github.com/repos/libretro-thumbnails/Nintendo_-_Super_Nintendo_Entertainment_System/git/trees/master?recursive=1"
+cover_index_url = "https://raw.githubusercontent.com/libretro-thumbnails/Nintendo_-_Super_Nintendo_Entertainment_System/master"
+cheat_index_url = "https://api.github.com/repos/libretro/libretro-database/git/trees/master?recursive=1"
+last_metadata_refresh_unix = 1782410943
+
+[ui]
+show_left_panel = true
+show_right_panel = true
+show_details_panel = true
+show_log_panel = true
+log_auto_scroll = true
+left_panel_width = 400.9375
+library_panel_width = 420.0
+details_panel_width = 260.0
+right_panel_width = 320.0
+log_panel_height = 160.5625

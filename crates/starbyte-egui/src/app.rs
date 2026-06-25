@@ -24,6 +24,7 @@ pub struct StarbyteApp {
     held_input: ControllerState,
     search_query: String,
     selected_game_id: Option<String>,
+    loaded_game_id: Option<String>,
     show_properties: bool,
     rom_dir_input: String,
 }
@@ -67,8 +68,23 @@ impl StarbyteApp {
 
         let mut session = FrontendSession::new(assets)?;
         let mut status_line = "No ROM loaded".to_owned();
+        let mut loaded_game_id = None;
         if let Some(path) = rom_path {
             session.load_rom(&path)?;
+            loaded_game_id = library_snapshot
+                .entries
+                .iter()
+                .find(|entry| entry.local.as_ref().map(|local| &local.rom_path) == Some(&path))
+                .map(|entry| entry.game_id.clone());
+            if let Some(game_id) = &loaded_game_id {
+                if let Some(entry) = library_snapshot
+                    .entries
+                    .iter()
+                    .find(|entry| &entry.game_id == game_id)
+                {
+                    let _ = session.set_active_cheats(&entry.cheats);
+                }
+            }
             let _ = session.run_frame();
             status_line = format!("Loaded {}", path.display());
         }
@@ -84,6 +100,7 @@ impl StarbyteApp {
             held_input: ControllerState::default(),
             search_query: String::new(),
             selected_game_id: None,
+            loaded_game_id,
             show_properties: false,
             rom_dir_input: String::new(),
         })
@@ -130,6 +147,40 @@ impl StarbyteApp {
         }
     }
 
+    fn lookup_entry(&self, game_id: &str) -> Option<LibraryEntry> {
+        if let Some(entry) = self
+            .library_snapshot
+            .entries
+            .iter()
+            .find(|entry| entry.game_id == game_id)
+        {
+            return Some(entry.clone());
+        }
+
+        self.library_service
+            .snapshot(LibraryFilter {
+                query: String::new(),
+                installed_only: false,
+                view_mode: self.library_service.config().library.active_view,
+            })
+            .ok()?
+            .entries
+            .into_iter()
+            .find(|entry| entry.game_id == game_id)
+    }
+
+    fn sync_loaded_game_cheats(&mut self) {
+        let Some(game_id) = self.loaded_game_id.clone() else {
+            self.session.clear_active_cheats();
+            return;
+        };
+        if let Some(entry) = self.lookup_entry(&game_id) {
+            let _ = self.session.set_active_cheats(&entry.cheats);
+        } else {
+            self.session.clear_active_cheats();
+        }
+    }
+
     fn refresh_framebuffer(&mut self, ctx: &egui::Context) {
         let snapshot = self.session.snapshot();
         let image = ColorImage::from_rgba_unmultiplied(
@@ -156,6 +207,8 @@ impl StarbyteApp {
 
         match self.session.load_rom(&local.rom_path) {
             Ok(()) => {
+                self.loaded_game_id = Some(entry.game_id.clone());
+                let _ = self.session.set_active_cheats(&entry.cheats);
                 let _ = self.session.run_frame();
                 self.refresh_framebuffer(ctx);
                 self.status_line = format!("Loaded {}", local.rom_path.display());
@@ -209,6 +262,9 @@ impl StarbyteApp {
         }
         self.persist_config();
         self.refresh_snapshot();
+        if self.loaded_game_id.as_deref() == Some(game_id) {
+            self.sync_loaded_game_cheats();
+        }
     }
 
     fn refresh_selected_metadata(&mut self) {
@@ -218,6 +274,7 @@ impl StarbyteApp {
         }
         self.persist_config();
         self.refresh_snapshot();
+        self.sync_loaded_game_cheats();
     }
 
     fn refresh_selected_covers(&mut self, entry: Option<&LibraryEntry>) {

@@ -32,7 +32,7 @@ This document tracks the library-first `egui` frontend work that sits on top of 
 - [x] Cache cheats under `.cache/starbyte/games/cheats/`.
 - [x] Persist enabled cheat selections per game in runtime config.
 - [x] Expose per-game cheat toggles in the properties UI.
-- [ ] Apply enabled cheats to the live emulator runtime.
+- [x] Apply enabled cheats to the live emulator runtime.
 
 ## Phase 5: CLI Cache-Management Commands
 

@@ -256,6 +256,8 @@ impl std::fmt::Debug for LibraryService {
 impl LibraryService {
     /// Build a reusable library service around the provided config and asset paths.
     pub fn new(config: RuntimeConfig, assets: AssetConfig) -> Result<Self> {
+        let cache_root = resolve_cache_root(&config, &assets);
+        ensure_cache_layout(&cache_root)?;
         let client = Client::builder()
             .user_agent("starbyte/0.1 (+https://github.com/openai/starbyte)")
             .build()
@@ -284,12 +286,7 @@ impl LibraryService {
     /// Resolve the effective cache root.
     #[must_use]
     pub fn cache_root(&self) -> PathBuf {
-        self.config
-            .library
-            .cache_dir
-            .clone()
-            .or_else(|| self.assets.cache_dir.clone())
-            .unwrap_or_else(|| self.assets.cache_root())
+        resolve_cache_root(&self.config, &self.assets)
     }
 
     /// Persist the current config using the active asset/config path rules.
@@ -708,6 +705,29 @@ fn cheat_cache_path(cache_root: &Path, game_id: &str) -> PathBuf {
         .join(format!("{game_id}.json"))
 }
 
+fn resolve_cache_root(config: &RuntimeConfig, assets: &AssetConfig) -> PathBuf {
+    config
+        .library
+        .cache_dir
+        .clone()
+        .or_else(|| assets.cache_dir.clone())
+        .unwrap_or_else(|| assets.cache_root())
+}
+
+fn ensure_cache_layout(cache_root: &Path) -> Result<()> {
+    for path in [
+        cache_root.to_path_buf(),
+        cache_root.join("games"),
+        cache_root.join("games").join("metadata"),
+        cache_root.join("games").join("covers"),
+        cache_root.join("games").join("cheats"),
+        cache_root.join("manifests"),
+    ] {
+        fs::create_dir_all(path)?;
+    }
+    Ok(())
+}
+
 fn write_json<T: Serialize>(path: PathBuf, value: &T) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -1038,5 +1058,23 @@ mod tests {
         .unwrap();
         assert_eq!(entries[0].cheats.len(), 1);
         assert!(entries[0].cheats[0].enabled);
+    }
+
+    #[test]
+    fn library_service_bootstraps_cache_layout() {
+        let dir = tempdir().unwrap();
+        let cache_root = dir.path().join(".cache").join("starbyte");
+        let assets = starbyte_core::manifest::AssetConfig {
+            cache_dir: Some(cache_root.clone()),
+            ..Default::default()
+        };
+
+        let service = LibraryService::new(RuntimeConfig::default(), assets).unwrap();
+
+        assert_eq!(service.cache_root(), cache_root);
+        assert!(cache_root.join("games").join("metadata").is_dir());
+        assert!(cache_root.join("games").join("covers").is_dir());
+        assert!(cache_root.join("games").join("cheats").is_dir());
+        assert!(cache_root.join("manifests").is_dir());
     }
 }

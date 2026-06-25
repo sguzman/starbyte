@@ -61,6 +61,9 @@ pub enum Error {
     /// Config parsing failure.
     #[error("configuration error: {0}")]
     Config(#[from] toml::de::Error),
+    /// Config serialization failure.
+    #[error("configuration error: {0}")]
+    ConfigSerialize(#[from] toml::ser::Error),
 }
 
 impl Error {

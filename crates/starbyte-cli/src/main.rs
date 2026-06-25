@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::json;
+use starbyte_frontend::{LibraryFilter, LibraryService, LibraryTarget};
 use tracing::{Level, info};
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -56,6 +57,14 @@ struct AssetArgs {
     /// Directory for save-state files.
     #[arg(long, global = true)]
     state_dir: Option<PathBuf>,
+
+    /// Directory for cached metadata, covers, and cheats.
+    #[arg(long, global = true)]
+    cache_dir: Option<PathBuf>,
+
+    /// Runtime configuration file path.
+    #[arg(long, global = true)]
+    config: Option<PathBuf>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -64,10 +73,71 @@ enum Command {
     Compliance(ComplianceArgs),
     /// Inspect ROM metadata without running emulation.
     Inspect { rom: PathBuf },
+    /// Scan ROM libraries and manage cached metadata, covers, and cheats.
+    Library(LibraryArgs),
     /// Run the bootstrap emulator for a fixed number of frames.
     Run(RunArgs),
     /// Emit a sample runtime configuration file to stdout.
     PrintConfig { format: ConfigFormat },
+}
+
+#[derive(Debug, Args)]
+struct LibraryArgs {
+    #[command(subcommand)]
+    command: LibraryCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum LibraryCommand {
+    /// Scan configured ROM directories and print the merged library snapshot.
+    Scan(LibraryScanArgs),
+    /// Refresh and cache library metadata.
+    RefreshMetadata(LibraryTargetArgs),
+    /// Refresh and cache cover images.
+    RefreshCovers(LibraryTargetArgs),
+    /// Refresh and cache cheats.
+    RefreshCheats(LibraryTargetArgs),
+    /// Refresh metadata, covers, and cheats together.
+    RefreshAll(LibraryTargetArgs),
+    /// Placeholder hook for future ROM downloads.
+    DownloadRom(LibraryTargetArgs),
+}
+
+#[derive(Debug, Args, Clone, Default)]
+struct LibraryTargetArgs {
+    /// Restrict refresh actions to installed entries only.
+    #[arg(long)]
+    installed_only: bool,
+
+    /// Restrict refresh actions to one stable game id.
+    #[arg(long)]
+    game_id: Option<String>,
+
+    /// Restrict refresh actions to entries with matching titles.
+    #[arg(long)]
+    title: Option<String>,
+
+    /// Restrict refresh actions to one ROM path.
+    #[arg(long)]
+    rom: Option<PathBuf>,
+
+    /// Override configured ROM directories for this command. May be provided multiple times.
+    #[arg(long = "rom-dir")]
+    rom_dirs: Vec<PathBuf>,
+
+    /// Emit machine-readable JSON instead of human-readable text.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args, Clone, Default)]
+struct LibraryScanArgs {
+    #[command(flatten)]
+    target: LibraryTargetArgs,
+
+    /// Free-text query applied to the merged library snapshot.
+    #[arg(long)]
+    query: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -187,11 +257,14 @@ fn main() -> Result<()> {
         spc700_ipl: cli.assets.spc700_ipl.clone(),
         save_dir: cli.assets.save_dir.clone(),
         state_dir: cli.assets.state_dir.clone(),
+        cache_dir: cli.assets.cache_dir.clone(),
+        config_path: cli.assets.config.clone(),
     };
 
     match cli.command {
         Command::Compliance(args) => run_compliance(args, assets),
         Command::Inspect { rom } => inspect_rom(rom),
+        Command::Library(args) => run_library(args, assets),
         Command::Run(args) => run_rom(args, assets),
         Command::PrintConfig { format } => print_config(format),
     }
@@ -250,6 +323,120 @@ fn inspect_rom(path: PathBuf) -> Result<()> {
         "RAM size (declared): {} bytes",
         cartridge.header().ram_size_bytes()
     );
+    Ok(())
+}
+
+fn run_library(args: LibraryArgs, assets: AssetConfig) -> Result<()> {
+    let config_path = assets.config_path();
+    let mut config = RuntimeConfig::load_or_default(&config_path)
+        .with_context(|| format!("failed to load config from {}", config_path.display()))?;
+
+    let target_args = match &args.command {
+        LibraryCommand::Scan(scan) => scan.target.clone(),
+        LibraryCommand::RefreshMetadata(target)
+        | LibraryCommand::RefreshCovers(target)
+        | LibraryCommand::RefreshCheats(target)
+        | LibraryCommand::RefreshAll(target)
+        | LibraryCommand::DownloadRom(target) => target.clone(),
+    };
+
+    if !target_args.rom_dirs.is_empty() {
+        config.library.rom_dirs = target_args.rom_dirs.clone();
+    }
+
+    let mut service = LibraryService::new(config, assets)?;
+
+    match args.command {
+        LibraryCommand::Scan(scan) => {
+            let snapshot = service.snapshot(LibraryFilter {
+                query: scan.query.unwrap_or_default(),
+                installed_only: scan.target.installed_only,
+                view_mode: service.config().library.active_view,
+            })?;
+            if scan.target.json {
+                println!("{}", serde_json::to_string_pretty(&snapshot)?);
+            } else {
+                println!("Total: {}", snapshot.total_count);
+                println!("Installed: {}", snapshot.installed_count);
+                println!("Missing: {}", snapshot.missing_count);
+                for entry in snapshot.entries {
+                    let status = match entry.installed_status {
+                        starbyte_frontend::InstalledStatus::Installed => "installed",
+                        starbyte_frontend::InstalledStatus::Missing => "missing",
+                    };
+                    println!("[{status}] {} ({})", entry.display_title, entry.game_id);
+                }
+            }
+        }
+        LibraryCommand::RefreshMetadata(target) => {
+            let count = service.refresh_metadata_index()?;
+            service.save_config()?;
+            print_library_refresh_json(target.json, json!({
+                "updated": "metadata",
+                "records": count,
+            }))?;
+        }
+        LibraryCommand::RefreshCovers(target) => {
+            let count = service.refresh_covers(&library_target_from_args(&target))?;
+            service.save_config()?;
+            print_library_refresh_json(target.json, json!({
+                "updated": "covers",
+                "records": count,
+            }))?;
+        }
+        LibraryCommand::RefreshCheats(target) => {
+            let count = service.refresh_cheats(&library_target_from_args(&target))?;
+            service.save_config()?;
+            print_library_refresh_json(target.json, json!({
+                "updated": "cheats",
+                "records": count,
+            }))?;
+        }
+        LibraryCommand::RefreshAll(target) => {
+            let summary = service.refresh_all(&library_target_from_args(&target))?;
+            service.save_config()?;
+            print_library_refresh_json(target.json, serde_json::to_value(summary)?)?;
+        }
+        LibraryCommand::DownloadRom(target) => {
+            let payload = json!({
+                "updated": "rom_download",
+                "supported": false,
+                "reason": "ROM downloading is intentionally unsupported in this version",
+                "target": {
+                    "installed_only": target.installed_only,
+                    "game_id": target.game_id,
+                    "title": target.title,
+                    "rom": target.rom.map(|path| path.display().to_string()),
+                }
+            });
+            if target.json {
+                println!("{}", serde_json::to_string_pretty(&payload)?);
+            } else {
+                println!("ROM downloading is intentionally unsupported in this version.");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn library_target_from_args(args: &LibraryTargetArgs) -> LibraryTarget {
+    LibraryTarget {
+        installed_only: args.installed_only,
+        game_id: args.game_id.clone(),
+        title: args.title.clone(),
+        rom_path: args.rom.clone(),
+    }
+}
+
+fn print_library_refresh_json(as_json: bool, payload: serde_json::Value) -> Result<()> {
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+    } else if let Some(object) = payload.as_object() {
+        for (key, value) in object {
+            println!("{key}: {value}");
+        }
+    }
     Ok(())
 }
 

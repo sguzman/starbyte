@@ -108,6 +108,24 @@ fn write_coprocessor_regression_suite(dir: &Path) {
     .unwrap();
 }
 
+fn write_library_rom(path: &Path) {
+    let mut rom = vec![0_u8; 0x10000];
+    let base = 0x7FC0;
+    rom[base..base + 21].copy_from_slice(b"STARBYTE LIBRARY ROM ");
+    rom[base + 0x15] = 0x20;
+    rom[base + 0x16] = 0x00;
+    rom[base + 0x17] = 0x09;
+    rom[base + 0x18] = 0x01;
+    rom[base + 0x19] = 0x01;
+    rom[base + 0x1C] = 0x00;
+    rom[base + 0x1D] = 0xFF;
+    rom[base + 0x1E] = 0xFF;
+    rom[base + 0x1F] = 0x00;
+    rom[0x7FFC] = 0x00;
+    rom[0x7FFD] = 0x80;
+    fs::write(path, rom).unwrap();
+}
+
 #[test]
 fn print_config_toml_succeeds() {
     Command::cargo_bin("starbyte")
@@ -131,6 +149,43 @@ fn inspect_reports_detected_coprocessor() {
 
     let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
     assert!(stdout.contains("Coprocessor: DSP"));
+}
+
+#[test]
+fn library_scan_json_reports_installed_entries() {
+    let dir = tempdir().unwrap();
+    let rom_dir = dir.path().join("roms");
+    fs::create_dir_all(&rom_dir).unwrap();
+    write_library_rom(&rom_dir.join("library.sfc"));
+
+    let assert = Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "library",
+            "scan",
+            "--rom-dir",
+            rom_dir.to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    assert!(stdout.contains("\"installed_count\": 1"));
+    assert!(stdout.contains("STARBYTE LIBRARY ROM"));
+}
+
+#[test]
+fn library_download_rom_json_reports_unsupported() {
+    let assert = Command::cargo_bin("starbyte")
+        .unwrap()
+        .args(["library", "download-rom", "--json"])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    assert!(stdout.contains("\"supported\": false"));
+    assert!(stdout.contains("unsupported"));
 }
 
 #[test]

@@ -1,4 +1,6 @@
-//! Frontend-agnostic session orchestration shared by native shells.
+//! Frontend-agnostic session orchestration and library services shared by native shells.
+
+mod library;
 
 use std::path::{Path, PathBuf};
 
@@ -7,6 +9,13 @@ use anyhow::{Context, Result};
 use starbyte_core::{
     Emulator, EmulatorBuilder, cartridge::Cartridge, input::ControllerState, manifest::AssetConfig,
 };
+
+pub use self::library::{
+    CheatEntry, CheatProvider, CoverAsset, CoverProvider, GameId, GameMetadata, GameMetadataProvider,
+    InstalledStatus, LibraryEntry, LibraryFilter, LibraryService, LibrarySnapshot, LibraryTarget,
+    LocalRomInfo, RefreshSummary, RomDownloadProvider,
+};
+pub use starbyte_core::manifest::LibraryViewMode;
 
 /// Read-only session status exported to frontend shells.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,6 +82,12 @@ impl FrontendSession {
         Ok(())
     }
 
+    /// Return the currently loaded ROM path, if any.
+    #[must_use]
+    pub fn loaded_rom_path(&self) -> Option<&Path> {
+        self.rom_path.as_deref()
+    }
+
     /// Advance the emulator by one frame.
     pub fn run_frame(&mut self) -> Result<()> {
         self.emulator
@@ -133,7 +148,7 @@ mod tests {
     fn synthetic_rom_bytes() -> Vec<u8> {
         let mut rom = vec![0_u8; 0x10000];
         let base = 0x7FC0;
-        rom[base..base + 20].copy_from_slice(b"STARBYTE FRONTEND   ");
+        rom[base..base + 21].copy_from_slice(b"STARBYTE FRONTEND    ");
         rom[base + 0x15] = 0x20;
         rom[base + 0x16] = 0x00;
         rom[base + 0x17] = 0x09;
@@ -143,6 +158,8 @@ mod tests {
         rom[base + 0x1D] = 0xFF;
         rom[base + 0x1E] = 0x00;
         rom[base + 0x1F] = 0x00;
+        rom[0x7FFC] = 0x00;
+        rom[0x7FFD] = 0x80;
         rom
     }
 

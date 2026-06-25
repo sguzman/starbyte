@@ -20,9 +20,21 @@ struct Args {
     #[arg(long)]
     rom: Option<PathBuf>,
 
+    /// Optional library ROM directory to add on startup. May be provided multiple times.
+    #[arg(long = "rom-dir")]
+    rom_dirs: Vec<PathBuf>,
+
     /// Optional SPC700 IPL ROM path.
     #[arg(long)]
     spc700_ipl: Option<PathBuf>,
+
+    /// Optional cache root for metadata, covers, cheats, and config.
+    #[arg(long)]
+    cache_dir: Option<PathBuf>,
+
+    /// Optional runtime configuration file path.
+    #[arg(long)]
+    config: Option<PathBuf>,
 
     /// Start in light mode instead of night mode.
     #[arg(long)]
@@ -44,15 +56,24 @@ fn main() -> Result<()> {
         spc700_ipl: args.spc700_ipl.clone(),
         save_dir: None,
         state_dir: None,
+        cache_dir: args.cache_dir.clone(),
+        config_path: args.config.clone(),
     };
     let prefer_dark_mode = !args.day_mode;
     let rom = args.rom.clone();
+    let rom_dirs = args.rom_dirs.clone();
 
     eframe::run_native(
         "Starbyte",
         options,
         Box::new(move |cc| {
-            let app = StarbyteApp::new(cc, assets.clone(), rom.clone(), prefer_dark_mode)
+            let app = StarbyteApp::new(
+                cc,
+                assets.clone(),
+                rom.clone(),
+                rom_dirs.clone(),
+                prefer_dark_mode,
+            )
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
             Ok(Box::new(app))
         }),

@@ -36,10 +36,10 @@ This document tracks the coprocessor milestone at a lower level than the main ro
 - Variant-aware DSP scaffolding now distinguishes likely `DSP-1`, `DSP-1B`, `DSP-2`, `DSP-3`, and `DSP-4` titles, and the `0x1F` dump-style command path is in place for expanded validation.
 - The DSP FSM now also models a freeze command family and a broader opcode envelope so future command-accurate work has a better scaffold.
 - [x] Replace bootstrap command behavior with authentic `DSP-1` command semantics.
-- [ ] Add command coverage for the real `DSP-1` operations needed by early target software.
+- [x] Add command coverage for the real `DSP-1` operations needed by early target software.
 - [x] Add regression inputs that validate operand packing and result ordering against known-good behavior.
 - [x] Reach a point where at least one `DSP-1` title or dedicated test path boots meaningfully.
-- The current DSP runtime now executes real `DSP-1` math/geometry commands for multiply, inverse, triangle, radius, range, distance, rotate, and polar paths, with command-latency staging and chip-level regression tests.
+- The current DSP runtime now executes real `DSP-1` math/geometry commands for multiply, inverse, attitude/objective/subjective/scalar/gyrate transforms, triangle, radius, range, distance, rotate, and polar paths, with command-latency staging and chip-level regression tests.
 - ROM-regression coverage now includes dedicated DSP-family fixtures that exercise `DSP-1`, `DSP-1B`, `DSP-2`, `DSP-3`, and `DSP-4` through the full emulator path.
 
 ## Phase 3: DSP Family Maturity
@@ -84,8 +84,8 @@ This document tracks the coprocessor milestone at a lower level than the main ro
 
 ## Completion Criteria
 
-- [ ] `DSP-1` is meaningfully usable and regression-tested.
-- [ ] `SuperFX` has a tested boot/render baseline.
+- [x] `DSP-1` is meaningfully usable and regression-tested.
+- [x] `SuperFX` has a tested boot/render baseline.
 - [ ] `SA-1` has a tested boot baseline.
 - [ ] `Cx4` has targeted command or game-path validation.
 - [ ] At least one secondary chip from the `S-DD1` / `OBC1` / `S-RTC` group is implemented correctly.

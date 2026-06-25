@@ -743,7 +743,7 @@ fn build_attitude_matrix(scale: i16, rz: i16, ry: i16, rx: i16) -> [[i16; 3]; 3]
     let cos_ry = dsp_cos(ry);
     let sin_rx = dsp_sin(rx);
     let cos_rx = dsp_cos(rx);
-    let s = scale >> 1;
+    let s = scale;
 
     [
         [
@@ -1051,11 +1051,11 @@ mod tests {
     #[test]
     fn unsupported_variant_commands_return_variant_marked_error_word() {
         let mut dsp2 = DspCoprocessor::new(&header("STARBYTE DSP-2", Mapper::LoRom, 0x03, 0x08, 0x00));
-        write_word(&mut dsp2, Mapper::LoRom, 0x308000, 0x0004);
+        write_word(&mut dsp2, Mapper::LoRom, 0x308000, 0x0010);
         write_word(&mut dsp2, Mapper::LoRom, 0x308000, 0x4000);
-        write_word(&mut dsp2, Mapper::LoRom, 0x308000, 0x4000);
-        dsp2.step_master_cycles(12);
-        assert_eq!(read_word(&mut dsp2, Mapper::LoRom, 0x308000), 0x2D04);
+        write_word(&mut dsp2, Mapper::LoRom, 0x308000, 0x0000);
+        dsp2.step_master_cycles(18);
+        assert_eq!(read_word(&mut dsp2, Mapper::LoRom, 0x308000), 0x2D10);
     }
 
     #[test]

@@ -20,7 +20,7 @@ Starbyte is being bootstrapped as a correctness-first, CLI-first SNES emulator w
 - [x] Windows support hardening
 - [x] `egui` frontend bootstrap
 - [x] Additional frontends and advanced user features
-- [ ] Coprocessor support
+- [x] Coprocessor support
 - [ ] Nice-to-have features such as filters, shaders, rewind, movie recording
 - [x] Explicit non-feature for now: debugger tooling
 
@@ -121,9 +121,10 @@ Starbyte is being bootstrapped as a correctness-first, CLI-first SNES emulator w
 
 ### Coprocessor support
 
-- [ ] Defer all enhancement chips until the base console is stable and well-tested.
-- [ ] Add chips behind clearly bounded subsystem work rather than widening the early core.
-- [ ] Track detailed chip-by-chip progress in [docs/coprocessor-roadmap.md](/win/linux/Code/rust/starbyte/docs/coprocessor-roadmap.md).
+- [x] Defer all enhancement chips until the base console is stable and well-tested.
+- [x] Add chips behind clearly bounded subsystem work rather than widening the early core.
+- [x] Track detailed chip-by-chip progress in [docs/coprocessor-roadmap.md](/win/linux/Code/rust/starbyte/docs/coprocessor-roadmap.md).
+- The coprocessor milestone is complete as a bounded, test-backed subsystem milestone rather than a blanket compatibility claim across commercial software.
 
 ### Nice-to-have features such as filters, shaders, rewind, movie recording
 

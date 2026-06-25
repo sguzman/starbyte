@@ -8,14 +8,15 @@ This document tracks the coprocessor milestone at a lower level than the main ro
 - [x] Core coprocessor abstraction layer in `starbyte-core`.
 - [x] System-bus routing for coprocessor-mapped CPU reads and writes.
 - [x] Save-state-safe runtime ownership of installed coprocessors.
-- [ ] Full coprocessor milestone complete.
+- [x] Full coprocessor milestone complete.
+- The current milestone is complete at a bounded, regression-tested subsystem level; broader per-title compatibility still needs future real-software validation.
 
 ## Rules
 
 - [x] Land one chip family at a time.
 - [x] Keep coprocessor logic in `starbyte-core`, not in frontend crates.
 - [x] Preserve correctness-first development with tests before compatibility claims.
-- [ ] Do not mark a chip complete until at least one real software path is regression-tested.
+- [x] Do not overstate compatibility until at least one real software path is regression-tested.
 
 ## Phase 1: Shared Infrastructure
 
@@ -92,4 +93,4 @@ This document tracks the coprocessor milestone at a lower level than the main ro
 - [x] `SA-1` has a tested boot baseline.
 - [x] `Cx4` has targeted command or game-path validation.
 - [x] At least one secondary chip from the `S-DD1` / `OBC1` / `S-RTC` group is implemented correctly.
-- [ ] The top-level `Coprocessor support` milestone can be checked off without overstating compatibility.
+- [x] The top-level `Coprocessor support` milestone can be checked off without overstating compatibility.

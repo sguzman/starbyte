@@ -60,11 +60,48 @@ fn write_regression_suite(dir: &Path) {
           "rom":"regression.sfc",
           "frames":1,
           "setup_writes":[[8481,0],[8482,0],[8482,124],[8492,1]],
+          "expected_reads":[],
           "expected":{
             "frame":1,
             "save_ram_len":2048,
             "min_apu_steps":1,
             "first_pixel_rgba":[248,0,0,255]
+          }
+        }]"#,
+    )
+    .unwrap();
+}
+
+fn write_coprocessor_regression_suite(dir: &Path) {
+    let mut rom = vec![0_u8; 0x10000];
+    let base = 0x7FC0;
+    rom[base..base + 21].copy_from_slice(b"STARBYTE DSP-1 TEST  ");
+    rom[base + 0x15] = 0x20;
+    rom[base + 0x16] = 0x03;
+    rom[base + 0x17] = 0x09;
+    rom[base + 0x18] = 0x00;
+    rom[base + 0x19] = 0x01;
+    rom[base + 0x1C] = 0x00;
+    rom[base + 0x1D] = 0xFF;
+    rom[base + 0x1E] = 0xFF;
+    rom[base + 0x1F] = 0x00;
+    rom[0x7FFC] = 0x00;
+    rom[0x7FFD] = 0x80;
+    rom[0x0000] = 0xEA;
+    fs::write(dir.join("coprocessor.sfc"), rom).unwrap();
+
+    fs::write(
+        dir.join("coprocessor-suite.json"),
+        r#"[{
+          "name":"dsp multiply",
+          "rom":"coprocessor.sfc",
+          "frames":1,
+          "setup_writes":[[3178496,0],[3178497,0],[3178496,0],[3178497,64],[3178496,0],[3178497,64]],
+          "expected_reads":[[3194880,192],[3178496,0],[3178497,32],[3194880,128]],
+          "expected":{
+            "frame":1,
+            "save_ram_len":0,
+            "min_apu_steps":1
           }
         }]"#,
     )
@@ -352,4 +389,20 @@ fn rom_regression_run_current_can_dump_artifacts() {
         serde_json::from_slice(&fs::read(artifact_dir.join("summary.json")).unwrap()).unwrap();
     assert_eq!(summary["failed"], 0);
     assert_eq!(summary["passed"], 1);
+}
+
+#[test]
+fn rom_regression_run_current_supports_expected_host_reads() {
+    let dir = tempdir().unwrap();
+    write_coprocessor_regression_suite(dir.path());
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "compliance",
+            "rom-run-current",
+            dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
 }

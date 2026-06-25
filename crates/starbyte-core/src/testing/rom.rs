@@ -25,6 +25,8 @@ pub struct RomFixture {
     pub frames: u32,
     /// Host writes applied after ROM load and before execution.
     pub setup_writes: Vec<(u32, u8)>,
+    /// Host reads verified after execution completes.
+    pub expected_reads: Vec<(u32, u8)>,
     /// Expected post-run results.
     pub expected: ExpectedOutcome,
 }
@@ -156,6 +158,15 @@ fn evaluate_fixture(fixture: &RomFixture, assets: &AssetConfig) -> Vec<String> {
         }
     }
 
+    for (address, expected) in &fixture.expected_reads {
+        let actual = emulator.host_read_u8(*address);
+        if actual != *expected {
+            reasons.push(format!(
+                "host read mismatch at 0x{address:06X}: expected 0x{expected:02X}, got 0x{actual:02X}"
+            ));
+        }
+    }
+
     if let Some(expected_frame) = fixture.expected.frame
         && emulator.timing().frame != expected_frame
     {
@@ -234,6 +245,8 @@ struct RawFixture {
     frames: u32,
     #[serde(default)]
     setup_writes: Vec<(u32, u8)>,
+    #[serde(default)]
+    expected_reads: Vec<(u32, u8)>,
     expected: RawExpectedOutcome,
 }
 
@@ -254,6 +267,7 @@ impl RawFixture {
             rom: base_dir.join(self.rom),
             frames: self.frames,
             setup_writes: self.setup_writes,
+            expected_reads: self.expected_reads,
             expected: ExpectedOutcome {
                 frame: self.expected.frame,
                 cpu_pc: self.expected.cpu_pc,
@@ -304,6 +318,34 @@ mod tests {
         fs::write(path, rom).unwrap();
     }
 
+    fn write_coprocessor_rom(
+        path: &Path,
+        title: &[u8; 21],
+        rom_type: u8,
+        ram_size_code: u8,
+        program: &[(usize, u8)],
+    ) {
+        let mut rom = vec![0_u8; 0x10000];
+        let base = 0x7FC0;
+        rom[base..base + 21].copy_from_slice(title);
+        rom[base + 0x15] = 0x20;
+        rom[base + 0x16] = rom_type;
+        rom[base + 0x17] = 0x09;
+        rom[base + 0x18] = ram_size_code;
+        rom[base + 0x19] = 0x01;
+        rom[base + 0x1C] = 0x00;
+        rom[base + 0x1D] = 0xFF;
+        rom[base + 0x1E] = 0xFF;
+        rom[base + 0x1F] = 0x00;
+        rom[0x7FFC] = 0x00;
+        rom[0x7FFD] = 0x80;
+        rom[0x0000] = 0xEA;
+        for (offset, value) in program {
+            rom[*offset] = *value;
+        }
+        fs::write(path, rom).unwrap();
+    }
+
     #[test]
     fn summarizes_and_runs_synthetic_regression_suite() {
         let dir = tempdir().unwrap();
@@ -329,6 +371,7 @@ mod tests {
                   "rom":"case.sfc",
                   "frames":1,
                   "setup_writes":[[8481,0],[8482,0],[8482,124],[8492,1]],
+                  "expected_reads":[],
                   "expected":{{
                     "frame":1,
                     "frame_hash":{expected_hash},
@@ -350,5 +393,100 @@ mod tests {
         let run = run_with_current_core(&fixtures, &AssetConfig::default(), 8);
         assert_eq!(run.failed, 0);
         assert_eq!(run.passed, 1);
+    }
+
+    #[test]
+    fn runs_dsp_variant_and_superfx_regression_suite() {
+        let dir = tempdir().unwrap();
+
+        let dsp1 = dir.path().join("dsp1.sfc");
+        let dsp1b = dir.path().join("dsp1b.sfc");
+        let dsp2 = dir.path().join("dsp2.sfc");
+        let dsp3 = dir.path().join("dsp3.sfc");
+        let dsp4 = dir.path().join("dsp4.sfc");
+        let superfx = dir.path().join("superfx.sfc");
+
+        write_coprocessor_rom(&dsp1, b"STARBYTE DSP-1 TEST  ", 0x03, 0x00, &[]);
+        write_coprocessor_rom(&dsp1b, b"STARBYTE DSP-1B TEST ", 0x03, 0x00, &[]);
+        write_coprocessor_rom(&dsp2, b"STARBYTE DSP-2 TEST  ", 0x03, 0x00, &[]);
+        write_coprocessor_rom(&dsp3, b"STARBYTE DSP-3 TEST  ", 0x03, 0x00, &[]);
+        write_coprocessor_rom(&dsp4, b"STARBYTE DSP-4 TEST  ", 0x03, 0x00, &[]);
+        write_coprocessor_rom(
+            &superfx,
+            b"STARBYTE SUPERFX ROM ",
+            0x13,
+            0x00,
+            &[
+                (0x0020, 0xFE), (0x0021, 0x40), (0x0022, 0x00),
+                (0x0023, 0xDF),
+                (0x0024, 0x4C),
+                (0x0025, 0x00),
+                (0x0040, 0x33),
+            ],
+        );
+
+        let expected_superfx_hash = {
+            let mut emulator = Emulator::default();
+            emulator.load_rom(Cartridge::load(&superfx).unwrap());
+            emulator.host_write_u8(0x00301E, 0x20);
+            emulator.host_write_u8(0x00301F, 0x00);
+            emulator.run_until_frame().unwrap();
+            framebuffer_hash(emulator.framebuffer())
+        };
+
+        fs::write(
+            dir.path().join("suite.json"),
+            format!(
+                r#"[{{
+                  "name":"dsp1 multiply",
+                  "rom":"dsp1.sfc",
+                  "frames":1,
+                  "setup_writes":[[3178496,0],[3178497,0],[3178496,0],[3178497,64],[3178496,0],[3178497,64]],
+                  "expected_reads":[[3194880,192],[3178496,0],[3178497,32],[3194880,128]],
+                  "expected":{{"frame":1,"save_ram_len":0,"min_apu_steps":1}}
+                }},{{
+                  "name":"dsp1b dump",
+                  "rom":"dsp1b.sfc",
+                  "frames":1,
+                  "setup_writes":[[3178496,31],[3178497,0],[3178496,52],[3178497,18]],
+                  "expected_reads":[[3178496,62],[3178497,139]],
+                  "expected":{{"frame":1,"save_ram_len":0,"min_apu_steps":1}}
+                }},{{
+                  "name":"dsp2 multiply2",
+                  "rom":"dsp2.sfc",
+                  "frames":1,
+                  "setup_writes":[[3178496,32],[3178497,0],[3178496,0],[3178497,64],[3178496,0],[3178497,64]],
+                  "expected_reads":[[3178496,1],[3178497,32]],
+                  "expected":{{"frame":1,"save_ram_len":0,"min_apu_steps":1}}
+                }},{{
+                  "name":"dsp3 dump",
+                  "rom":"dsp3.sfc",
+                  "frames":1,
+                  "setup_writes":[[3178496,31],[3178497,0],[3178496,52],[3178497,18]],
+                  "expected_reads":[[3178496,15],[3178497,186]],
+                  "expected":{{"frame":1,"save_ram_len":0,"min_apu_steps":1}}
+                }},{{
+                  "name":"dsp4 distance",
+                  "rom":"dsp4.sfc",
+                  "frames":1,
+                  "setup_writes":[[3178496,40],[3178497,0],[3178496,3],[3178497,0],[3178496,4],[3178497,0],[3178496,12],[3178497,0]],
+                  "expected_reads":[[3178496,13],[3178497,0]],
+                  "expected":{{"frame":1,"save_ram_len":0,"min_apu_steps":1}}
+                }},{{
+                  "name":"superfx overlay",
+                  "rom":"superfx.sfc",
+                  "frames":1,
+                  "setup_writes":[[12318,32],[12319,0]],
+                  "expected_reads":[[12337,128]],
+                  "expected":{{"frame":1,"frame_hash":{expected_superfx_hash},"save_ram_len":0,"min_apu_steps":1,"first_pixel_rgba":[255,0,255,255]}}
+                }}]"#
+            ),
+        )
+        .unwrap();
+
+        let fixtures = load_suite(dir.path()).unwrap();
+        let run = run_with_current_core(&fixtures, &AssetConfig::default(), 8);
+        assert_eq!(run.failed, 0, "{run:#?}");
+        assert_eq!(run.passed, 6);
     }
 }

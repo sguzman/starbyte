@@ -92,12 +92,16 @@ enum LibraryCommand {
     /// Scan configured ROM directories and print the merged library snapshot.
     Scan(LibraryScanArgs),
     /// Refresh and cache library metadata.
+    #[command(alias = "fetch-metadata")]
     RefreshMetadata(LibraryTargetArgs),
     /// Refresh and cache cover images.
+    #[command(alias = "fetch-covers")]
     RefreshCovers(LibraryTargetArgs),
     /// Refresh and cache cheats.
+    #[command(alias = "fetch-cheats")]
     RefreshCheats(LibraryTargetArgs),
     /// Refresh metadata, covers, and cheats together.
+    #[command(alias = "fetch-all")]
     RefreshAll(LibraryTargetArgs),
     /// Placeholder hook for future ROM downloads.
     DownloadRom(LibraryTargetArgs),
@@ -328,6 +332,7 @@ fn inspect_rom(path: PathBuf) -> Result<()> {
 
 fn run_library(args: LibraryArgs, assets: AssetConfig) -> Result<()> {
     let config_path = assets.config_path();
+    info!(config_path = %config_path.display(), cache_root = %assets.cache_root().display(), "starting library command");
     let mut config = RuntimeConfig::load_or_default(&config_path)
         .with_context(|| format!("failed to load config from {}", config_path.display()))?;
 

@@ -19,6 +19,7 @@ sha1 = "0.10.6"
 starbyte-core = { path = "../starbyte-core" }
 tracing = "0.1.44"
 urlencoding = "2.1.3"
+zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = "3.23.0"

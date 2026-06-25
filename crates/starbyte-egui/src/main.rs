@@ -1,17 +1,19 @@
 //! Native `egui` frontend bootstrap for Starbyte.
 
 mod app;
+mod logging;
+mod worker;
 
-use std::path::PathBuf;
+use std::{env, path::PathBuf};
 
 use anyhow::Result;
 use clap::Parser;
 use eframe::egui;
-use tracing_subscriber::{EnvFilter, fmt};
+use tracing::info;
 
-use crate::app::StarbyteApp;
+use crate::{app::StarbyteApp, logging::install_tracing};
 
-use starbyte_core::manifest::AssetConfig;
+use starbyte_core::manifest::{AssetConfig, RuntimeConfig};
 
 #[derive(Debug, Parser)]
 #[command(name = "starbyte-egui", about = "Bootstrap egui frontend for Starbyte")]
@@ -36,22 +38,13 @@ struct Args {
     #[arg(long)]
     config: Option<PathBuf>,
 
-    /// Start in light mode instead of night mode.
+    /// Start in light mode instead of using the persisted theme preference.
     #[arg(long)]
     day_mode: bool,
 }
 
 fn main() -> Result<()> {
-    install_tracing()?;
     let args = Args::parse();
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 820.0])
-            .with_min_inner_size([960.0, 640.0])
-            .with_title("Starbyte"),
-        ..Default::default()
-    };
-
     let assets = AssetConfig {
         spc700_ipl: args.spc700_ipl.clone(),
         save_dir: None,
@@ -59,7 +52,36 @@ fn main() -> Result<()> {
         cache_dir: args.cache_dir.clone(),
         config_path: args.config.clone(),
     };
-    let prefer_dark_mode = !args.day_mode;
+    let config_path = assets.config_path();
+    let mut config = RuntimeConfig::load_or_default(&config_path)?;
+    let cache_root = config
+        .library
+        .cache_dir
+        .clone()
+        .or_else(|| assets.cache_dir.clone())
+        .unwrap_or_else(|| assets.cache_root());
+    let filter = env::var("STARBYTE_LOG").unwrap_or_else(|_| config.log_filter.clone());
+    let log_lines = install_tracing(&cache_root, &filter)?;
+    info!(
+        config_path = %config_path.display(),
+        cache_root = %cache_root.display(),
+        filter = %filter,
+        "starting starbyte egui"
+    );
+
+    let prefer_dark_mode_override = args.day_mode.then_some(false);
+    if let Some(prefer_dark_mode) = prefer_dark_mode_override {
+        config.prefer_dark_mode = prefer_dark_mode;
+    }
+
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1440.0, 900.0])
+            .with_min_inner_size([1100.0, 720.0])
+            .with_title("Starbyte"),
+        ..Default::default()
+    };
+
     let rom = args.rom.clone();
     let rom_dirs = args.rom_dirs.clone();
 
@@ -70,21 +92,15 @@ fn main() -> Result<()> {
             let app = StarbyteApp::new(
                 cc,
                 assets.clone(),
+                config.clone(),
                 rom.clone(),
                 rom_dirs.clone(),
-                prefer_dark_mode,
+                prefer_dark_mode_override,
+                log_lines.clone(),
             )
-                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
             Ok(Box::new(app))
         }),
     )
     .map_err(|error| anyhow::anyhow!("failed to launch egui frontend: {error}"))
-}
-
-fn install_tracing() -> Result<()> {
-    fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .with_target(true)
-        .try_init()
-        .map_err(|error| anyhow::anyhow!("failed to initialize tracing subscriber: {error}"))
 }

@@ -203,25 +203,78 @@ impl Default for AdvancedSettings {
     }
 }
 
+/// Persistent GUI layout and logging panel settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiSettings {
+    /// Whether the left settings/navigation column is visible.
+    pub show_left_panel: bool,
+    /// Whether the right session column is visible.
+    pub show_right_panel: bool,
+    /// Whether the details/cover column is visible.
+    pub show_details_panel: bool,
+    /// Whether the bottom log panel is visible.
+    pub show_log_panel: bool,
+    /// Whether the log view should auto-scroll as new lines arrive.
+    pub log_auto_scroll: bool,
+    /// Desired width for the left settings/navigation column.
+    pub left_panel_width: f32,
+    /// Desired width for the library browser column.
+    pub library_panel_width: f32,
+    /// Desired width for the details/cover column.
+    pub details_panel_width: f32,
+    /// Desired width for the right session column.
+    pub right_panel_width: f32,
+    /// Desired height for the bottom log panel.
+    pub log_panel_height: f32,
+}
+
+impl Default for UiSettings {
+    fn default() -> Self {
+        Self {
+            show_left_panel: true,
+            show_right_panel: true,
+            show_details_panel: true,
+            show_log_panel: true,
+            log_auto_scroll: true,
+            left_panel_width: 280.0,
+            library_panel_width: 420.0,
+            details_panel_width: 340.0,
+            right_panel_width: 320.0,
+            log_panel_height: 180.0,
+        }
+    }
+}
+
 /// User-tunable runtime options that should survive frontend changes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeConfig {
     /// Logging filter used by `tracing_subscriber`.
+    #[serde(default = "default_log_filter")]
     pub log_filter: String,
     /// Whether the frontend should start in dark mode.
+    #[serde(default = "default_prefer_dark_mode")]
     pub prefer_dark_mode: bool,
     /// Frontend/library-facing audio options.
+    #[serde(default)]
     pub audio: AudioSettings,
     /// Frontend/library-facing video options.
+    #[serde(default)]
     pub video: VideoSettings,
     /// Frontend/library-facing input options.
+    #[serde(default)]
     pub input: InputSettings,
     /// Frontend/library-facing cheat options.
+    #[serde(default)]
     pub cheats: CheatSettings,
     /// Frontend/library-facing library options.
+    #[serde(default)]
     pub library: LibrarySettings,
     /// Advanced/cache/provider options.
+    #[serde(default)]
     pub advanced: AdvancedSettings,
+    /// Frontend shell layout and logging pane preferences.
+    #[serde(default)]
+    pub ui: UiSettings,
 }
 
 impl RuntimeConfig {
@@ -256,16 +309,25 @@ impl RuntimeConfig {
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
-            log_filter: "info,starbyte_core=debug,starbyte_cli=debug".to_owned(),
-            prefer_dark_mode: true,
+            log_filter: default_log_filter(),
+            prefer_dark_mode: default_prefer_dark_mode(),
             audio: AudioSettings::default(),
             video: VideoSettings::default(),
             input: InputSettings::default(),
             cheats: CheatSettings::default(),
             library: LibrarySettings::default(),
             advanced: AdvancedSettings::default(),
+            ui: UiSettings::default(),
         }
     }
+}
+
+fn default_log_filter() -> String {
+    "info,starbyte_core=debug,starbyte_frontend=debug,starbyte_egui=debug".to_owned()
+}
+
+const fn default_prefer_dark_mode() -> bool {
+    true
 }
 
 #[cfg(test)]
@@ -288,6 +350,8 @@ mod tests {
         let mut config = RuntimeConfig::default();
         config.library.active_view = LibraryViewMode::Detailed;
         config.library.rom_dirs.push(temp_dir.path().join("roms"));
+        config.ui.show_log_panel = false;
+        config.ui.details_panel_width = 512.0;
         config.cheats
             .enabled_by_game
             .insert("abc123".to_owned(), vec!["infinite-lives".to_owned()]);
@@ -296,6 +360,8 @@ mod tests {
         let loaded = RuntimeConfig::load_or_default(&path).unwrap();
         assert_eq!(loaded.library.active_view, LibraryViewMode::Detailed);
         assert_eq!(loaded.library.rom_dirs.len(), 1);
+        assert!(!loaded.ui.show_log_panel);
+        assert_eq!(loaded.ui.details_panel_width, 512.0);
         assert_eq!(
             loaded
                 .cheats

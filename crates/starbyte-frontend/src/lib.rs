@@ -13,7 +13,7 @@ use starbyte_core::{
 pub use self::library::{
     CheatEntry, CheatProvider, CoverAsset, CoverProvider, GameId, GameMetadata, GameMetadataProvider,
     InstalledStatus, LibraryEntry, LibraryFilter, LibraryService, LibrarySnapshot, LibraryTarget,
-    LocalRomInfo, RefreshSummary, RomDownloadProvider,
+    LocalRomInfo, LocalRomSourceKind, RefreshSummary, RomDownloadProvider,
 };
 pub use starbyte_core::manifest::LibraryViewMode;
 

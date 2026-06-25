@@ -1,126 +1,237 @@
-use std::{collections::BTreeMap, path::{Path, PathBuf}, process::Command};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    process::Command,
+    time::Duration,
+};
 
 use anyhow::Result;
 use eframe::egui::{self, ColorImage, RichText, TextureHandle, TextureOptions, Vec2};
 use image::ImageReader;
-use tracing::warn;
+use tracing::{debug, info, warn};
+
+use crate::{
+    logging::SharedLogBuffer,
+    worker::{AppWorker, WorkerCommand, WorkerCommandKind, WorkerEvent},
+};
 
 use starbyte_core::{
     input::ControllerState,
     manifest::{AssetConfig, LibraryViewMode, RuntimeConfig},
 };
 use starbyte_frontend::{
-    FrontendSession, InstalledStatus, LibraryEntry, LibraryFilter, LibraryService, LibraryTarget,
+    FrontendSession, InstalledStatus, LibraryEntry, LibraryFilter, LibrarySnapshot, LibraryTarget,
 };
 
+#[derive(Debug, Clone)]
+struct JobRecord {
+    id: u64,
+    label: String,
+    state: &'static str,
+    detail: String,
+}
+
 pub struct StarbyteApp {
+    assets: AssetConfig,
+    config: RuntimeConfig,
+    cache_root: PathBuf,
     session: FrontendSession,
-    library_service: LibraryService,
-    library_snapshot: starbyte_frontend::LibrarySnapshot,
+    worker: AppWorker,
+    library_snapshot: LibrarySnapshot,
     framebuffer_texture: Option<TextureHandle>,
     cover_textures: BTreeMap<String, TextureHandle>,
-    prefer_dark_mode: bool,
-    status_line: String,
     held_input: ControllerState,
+    status_line: String,
     search_query: String,
     selected_game_id: Option<String>,
     loaded_game_id: Option<String>,
     show_properties: bool,
     rom_dir_input: String,
+    logs: SharedLogBuffer,
+    jobs: Vec<JobRecord>,
+    next_job_id: u64,
 }
 
 impl StarbyteApp {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         assets: AssetConfig,
+        mut config: RuntimeConfig,
         rom_path: Option<PathBuf>,
         startup_rom_dirs: Vec<PathBuf>,
-        prefer_dark_mode: bool,
+        prefer_dark_mode_override: Option<bool>,
+        logs: SharedLogBuffer,
     ) -> Result<Self> {
-        let config_path = assets.config_path();
-        let mut config = RuntimeConfig::load_or_default(&config_path)?;
-        config.prefer_dark_mode = prefer_dark_mode;
+        if let Some(prefer_dark_mode) = prefer_dark_mode_override {
+            config.prefer_dark_mode = prefer_dark_mode;
+        }
         for rom_dir in startup_rom_dirs {
             if !config.library.rom_dirs.contains(&rom_dir) {
                 config.library.rom_dirs.push(rom_dir);
             }
         }
-        if let Some(path) = &rom_path {
-            if let Some(parent) = path.parent() {
-                let parent = parent.to_path_buf();
-                if !config.library.rom_dirs.contains(&parent) {
-                    config.library.rom_dirs.push(parent);
-                }
+        if let Some(path) = &rom_path
+            && let Some(parent) = path.parent()
+        {
+            let parent = parent.to_path_buf();
+            if !config.library.rom_dirs.contains(&parent) {
+                config.library.rom_dirs.push(parent);
             }
         }
 
+        let cache_root = resolve_cache_root(&config, &assets);
         apply_theme(&cc.egui_ctx, config.prefer_dark_mode);
+        info!(
+            config_path = %assets.config_path().display(),
+            cache_root = %cache_root.display(),
+            prefer_dark_mode = config.prefer_dark_mode,
+            rom_dirs = ?config.library.rom_dirs,
+            providers_enabled = config.advanced.providers.enable_network,
+            "initialized gui app state"
+        );
 
-        let mut library_service = LibraryService::new(config, assets.clone())?;
-        if library_service.config().advanced.refresh_on_startup {
-            let _ = library_service.refresh_metadata_index();
-        }
-        let library_snapshot = library_service.snapshot(LibraryFilter {
-            query: String::new(),
-            installed_only: library_service.config().library.show_installed_only,
-            view_mode: library_service.config().library.active_view,
-        })?;
-
-        let mut session = FrontendSession::new(assets)?;
-        let mut status_line = "No ROM loaded".to_owned();
-        let mut loaded_game_id = None;
+        let mut session = FrontendSession::new(assets.clone())?;
+        let mut status_line = "Waiting for library scan...".to_owned();
         if let Some(path) = rom_path {
             session.load_rom(&path)?;
-            loaded_game_id = library_snapshot
-                .entries
-                .iter()
-                .find(|entry| entry.local.as_ref().map(|local| &local.rom_path) == Some(&path))
-                .map(|entry| entry.game_id.clone());
-            if let Some(game_id) = &loaded_game_id {
-                if let Some(entry) = library_snapshot
-                    .entries
-                    .iter()
-                    .find(|entry| &entry.game_id == game_id)
-                {
-                    let _ = session.set_active_cheats(&entry.cheats);
-                }
-            }
             let _ = session.run_frame();
             status_line = format!("Loaded {}", path.display());
         }
 
-        Ok(Self {
+        let worker = AppWorker::spawn(assets.clone());
+        let mut app = Self {
+            assets,
+            config,
+            cache_root,
             session,
-            library_service,
-            library_snapshot,
+            worker,
+            library_snapshot: empty_snapshot(),
             framebuffer_texture: None,
             cover_textures: BTreeMap::new(),
-            prefer_dark_mode,
-            status_line,
             held_input: ControllerState::default(),
+            status_line,
             search_query: String::new(),
             selected_game_id: None,
-            loaded_game_id,
+            loaded_game_id: None,
             show_properties: false,
             rom_dir_input: String::new(),
-        })
+            logs,
+            jobs: Vec::new(),
+            next_job_id: 1,
+        };
+        app.persist_config();
+        if app.config.advanced.refresh_on_startup {
+            app.queue_job(WorkerCommandKind::RefreshMetadata);
+        } else {
+            app.queue_job(WorkerCommandKind::RefreshSnapshot);
+        }
+        Ok(app)
     }
 
-    fn refresh_snapshot(&mut self) {
-        match self.library_service.snapshot(LibraryFilter {
+    fn current_filter(&self) -> LibraryFilter {
+        LibraryFilter {
             query: self.search_query.clone(),
-            installed_only: self.library_service.config().library.show_installed_only,
-            view_mode: self.library_service.config().library.active_view,
-        }) {
-            Ok(snapshot) => self.library_snapshot = snapshot,
-            Err(error) => self.status_line = error.to_string(),
+            installed_only: self.config.library.show_installed_only,
+            view_mode: self.config.library.active_view,
         }
     }
 
     fn persist_config(&mut self) {
-        self.library_service.config_mut().prefer_dark_mode = self.prefer_dark_mode;
-        if let Err(error) = self.library_service.save_config() {
+        if let Err(error) = self.config.save_to_path(self.assets.config_path()) {
             self.status_line = error.to_string();
+            warn!("{error}");
+        } else {
+            debug!(path = %self.assets.config_path().display(), "persisted GUI config");
+        }
+    }
+
+    fn queue_job(&mut self, kind: WorkerCommandKind) {
+        let job_id = self.next_job_id;
+        self.next_job_id += 1;
+        let label = job_label(&kind).to_owned();
+        self.jobs.push(JobRecord {
+            id: job_id,
+            label: label.clone(),
+            state: "queued",
+            detail: "Queued".to_owned(),
+        });
+        self.status_line = format!("{label} queued...");
+        self.worker.submit(WorkerCommand {
+            job_id,
+            config: self.config.clone(),
+            filter: self.current_filter(),
+            kind,
+        });
+    }
+
+    fn poll_worker_events(&mut self, ctx: &egui::Context) {
+        while let Some(event) = self.worker.try_recv() {
+            match event {
+                WorkerEvent::JobStarted { job_id, label } => {
+                    self.update_job(job_id, &label, "running", "Running");
+                    self.status_line = format!("{label} in progress...");
+                }
+                WorkerEvent::SnapshotReady {
+                    job_id,
+                    snapshot,
+                    config,
+                    status,
+                } => {
+                    self.config = config;
+                    self.cache_root = resolve_cache_root(&self.config, &self.assets);
+                    self.library_snapshot = snapshot;
+                    self.update_snapshot_cheat_flags();
+                    self.sync_loaded_game_cheats();
+                    self.update_job(job_id, "Library", "done", &status);
+                    self.status_line = status;
+                }
+                WorkerEvent::RomReady {
+                    job_id,
+                    entry,
+                    rom_path,
+                } => match self.session.load_rom(&rom_path) {
+                    Ok(()) => {
+                        self.loaded_game_id = Some(entry.game_id.clone());
+                        let _ = self.session.set_active_cheats(&entry.cheats);
+                        let _ = self.session.run_frame();
+                        self.refresh_framebuffer(ctx);
+                        let detail = format!("Loaded {}", rom_path.display());
+                        self.update_job(job_id, "Load Game", "done", &detail);
+                        self.status_line = detail;
+                    }
+                    Err(error) => {
+                        self.update_job(job_id, "Load Game", "failed", &error.to_string());
+                        self.status_line = error.to_string();
+                    }
+                },
+                WorkerEvent::JobFailed {
+                    job_id,
+                    label,
+                    error,
+                } => {
+                    self.update_job(job_id, &label, "failed", &error);
+                    self.status_line = error;
+                }
+            }
+        }
+    }
+
+    fn update_job(&mut self, job_id: u64, label: &str, state: &'static str, detail: &str) {
+        if let Some(job) = self.jobs.iter_mut().find(|job| job.id == job_id) {
+            job.label = label.to_owned();
+            job.state = state;
+            job.detail = detail.to_owned();
+        } else {
+            self.jobs.push(JobRecord {
+                id: job_id,
+                label: label.to_owned(),
+                state,
+                detail: detail.to_owned(),
+            });
+        }
+        if self.jobs.len() > 24 {
+            let excess = self.jobs.len().saturating_sub(24);
+            self.jobs.drain(0..excess);
         }
     }
 
@@ -133,51 +244,35 @@ impl StarbyteApp {
             .cloned()
     }
 
-    fn run_frame(&mut self, ctx: &egui::Context) {
-        self.session.set_controller1(self.held_input);
-        match self.session.run_frame() {
-            Ok(()) => {
-                self.refresh_framebuffer(ctx);
-                self.status_line = self.session.snapshot().status_line();
-            }
-            Err(error) => {
-                warn!("{error}");
-                self.status_line = error.to_string();
-            }
-        }
-    }
-
-    fn lookup_entry(&self, game_id: &str) -> Option<LibraryEntry> {
+    fn sync_loaded_game_cheats(&mut self) {
+        let Some(game_id) = self.loaded_game_id.clone() else {
+            self.session.clear_active_cheats();
+            return;
+        };
         if let Some(entry) = self
             .library_snapshot
             .entries
             .iter()
             .find(|entry| entry.game_id == game_id)
         {
-            return Some(entry.clone());
-        }
-
-        self.library_service
-            .snapshot(LibraryFilter {
-                query: String::new(),
-                installed_only: false,
-                view_mode: self.library_service.config().library.active_view,
-            })
-            .ok()?
-            .entries
-            .into_iter()
-            .find(|entry| entry.game_id == game_id)
-    }
-
-    fn sync_loaded_game_cheats(&mut self) {
-        let Some(game_id) = self.loaded_game_id.clone() else {
-            self.session.clear_active_cheats();
-            return;
-        };
-        if let Some(entry) = self.lookup_entry(&game_id) {
             let _ = self.session.set_active_cheats(&entry.cheats);
         } else {
             self.session.clear_active_cheats();
+        }
+    }
+
+    fn update_snapshot_cheat_flags(&mut self) {
+        for entry in &mut self.library_snapshot.entries {
+            let enabled = self
+                .config
+                .cheats
+                .enabled_by_game
+                .get(&entry.game_id)
+                .cloned()
+                .unwrap_or_default();
+            for cheat in &mut entry.cheats {
+                cheat.enabled = enabled.iter().any(|value| value == &cheat.id);
+            }
         }
     }
 
@@ -199,22 +294,28 @@ impl StarbyteApp {
         }
     }
 
-    fn play_entry(&mut self, entry: &LibraryEntry, ctx: &egui::Context) {
-        let Some(local) = &entry.local else {
+    fn run_frame(&mut self, ctx: &egui::Context) {
+        self.session.set_controller1(self.held_input);
+        match self.session.run_frame() {
+            Ok(()) => {
+                self.refresh_framebuffer(ctx);
+                self.status_line = self.session.snapshot().status_line();
+            }
+            Err(error) => {
+                warn!("{error}");
+                self.status_line = error.to_string();
+            }
+        }
+    }
+
+    fn queue_load_entry(&mut self, entry: &LibraryEntry) {
+        if entry.installed_status == InstalledStatus::Missing {
             self.status_line = format!("{} is not installed locally.", entry.display_title);
             return;
-        };
-
-        match self.session.load_rom(&local.rom_path) {
-            Ok(()) => {
-                self.loaded_game_id = Some(entry.game_id.clone());
-                let _ = self.session.set_active_cheats(&entry.cheats);
-                let _ = self.session.run_frame();
-                self.refresh_framebuffer(ctx);
-                self.status_line = format!("Loaded {}", local.rom_path.display());
-            }
-            Err(error) => self.status_line = error.to_string(),
         }
+        self.queue_job(WorkerCommandKind::MaterializeRom {
+            entry: entry.clone(),
+        });
     }
 
     fn ensure_cover_texture(
@@ -227,9 +328,11 @@ impl StarbyteApp {
         }
         let cover = entry.cover.as_ref()?;
         let Ok(reader) = ImageReader::open(&cover.cache_path) else {
+            warn!("failed to open cached cover {}", cover.cache_path.display());
             return None;
         };
         let Ok(image) = reader.decode() else {
+            warn!("failed to decode cached cover {}", cover.cache_path.display());
             return None;
         };
         let rgba = image.to_rgba8();
@@ -247,8 +350,7 @@ impl StarbyteApp {
 
     fn toggle_cheat(&mut self, game_id: &str, cheat_id: &str, enabled: bool) {
         let enabled_list = self
-            .library_service
-            .config_mut()
+            .config
             .cheats
             .enabled_by_game
             .entry(game_id.to_owned())
@@ -260,50 +362,11 @@ impl StarbyteApp {
         } else {
             enabled_list.retain(|value| value != cheat_id);
         }
+        self.update_snapshot_cheat_flags();
         self.persist_config();
-        self.refresh_snapshot();
         if self.loaded_game_id.as_deref() == Some(game_id) {
             self.sync_loaded_game_cheats();
         }
-    }
-
-    fn refresh_selected_metadata(&mut self) {
-        match self.library_service.refresh_metadata_index() {
-            Ok(count) => self.status_line = format!("Refreshed metadata index ({count} records)."),
-            Err(error) => self.status_line = error.to_string(),
-        }
-        self.persist_config();
-        self.refresh_snapshot();
-        self.sync_loaded_game_cheats();
-    }
-
-    fn refresh_selected_covers(&mut self, entry: Option<&LibraryEntry>) {
-        let target = entry
-            .map(|entry| LibraryTarget {
-                game_id: Some(entry.game_id.clone()),
-                ..LibraryTarget::default()
-            })
-            .unwrap_or_default();
-        match self.library_service.refresh_covers(&target) {
-            Ok(count) => self.status_line = format!("Refreshed covers ({count} file(s))."),
-            Err(error) => self.status_line = error.to_string(),
-        }
-        self.refresh_snapshot();
-    }
-
-    fn refresh_selected_cheats(&mut self, entry: Option<&LibraryEntry>) {
-        let target = entry
-            .map(|entry| LibraryTarget {
-                game_id: Some(entry.game_id.clone()),
-                ..LibraryTarget::default()
-            })
-            .unwrap_or_default();
-        match self.library_service.refresh_cheats(&target) {
-            Ok(count) => self.status_line = format!("Refreshed cheats ({count} record(s))."),
-            Err(error) => self.status_line = error.to_string(),
-        }
-        self.persist_config();
-        self.refresh_snapshot();
     }
 
     fn draw_top_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -318,66 +381,68 @@ impl StarbyteApp {
                 )
                 .changed()
             {
-                self.refresh_snapshot();
+                self.queue_job(WorkerCommandKind::RefreshSnapshot);
             }
 
-            let installed_only = &mut self.library_service.config_mut().library.show_installed_only;
-            if ui.checkbox(installed_only, "Installed only").changed() {
-                self.refresh_snapshot();
+            if ui
+                .checkbox(&mut self.config.library.show_installed_only, "Installed only")
+                .changed()
+            {
                 self.persist_config();
+                self.queue_job(WorkerCommandKind::RefreshSnapshot);
             }
 
             egui::ComboBox::from_label("View")
-                .selected_text(match self.library_service.config().library.active_view {
+                .selected_text(match self.config.library.active_view {
                     LibraryViewMode::List => "List",
                     LibraryViewMode::Grid => "Grid",
                     LibraryViewMode::Detailed => "Detailed",
                 })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(
-                        &mut self.library_service.config_mut().library.active_view,
+                        &mut self.config.library.active_view,
                         LibraryViewMode::List,
                         "List",
                     );
                     ui.selectable_value(
-                        &mut self.library_service.config_mut().library.active_view,
+                        &mut self.config.library.active_view,
                         LibraryViewMode::Grid,
                         "Grid",
                     );
                     ui.selectable_value(
-                        &mut self.library_service.config_mut().library.active_view,
+                        &mut self.config.library.active_view,
                         LibraryViewMode::Detailed,
                         "Detailed",
                     );
                 });
 
             if ui.button("Refresh Metadata").clicked() {
-                self.refresh_selected_metadata();
+                self.queue_job(WorkerCommandKind::RefreshMetadata);
             }
             if ui.button("Refresh Covers").clicked() {
-                self.refresh_selected_covers(None);
+                self.queue_job(WorkerCommandKind::RefreshCovers {
+                    target: LibraryTarget::default(),
+                });
             }
             if ui.button("Refresh Cheats").clicked() {
-                self.refresh_selected_cheats(None);
+                self.queue_job(WorkerCommandKind::RefreshCheats {
+                    target: LibraryTarget::default(),
+                });
             }
             if ui.button("Refresh All").clicked() {
-                match self.library_service.refresh_all(&LibraryTarget::default()) {
-                    Ok(summary) => {
-                        self.status_line = format!(
-                            "Refreshed metadata {}, covers {}, cheats {}.",
-                            summary.metadata_records, summary.covers_written, summary.cheat_records
-                        );
-                        self.persist_config();
-                        self.refresh_snapshot();
-                    }
-                    Err(error) => self.status_line = error.to_string(),
-                }
+                self.queue_job(WorkerCommandKind::RefreshAll);
             }
-            if ui.button("Properties").clicked() && self.selected_game_id.is_some() {
-                self.show_properties = true;
+            if ui.checkbox(&mut self.config.prefer_dark_mode, "Night Mode").changed() {
+                apply_theme(ctx, self.config.prefer_dark_mode);
+                self.persist_config();
             }
-            if ui.checkbox(&mut self.prefer_dark_mode, "Night Mode").changed() {
-                apply_theme(ctx, self.prefer_dark_mode);
+
+            ui.separator();
+            ui.checkbox(&mut self.config.ui.show_left_panel, "Left");
+            ui.checkbox(&mut self.config.ui.show_details_panel, "Details");
+            ui.checkbox(&mut self.config.ui.show_right_panel, "Session");
+            ui.checkbox(&mut self.config.ui.show_log_panel, "Logs");
+            if ui.button("Save Layout").clicked() {
                 self.persist_config();
             }
         });
@@ -399,34 +464,26 @@ impl StarbyteApp {
             if ui.button("Add").clicked() {
                 let path = PathBuf::from(self.rom_dir_input.trim());
                 if !self.rom_dir_input.trim().is_empty()
-                    && !self.library_service.config().library.rom_dirs.contains(&path)
+                    && !self.config.library.rom_dirs.contains(&path)
                 {
-                    self.library_service.config_mut().library.rom_dirs.push(path);
+                    self.config.library.rom_dirs.push(path);
                     self.rom_dir_input.clear();
                     self.persist_config();
-                    self.refresh_snapshot();
+                    self.queue_job(WorkerCommandKind::RefreshSnapshot);
                 }
             }
-            if ui.button("Browse").clicked() {
-                if let Some(path) = rfd::FileDialog::new().pick_folder()
-                    && !self.library_service.config().library.rom_dirs.contains(&path)
-                {
-                    self.library_service.config_mut().library.rom_dirs.push(path);
-                    self.persist_config();
-                    self.refresh_snapshot();
-                }
+            if ui.button("Browse").clicked()
+                && let Some(path) = rfd::FileDialog::new().pick_folder()
+                && !self.config.library.rom_dirs.contains(&path)
+            {
+                self.config.library.rom_dirs.push(path);
+                self.persist_config();
+                self.queue_job(WorkerCommandKind::RefreshSnapshot);
             }
         });
 
         let mut remove_index = None;
-        for (index, rom_dir) in self
-            .library_service
-            .config()
-            .library
-            .rom_dirs
-            .iter()
-            .enumerate()
-        {
+        for (index, rom_dir) in self.config.library.rom_dirs.iter().enumerate() {
             ui.horizontal(|ui| {
                 ui.label(rom_dir.display().to_string());
                 if ui.button("Remove").clicked() {
@@ -435,16 +492,16 @@ impl StarbyteApp {
             });
         }
         if let Some(index) = remove_index {
-            self.library_service.config_mut().library.rom_dirs.remove(index);
+            self.config.library.rom_dirs.remove(index);
             self.persist_config();
-            self.refresh_snapshot();
+            self.queue_job(WorkerCommandKind::RefreshSnapshot);
         }
 
         ui.separator();
         egui::CollapsingHeader::new("Audio")
             .default_open(true)
             .show(ui, |ui| {
-                let audio = &mut self.library_service.config_mut().audio;
+                let audio = &mut self.config.audio;
                 let mut changed = false;
                 changed |= ui.checkbox(&mut audio.enabled, "Enabled").changed();
                 changed |= ui.checkbox(&mut audio.mute_on_startup, "Mute on startup").changed();
@@ -467,7 +524,7 @@ impl StarbyteApp {
         egui::CollapsingHeader::new("Video")
             .default_open(true)
             .show(ui, |ui| {
-                let video = &mut self.library_service.config_mut().video;
+                let video = &mut self.config.video;
                 let mut changed = false;
                 changed |= ui.checkbox(&mut video.fullscreen, "Fullscreen").changed();
                 changed |= ui.checkbox(&mut video.integer_scale, "Integer scale").changed();
@@ -501,11 +558,10 @@ impl StarbyteApp {
         egui::CollapsingHeader::new("Cheats")
             .default_open(false)
             .show(ui, |ui| {
-                let cheats = &mut self.library_service.config_mut().cheats;
-                let changed = ui
-                    .checkbox(&mut cheats.show_cheat_badges, "Show cheat badges")
-                    .changed();
-                if changed {
+                if ui
+                    .checkbox(&mut self.config.cheats.show_cheat_badges, "Show cheat badges")
+                    .changed()
+                {
                     self.persist_config();
                 }
             });
@@ -513,11 +569,8 @@ impl StarbyteApp {
         egui::CollapsingHeader::new("Advanced / Cache")
             .default_open(false)
             .show(ui, |ui| {
-                ui.label(format!(
-                    "Cache Root: {}",
-                    self.library_service.cache_root().display()
-                ));
-                let advanced = &mut self.library_service.config_mut().advanced;
+                ui.label(format!("Cache Root: {}", self.cache_root.display()));
+                let advanced = &mut self.config.advanced;
                 let mut changed = false;
                 changed |= ui
                     .checkbox(&mut advanced.show_missing_games, "Show metadata-only games")
@@ -528,11 +581,103 @@ impl StarbyteApp {
                 changed |= ui
                     .checkbox(&mut advanced.providers.enable_network, "Enable network providers")
                     .changed();
+                changed |= ui
+                    .text_edit_singleline(&mut self.config.log_filter)
+                    .changed();
                 if changed {
                     self.persist_config();
-                    self.refresh_snapshot();
+                    self.queue_job(WorkerCommandKind::RefreshSnapshot);
                 }
             });
+
+        ui.separator();
+        ui.heading("Jobs");
+        for job in self.jobs.iter().rev().take(8) {
+            ui.label(format!("[{}] {}: {}", job.state, job.label, job.detail));
+        }
+    }
+
+    fn draw_details_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.heading("Details");
+        let Some(entry) = self.selected_entry() else {
+            ui.label("Select a game to see details.");
+            return;
+        };
+
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Play").clicked() {
+                self.queue_load_entry(&entry);
+            }
+            if ui.button("Properties").clicked() {
+                self.show_properties = true;
+            }
+            if ui.button("Refresh Covers").clicked() {
+                self.queue_job(WorkerCommandKind::RefreshCovers {
+                    target: LibraryTarget {
+                        game_id: Some(entry.game_id.clone()),
+                        ..LibraryTarget::default()
+                    },
+                });
+            }
+            if ui.button("Refresh Cheats").clicked() {
+                self.queue_job(WorkerCommandKind::RefreshCheats {
+                    target: LibraryTarget {
+                        game_id: Some(entry.game_id.clone()),
+                        ..LibraryTarget::default()
+                    },
+                });
+            }
+        });
+
+        ui.separator();
+        if let Some(texture) = self.ensure_cover_texture(ctx, &entry) {
+            let size = fit_size(texture.size_vec2(), Vec2::new(ui.available_width(), 260.0));
+            ui.add(egui::Image::new((texture.id(), size)));
+        } else {
+            ui.label("No cached cover.");
+        }
+        ui.separator();
+        ui.heading(entry.display_title.as_str());
+        ui.label(match entry.installed_status {
+            InstalledStatus::Installed => "Installed locally",
+            InstalledStatus::Missing => "Metadata only",
+        });
+        if let Some(local) = &entry.local {
+            ui.label(format!("Source: {:?}", local.source_kind));
+            ui.label(format!("Path: {}", local.rom_path.display()));
+            if let Some(member) = &local.archive_member_path {
+                ui.label(format!("Archive Member: {member}"));
+            }
+            if let Some(path) = &local.extracted_cache_path {
+                ui.label(format!("Extraction Cache: {}", path.display()));
+            }
+            ui.label(format!("Mapper: {}", local.mapper));
+            ui.label(format!(
+                "Coprocessor: {}",
+                local.coprocessor.as_deref().unwrap_or("None")
+            ));
+        }
+        if let Some(metadata) = &entry.metadata {
+            ui.label(format!("Metadata Source: {}", metadata.source));
+            ui.label(format!(
+                "Has cheat files: {}",
+                if metadata.has_cheat_files { "yes" } else { "no" }
+            ));
+        }
+
+        ui.separator();
+        ui.heading("Cheats");
+        if entry.cheats.is_empty() {
+            ui.label("No cached cheats for this title.");
+        } else {
+            for cheat in entry.cheats {
+                let mut enabled = cheat.enabled;
+                if ui.checkbox(&mut enabled, cheat.name.as_str()).changed() {
+                    self.toggle_cheat(&entry.game_id, &cheat.id, enabled);
+                }
+                ui.label(RichText::new(cheat.code).small());
+            }
+        }
     }
 
     fn draw_session_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -568,7 +713,7 @@ impl StarbyteApp {
 
     fn draw_library_browser(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let entries = self.library_snapshot.entries.clone();
-        match self.library_service.config().library.active_view {
+        match self.config.library.active_view {
             LibraryViewMode::List => {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     for entry in entries {
@@ -614,33 +759,39 @@ impl StarbyteApp {
         if response.clicked() {
             self.selected_game_id = Some(entry.game_id.clone());
         }
+        if response.double_clicked() {
+            self.queue_load_entry(entry);
+        }
         response.context_menu(|ui| self.draw_entry_context_menu(ui, ctx, entry));
     }
 
     fn draw_grid_entry(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, entry: &LibraryEntry) {
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.set_width(180.0);
+        ui.group(|ui| {
+            ui.set_width(200.0);
             if let Some(texture) = self.ensure_cover_texture(ctx, entry) {
-                ui.add(egui::Image::new((texture.id(), Vec2::new(140.0, 196.0))));
+                let size = fit_size(texture.size_vec2(), Vec2::new(180.0, 180.0));
+                ui.add(egui::Image::new((texture.id(), size)));
             } else {
-                ui.allocate_ui(Vec2::new(140.0, 196.0), |ui| {
-                    ui.centered_and_justified(|ui| ui.label("No Cover"));
-                });
+                ui.allocate_space(Vec2::new(180.0, 120.0));
+                ui.label("No cover");
             }
-            let button = ui.selectable_label(
+
+            let response = ui.selectable_label(
                 self.selected_game_id.as_deref() == Some(entry.game_id.as_str()),
-                &entry.display_title,
+                entry.display_title.as_str(),
             );
-            if button.clicked() {
+            if response.clicked() {
                 self.selected_game_id = Some(entry.game_id.clone());
             }
-            button.context_menu(|ui| self.draw_entry_context_menu(ui, ctx, entry));
+            if response.double_clicked() {
+                self.queue_load_entry(entry);
+            }
             ui.label(match entry.installed_status {
-                InstalledStatus::Installed => "Present",
+                InstalledStatus::Installed => "Installed",
                 InstalledStatus::Missing => "Missing",
             });
+            response.context_menu(|ui| self.draw_entry_context_menu(ui, ctx, entry));
         });
-        ui.add_space(8.0);
     }
 
     fn draw_detailed_entry(
@@ -649,51 +800,45 @@ impl StarbyteApp {
         ctx: &egui::Context,
         entry: &LibraryEntry,
     ) {
-        ui.horizontal(|ui| {
-            if let Some(texture) = self.ensure_cover_texture(ctx, entry) {
-                ui.add(egui::Image::new((texture.id(), Vec2::new(96.0, 134.0))));
-            }
-            ui.vertical(|ui| {
-                let label = ui.selectable_label(
-                    self.selected_game_id.as_deref() == Some(entry.game_id.as_str()),
-                    RichText::new(&entry.display_title).heading(),
-                );
-                if label.clicked() {
-                    self.selected_game_id = Some(entry.game_id.clone());
+        let response = ui.group(|ui| {
+            ui.horizontal(|ui| {
+                if let Some(texture) = self.ensure_cover_texture(ctx, entry) {
+                    let size = fit_size(texture.size_vec2(), Vec2::new(96.0, 96.0));
+                    ui.add(egui::Image::new((texture.id(), size)));
                 }
-                label.context_menu(|ui| self.draw_entry_context_menu(ui, ctx, entry));
-                ui.label(format!(
-                    "Status: {}",
-                    match entry.installed_status {
-                        InstalledStatus::Installed => "Present",
-                        InstalledStatus::Missing => "Missing",
+                ui.vertical(|ui| {
+                    ui.heading(entry.display_title.as_str());
+                    ui.label(match entry.installed_status {
+                        InstalledStatus::Installed => "Installed locally",
+                        InstalledStatus::Missing => "Metadata only",
+                    });
+                    if let Some(local) = &entry.local {
+                        ui.label(format!("Mapper: {}", local.mapper));
+                        ui.label(format!("Region: {}", local.region));
+                        if let Some(member) = &local.archive_member_path {
+                            ui.label(format!("Archive Member: {member}"));
+                        }
                     }
-                ));
-                if let Some(local) = &entry.local {
-                    ui.label(format!("Mapper: {}", local.mapper));
-                    ui.label(format!("Region: {}", local.region));
-                    if let Some(coprocessor) = &local.coprocessor {
-                        ui.label(format!("Coprocessor: {coprocessor}"));
-                    }
-                    ui.label(format!("ROM: {}", local.rom_path.display()));
-                }
-                if let Some(metadata) = &entry.metadata {
-                    ui.label(format!("Source: {}", metadata.source));
-                }
-                ui.label(format!("Cheats: {}", entry.cheats.len()));
+                    ui.label(format!("Cheats: {}", entry.cheats.len()));
+                });
             });
         });
+        if response.response.clicked() {
+            self.selected_game_id = Some(entry.game_id.clone());
+        }
+        response
+            .response
+            .context_menu(|ui| self.draw_entry_context_menu(ui, ctx, entry));
     }
 
     fn draw_entry_context_menu(
         &mut self,
         ui: &mut egui::Ui,
-        ctx: &egui::Context,
+        _ctx: &egui::Context,
         entry: &LibraryEntry,
     ) {
         if ui.button("Play").clicked() {
-            self.selected_game_id = Some(entry.game_id.clone());
-            self.play_entry(entry, ctx);
+            self.queue_load_entry(entry);
             ui.close();
         }
         if ui.button("Properties").clicked() {
@@ -702,27 +847,44 @@ impl StarbyteApp {
             ui.close();
         }
         if ui.button("Refresh Metadata").clicked() {
-            self.refresh_selected_metadata();
+            self.queue_job(WorkerCommandKind::RefreshMetadata);
+            ui.close();
+        }
+        if ui.button("Refresh Covers").clicked() {
+            self.queue_job(WorkerCommandKind::RefreshCovers {
+                target: LibraryTarget {
+                    game_id: Some(entry.game_id.clone()),
+                    ..LibraryTarget::default()
+                },
+            });
             ui.close();
         }
         if ui.button("Refresh Cheats").clicked() {
-            self.refresh_selected_cheats(Some(entry));
-            ui.close();
-        }
-        if ui.button("Refresh Cover").clicked() {
-            self.refresh_selected_covers(Some(entry));
+            self.queue_job(WorkerCommandKind::RefreshCheats {
+                target: LibraryTarget {
+                    game_id: Some(entry.game_id.clone()),
+                    ..LibraryTarget::default()
+                },
+            });
             ui.close();
         }
         if let Some(local) = &entry.local
             && ui.button("Open ROM Folder").clicked()
         {
-            let _ = open_path(local.rom_path.parent().unwrap_or(Path::new(".")));
+            let target = match local.source_kind {
+                starbyte_frontend::LocalRomSourceKind::File => local.rom_path.parent().map(Path::to_path_buf),
+                starbyte_frontend::LocalRomSourceKind::ZipArchiveMember => local.rom_path.parent().map(Path::to_path_buf),
+            };
+            if let Some(path) = target {
+                let _ = open_path(&path);
+            }
             ui.close();
         }
     }
 
     fn draw_properties_window(&mut self, ctx: &egui::Context) {
         let Some(entry) = self.selected_entry() else {
+            self.show_properties = false;
             return;
         };
         let mut open = self.show_properties;
@@ -730,54 +892,31 @@ impl StarbyteApp {
             .open(&mut open)
             .resizable(true)
             .show(ctx, |ui| {
-                ui.heading(&entry.display_title);
+                ui.heading(entry.display_title.as_str());
                 ui.label(format!("Game ID: {}", entry.game_id));
-                ui.label(format!(
-                    "Status: {}",
-                    match entry.installed_status {
-                        InstalledStatus::Installed => "Present",
-                        InstalledStatus::Missing => "Missing",
-                    }
-                ));
+                ui.label(match entry.installed_status {
+                    InstalledStatus::Installed => "Installed locally",
+                    InstalledStatus::Missing => "Metadata only",
+                });
                 if let Some(local) = &entry.local {
-                    ui.separator();
-                    ui.label(format!("ROM Path: {}", local.rom_path.display()));
-                    ui.label(format!("Mapper: {}", local.mapper));
-                    ui.label(format!("Region: {}", local.region));
-                    ui.label(format!("Size: {} bytes", local.file_size_bytes));
-                    if let Some(coprocessor) = &local.coprocessor {
-                        ui.label(format!("Coprocessor: {coprocessor}"));
+                    ui.label(format!("Source: {:?}", local.source_kind));
+                    ui.label(format!("Path: {}", local.rom_path.display()));
+                    if let Some(member) = &local.archive_member_path {
+                        ui.label(format!("Archive Member: {member}"));
                     }
                 }
                 if let Some(metadata) = &entry.metadata {
-                    ui.separator();
                     ui.label(format!("Metadata Source: {}", metadata.source));
-                    ui.label(format!("Fetched: {}", metadata.fetched_at_unix));
-                    ui.label(format!(
-                        "Cover URL: {}",
-                        metadata.cover_url.clone().unwrap_or_else(|| "none".to_owned())
-                    ));
+                    ui.label(format!("Fetched At: {}", metadata.fetched_at_unix));
                 }
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui.button("Play").clicked() {
-                        self.play_entry(&entry, ctx);
-                    }
-                    if ui.button("Refresh Cheats").clicked() {
-                        self.refresh_selected_cheats(Some(&entry));
-                    }
-                    if ui.button("Refresh Cover").clicked() {
-                        self.refresh_selected_covers(Some(&entry));
-                    }
-                });
                 ui.separator();
                 ui.heading("Cheats");
                 if entry.cheats.is_empty() {
-                    ui.label("No cached cheats. Use Refresh Cheats to download them.");
+                    ui.label("No cheats cached for this title.");
                 } else {
                     for cheat in entry.cheats {
                         let mut enabled = cheat.enabled;
-                        if ui.checkbox(&mut enabled, cheat.name).changed() {
+                        if ui.checkbox(&mut enabled, cheat.name.as_str()).changed() {
                             self.toggle_cheat(&entry.game_id, &cheat.id, enabled);
                         }
                         ui.label(RichText::new(cheat.code).small());
@@ -786,28 +925,130 @@ impl StarbyteApp {
             });
         self.show_properties = open;
     }
+
+    fn draw_log_panel(&mut self, ctx: &egui::Context) {
+        if !self.config.ui.show_log_panel {
+            return;
+        }
+
+        let response = egui::TopBottomPanel::bottom("logs")
+            .resizable(true)
+            .default_height(self.config.ui.log_panel_height)
+            .min_height(120.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.heading("Logs");
+                    if ui.button("Open Log Folder").clicked() {
+                        let _ = open_path(&self.cache_root.join("logs"));
+                    }
+                    if ui.button("Clear View").clicked()
+                        && let Ok(mut lines) = self.logs.lock()
+                    {
+                        lines.clear();
+                    }
+                    ui.checkbox(&mut self.config.ui.log_auto_scroll, "Auto-scroll");
+                });
+                ui.separator();
+                let lines = snapshot_logs(&self.logs);
+                egui::ScrollArea::vertical()
+                    .stick_to_bottom(self.config.ui.log_auto_scroll)
+                    .show(ui, |ui| {
+                        for line in lines {
+                            let color = if line.contains(" ERROR ") || line.contains(" error ") {
+                                egui::Color32::LIGHT_RED
+                            } else if line.contains(" WARN ") || line.contains(" warn ") {
+                                egui::Color32::YELLOW
+                            } else {
+                                egui::Color32::LIGHT_GRAY
+                            };
+                            ui.label(RichText::new(line).monospace().color(color));
+                        }
+                    });
+            });
+        self.config.ui.log_panel_height = response.response.rect.height();
+    }
 }
 
 impl eframe::App for StarbyteApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_worker_events(ctx);
+
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| self.draw_top_bar(ui, ctx));
+        self.draw_log_panel(ctx);
 
-        egui::SidePanel::left("settings")
-            .resizable(true)
-            .min_width(250.0)
-            .show(ctx, |ui| self.draw_settings_panel(ui));
+        if self.config.ui.show_left_panel {
+            let response = egui::SidePanel::left("settings")
+                .resizable(true)
+                .default_width(self.config.ui.left_panel_width)
+                .min_width(240.0)
+                .show(ctx, |ui| self.draw_settings_panel(ui));
+            self.config.ui.left_panel_width = response.response.rect.width();
+        }
 
-        egui::SidePanel::right("session")
-            .resizable(true)
-            .min_width(280.0)
-            .show(ctx, |ui| self.draw_session_panel(ui, ctx));
+        if self.config.ui.show_right_panel {
+            let response = egui::SidePanel::right("session")
+                .resizable(true)
+                .default_width(self.config.ui.right_panel_width)
+                .min_width(280.0)
+                .show(ctx, |ui| self.draw_session_panel(ui, ctx));
+            self.config.ui.right_panel_width = response.response.rect.width();
+        }
 
-        egui::CentralPanel::default().show(ctx, |ui| self.draw_library_browser(ui, ctx));
+        egui::CentralPanel::default().show(ctx, |ui| {
+            if self.config.ui.show_details_panel {
+                let response = egui::SidePanel::right("details")
+                    .resizable(true)
+                    .default_width(self.config.ui.details_panel_width)
+                    .min_width(260.0)
+                    .show_inside(ui, |ui| self.draw_details_panel(ui, ctx));
+                self.config.ui.details_panel_width = response.response.rect.width();
+            }
+
+            self.draw_library_browser(ui, ctx);
+        });
 
         if self.show_properties {
             self.draw_properties_window(ctx);
         }
+
+        ctx.request_repaint_after(Duration::from_millis(100));
     }
+}
+
+fn empty_snapshot() -> LibrarySnapshot {
+    LibrarySnapshot {
+        entries: Vec::new(),
+        filter: LibraryFilter::default(),
+        total_count: 0,
+        installed_count: 0,
+        missing_count: 0,
+    }
+}
+
+fn resolve_cache_root(config: &RuntimeConfig, assets: &AssetConfig) -> PathBuf {
+    config
+        .library
+        .cache_dir
+        .clone()
+        .or_else(|| assets.cache_dir.clone())
+        .unwrap_or_else(|| assets.cache_root())
+}
+
+fn job_label(kind: &WorkerCommandKind) -> &'static str {
+    match kind {
+        WorkerCommandKind::RefreshSnapshot => "Scan Library",
+        WorkerCommandKind::RefreshMetadata => "Refresh Metadata",
+        WorkerCommandKind::RefreshCovers { .. } => "Refresh Covers",
+        WorkerCommandKind::RefreshCheats { .. } => "Refresh Cheats",
+        WorkerCommandKind::RefreshAll => "Refresh All",
+        WorkerCommandKind::MaterializeRom { .. } => "Load Game",
+    }
+}
+
+fn snapshot_logs(logs: &SharedLogBuffer) -> Vec<String> {
+    logs.lock()
+        .map(|lines| lines.iter().cloned().collect())
+        .unwrap_or_default()
 }
 
 fn apply_theme(ctx: &egui::Context, prefer_dark_mode: bool) {

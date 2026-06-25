@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::{Cursor, Read},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -9,8 +10,9 @@ use anyhow::{Context, Result, anyhow};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
-use tracing::warn;
+use tracing::{debug, info, warn};
 use urlencoding::encode;
+use zip::ZipArchive;
 
 use starbyte_core::{
     cartridge::{Cartridge, Region},
@@ -19,6 +21,16 @@ use starbyte_core::{
 
 /// Stable library identifier derived from a normalized game title.
 pub type GameId = String;
+
+/// Local ROM source provenance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalRomSourceKind {
+    /// ROM discovered directly on disk.
+    File,
+    /// ROM discovered as a member inside a zip archive.
+    ZipArchiveMember,
+}
 
 /// Local ROM information discovered during library scans.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,8 +41,14 @@ pub struct LocalRomInfo {
     pub title: String,
     /// Normalized title used for merges and lookups.
     pub normalized_title: String,
-    /// On-disk ROM path.
+    /// On-disk ROM path or containing archive path.
     pub rom_path: PathBuf,
+    /// Origin of this ROM entry.
+    pub source_kind: LocalRomSourceKind,
+    /// Archive member path when sourced from a zip file.
+    pub archive_member_path: Option<String>,
+    /// Materialized extraction cache path when sourced from a zip file.
+    pub extracted_cache_path: Option<PathBuf>,
     /// Mapper name reported by the cartridge header.
     pub mapper: String,
     /// Coprocessor family if detected.
@@ -260,8 +278,16 @@ impl LibraryService {
         ensure_cache_layout(&cache_root)?;
         let client = Client::builder()
             .user_agent("starbyte/0.1 (+https://github.com/openai/starbyte)")
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(45))
             .build()
             .context("failed to build library HTTP client")?;
+        info!(
+            cache_root = %cache_root.display(),
+            rom_dirs = ?config.library.rom_dirs,
+            network_enabled = config.advanced.providers.enable_network,
+            "initialized library service"
+        );
         Ok(Self {
             config,
             assets,
@@ -292,6 +318,7 @@ impl LibraryService {
     /// Persist the current config using the active asset/config path rules.
     pub fn save_config(&self) -> Result<()> {
         let path = self.assets.config_path();
+        debug!(config_path = %path.display(), "persisting runtime config");
         self.config
             .save_to_path(&path)
             .with_context(|| format!("failed to save config to {}", path.display()))
@@ -300,22 +327,25 @@ impl LibraryService {
 
     /// Scan configured ROM directories and return installed entries.
     pub fn scan_roms(&self) -> Result<Vec<LocalRomInfo>> {
+        info!(rom_dirs = ?self.config.library.rom_dirs, "scanning ROM directories");
         let mut discovered = BTreeMap::<GameId, LocalRomInfo>::new();
         for rom_dir in &self.config.library.rom_dirs {
-            for path in discover_rom_files(rom_dir)? {
-                match inspect_rom_file(&path) {
+            for candidate in discover_rom_files(rom_dir)? {
+                match inspect_rom_candidate(&candidate, &self.cache_root()) {
                     Ok(info) => {
                         discovered.entry(info.game_id.clone()).or_insert(info);
                     }
-                    Err(error) => warn!("skipping ROM candidate {}: {error}", path.display()),
+                    Err(error) => warn!("skipping ROM candidate {}: {error}", candidate.display_label()),
                 }
             }
         }
+        info!(discovered = discovered.len(), "completed ROM scan");
         Ok(discovered.into_values().collect())
     }
 
     /// Load a merged library snapshot using cached metadata, covers, and cheats.
     pub fn snapshot(&self, mut filter: LibraryFilter) -> Result<LibrarySnapshot> {
+        debug!(query = %filter.query, installed_only = filter.installed_only, "building library snapshot");
         if matches!(filter.view_mode, LibraryViewMode::List)
             && !self.config.advanced.show_missing_games
             && !filter.installed_only
@@ -359,6 +389,7 @@ impl LibraryService {
 
     /// Refresh the cached metadata index.
     pub fn refresh_metadata_index(&mut self) -> Result<usize> {
+        info!("refreshing metadata index");
         let metadata = self.metadata_provider.refresh_metadata(
             &self.client,
             &self.config.advanced.providers,
@@ -370,6 +401,7 @@ impl LibraryService {
 
     /// Refresh cached cover assets for the targeted entries.
     pub fn refresh_covers(&mut self, target: &LibraryTarget) -> Result<usize> {
+        info!(?target, "refreshing cover cache");
         let snapshot = self.snapshot(LibraryFilter {
             installed_only: target.installed_only,
             view_mode: self.config.library.active_view,
@@ -394,6 +426,7 @@ impl LibraryService {
 
     /// Refresh cached cheat files for the targeted entries.
     pub fn refresh_cheats(&mut self, target: &LibraryTarget) -> Result<usize> {
+        info!(?target, "refreshing cheats cache");
         let snapshot = self.snapshot(LibraryFilter {
             installed_only: target.installed_only,
             view_mode: self.config.library.active_view,
@@ -425,6 +458,7 @@ impl LibraryService {
 
     /// Refresh metadata, covers, and cheats for the targeted entries.
     pub fn refresh_all(&mut self, target: &LibraryTarget) -> Result<RefreshSummary> {
+        info!(?target, "refreshing all library assets");
         let metadata_records = self.refresh_metadata_index()?;
         let covers_written = self.refresh_covers(target)?;
         let cheat_records = self.refresh_cheats(target)?;
@@ -441,6 +475,42 @@ impl LibraryService {
 
     fn load_cached_metadata_index(&self) -> Result<Vec<GameMetadata>> {
         read_json_or_default(self.metadata_index_path())
+    }
+
+    /// Resolve a local library entry to a playable ROM path, extracting archive members into cache when needed.
+    pub fn materialize_rom(&self, local: &LocalRomInfo) -> Result<PathBuf> {
+        match local.source_kind {
+            LocalRomSourceKind::File => Ok(local.rom_path.clone()),
+            LocalRomSourceKind::ZipArchiveMember => {
+                let member_path = local
+                    .archive_member_path
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("archive-backed ROM is missing its member path"))?;
+                let cache_path = extracted_rom_cache_path(&self.cache_root(), &local.rom_path, member_path)?;
+                if cache_path.exists() {
+                    info!(
+                        archive = %local.rom_path.display(),
+                        member = member_path,
+                        extracted = %cache_path.display(),
+                        "reusing cached archive extraction"
+                    );
+                    return Ok(cache_path);
+                }
+
+                info!(
+                    archive = %local.rom_path.display(),
+                    member = member_path,
+                    extracted = %cache_path.display(),
+                    "extracting archive-backed ROM into cache"
+                );
+                if let Some(parent) = cache_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let bytes = read_zip_member_bytes(&local.rom_path, member_path)?;
+                fs::write(&cache_path, bytes)?;
+                Ok(cache_path)
+            }
+        }
     }
 }
 
@@ -461,6 +531,7 @@ impl GameMetadataProvider for LibretroMetadataProvider {
             .error_for_status()
             .context("metadata index request returned an error status")?;
         let tree: GitTreeResponse = response.json().context("failed to parse metadata index response")?;
+        debug!(entries = tree.tree.len(), "received metadata tree response");
         let mut metadata = Vec::new();
         for node in tree.tree {
             if !node.path.starts_with("Named_Boxarts/") || node.kind != "blob" {
@@ -484,6 +555,7 @@ impl GameMetadataProvider for LibretroMetadataProvider {
                 fetched_at_unix: now_unix(),
             });
         }
+        info!(records = metadata.len(), "metadata refresh completed");
         Ok(metadata)
     }
 }
@@ -520,6 +592,7 @@ impl CoverProvider for LibretroCoverProvider {
             .bytes()
             .context("failed to read cover response bytes")?;
         fs::write(&cache_path, &bytes)?;
+        debug!(game_id = %metadata.game_id, path = %cache_path.display(), bytes = bytes.len(), "cached cover image");
         Ok(Some(CoverAsset {
             game_id: metadata.game_id.clone(),
             cache_path,
@@ -549,6 +622,7 @@ impl CheatProvider for LibretroCheatProvider {
             .error_for_status()
             .context("cheat index request returned an error status")?;
         let tree: GitTreeResponse = response.json().context("failed to parse cheat index response")?;
+        debug!(entries = tree.tree.len(), title = %entry.display_title, "received cheat tree response");
         let mut cheats = Vec::new();
         for node in tree.tree {
             if !node.path.starts_with("cht/Nintendo - Super Nintendo Entertainment System/")
@@ -586,6 +660,7 @@ impl CheatProvider for LibretroCheatProvider {
 
         let cache_path = cheat_cache_path(cache_root, &entry.game_id);
         write_json(cache_path, &cheats)?;
+        info!(game_id = %entry.game_id, cheats = cheats.len(), "cheat refresh completed");
         Ok(cheats)
     }
 }
@@ -600,6 +675,27 @@ struct GitTreeNode {
     path: String,
     #[serde(rename = "type")]
     kind: String,
+}
+
+#[derive(Debug, Clone)]
+enum RomCandidate {
+    File(PathBuf),
+    ZipMember {
+        archive_path: PathBuf,
+        member_path: String,
+    },
+}
+
+impl RomCandidate {
+    fn display_label(&self) -> String {
+        match self {
+            Self::File(path) => path.display().to_string(),
+            Self::ZipMember {
+                archive_path,
+                member_path,
+            } => format!("{}::{member_path}", archive_path.display()),
+        }
+    }
 }
 
 fn merge_library_entries(
@@ -705,6 +801,32 @@ fn cheat_cache_path(cache_root: &Path, game_id: &str) -> PathBuf {
         .join(format!("{game_id}.json"))
 }
 
+fn extracted_rom_cache_path(
+    cache_root: &Path,
+    archive_path: &Path,
+    member_path: &str,
+) -> Result<PathBuf> {
+    let metadata = fs::metadata(archive_path)?;
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |duration| duration.as_secs());
+    let mut hasher = Sha1::new();
+    hasher.update(archive_path.display().to_string().as_bytes());
+    hasher.update(member_path.as_bytes());
+    hasher.update(metadata.len().to_le_bytes());
+    hasher.update(modified.to_le_bytes());
+    let extension = Path::new(member_path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .filter(|ext| matches!(ext.to_ascii_lowercase().as_str(), "sfc" | "smc" | "swc" | "fig"))
+        .unwrap_or("sfc");
+    Ok(cache_root
+        .join("extracted-roms")
+        .join(format!("{:x}.{extension}", hasher.finalize())))
+}
+
 fn resolve_cache_root(config: &RuntimeConfig, assets: &AssetConfig) -> PathBuf {
     config
         .library
@@ -721,6 +843,7 @@ fn ensure_cache_layout(cache_root: &Path) -> Result<()> {
         cache_root.join("games").join("metadata"),
         cache_root.join("games").join("covers"),
         cache_root.join("games").join("cheats"),
+        cache_root.join("extracted-roms"),
         cache_root.join("manifests"),
     ] {
         fs::create_dir_all(path)?;
@@ -747,7 +870,7 @@ where
     Ok(serde_json::from_str(&text).unwrap_or_default())
 }
 
-fn discover_rom_files(root: &Path) -> Result<Vec<PathBuf>> {
+fn discover_rom_files(root: &Path) -> Result<Vec<RomCandidate>> {
     if !root.exists() {
         return Ok(Vec::new());
     }
@@ -760,7 +883,9 @@ fn discover_rom_files(root: &Path) -> Result<Vec<PathBuf>> {
             if path.is_dir() {
                 stack.push(path);
             } else if is_rom_path(&path) {
-                files.push(path);
+                files.push(RomCandidate::File(path));
+            } else if is_zip_path(&path) {
+                files.extend(discover_zip_members(&path)?);
             }
         }
     }
@@ -774,7 +899,55 @@ fn is_rom_path(path: &Path) -> bool {
     )
 }
 
-fn inspect_rom_file(path: &Path) -> Result<LocalRomInfo> {
+fn is_zip_path(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|ext| ext.to_str()).map(|ext| ext.to_ascii_lowercase()),
+        Some(ext) if ext == "zip"
+    )
+}
+
+fn discover_zip_members(path: &Path) -> Result<Vec<RomCandidate>> {
+    let file = fs::File::open(path)?;
+    let mut archive = ZipArchive::new(file)
+        .with_context(|| format!("failed to read zip archive {}", path.display()))?;
+    let mut members = Vec::new();
+    for index in 0..archive.len() {
+        let member = archive.by_index(index)?;
+        if member.is_dir() {
+            continue;
+        }
+        let member_name = member.name().to_owned();
+        if is_rom_member_name(&member_name) {
+            members.push(RomCandidate::ZipMember {
+                archive_path: path.to_path_buf(),
+                member_path: member_name,
+            });
+        }
+    }
+    Ok(members)
+}
+
+fn is_rom_member_name(name: &str) -> bool {
+    matches!(
+        Path::new(name)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase()),
+        Some(ext) if matches!(ext.as_str(), "sfc" | "smc" | "swc" | "fig")
+    )
+}
+
+fn inspect_rom_candidate(candidate: &RomCandidate, cache_root: &Path) -> Result<LocalRomInfo> {
+    match candidate {
+        RomCandidate::File(path) => inspect_rom_path(path),
+        RomCandidate::ZipMember {
+            archive_path,
+            member_path,
+        } => inspect_zip_member(archive_path, member_path, cache_root),
+    }
+}
+
+fn inspect_rom_path(path: &Path) -> Result<LocalRomInfo> {
     let cartridge = Cartridge::load(path)
         .with_context(|| format!("failed to inspect ROM at {}", path.display()))?;
     let metadata = fs::metadata(path)?;
@@ -784,6 +957,9 @@ fn inspect_rom_file(path: &Path) -> Result<LocalRomInfo> {
         normalized_title: normalize_title(&title),
         title,
         rom_path: path.to_path_buf(),
+        source_kind: LocalRomSourceKind::File,
+        archive_member_path: None,
+        extracted_cache_path: None,
         mapper: format!("{:?}", cartridge.mapper()),
         coprocessor: cartridge.coprocessor_kind().map(|kind| kind.to_string()),
         region: match cartridge.header().region {
@@ -794,6 +970,52 @@ fn inspect_rom_file(path: &Path) -> Result<LocalRomInfo> {
         .to_owned(),
         file_size_bytes: metadata.len(),
     })
+}
+
+fn inspect_zip_member(archive_path: &Path, member_path: &str, cache_root: &Path) -> Result<LocalRomInfo> {
+    let bytes = read_zip_member_bytes(archive_path, member_path)?;
+    let cartridge = Cartridge::from_bytes(bytes.clone(), None).with_context(|| {
+        format!(
+            "failed to inspect archived ROM {}::{member_path}",
+            archive_path.display()
+        )
+    })?;
+    let title = cartridge.header().title.clone();
+    let extracted_cache_path = extracted_rom_cache_path(cache_root, archive_path, member_path)?;
+    Ok(LocalRomInfo {
+        game_id: game_id_for_title(&format!(
+            "{}::{member_path}",
+            title.trim()
+        )),
+        normalized_title: normalize_title(&title),
+        title,
+        rom_path: archive_path.to_path_buf(),
+        source_kind: LocalRomSourceKind::ZipArchiveMember,
+        archive_member_path: Some(member_path.to_owned()),
+        extracted_cache_path: Some(extracted_cache_path),
+        mapper: format!("{:?}", cartridge.mapper()),
+        coprocessor: cartridge.coprocessor_kind().map(|kind| kind.to_string()),
+        region: match cartridge.header().region {
+            Region::Ntsc => "NTSC",
+            Region::Pal => "PAL",
+            Region::Unknown => "Unknown",
+        }
+        .to_owned(),
+        file_size_bytes: bytes.len() as u64,
+    })
+}
+
+fn read_zip_member_bytes(archive_path: &Path, member_path: &str) -> Result<Vec<u8>> {
+    let bytes = fs::read(archive_path)?;
+    let cursor = Cursor::new(bytes);
+    let mut archive = ZipArchive::new(cursor)
+        .with_context(|| format!("failed to read zip archive {}", archive_path.display()))?;
+    let mut member = archive
+        .by_name(member_path)
+        .with_context(|| format!("failed to find zip member {member_path}"))?;
+    let mut rom = Vec::with_capacity(member.size() as usize);
+    member.read_to_end(&mut rom)?;
+    Ok(rom)
 }
 
 fn select_entries(entries: Vec<LibraryEntry>, target: &LibraryTarget) -> Vec<LibraryEntry> {
@@ -923,15 +1145,16 @@ fn now_unix() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, io::Write};
 
     use tempfile::tempdir;
+    use zip::write::SimpleFileOptions;
 
-    use starbyte_core::manifest::RuntimeConfig;
+    use starbyte_core::{cartridge::Cartridge, manifest::RuntimeConfig};
 
     use super::{
-        GameMetadata, InstalledStatus, LibraryFilter, LibraryService, cheat_cache_path, game_id_for_title,
-        merge_library_entries, normalize_title, write_json,
+        GameMetadata, InstalledStatus, LibraryFilter, LibraryService, LocalRomSourceKind, cheat_cache_path,
+        game_id_for_title, merge_library_entries, normalize_title, write_json,
     };
 
     fn synthetic_rom_bytes(title: &[u8; 21]) -> Vec<u8> {
@@ -952,6 +1175,17 @@ mod tests {
         rom
     }
 
+    fn write_zip_roms(path: &std::path::Path, members: &[(&str, Vec<u8>)]) {
+        let file = fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = SimpleFileOptions::default();
+        for (name, bytes) in members {
+            zip.start_file(name, options).unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
     #[test]
     fn normalize_title_collapses_punctuation() {
         assert_eq!(
@@ -970,6 +1204,51 @@ mod tests {
         let service = LibraryService::new(config, Default::default()).unwrap();
         let roms = service.scan_roms().unwrap();
         assert_eq!(roms.len(), 1);
+    }
+
+    #[test]
+    fn scan_roms_discovers_zip_members_as_entries() {
+        let dir = tempdir().unwrap();
+        write_zip_roms(
+            &dir.path().join("bundle.zip"),
+            &[
+                ("one.sfc", synthetic_rom_bytes(b"STARBYTE ZIP GAME 01 ")),
+                ("two.sfc", synthetic_rom_bytes(b"STARBYTE ZIP GAME 02 ")),
+                ("readme.txt", b"ignore me".to_vec()),
+            ],
+        );
+        let mut config = RuntimeConfig::default();
+        config.library.rom_dirs.push(dir.path().to_path_buf());
+        config.library.cache_dir = Some(dir.path().join(".cache"));
+        let service = LibraryService::new(config, Default::default()).unwrap();
+
+        let roms = service.scan_roms().unwrap();
+
+        assert_eq!(roms.len(), 2);
+        assert!(roms.iter().all(|rom| rom.source_kind == LocalRomSourceKind::ZipArchiveMember));
+        assert!(roms.iter().all(|rom| rom.archive_member_path.is_some()));
+        assert!(roms.iter().all(|rom| rom.extracted_cache_path.is_some()));
+    }
+
+    #[test]
+    fn materialize_rom_extracts_zip_member_into_cache() {
+        let dir = tempdir().unwrap();
+        let archive_path = dir.path().join("bundle.zip");
+        write_zip_roms(
+            &archive_path,
+            &[("nested/game.sfc", synthetic_rom_bytes(b"STARBYTE ZIP LOAD    "))],
+        );
+        let mut config = RuntimeConfig::default();
+        config.library.rom_dirs.push(dir.path().to_path_buf());
+        config.library.cache_dir = Some(dir.path().join(".cache"));
+        let service = LibraryService::new(config, Default::default()).unwrap();
+
+        let rom = service.scan_roms().unwrap().remove(0);
+        let path = service.materialize_rom(&rom).unwrap();
+
+        assert!(path.exists());
+        let cart = Cartridge::load(&path).unwrap();
+        assert_eq!(cart.header().title.trim(), "STARBYTE ZIP LOAD");
     }
 
     #[test]
@@ -1075,6 +1354,7 @@ mod tests {
         assert!(cache_root.join("games").join("metadata").is_dir());
         assert!(cache_root.join("games").join("covers").is_dir());
         assert!(cache_root.join("games").join("cheats").is_dir());
+        assert!(cache_root.join("extracted-roms").is_dir());
         assert!(cache_root.join("manifests").is_dir());
     }
 }

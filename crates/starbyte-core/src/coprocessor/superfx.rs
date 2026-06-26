@@ -21,7 +21,9 @@ pub enum SuperFxMap {
 
 impl SuperFxMap {
     fn for_cartridge(cartridge: &Cartridge) -> Self {
-        if cartridge.header().mapper == Mapper::HiRom || cartridge.header().rom_size_bytes() > (2 * 1024 * 1024) {
+        if cartridge.header().mapper == Mapper::HiRom
+            || cartridge.header().rom_size_bytes() > (2 * 1024 * 1024)
+        {
             Self::SuperFx2
         } else {
             Self::SuperFx1
@@ -355,7 +357,8 @@ impl SuperFxCoprocessor {
             if !self.cache_valid[cache_offset / 16] {
                 let line_base = cache_offset & !0x0F;
                 for offset in 0..16 {
-                    self.cache[line_base + offset] = self.read_rom_byte(self.cbr_bank_address(line_base as u16 + offset as u16));
+                    self.cache[line_base + offset] =
+                        self.read_rom_byte(self.cbr_bank_address(line_base as u16 + offset as u16));
                 }
                 self.cache_valid[line_base / 16] = true;
             }
@@ -423,7 +426,11 @@ impl SuperFxCoprocessor {
         }
 
         let index = (y * SUPERFX_WIDTH + x) * 4;
-        let rgb = [self.overlay[index], self.overlay[index + 1], self.overlay[index + 2]];
+        let rgb = [
+            self.overlay[index],
+            self.overlay[index + 1],
+            self.overlay[index + 2],
+        ];
         encode_color(rgb)
     }
 
@@ -530,9 +537,15 @@ mod tests {
     #[test]
     fn can_execute_tiny_plot_program_and_render_overlay() {
         let cartridge = make_superfx_cart(&[
-            (0x0000, 0xF1), (0x0001, 0x02), (0x0002, 0x00), // IWT R1,2
-            (0x0003, 0xF2), (0x0004, 0x01), (0x0005, 0x00), // IWT R2,1
-            (0x0006, 0xFE), (0x0007, 0x20), (0x0008, 0x00), // IWT R14,0x20
+            (0x0000, 0xF1),
+            (0x0001, 0x02),
+            (0x0002, 0x00), // IWT R1,2
+            (0x0003, 0xF2),
+            (0x0004, 0x01),
+            (0x0005, 0x00), // IWT R2,1
+            (0x0006, 0xFE),
+            (0x0007, 0x20),
+            (0x0008, 0x00), // IWT R14,0x20
             (0x0009, 0xDF), // GETC
             (0x000A, 0x4C), // PLOT
             (0x000B, 0x00), // STOP
@@ -549,6 +562,9 @@ mod tests {
 
         let pixel = (SUPERFX_WIDTH + 2) * 4;
         assert_eq!(&frame.pixels()[pixel..pixel + 4], &[255, 0, 255, 255]);
-        assert_eq!(superfx.read(Mapper::LoRom, 0x003031), Some((SFR_IRQ >> 8) as u8));
+        assert_eq!(
+            superfx.read(Mapper::LoRom, 0x003031),
+            Some((SFR_IRQ >> 8) as u8)
+        );
     }
 }

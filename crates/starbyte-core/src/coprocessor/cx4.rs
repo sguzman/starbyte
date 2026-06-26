@@ -104,9 +104,11 @@ impl Cx4Coprocessor {
                 let z = read_i16(&self.ram, 0x0004).max(1);
                 let focal = read_i16(&self.ram, 0x0006).max(1);
                 let screen_x = ((i32::from(x) * i32::from(focal)) / i32::from(z))
-                    .clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
+                    .clamp(i32::from(i16::MIN), i32::from(i16::MAX))
+                    as i16;
                 let screen_y = ((i32::from(y) * i32::from(focal)) / i32::from(z))
-                    .clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
+                    .clamp(i32::from(i16::MIN), i32::from(i16::MAX))
+                    as i16;
                 write_i16(&mut self.ram, 0x0010, screen_x);
                 write_i16(&mut self.ram, 0x0012, screen_y);
                 write_i16(&mut self.ram, 0x0014, z);
@@ -185,7 +187,12 @@ mod tests {
     fn vector_length_command_produces_expected_result() {
         let mut cx4 = Cx4Coprocessor::new(&header());
         for (address, value) in [
-            (0x006000, 3), (0x006001, 0), (0x006002, 4), (0x006003, 0), (0x006004, 12), (0x006005, 0),
+            (0x006000, 3),
+            (0x006001, 0),
+            (0x006002, 4),
+            (0x006003, 0),
+            (0x006004, 12),
+            (0x006005, 0),
             (0x007F40, 0x10),
         ] {
             assert!(cx4.write(Mapper::LoRom, address, value));
@@ -200,7 +207,12 @@ mod tests {
     fn rotate_command_updates_output_registers() {
         let mut cx4 = Cx4Coprocessor::new(&header());
         for (address, value) in [
-            (0x006000, 0), (0x006001, 0x40), (0x006002, 0), (0x006003, 0x40), (0x006004, 0), (0x006005, 0),
+            (0x006000, 0),
+            (0x006001, 0x40),
+            (0x006002, 0),
+            (0x006003, 0x40),
+            (0x006004, 0),
+            (0x006005, 0),
             (0x007F40, 0x13),
         ] {
             assert!(cx4.write(Mapper::LoRom, address, value));
@@ -208,6 +220,9 @@ mod tests {
         cx4.step(18);
         assert_eq!(cx4.read(Mapper::LoRom, 0x006010), Some(0));
         assert_eq!(cx4.read(Mapper::LoRom, 0x006011), Some(0));
-        assert!(cx4.read(Mapper::LoRom, 0x006013).is_some_and(|value| value > 0x3E));
+        assert!(
+            cx4.read(Mapper::LoRom, 0x006013)
+                .is_some_and(|value| value > 0x3E)
+        );
     }
 }

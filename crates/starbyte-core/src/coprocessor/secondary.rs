@@ -72,7 +72,9 @@ impl Sdd1Coprocessor {
         }
         self.busy_cycles = self.busy_cycles.saturating_sub(clocks);
         if self.busy_cycles == 0 && self.output.is_empty() && !self.input.is_empty() {
-            self.output = decompress_stream(self.mode, &self.input).into_iter().collect();
+            self.output = decompress_stream(self.mode, &self.input)
+                .into_iter()
+                .collect();
             self.input.clear();
         }
     }
@@ -109,11 +111,25 @@ impl Obc1Coprocessor {
     pub(crate) fn read(&mut self, mapper: Mapper, address: Address) -> Option<u8> {
         let offset = decode_obc1(mapper, address)?;
         Some(match offset {
-            0x1FF0 => self.ram[(usize::from(self.baseptr) + (usize::from(self.address) << 2)) & 0x1FFF],
-            0x1FF1 => self.ram[(usize::from(self.baseptr) + (usize::from(self.address) << 2) + 1) & 0x1FFF],
-            0x1FF2 => self.ram[(usize::from(self.baseptr) + (usize::from(self.address) << 2) + 2) & 0x1FFF],
-            0x1FF3 => self.ram[(usize::from(self.baseptr) + (usize::from(self.address) << 2) + 3) & 0x1FFF],
-            0x1FF4 => self.ram[(usize::from(self.baseptr) + usize::from(self.address >> 2) + 0x200) & 0x1FFF],
+            0x1FF0 => {
+                self.ram[(usize::from(self.baseptr) + (usize::from(self.address) << 2)) & 0x1FFF]
+            }
+            0x1FF1 => {
+                self.ram
+                    [(usize::from(self.baseptr) + (usize::from(self.address) << 2) + 1) & 0x1FFF]
+            }
+            0x1FF2 => {
+                self.ram
+                    [(usize::from(self.baseptr) + (usize::from(self.address) << 2) + 2) & 0x1FFF]
+            }
+            0x1FF3 => {
+                self.ram
+                    [(usize::from(self.baseptr) + (usize::from(self.address) << 2) + 3) & 0x1FFF]
+            }
+            0x1FF4 => {
+                self.ram
+                    [(usize::from(self.baseptr) + usize::from(self.address >> 2) + 0x200) & 0x1FFF]
+            }
             _ => self.ram[usize::from(offset) & 0x1FFF],
         })
     }
@@ -125,11 +141,13 @@ impl Obc1Coprocessor {
         match offset {
             0x1FF0..=0x1FF3 => {
                 let slot = usize::from(offset - 0x1FF0);
-                let index = (usize::from(self.baseptr) + (usize::from(self.address) << 2) + slot) & 0x1FFF;
+                let index =
+                    (usize::from(self.baseptr) + (usize::from(self.address) << 2) + slot) & 0x1FFF;
                 self.ram[index] = value;
             }
             0x1FF4 => {
-                let index = (usize::from(self.baseptr) + usize::from(self.address >> 2) + 0x200) & 0x1FFF;
+                let index =
+                    (usize::from(self.baseptr) + usize::from(self.address >> 2) + 0x200) & 0x1FFF;
                 let mask = !(0x03 << self.shift);
                 self.ram[index] = (self.ram[index] & mask) | ((value & 0x03) << self.shift);
             }

@@ -37,9 +37,11 @@ impl AssetConfig {
     /// Resolve the effective configuration path for persisted GUI/runtime settings.
     #[must_use]
     pub fn config_path(&self) -> PathBuf {
-        self.config_path
-            .clone()
-            .unwrap_or_else(|| PathBuf::from(".config").join("starbyte").join("config.toml"))
+        self.config_path.clone().unwrap_or_else(|| {
+            PathBuf::from(".config")
+                .join("starbyte")
+                .join("config.toml")
+        })
     }
 
     /// Resolve the legacy configuration path used before config relocation.
@@ -339,7 +341,9 @@ impl RuntimeConfig {
     /// Return the default configuration path used by CLI and GUI shells.
     #[must_use]
     pub fn default_path() -> PathBuf {
-        PathBuf::from(".config").join("starbyte").join("config.toml")
+        PathBuf::from(".config")
+            .join("starbyte")
+            .join("config.toml")
     }
 
     /// Load a config file if it exists, otherwise return defaults.
@@ -432,9 +436,22 @@ mod tests {
     #[test]
     fn asset_config_resolves_default_paths() {
         let config = AssetConfig::default();
-        assert_eq!(config.cache_root(), std::path::PathBuf::from(".cache").join("starbyte"));
-        assert_eq!(config.config_path(), std::path::PathBuf::from(".config").join("starbyte").join("config.toml"));
-        assert_eq!(config.legacy_config_path(), std::path::PathBuf::from(".cache").join("starbyte").join("config.toml"));
+        assert_eq!(
+            config.cache_root(),
+            std::path::PathBuf::from(".cache").join("starbyte")
+        );
+        assert_eq!(
+            config.config_path(),
+            std::path::PathBuf::from(".config")
+                .join("starbyte")
+                .join("config.toml")
+        );
+        assert_eq!(
+            config.legacy_config_path(),
+            std::path::PathBuf::from(".cache")
+                .join("starbyte")
+                .join("config.toml")
+        );
     }
 
     #[test]
@@ -447,7 +464,8 @@ mod tests {
         config.mode = AppMode::Prod;
         config.ui.show_log_panel = false;
         config.ui.details_panel_width = 512.0;
-        config.cheats
+        config
+            .cheats
             .enabled_by_game
             .insert("abc123".to_owned(), vec!["infinite-lives".to_owned()]);
         config.save_to_path(&path).unwrap();

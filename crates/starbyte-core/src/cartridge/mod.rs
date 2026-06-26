@@ -284,10 +284,31 @@ mod tests {
         srtc[0x7FC0..0x7FC0 + 21].copy_from_slice(b"STARBYTE SRTC TEST   ");
         srtc[0x7FC0 + 0x16] = 0x53;
 
-        assert_eq!(Cartridge::from_bytes(sa1, None).unwrap().coprocessor_kind(), Some(CoprocessorKind::Sa1));
-        assert_eq!(Cartridge::from_bytes(cx4, None).unwrap().coprocessor_kind(), Some(CoprocessorKind::Cx4));
-        assert_eq!(Cartridge::from_bytes(sdd1, None).unwrap().coprocessor_kind(), Some(CoprocessorKind::Sdd1));
-        assert_eq!(Cartridge::from_bytes(obc1, None).unwrap().coprocessor_kind(), Some(CoprocessorKind::Obc1));
-        assert_eq!(Cartridge::from_bytes(srtc, None).unwrap().coprocessor_kind(), Some(CoprocessorKind::SRtc));
+        assert_eq!(
+            Cartridge::from_bytes(sa1, None).unwrap().coprocessor_kind(),
+            Some(CoprocessorKind::Sa1)
+        );
+        assert_eq!(
+            Cartridge::from_bytes(cx4, None).unwrap().coprocessor_kind(),
+            Some(CoprocessorKind::Cx4)
+        );
+        assert_eq!(
+            Cartridge::from_bytes(sdd1, None)
+                .unwrap()
+                .coprocessor_kind(),
+            Some(CoprocessorKind::Sdd1)
+        );
+        assert_eq!(
+            Cartridge::from_bytes(obc1, None)
+                .unwrap()
+                .coprocessor_kind(),
+            Some(CoprocessorKind::Obc1)
+        );
+        assert_eq!(
+            Cartridge::from_bytes(srtc, None)
+                .unwrap()
+                .coprocessor_kind(),
+            Some(CoprocessorKind::SRtc)
+        );
     }
 }

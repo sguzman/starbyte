@@ -112,9 +112,7 @@ impl Coprocessor {
     pub fn for_cartridge(cartridge: &Cartridge) -> Option<Self> {
         match CoprocessorKind::detect(cartridge.header())? {
             CoprocessorKind::Dsp => Some(Self::Dsp(DspCoprocessor::new(cartridge.header()))),
-            CoprocessorKind::SuperFx => {
-                Some(Self::SuperFx(SuperFxCoprocessor::new(cartridge)))
-            }
+            CoprocessorKind::SuperFx => Some(Self::SuperFx(SuperFxCoprocessor::new(cartridge))),
             CoprocessorKind::Sa1 => Some(Self::Sa1(Sa1Coprocessor::new(cartridge))),
             CoprocessorKind::Cx4 => Some(Self::Cx4(Cx4Coprocessor::new(cartridge.header()))),
             CoprocessorKind::Sdd1 => Some(Self::Sdd1(Sdd1Coprocessor::new())),
@@ -193,7 +191,12 @@ impl Coprocessor {
     /// Render any coprocessor-owned overlay content on top of the main framebuffer.
     pub fn render_overlay(&self, framebuffer: &mut FrameBuffer) {
         match self {
-            Self::Dsp(_) | Self::Sa1(_) | Self::Cx4(_) | Self::Sdd1(_) | Self::Obc1(_) | Self::SRtc(_) => {}
+            Self::Dsp(_)
+            | Self::Sa1(_)
+            | Self::Cx4(_)
+            | Self::Sdd1(_)
+            | Self::Obc1(_)
+            | Self::SRtc(_) => {}
             Self::SuperFx(superfx) => superfx.render_overlay(framebuffer),
         }
     }

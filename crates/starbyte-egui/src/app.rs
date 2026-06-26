@@ -21,7 +21,8 @@ use starbyte_core::{
     manifest::{AssetConfig, InputDeviceMode, LibraryViewMode, RuntimeConfig},
 };
 use starbyte_frontend::{
-    FrontendSession, InstalledStatus, LibraryEntry, LibraryFilter, LibrarySnapshot, LibraryTarget,
+    FrontendSession, InstalledStatus, LibraryEntry, LibraryFilter, LibraryService, LibrarySnapshot,
+    LibraryTarget,
 };
 
 #[derive(Debug, Clone)]
@@ -106,13 +107,21 @@ impl StarbyteApp {
 
         let worker = AppWorker::spawn(assets.clone());
         let gilrs = Gilrs::new().ok();
+        let cached_snapshot = LibraryService::new(config.clone(), assets.clone())
+            .ok()
+            .and_then(|service| service.load_cached_snapshot().ok().flatten());
+        let status_line = if cached_snapshot.is_some() {
+            "Loaded cached library snapshot.".to_owned()
+        } else {
+            status_line
+        };
         let mut app = Self {
             assets,
             config,
             cache_root,
             session,
             worker,
-            library_snapshot: empty_snapshot(),
+            library_snapshot: cached_snapshot.unwrap_or_else(empty_snapshot),
             framebuffer_texture: None,
             cover_textures: BTreeMap::new(),
             failed_cover_ids: BTreeSet::new(),
@@ -134,7 +143,7 @@ impl StarbyteApp {
         app.persist_config();
         if app.config.advanced.refresh_on_startup {
             app.queue_job(WorkerCommandKind::RefreshMetadata);
-        } else {
+        } else if app.library_snapshot.total_count == 0 && app.library_snapshot.entries.is_empty() {
             app.queue_job(WorkerCommandKind::RefreshSnapshot);
         }
         Ok(app)
@@ -355,7 +364,10 @@ impl StarbyteApp {
         };
         let events = ctx.input(|input| input.events.clone());
         for event in events {
-            if let egui::Event::Key { key, pressed: true, .. } = event {
+            if let egui::Event::Key {
+                key, pressed: true, ..
+            } = event
+            {
                 self.config
                     .input
                     .keyboard_bindings
@@ -400,7 +412,8 @@ impl StarbyteApp {
     }
 
     fn run_frame(&mut self, ctx: &egui::Context) {
-        self.session.set_controller1(self.effective_controller_state(ctx));
+        self.session
+            .set_controller1(self.effective_controller_state(ctx));
         match self.session.run_frame() {
             Ok(()) => {
                 self.refresh_framebuffer(ctx);
@@ -441,7 +454,10 @@ impl StarbyteApp {
             return None;
         };
         let Ok(image) = reader.decode() else {
-            warn!("failed to decode cached cover {}", cover.cache_path.display());
+            warn!(
+                "failed to decode cached cover {}",
+                cover.cache_path.display()
+            );
             self.failed_cover_ids.insert(entry.game_id.clone());
             return None;
         };
@@ -486,17 +502,17 @@ impl StarbyteApp {
             ui.label("Library-first frontend");
             ui.separator();
             if ui
-                .add(
-                    egui::TextEdit::singleline(&mut self.search_query)
-                        .hint_text("Search library"),
-                )
+                .add(egui::TextEdit::singleline(&mut self.search_query).hint_text("Search library"))
                 .changed()
             {
                 self.status_line = format!("Filtered to {} entries.", self.visible_entries().len());
             }
 
             if ui
-                .checkbox(&mut self.config.library.show_installed_only, "Installed only")
+                .checkbox(
+                    &mut self.config.library.show_installed_only,
+                    "Installed only",
+                )
                 .changed()
             {
                 self.persist_config();
@@ -547,16 +563,22 @@ impl StarbyteApp {
             if ui.button("Refresh All").clicked() {
                 self.queue_job(WorkerCommandKind::RefreshAll);
             }
-            if ui.checkbox(&mut self.config.prefer_dark_mode, "Night Mode").changed() {
+            if ui
+                .checkbox(&mut self.config.prefer_dark_mode, "Night Mode")
+                .changed()
+            {
                 apply_theme(ctx, self.config.prefer_dark_mode);
                 self.persist_config();
             }
 
             ui.separator();
             ui.checkbox(&mut self.config.ui.show_left_panel, "Left");
-            ui.add_enabled_ui(self.config.library.active_view == LibraryViewMode::List, |ui| {
-                ui.checkbox(&mut self.config.ui.show_details_panel, "Details");
-            });
+            ui.add_enabled_ui(
+                self.config.library.active_view == LibraryViewMode::List,
+                |ui| {
+                    ui.checkbox(&mut self.config.ui.show_details_panel, "Details");
+                },
+            );
             ui.checkbox(&mut self.config.ui.show_right_panel, "Session");
             ui.checkbox(&mut self.config.ui.show_log_panel, "Logs");
             if ui.button("Save Layout").clicked() {
@@ -619,82 +641,92 @@ impl StarbyteApp {
             egui::CollapsingHeader::new("Audio")
                 .default_open(true)
                 .show(ui, |ui| {
-                let audio = &mut self.config.audio;
-                let mut changed = false;
-                changed |= ui.checkbox(&mut audio.enabled, "Enabled").changed();
-                changed |= ui.checkbox(&mut audio.mute_on_startup, "Mute on startup").changed();
-                changed |= ui
-                    .add(egui::Slider::new(&mut audio.volume, 0.0..=1.0).text("Volume"))
-                    .changed();
-                changed |= ui
-                    .add(
-                        egui::DragValue::new(&mut audio.sample_rate_hz)
-                            .speed(1_000)
-                            .range(8_000..=96_000)
-                            .prefix("Hz "),
-                    )
-                    .changed();
-                if changed {
-                    self.persist_config();
-                }
-            });
+                    let audio = &mut self.config.audio;
+                    let mut changed = false;
+                    changed |= ui.checkbox(&mut audio.enabled, "Enabled").changed();
+                    changed |= ui
+                        .checkbox(&mut audio.mute_on_startup, "Mute on startup")
+                        .changed();
+                    changed |= ui
+                        .add(egui::Slider::new(&mut audio.volume, 0.0..=1.0).text("Volume"))
+                        .changed();
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut audio.sample_rate_hz)
+                                .speed(1_000)
+                                .range(8_000..=96_000)
+                                .prefix("Hz "),
+                        )
+                        .changed();
+                    if changed {
+                        self.persist_config();
+                    }
+                });
 
             egui::CollapsingHeader::new("Video")
                 .default_open(true)
                 .show(ui, |ui| {
-                let video = &mut self.config.video;
-                let mut changed = false;
-                changed |= ui.checkbox(&mut video.fullscreen, "Fullscreen").changed();
-                changed |= ui.checkbox(&mut video.integer_scale, "Integer scale").changed();
-                changed |= ui.checkbox(&mut video.vsync, "VSync").changed();
-                changed |= ui
-                    .add(egui::Slider::new(&mut video.scale, 1..=6).text("Scale"))
-                    .changed();
-                if changed {
-                    self.persist_config();
-                }
-            });
+                    let video = &mut self.config.video;
+                    let mut changed = false;
+                    changed |= ui.checkbox(&mut video.fullscreen, "Fullscreen").changed();
+                    changed |= ui
+                        .checkbox(&mut video.integer_scale, "Integer scale")
+                        .changed();
+                    changed |= ui.checkbox(&mut video.vsync, "VSync").changed();
+                    changed |= ui
+                        .add(egui::Slider::new(&mut video.scale, 1..=6).text("Scale"))
+                        .changed();
+                    if changed {
+                        self.persist_config();
+                    }
+                });
 
             egui::CollapsingHeader::new("Input")
                 .default_open(false)
                 .show(ui, |ui| {
-                self.draw_input_settings(ui);
-            });
+                    self.draw_input_settings(ui);
+                });
 
             egui::CollapsingHeader::new("Cheats")
                 .default_open(false)
                 .show(ui, |ui| {
-                if ui
-                    .checkbox(&mut self.config.cheats.show_cheat_badges, "Show cheat badges")
-                    .changed()
-                {
-                    self.persist_config();
-                }
-            });
+                    if ui
+                        .checkbox(
+                            &mut self.config.cheats.show_cheat_badges,
+                            "Show cheat badges",
+                        )
+                        .changed()
+                    {
+                        self.persist_config();
+                    }
+                });
 
             egui::CollapsingHeader::new("Advanced / Cache")
                 .default_open(false)
                 .show(ui, |ui| {
-                ui.label(format!("Cache Root: {}", self.cache_root.display()));
-                let advanced = &mut self.config.advanced;
-                let mut changed = false;
-                changed |= ui
-                    .checkbox(&mut advanced.show_missing_games, "Show metadata-only games")
-                    .changed();
-                changed |= ui
-                    .checkbox(&mut advanced.refresh_on_startup, "Refresh on startup")
-                    .changed();
-                changed |= ui
-                    .checkbox(&mut advanced.providers.enable_network, "Enable network providers")
-                    .changed();
-                changed |= ui
-                    .text_edit_singleline(&mut self.config.log_filter)
-                    .changed();
-                if changed {
-                    self.persist_config();
-                    self.queue_job(WorkerCommandKind::RefreshSnapshot);
-                }
-            });
+                    ui.label(format!("Cache Root: {}", self.cache_root.display()));
+                    let advanced = &mut self.config.advanced;
+                    let mut changed = false;
+                    changed |= ui
+                        .checkbox(&mut advanced.show_missing_games, "Show metadata-only games")
+                        .changed();
+                    changed |= ui
+                        .checkbox(&mut advanced.refresh_on_startup, "Refresh on startup")
+                        .changed();
+                    changed |= ui
+                        .checkbox(
+                            &mut advanced.providers.enable_network,
+                            "Enable network providers",
+                        )
+                        .changed();
+                    changed |= ui
+                        .text_edit_singleline(&mut self.config.log_filter)
+                        .changed();
+                    if changed {
+                        self.persist_config();
+                        self.queue_job(WorkerCommandKind::RefreshSnapshot);
+                    }
+                });
 
             ui.separator();
             ui.heading("Jobs");
@@ -768,7 +800,11 @@ impl StarbyteApp {
             ui.label(format!("Metadata Source: {}", metadata.source));
             ui.label(format!(
                 "Has cheat files: {}",
-                if metadata.has_cheat_files { "yes" } else { "no" }
+                if metadata.has_cheat_files {
+                    "yes"
+                } else {
+                    "no"
+                }
             ));
         }
 
@@ -853,7 +889,10 @@ impl StarbyteApp {
             });
         }
         if let Some(action) = &self.pending_gamepad_bind {
-            ui.label(format!("Press a gamepad button to bind {}...", action_label(action)));
+            ui.label(format!(
+                "Press a gamepad button to bind {}...",
+                action_label(action)
+            ));
         }
     }
 
@@ -869,7 +908,8 @@ impl StarbyteApp {
             self.run_frame(ctx);
         }
         if ui.button("Run 60 Frames").clicked() {
-            self.session.set_controller1(self.effective_controller_state(ctx));
+            self.session
+                .set_controller1(self.effective_controller_state(ctx));
             match self.session.run_frames(60) {
                 Ok(()) => {
                     self.refresh_framebuffer(ctx);
@@ -983,9 +1023,7 @@ impl StarbyteApp {
                         })
                         .size(12.0),
                     );
-                    ui.label(
-                        RichText::new(format!("Cheats {}", entry.cheats.len())).size(11.0),
-                    );
+                    ui.label(RichText::new(format!("Cheats {}", entry.cheats.len())).size(11.0));
 
                     if title_response.clicked() {
                         self.selected_game_id = Some(entry.game_id.clone());
@@ -1085,8 +1123,12 @@ impl StarbyteApp {
             && ui.button("Open ROM Folder").clicked()
         {
             let target = match local.source_kind {
-                starbyte_frontend::LocalRomSourceKind::File => local.rom_path.parent().map(Path::to_path_buf),
-                starbyte_frontend::LocalRomSourceKind::ZipArchiveMember => local.rom_path.parent().map(Path::to_path_buf),
+                starbyte_frontend::LocalRomSourceKind::File => {
+                    local.rom_path.parent().map(Path::to_path_buf)
+                }
+                starbyte_frontend::LocalRomSourceKind::ZipArchiveMember => {
+                    local.rom_path.parent().map(Path::to_path_buf)
+                }
             };
             if let Some(path) = target {
                 let _ = open_path(&path);
@@ -1250,7 +1292,13 @@ fn empty_snapshot() -> LibrarySnapshot {
 fn normalize_query(input: &str) -> String {
     input
         .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch.to_ascii_lowercase() } else { ' ' })
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -1258,7 +1306,9 @@ fn normalize_query(input: &str) -> String {
 }
 
 fn input_actions() -> &'static [&'static str] {
-    &["up", "down", "left", "right", "start", "select", "a", "b", "x", "y", "l", "r"]
+    &[
+        "up", "down", "left", "right", "start", "select", "a", "b", "x", "y", "l", "r",
+    ]
 }
 
 fn action_label(action: &str) -> &'static str {

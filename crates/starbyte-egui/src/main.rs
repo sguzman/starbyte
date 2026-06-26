@@ -109,14 +109,12 @@ fn main() -> Result<()> {
 fn load_runtime_config(assets: &AssetConfig) -> Result<RuntimeConfig> {
     let config_path = assets.config_path();
     if assets.config_path.is_some() || config_path.exists() {
-        return RuntimeConfig::load_or_default(&config_path)
-            .map_err(anyhow::Error::from);
+        return RuntimeConfig::load_or_default(&config_path).map_err(anyhow::Error::from);
     }
 
     let legacy_path = assets.legacy_config_path();
     if legacy_path.exists() {
-        return RuntimeConfig::load_or_default(&legacy_path)
-            .map_err(anyhow::Error::from);
+        return RuntimeConfig::load_or_default(&legacy_path).map_err(anyhow::Error::from);
     }
 
     Ok(RuntimeConfig::default())

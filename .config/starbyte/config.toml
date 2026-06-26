@@ -65,6 +65,7 @@ metadata_index_url = "https://api.github.com/repos/libretro-thumbnails/Nintendo_
 cover_index_url = "https://raw.githubusercontent.com/libretro-thumbnails/Nintendo_-_Super_Nintendo_Entertainment_System/master"
 cheat_index_url = "https://api.github.com/repos/libretro/libretro-database/git/trees/master?recursive=1"
 last_metadata_refresh_unix = 1782410943
+last_cover_refresh_unix = 1782425546
 
 [ui]
 show_left_panel = true

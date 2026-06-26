@@ -641,7 +641,11 @@ mod tests {
         make_cart_with_title_and_rom_type(mapper, rom_type, b"STARBYTE SYSTEM BUS  ")
     }
 
-    fn make_cart_with_title_and_rom_type(mapper: Mapper, rom_type: u8, title: &[u8; 21]) -> Cartridge {
+    fn make_cart_with_title_and_rom_type(
+        mapper: Mapper,
+        rom_type: u8,
+        title: &[u8; 21],
+    ) -> Cartridge {
         let mut rom = match mapper {
             Mapper::LoRom => vec![0_u8; 0x10000],
             Mapper::HiRom => vec![0_u8; 0x20000],
@@ -797,7 +801,11 @@ mod tests {
     #[test]
     fn routes_cx4_command_window_before_rom() {
         let mut bus = SystemBus::default();
-        bus.install_cartridge(make_cart_with_title_and_rom_type(Mapper::LoRom, 0xF3, b"STARBYTE CX4 TEST    "));
+        bus.install_cartridge(make_cart_with_title_and_rom_type(
+            Mapper::LoRom,
+            0xF3,
+            b"STARBYTE CX4 TEST    ",
+        ));
 
         for (address, value) in [
             (0x006000, 3),
@@ -845,7 +853,8 @@ mod tests {
         srtc.write(0x002801, 0x0F);
         assert_eq!(srtc.read(0x002800), 0x01);
         assert!(matches!(
-            srtc.coprocessor().map(crate::coprocessor::Coprocessor::kind),
+            srtc.coprocessor()
+                .map(crate::coprocessor::Coprocessor::kind),
             Some(crate::coprocessor::CoprocessorKind::SRtc)
         ));
     }

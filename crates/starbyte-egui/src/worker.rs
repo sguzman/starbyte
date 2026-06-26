@@ -5,7 +5,9 @@ use std::{
 };
 
 use starbyte_core::manifest::{AssetConfig, RuntimeConfig};
-use starbyte_frontend::{LibraryEntry, LibraryFilter, LibraryService, LibrarySnapshot, LibraryTarget};
+use starbyte_frontend::{
+    LibraryEntry, LibraryFilter, LibraryService, LibrarySnapshot, LibraryTarget,
+};
 use tracing::{error, info};
 
 #[derive(Debug, Clone)]

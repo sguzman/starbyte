@@ -471,15 +471,15 @@ impl DspCommand {
             (Self::AttitudeA | Self::AttitudeB | Self::AttitudeC, _) => 18,
             (
                 Self::ObjectiveA
-                    | Self::ObjectiveB
-                    | Self::ObjectiveC
-                    | Self::SubjectiveA
-                    | Self::SubjectiveB
-                    | Self::SubjectiveC
-                    | Self::ScalarA
-                    | Self::ScalarB
-                    | Self::ScalarC
-                    | Self::Gyrate,
+                | Self::ObjectiveB
+                | Self::ObjectiveC
+                | Self::SubjectiveA
+                | Self::SubjectiveB
+                | Self::SubjectiveC
+                | Self::ScalarA
+                | Self::ScalarB
+                | Self::ScalarC
+                | Self::Gyrate,
                 _,
             ) => 18,
             (Self::Polar, _) => 24,
@@ -492,14 +492,21 @@ impl DspCommand {
         }
     }
 
-    fn execute(self, operands: &[i16], variant: DspVariant, shared: &mut DspSharedState) -> Vec<i16> {
+    fn execute(
+        self,
+        operands: &[i16],
+        variant: DspVariant,
+        shared: &mut DspSharedState,
+    ) -> Vec<i16> {
         if !self.supported_by(variant) {
             return vec![unsupported_variant_code(variant, self.opcode_hint())];
         }
 
         match self {
             Self::MemoryTest => vec![0],
-            Self::MemoryDump => build_memory_dump(variant, operands.first().copied().unwrap_or_default()),
+            Self::MemoryDump => {
+                build_memory_dump(variant, operands.first().copied().unwrap_or_default())
+            }
             Self::MemorySize => vec![0x0100],
             Self::Multiply => vec![q15_mul(operands[0], operands[1])],
             Self::Multiply2 => vec![q15_mul(operands[0], operands[1]).saturating_add(1)],
@@ -508,15 +515,18 @@ impl DspCommand {
                 vec![coefficient, exponent]
             }
             Self::AttitudeA => {
-                shared.matrix_a = build_attitude_matrix(operands[0], operands[1], operands[2], operands[3]);
+                shared.matrix_a =
+                    build_attitude_matrix(operands[0], operands[1], operands[2], operands[3]);
                 Vec::new()
             }
             Self::AttitudeB => {
-                shared.matrix_b = build_attitude_matrix(operands[0], operands[1], operands[2], operands[3]);
+                shared.matrix_b =
+                    build_attitude_matrix(operands[0], operands[1], operands[2], operands[3]);
                 Vec::new()
             }
             Self::AttitudeC => {
-                shared.matrix_c = build_attitude_matrix(operands[0], operands[1], operands[2], operands[3]);
+                shared.matrix_c =
+                    build_attitude_matrix(operands[0], operands[1], operands[2], operands[3]);
                 Vec::new()
             }
             Self::ObjectiveA => transform_objective(&shared.matrix_a, operands),
@@ -542,8 +552,20 @@ impl DspCommand {
                     i16::from_le_bytes([bytes[2], bytes[3]]),
                 ]
             }
-            Self::Range => vec![vector_range(operands[0], operands[1], operands[2], operands[3], 0)],
-            Self::Range2 => vec![vector_range(operands[0], operands[1], operands[2], operands[3], 1)],
+            Self::Range => vec![vector_range(
+                operands[0],
+                operands[1],
+                operands[2],
+                operands[3],
+                0,
+            )],
+            Self::Range2 => vec![vector_range(
+                operands[0],
+                operands[1],
+                operands[2],
+                operands[3],
+                1,
+            )],
             Self::Distance => vec![vector_distance(operands[0], operands[1], operands[2])],
             Self::Rotate => {
                 let sin = dsp_sin(operands[0]);
@@ -554,7 +576,12 @@ impl DspCommand {
             }
             Self::Polar => {
                 let (az, ay, ax, mut x, mut y, mut z) = (
-                    operands[0], operands[1], operands[2], operands[3], operands[4], operands[5],
+                    operands[0],
+                    operands[1],
+                    operands[2],
+                    operands[3],
+                    operands[4],
+                    operands[5],
                 );
                 let sin_az = dsp_sin(az);
                 let cos_az = dsp_cos(az);
@@ -669,7 +696,10 @@ fn vector_range(x: i16, y: i16, z: i16, radius: i16, bias: i16) -> i16 {
 
 fn vector_distance(x: i16, y: i16, z: i16) -> i16 {
     let radius = vector_radius(x, y, z) as f64;
-    radius.sqrt().round().clamp(f64::from(i16::MIN + 1), f64::from(i16::MAX)) as i16
+    radius
+        .sqrt()
+        .round()
+        .clamp(f64::from(i16::MIN + 1), f64::from(i16::MAX)) as i16
 }
 
 fn dsp_sin(angle: i16) -> i16 {
@@ -722,7 +752,10 @@ fn build_memory_dump(variant: DspVariant, seed_word: i16) -> Vec<i16> {
     let mut state = variant_seed ^ (seed_word as u16);
     (0..1024)
         .map(|index| {
-            state = state.rotate_left(3).wrapping_add(0x41C6).wrapping_add(index as u16);
+            state = state
+                .rotate_left(3)
+                .wrapping_add(0x41C6)
+                .wrapping_add(index as u16);
             state ^= (index as u16).wrapping_mul(0x0101);
             i16::from_le_bytes(state.to_le_bytes())
         })
@@ -791,7 +824,10 @@ fn transform_subjective(matrix: &[[i16; 3]; 3], operands: &[i16]) -> Vec<i16> {
 }
 
 fn scalar_forward(matrix: &[[i16; 3]; 3], operands: &[i16]) -> i16 {
-    dot3([matrix[0][0], matrix[1][0], matrix[2][0]], [operands[0], operands[1], operands[2]])
+    dot3(
+        [matrix[0][0], matrix[1][0], matrix[2][0]],
+        [operands[0], operands[1], operands[2]],
+    )
 }
 
 fn dot3(left: [i16; 3], right: [i16; 3]) -> i16 {
@@ -816,11 +852,15 @@ fn gyrate(operands: &[i16]) -> Vec<i16> {
     let (sec_coefficient, sec_exponent) = dsp_inverse(cos_ax, 0);
     let sec_ax = denormalize_fp(sec_coefficient, sec_exponent);
 
-    let rz = az.saturating_add(q15_mul(sec_ax, q15_mul(u, cos_ay).saturating_sub(q15_mul(f, sin_ay))));
+    let rz = az.saturating_add(q15_mul(
+        sec_ax,
+        q15_mul(u, cos_ay).saturating_sub(q15_mul(f, sin_ay)),
+    ));
     let rx = ax.saturating_add(q15_mul(u, sin_ay).saturating_add(q15_mul(f, cos_ay)));
-    let ry = ay
-        .saturating_add(l)
-        .saturating_sub(q15_mul(q15_mul(sec_ax, sin_ax), q15_mul(u, cos_ay).saturating_add(q15_mul(f, sin_ay))));
+    let ry = ay.saturating_add(l).saturating_sub(q15_mul(
+        q15_mul(sec_ax, sin_ax),
+        q15_mul(u, cos_ay).saturating_add(q15_mul(f, sin_ay)),
+    ));
 
     vec![rz, rx, ry]
 }
@@ -979,26 +1019,45 @@ mod tests {
     #[test]
     fn variant_detection_prefers_specific_titles() {
         assert_eq!(
-            DspVariant::detect(&header("STARBYTE DSP-1B TEST", Mapper::LoRom, 0x03, 0x08, 0x00)),
+            DspVariant::detect(&header(
+                "STARBYTE DSP-1B TEST",
+                Mapper::LoRom,
+                0x03,
+                0x08,
+                0x00
+            )),
             DspVariant::Dsp1B
         );
         assert_eq!(
-            DspVariant::detect(&header("STARBYTE DSP-4 TEST", Mapper::LoRom, 0x03, 0x08, 0x00)),
+            DspVariant::detect(&header(
+                "STARBYTE DSP-4 TEST",
+                Mapper::LoRom,
+                0x03,
+                0x08,
+                0x00
+            )),
             DspVariant::Dsp4
         );
     }
 
     #[test]
     fn multiply_command_obeys_q15_scaling_and_latency() {
-        let mut dsp = DspCoprocessor::new(&header("STARBYTE DSP-1", Mapper::LoRom, 0x03, 0x08, 0x00));
+        let mut dsp =
+            DspCoprocessor::new(&header("STARBYTE DSP-1", Mapper::LoRom, 0x03, 0x08, 0x00));
 
         write_word(&mut dsp, Mapper::LoRom, 0x308000, 0x0000);
         write_word(&mut dsp, Mapper::LoRom, 0x308000, 0x4000);
         write_word(&mut dsp, Mapper::LoRom, 0x308000, 0x4000);
 
-        assert_eq!(dsp.read(Mapper::LoRom, 0x30C000), Some(DSP_STATUS_COMMAND_WAITING));
+        assert_eq!(
+            dsp.read(Mapper::LoRom, 0x30C000),
+            Some(DSP_STATUS_COMMAND_WAITING)
+        );
         dsp.step_master_cycles(5);
-        assert_eq!(dsp.read(Mapper::LoRom, 0x30C000), Some(DSP_STATUS_COMMAND_WAITING));
+        assert_eq!(
+            dsp.read(Mapper::LoRom, 0x30C000),
+            Some(DSP_STATUS_COMMAND_WAITING)
+        );
         dsp.step_master_cycles(1);
         assert_eq!(
             dsp.read(Mapper::LoRom, 0x30C000),
@@ -1009,7 +1068,8 @@ mod tests {
 
     #[test]
     fn triangle_and_rotate_commands_use_geometric_semantics() {
-        let mut dsp = DspCoprocessor::new(&header("STARBYTE DSP-1", Mapper::LoRom, 0x03, 0x08, 0x00));
+        let mut dsp =
+            DspCoprocessor::new(&header("STARBYTE DSP-1", Mapper::LoRom, 0x03, 0x08, 0x00));
 
         write_word(&mut dsp, Mapper::LoRom, 0x308000, 0x0004);
         write_word(&mut dsp, Mapper::LoRom, 0x308000, 0x4000);
@@ -1033,8 +1093,10 @@ mod tests {
 
     #[test]
     fn memory_dump_is_large_and_variant_specific() {
-        let mut dsp1 = DspCoprocessor::new(&header("STARBYTE DSP-1", Mapper::LoRom, 0x03, 0x08, 0x00));
-        let mut dsp1b = DspCoprocessor::new(&header("STARBYTE DSP-1B", Mapper::LoRom, 0x03, 0x08, 0x00));
+        let mut dsp1 =
+            DspCoprocessor::new(&header("STARBYTE DSP-1", Mapper::LoRom, 0x03, 0x08, 0x00));
+        let mut dsp1b =
+            DspCoprocessor::new(&header("STARBYTE DSP-1B", Mapper::LoRom, 0x03, 0x08, 0x00));
 
         write_word(&mut dsp1, Mapper::LoRom, 0x308000, 0x001F);
         write_word(&mut dsp1, Mapper::LoRom, 0x308000, 0x1234);
@@ -1050,7 +1112,8 @@ mod tests {
 
     #[test]
     fn unsupported_variant_commands_return_variant_marked_error_word() {
-        let mut dsp2 = DspCoprocessor::new(&header("STARBYTE DSP-2", Mapper::LoRom, 0x03, 0x08, 0x00));
+        let mut dsp2 =
+            DspCoprocessor::new(&header("STARBYTE DSP-2", Mapper::LoRom, 0x03, 0x08, 0x00));
         write_word(&mut dsp2, Mapper::LoRom, 0x308000, 0x0010);
         write_word(&mut dsp2, Mapper::LoRom, 0x308000, 0x4000);
         write_word(&mut dsp2, Mapper::LoRom, 0x308000, 0x0000);
@@ -1060,7 +1123,8 @@ mod tests {
 
     #[test]
     fn attitude_and_transform_commands_share_matrix_state() {
-        let mut dsp = DspCoprocessor::new(&header("STARBYTE DSP-1", Mapper::LoRom, 0x03, 0x08, 0x00));
+        let mut dsp =
+            DspCoprocessor::new(&header("STARBYTE DSP-1", Mapper::LoRom, 0x03, 0x08, 0x00));
 
         for word in [0x0001_u16, 0x7FFF, 0x0000, 0x0000, 0x0000] {
             write_word(&mut dsp, Mapper::LoRom, 0x308000, word);
@@ -1092,7 +1156,8 @@ mod tests {
 
     #[test]
     fn scalar_and_gyrate_commands_produce_nontrivial_results() {
-        let mut dsp = DspCoprocessor::new(&header("STARBYTE DSP-1", Mapper::LoRom, 0x03, 0x08, 0x00));
+        let mut dsp =
+            DspCoprocessor::new(&header("STARBYTE DSP-1", Mapper::LoRom, 0x03, 0x08, 0x00));
 
         for word in [0x0001_u16, 0x7FFF, 0x2000, 0x0000, 0x0000] {
             write_word(&mut dsp, Mapper::LoRom, 0x308000, word);

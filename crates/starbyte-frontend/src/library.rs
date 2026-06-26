@@ -10,7 +10,7 @@ use anyhow::{Context, Result, anyhow};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use urlencoding::encode;
 use zip::ZipArchive;
 
@@ -330,10 +330,15 @@ impl LibraryService {
         info!(rom_dirs = ?self.config.library.rom_dirs, "scanning ROM directories");
         let manifest_path = self.scan_manifest_path();
         let mut manifest: ScanCacheManifest = read_json_or_default(manifest_path.clone())?;
+        let archive_manifest_path = self.archive_manifest_path();
+        let mut archive_manifest: ArchiveListingManifest =
+            read_json_or_default(archive_manifest_path.clone())?;
         let mut seen_keys = BTreeSet::new();
         let mut discovered = BTreeMap::<GameId, LocalRomInfo>::new();
         for rom_dir in &self.config.library.rom_dirs {
-            for candidate in discover_rom_files(rom_dir)? {
+            for candidate in
+                discover_rom_files(rom_dir, &archive_manifest_path, &mut archive_manifest)?
+            {
                 let cache_key = candidate.cache_key();
                 seen_keys.insert(cache_key.clone());
                 let signature = candidate.source_signature()?;
@@ -357,12 +362,16 @@ impl LibraryService {
                         write_json(manifest_path.clone(), &manifest)?;
                         discovered.entry(info.game_id.clone()).or_insert(info);
                     }
-                    Err(error) => debug!("skipping ROM candidate {}: {error}", candidate.display_label()),
+                    Err(error) => debug!(
+                        "skipping ROM candidate {}: {error}",
+                        candidate.display_label()
+                    ),
                 }
             }
         }
         manifest.records.retain(|key, _| seen_keys.contains(key));
         write_json(manifest_path, &manifest)?;
+        write_json(archive_manifest_path, &archive_manifest)?;
         info!(discovered = discovered.len(), "completed ROM scan");
         Ok(discovered.into_values().collect())
     }
@@ -380,7 +389,8 @@ impl LibraryService {
         let local_roms = self.scan_roms()?;
         let metadata = self.load_cached_metadata_index()?;
         let enabled_by_game = &self.config.cheats.enabled_by_game;
-        let mut entries = merge_library_entries(&local_roms, &metadata, self.cache_root(), enabled_by_game)?;
+        let mut entries =
+            merge_library_entries(&local_roms, &metadata, self.cache_root(), enabled_by_game)?;
 
         let total_count = entries.len();
         let installed_count = entries
@@ -402,22 +412,23 @@ impl LibraryService {
 
         entries.sort_by(|left, right| left.display_title.cmp(&right.display_title));
 
-        Ok(LibrarySnapshot {
+        let snapshot = LibrarySnapshot {
             entries,
             filter,
             total_count,
             installed_count,
             missing_count,
-        })
+        };
+        write_json(self.snapshot_cache_path(), &snapshot)?;
+        Ok(snapshot)
     }
 
     /// Refresh the cached metadata index.
     pub fn refresh_metadata_index(&mut self) -> Result<usize> {
         info!("refreshing metadata index");
-        let metadata = self.metadata_provider.refresh_metadata(
-            &self.client,
-            &self.config.advanced.providers,
-        )?;
+        let metadata = self
+            .metadata_provider
+            .refresh_metadata(&self.client, &self.config.advanced.providers)?;
         write_json(self.metadata_index_path(), &metadata)?;
         self.config.advanced.providers.last_metadata_refresh_unix = Some(now_unix());
         Ok(metadata.len())
@@ -436,12 +447,21 @@ impl LibraryService {
             let Some(metadata) = &entry.metadata else {
                 continue;
             };
-            if self
+            match self
                 .cover_provider
-                .fetch_cover(&self.client, metadata, &self.cache_root())?
-                .is_some()
+                .fetch_cover(&self.client, metadata, &self.cache_root())
             {
-                written += 1;
+                Ok(Some(_)) => {
+                    written += 1;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    warn!(
+                        game_id = %entry.game_id,
+                        title = %entry.display_title,
+                        "failed to refresh cover: {error}"
+                    );
+                }
             }
         }
         self.config.advanced.providers.last_cover_refresh_unix = Some(now_unix());
@@ -473,8 +493,19 @@ impl LibraryService {
                 &entry,
                 &self.cache_root(),
                 &enabled_ids,
-            )?;
-            records += cheats.len();
+            );
+            match cheats {
+                Ok(cheats) => {
+                    records += cheats.len();
+                }
+                Err(error) => {
+                    warn!(
+                        game_id = %entry.game_id,
+                        title = %entry.display_title,
+                        "failed to refresh cheats: {error}"
+                    );
+                }
+            }
         }
         self.config.advanced.providers.last_cheat_refresh_unix = Some(now_unix());
         Ok(records)
@@ -494,7 +525,10 @@ impl LibraryService {
     }
 
     fn metadata_index_path(&self) -> PathBuf {
-        self.cache_root().join("games").join("metadata").join("index.json")
+        self.cache_root()
+            .join("games")
+            .join("metadata")
+            .join("index.json")
     }
 
     fn load_cached_metadata_index(&self) -> Result<Vec<GameMetadata>> {
@@ -502,7 +536,33 @@ impl LibraryService {
     }
 
     fn scan_manifest_path(&self) -> PathBuf {
-        self.cache_root().join("manifests").join("library-scan.json")
+        self.cache_root()
+            .join("manifests")
+            .join("library-scan.json")
+    }
+
+    /// Load the most recently persisted library snapshot if one exists.
+    pub fn load_cached_snapshot(&self) -> Result<Option<LibrarySnapshot>> {
+        let path = self.snapshot_cache_path();
+        if !path.exists() {
+            return Ok(None);
+        }
+        let text = fs::read_to_string(&path)?;
+        let snapshot = serde_json::from_str(&text)
+            .with_context(|| format!("failed to parse cached snapshot {}", path.display()))?;
+        Ok(Some(snapshot))
+    }
+
+    fn snapshot_cache_path(&self) -> PathBuf {
+        self.cache_root()
+            .join("manifests")
+            .join("library-snapshot.json")
+    }
+
+    fn archive_manifest_path(&self) -> PathBuf {
+        self.cache_root()
+            .join("manifests")
+            .join("archive-members.json")
     }
 
     /// Resolve a local library entry to a playable ROM path, extracting archive members into cache when needed.
@@ -514,7 +574,8 @@ impl LibraryService {
                     .archive_member_path
                     .as_deref()
                     .ok_or_else(|| anyhow!("archive-backed ROM is missing its member path"))?;
-                let cache_path = extracted_rom_cache_path(&self.cache_root(), &local.rom_path, member_path)?;
+                let cache_path =
+                    extracted_rom_cache_path(&self.cache_root(), &local.rom_path, member_path)?;
                 if cache_path.exists() {
                     info!(
                         archive = %local.rom_path.display(),
@@ -558,14 +619,19 @@ impl GameMetadataProvider for LibretroMetadataProvider {
             .context("failed to request metadata index")?
             .error_for_status()
             .context("metadata index request returned an error status")?;
-        let tree: GitTreeResponse = response.json().context("failed to parse metadata index response")?;
+        let tree: GitTreeResponse = response
+            .json()
+            .context("failed to parse metadata index response")?;
         debug!(entries = tree.tree.len(), "received metadata tree response");
         let mut metadata = Vec::new();
         for node in tree.tree {
             if !node.path.starts_with("Named_Boxarts/") || node.kind != "blob" {
                 continue;
             }
-            let Some(title) = Path::new(&node.path).file_stem().and_then(|stem| stem.to_str()) else {
+            let Some(title) = Path::new(&node.path)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+            else {
                 continue;
             };
             let normalized_title = normalize_title(title);
@@ -649,17 +715,24 @@ impl CheatProvider for LibretroCheatProvider {
             .context("failed to request cheat index")?
             .error_for_status()
             .context("cheat index request returned an error status")?;
-        let tree: GitTreeResponse = response.json().context("failed to parse cheat index response")?;
+        let tree: GitTreeResponse = response
+            .json()
+            .context("failed to parse cheat index response")?;
         debug!(entries = tree.tree.len(), title = %entry.display_title, "received cheat tree response");
         let mut cheats = Vec::new();
         for node in tree.tree {
-            if !node.path.starts_with("cht/Nintendo - Super Nintendo Entertainment System/")
+            if !node
+                .path
+                .starts_with("cht/Nintendo - Super Nintendo Entertainment System/")
                 || !node.path.ends_with(".cht")
                 || node.kind != "blob"
             {
                 continue;
             }
-            let Some(stem) = Path::new(&node.path).file_stem().and_then(|stem| stem.to_str()) else {
+            let Some(stem) = Path::new(&node.path)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+            else {
                 continue;
             };
             let base_title = strip_cheat_suffix(stem);
@@ -714,6 +787,17 @@ struct ScanCacheManifest {
 struct ScanCacheRecord {
     source_signature: String,
     rom_info: LocalRomInfo,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct ArchiveListingManifest {
+    records: BTreeMap<String, ArchiveListingRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ArchiveListingRecord {
+    source_signature: String,
+    members: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -820,33 +904,21 @@ fn merge_library_entries(
 }
 
 fn title_match_score(local: &LocalRomInfo, metadata: &GameMetadata) -> Option<usize> {
-    if local.normalized_title.is_empty() || metadata.normalized_title.is_empty() {
+    let local_titles = local_match_titles(local);
+    let metadata_titles = metadata_match_titles(metadata);
+    if local_titles.is_empty() || metadata_titles.is_empty() {
         return None;
     }
-    if local.normalized_title == metadata.normalized_title {
-        return Some(1_000);
-    }
-    if metadata
-        .normalized_title
-        .starts_with(&local.normalized_title)
-        || local
-            .normalized_title
-            .starts_with(&metadata.normalized_title)
-    {
-        return Some(800 + local.normalized_title.len().min(metadata.normalized_title.len()));
-    }
 
-    let local_tokens = local.normalized_title.split_whitespace().collect::<Vec<_>>();
-    let metadata_tokens = metadata.normalized_title.split_whitespace().collect::<Vec<_>>();
-    let overlap = local_tokens
-        .iter()
-        .filter(|token| metadata_tokens.contains(token))
-        .count();
-    if overlap >= local_tokens.len().min(metadata_tokens.len()).saturating_sub(1) && overlap >= 2 {
-        return Some(100 + overlap * 10);
+    let mut best_score = None;
+    for local_title in &local_titles {
+        for metadata_title in &metadata_titles {
+            if let Some(score) = score_normalized_titles(local_title, metadata_title) {
+                best_score = Some(best_score.map_or(score, |best: usize| best.max(score)));
+            }
+        }
     }
-
-    None
+    best_score
 }
 
 fn load_cached_cover(
@@ -918,7 +990,12 @@ fn extracted_rom_cache_path(
     let extension = Path::new(member_path)
         .extension()
         .and_then(|ext| ext.to_str())
-        .filter(|ext| matches!(ext.to_ascii_lowercase().as_str(), "sfc" | "smc" | "swc" | "fig"))
+        .filter(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "sfc" | "smc" | "swc" | "fig"
+            )
+        })
         .unwrap_or("sfc");
     Ok(cache_root
         .join("extracted-roms")
@@ -978,7 +1055,11 @@ where
     Ok(serde_json::from_str(&text).unwrap_or_default())
 }
 
-fn discover_rom_files(root: &Path) -> Result<Vec<RomCandidate>> {
+fn discover_rom_files(
+    root: &Path,
+    archive_manifest_path: &Path,
+    archive_manifest: &mut ArchiveListingManifest,
+) -> Result<Vec<RomCandidate>> {
     if !root.exists() {
         return Ok(Vec::new());
     }
@@ -993,7 +1074,11 @@ fn discover_rom_files(root: &Path) -> Result<Vec<RomCandidate>> {
             } else if is_rom_path(&path) {
                 files.push(RomCandidate::File(path));
             } else if is_zip_path(&path) {
-                files.extend(discover_zip_members(&path)?);
+                files.extend(discover_zip_members(
+                    &path,
+                    archive_manifest_path,
+                    archive_manifest,
+                )?);
             }
         }
     }
@@ -1014,7 +1099,27 @@ fn is_zip_path(path: &Path) -> bool {
     )
 }
 
-fn discover_zip_members(path: &Path) -> Result<Vec<RomCandidate>> {
+fn discover_zip_members(
+    path: &Path,
+    archive_manifest_path: &Path,
+    archive_manifest: &mut ArchiveListingManifest,
+) -> Result<Vec<RomCandidate>> {
+    let cache_key = format!("zip::{}", path.display());
+    let signature = file_signature(path)?;
+    if let Some(record) = archive_manifest.records.get(&cache_key)
+        && record.source_signature == signature
+    {
+        return Ok(record
+            .members
+            .iter()
+            .cloned()
+            .map(|member_path| RomCandidate::ZipMember {
+                archive_path: path.to_path_buf(),
+                member_path,
+            })
+            .collect());
+    }
+
     let file = fs::File::open(path)?;
     let mut archive = ZipArchive::new(file)
         .with_context(|| format!("failed to read zip archive {}", path.display()))?;
@@ -1028,10 +1133,24 @@ fn discover_zip_members(path: &Path) -> Result<Vec<RomCandidate>> {
         if is_rom_member_name(&member_name) {
             members.push(RomCandidate::ZipMember {
                 archive_path: path.to_path_buf(),
-                member_path: member_name,
+                member_path: member_name.clone(),
             });
         }
     }
+    archive_manifest.records.insert(
+        cache_key,
+        ArchiveListingRecord {
+            source_signature: signature,
+            members: members
+                .iter()
+                .filter_map(|candidate| match candidate {
+                    RomCandidate::ZipMember { member_path, .. } => Some(member_path.clone()),
+                    RomCandidate::File(_) => None,
+                })
+                .collect(),
+        },
+    );
+    write_json(archive_manifest_path.to_path_buf(), archive_manifest)?;
     Ok(members)
 }
 
@@ -1080,7 +1199,11 @@ fn inspect_rom_path(path: &Path) -> Result<LocalRomInfo> {
     })
 }
 
-fn inspect_zip_member(archive_path: &Path, member_path: &str, cache_root: &Path) -> Result<LocalRomInfo> {
+fn inspect_zip_member(
+    archive_path: &Path,
+    member_path: &str,
+    cache_root: &Path,
+) -> Result<LocalRomInfo> {
     let bytes = read_zip_member_bytes(archive_path, member_path)?;
     let cartridge = Cartridge::from_bytes(bytes.clone(), None).with_context(|| {
         format!(
@@ -1091,10 +1214,7 @@ fn inspect_zip_member(archive_path: &Path, member_path: &str, cache_root: &Path)
     let title = cartridge.header().title.clone();
     let extracted_cache_path = extracted_rom_cache_path(cache_root, archive_path, member_path)?;
     Ok(LocalRomInfo {
-        game_id: game_id_for_title(&format!(
-            "{}::{member_path}",
-            title.trim()
-        )),
+        game_id: game_id_for_title(&format!("{}::{member_path}", title.trim())),
         normalized_title: normalize_title(&title),
         title,
         rom_path: archive_path.to_path_buf(),
@@ -1196,11 +1316,16 @@ fn parse_libretro_cheats(
 }
 
 fn cheat_kind_from_stem(stem: &str) -> String {
-    ["Game Genie", "Action Replay", "Pro Action Replay", "Gold Finger"]
-        .into_iter()
-        .find(|needle| stem.contains(needle))
-        .unwrap_or("Unknown")
-        .to_owned()
+    [
+        "Game Genie",
+        "Action Replay",
+        "Pro Action Replay",
+        "Gold Finger",
+    ]
+    .into_iter()
+    .find(|needle| stem.contains(needle))
+    .unwrap_or("Unknown")
+    .to_owned()
 }
 
 fn strip_cheat_suffix(stem: &str) -> String {
@@ -1238,6 +1363,105 @@ fn normalize_title(input: &str) -> String {
     normalized.trim().to_owned()
 }
 
+fn strip_title_suffixes(input: &str) -> String {
+    let mut text = input.trim().to_owned();
+    loop {
+        let Some(end) = text.rfind(')') else {
+            break;
+        };
+        let Some(start) = text[..end].rfind('(') else {
+            break;
+        };
+        if end != text.len() - 1 {
+            break;
+        }
+        text.truncate(start);
+        text = text.trim_end_matches([' ', '-', '_']).trim().to_owned();
+    }
+    text
+}
+
+fn title_file_stem(path: &Path) -> Option<String> {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(strip_title_suffixes)
+}
+
+fn local_match_titles(local: &LocalRomInfo) -> Vec<String> {
+    let mut titles = vec![
+        local.normalized_title.clone(),
+        normalize_title(&strip_title_suffixes(&local.title)),
+    ];
+    if let Some(member_path) = &local.archive_member_path {
+        if let Some(stem) = title_file_stem(Path::new(member_path)) {
+            titles.push(normalize_title(&stem));
+        }
+    } else if let Some(stem) = title_file_stem(&local.rom_path) {
+        titles.push(normalize_title(&stem));
+    }
+    titles.retain(|title| !title.is_empty());
+    titles.sort();
+    titles.dedup();
+    titles
+}
+
+fn metadata_match_titles(metadata: &GameMetadata) -> Vec<String> {
+    let mut titles = vec![
+        metadata.normalized_title.clone(),
+        normalize_title(&strip_title_suffixes(&metadata.title)),
+    ];
+    titles.retain(|title| !title.is_empty());
+    titles.sort();
+    titles.dedup();
+    titles
+}
+
+fn squash_title(title: &str) -> String {
+    title.replace(' ', "")
+}
+
+fn score_normalized_titles(left: &str, right: &str) -> Option<usize> {
+    if left.is_empty() || right.is_empty() {
+        return None;
+    }
+    if left == right {
+        return Some(1_200);
+    }
+
+    let left_squashed = squash_title(left);
+    let right_squashed = squash_title(right);
+    if left_squashed == right_squashed {
+        return Some(1_100);
+    }
+    if left_squashed.starts_with(&right_squashed) || right_squashed.starts_with(&left_squashed) {
+        return Some(980 + left_squashed.len().min(right_squashed.len()));
+    }
+    if left_squashed.contains(&right_squashed) || right_squashed.contains(&left_squashed) {
+        return Some(920 + left_squashed.len().min(right_squashed.len()));
+    }
+
+    let left_tokens = left.split_whitespace().collect::<Vec<_>>();
+    let right_tokens = right.split_whitespace().collect::<Vec<_>>();
+    let overlap = left_tokens
+        .iter()
+        .filter(|token| right_tokens.contains(token))
+        .count();
+    if overlap == 0 {
+        return None;
+    }
+    let shorter = left_tokens.len().min(right_tokens.len());
+    if overlap >= shorter {
+        return Some(860 + overlap * 10);
+    }
+    if overlap + 1 >= shorter && shorter >= 2 {
+        return Some(760 + overlap * 10);
+    }
+    if overlap >= 2 {
+        return Some(600 + overlap * 10);
+    }
+    None
+}
+
 fn game_id_for_title(title: &str) -> GameId {
     let normalized = normalize_title(title);
     let mut hasher = Sha1::new();
@@ -1261,8 +1485,9 @@ mod tests {
     use starbyte_core::{cartridge::Cartridge, manifest::RuntimeConfig};
 
     use super::{
-        GameMetadata, InstalledStatus, LibraryFilter, LibraryService, LocalRomSourceKind, cheat_cache_path,
-        game_id_for_title, merge_library_entries, normalize_title, write_json,
+        GameMetadata, InstalledStatus, LibraryFilter, LibraryService, LocalRomSourceKind,
+        cheat_cache_path, game_id_for_title, merge_library_entries, normalize_title,
+        score_normalized_titles, write_json,
     };
 
     fn synthetic_rom_bytes(title: &[u8; 21]) -> Vec<u8> {
@@ -1305,7 +1530,11 @@ mod tests {
     #[test]
     fn scan_roms_ignores_invalid_files() {
         let dir = tempdir().unwrap();
-        fs::write(dir.path().join("good.sfc"), synthetic_rom_bytes(b"STARBYTE VALID GAME  ")).unwrap();
+        fs::write(
+            dir.path().join("good.sfc"),
+            synthetic_rom_bytes(b"STARBYTE VALID GAME  "),
+        )
+        .unwrap();
         fs::write(dir.path().join("bad.sfc"), b"not a rom").unwrap();
         let mut config = RuntimeConfig::default();
         config.library.rom_dirs.push(dir.path().to_path_buf());
@@ -1333,9 +1562,36 @@ mod tests {
         let roms = service.scan_roms().unwrap();
 
         assert_eq!(roms.len(), 2);
-        assert!(roms.iter().all(|rom| rom.source_kind == LocalRomSourceKind::ZipArchiveMember));
+        assert!(
+            roms.iter()
+                .all(|rom| rom.source_kind == LocalRomSourceKind::ZipArchiveMember)
+        );
         assert!(roms.iter().all(|rom| rom.archive_member_path.is_some()));
         assert!(roms.iter().all(|rom| rom.extracted_cache_path.is_some()));
+    }
+
+    #[test]
+    fn scan_roms_persists_archive_listing_manifest() {
+        let dir = tempdir().unwrap();
+        write_zip_roms(
+            &dir.path().join("bundle.zip"),
+            &[("one.sfc", synthetic_rom_bytes(b"STARBYTE ZIP GAME 01 "))],
+        );
+        let mut config = RuntimeConfig::default();
+        config.library.rom_dirs.push(dir.path().to_path_buf());
+        config.library.cache_dir = Some(dir.path().join(".cache"));
+        let service = LibraryService::new(config, Default::default()).unwrap();
+
+        let roms = service.scan_roms().unwrap();
+
+        assert_eq!(roms.len(), 1);
+        assert!(
+            service
+                .cache_root()
+                .join("manifests")
+                .join("archive-members.json")
+                .exists()
+        );
     }
 
     #[test]
@@ -1344,7 +1600,10 @@ mod tests {
         let archive_path = dir.path().join("bundle.zip");
         write_zip_roms(
             &archive_path,
-            &[("nested/game.sfc", synthetic_rom_bytes(b"STARBYTE ZIP LOAD    "))],
+            &[(
+                "nested/game.sfc",
+                synthetic_rom_bytes(b"STARBYTE ZIP LOAD    "),
+            )],
         );
         let mut config = RuntimeConfig::default();
         config.library.rom_dirs.push(dir.path().to_path_buf());
@@ -1404,7 +1663,13 @@ mod tests {
         let snapshot = service.snapshot(LibraryFilter::default()).unwrap();
         assert_eq!(snapshot.total_count, 2);
         assert_eq!(snapshot.installed_count, 1);
-        assert!(snapshot.entries.iter().any(|entry| entry.game_id == missing_id && entry.installed_status == InstalledStatus::Missing));
+        assert!(
+            snapshot
+                .entries
+                .iter()
+                .any(|entry| entry.game_id == missing_id
+                    && entry.installed_status == InstalledStatus::Missing)
+        );
     }
 
     #[test]
@@ -1437,14 +1702,48 @@ mod tests {
                 fetched_at_unix: 0,
             }],
             dir.path().to_path_buf(),
-            &std::collections::BTreeMap::from([(
-                game_id.clone(),
-                vec!["cheat-1".to_owned()],
-            )]),
+            &std::collections::BTreeMap::from([(game_id.clone(), vec!["cheat-1".to_owned()])]),
         )
         .unwrap();
         assert_eq!(entries[0].cheats.len(), 1);
         assert!(entries[0].cheats[0].enabled);
+    }
+
+    #[test]
+    fn title_scoring_matches_truncated_header_to_provider_title() {
+        assert!(score_normalized_titles("real monsters", "aaahh real monsters usa") >= Some(920));
+        assert!(
+            score_normalized_titles("acme animation factor", "acme animation factory usa")
+                >= Some(760)
+        );
+    }
+
+    #[test]
+    fn cached_snapshot_roundtrip_loads() {
+        let dir = tempdir().unwrap();
+        let cache_root = dir.path().join(".cache").join("starbyte");
+        let assets = starbyte_core::manifest::AssetConfig {
+            cache_dir: Some(cache_root.clone()),
+            ..Default::default()
+        };
+        let service = LibraryService::new(RuntimeConfig::default(), assets).unwrap();
+        let snapshot = super::LibrarySnapshot {
+            entries: Vec::new(),
+            filter: LibraryFilter::default(),
+            total_count: 1,
+            installed_count: 1,
+            missing_count: 0,
+        };
+
+        write_json(
+            cache_root.join("manifests").join("library-snapshot.json"),
+            &snapshot,
+        )
+        .unwrap();
+
+        let loaded = service.load_cached_snapshot().unwrap().unwrap();
+        assert_eq!(loaded.total_count, 1);
+        assert_eq!(loaded.installed_count, 1);
     }
 
     #[test]

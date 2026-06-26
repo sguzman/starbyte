@@ -285,7 +285,12 @@ fn load_runtime_config(assets: &AssetConfig) -> Result<RuntimeConfig> {
     let legacy_path = assets.legacy_config_path();
     if legacy_path.exists() {
         return RuntimeConfig::load_or_default(&legacy_path)
-            .with_context(|| format!("failed to load legacy config from {}", legacy_path.display()))
+            .with_context(|| {
+                format!(
+                    "failed to load legacy config from {}",
+                    legacy_path.display()
+                )
+            })
             .map_err(anyhow::Error::from);
     }
 
@@ -393,26 +398,35 @@ fn run_library(args: LibraryArgs, assets: AssetConfig) -> Result<()> {
         LibraryCommand::RefreshMetadata(target) => {
             let count = service.refresh_metadata_index()?;
             service.save_config()?;
-            print_library_refresh_json(target.json, json!({
-                "updated": "metadata",
-                "records": count,
-            }))?;
+            print_library_refresh_json(
+                target.json,
+                json!({
+                    "updated": "metadata",
+                    "records": count,
+                }),
+            )?;
         }
         LibraryCommand::RefreshCovers(target) => {
             let count = service.refresh_covers(&library_target_from_args(&target))?;
             service.save_config()?;
-            print_library_refresh_json(target.json, json!({
-                "updated": "covers",
-                "records": count,
-            }))?;
+            print_library_refresh_json(
+                target.json,
+                json!({
+                    "updated": "covers",
+                    "records": count,
+                }),
+            )?;
         }
         LibraryCommand::RefreshCheats(target) => {
             let count = service.refresh_cheats(&library_target_from_args(&target))?;
             service.save_config()?;
-            print_library_refresh_json(target.json, json!({
-                "updated": "cheats",
-                "records": count,
-            }))?;
+            print_library_refresh_json(
+                target.json,
+                json!({
+                    "updated": "cheats",
+                    "records": count,
+                }),
+            )?;
         }
         LibraryCommand::RefreshAll(target) => {
             let summary = service.refresh_all(&library_target_from_args(&target))?;

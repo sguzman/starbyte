@@ -1,10 +1,12 @@
 //! CLI integration tests.
 
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 use assert_cmd::Command;
 use tempfile::tempdir;
+use zip::write::SimpleFileOptions;
 
 const SPC700_IPL_ROM_LEN: usize = 64;
 
@@ -48,6 +50,17 @@ fn write_test_rom_with_rom_type(path: &Path, rom_type: u8, title: &[u8; 21]) {
 
 fn write_test_ipl(path: &Path) {
     fs::write(path, vec![0_u8; SPC700_IPL_ROM_LEN]).unwrap();
+}
+
+fn write_zip_roms(path: &Path, members: &[(&str, Vec<u8>)]) {
+    let file = fs::File::create(path).unwrap();
+    let mut zip = zip::ZipWriter::new(file);
+    let options = SimpleFileOptions::default();
+    for (name, bytes) in members {
+        zip.start_file(name, options).unwrap();
+        zip.write_all(bytes).unwrap();
+    }
+    zip.finish().unwrap();
 }
 
 fn write_regression_suite(dir: &Path) {
@@ -149,6 +162,40 @@ fn inspect_reports_detected_coprocessor() {
 
     let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
     assert!(stdout.contains("Coprocessor: DSP"));
+}
+
+#[test]
+fn inspect_accepts_zip_backed_roms() {
+    let dir = tempdir().unwrap();
+    let zip_path = dir.path().join("sample.zip");
+    let mut rom = vec![0_u8; 0x10000];
+    let base = 0x7FC0;
+    rom[base..base + 21].copy_from_slice(b"STARBYTE ZIP TEST    ");
+    rom[base + 0x15] = 0x20;
+    rom[base + 0x16] = 0x00;
+    rom[base + 0x17] = 0x09;
+    rom[base + 0x18] = 0x01;
+    rom[base + 0x19] = 0x01;
+    rom[base + 0x1C] = 0x00;
+    rom[base + 0x1D] = 0xFF;
+    rom[base + 0x1E] = 0xFF;
+    rom[base + 0x1F] = 0x00;
+    rom[0x7FFC] = 0x00;
+    rom[0x7FFD] = 0x80;
+    rom[0x0000] = 0xEA;
+    write_zip_roms(
+        &zip_path,
+        &[("notes.txt", b"ignore me".to_vec()), ("sample.smc", rom)],
+    );
+
+    let assert = Command::cargo_bin("starbyte")
+        .unwrap()
+        .args(["inspect", zip_path.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    assert!(stdout.contains("Title: STARBYTE ZIP TEST"));
 }
 
 #[test]

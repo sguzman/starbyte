@@ -2,10 +2,15 @@
 
 mod header;
 
-use std::path::{Path, PathBuf};
+use std::{
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument};
+use zip::ZipArchive;
 
 use crate::coprocessor::CoprocessorKind;
 use crate::error::{Error, Result};
@@ -13,6 +18,7 @@ use crate::error::{Error, Result};
 pub use self::header::{CartridgeHeader, Region};
 
 const SMC_HEADER_LEN: usize = 512;
+const ROM_EXTENSIONS: &[&str] = &["sfc", "smc", "swc", "fig"];
 
 /// Supported SNES mapper families for the bootstrap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,7 +52,7 @@ impl Cartridge {
     #[instrument(skip_all)]
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let bytes = std::fs::read(path).map_err(|source| Error::io(path, source))?;
+        let bytes = load_cartridge_bytes(path)?;
         Self::from_bytes(bytes, Some(path.to_path_buf()))
     }
 
@@ -119,6 +125,67 @@ impl Cartridge {
     }
 }
 
+fn load_cartridge_bytes(path: &Path) -> Result<Vec<u8>> {
+    if is_zip_path(path) {
+        return load_first_rom_from_zip(path);
+    }
+
+    std::fs::read(path).map_err(|source| Error::io(path, source))
+}
+
+fn is_zip_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase()),
+        Some(ext) if ext == "zip"
+    )
+}
+
+fn is_rom_member_name(name: &str) -> bool {
+    matches!(
+        Path::new(name)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase()),
+        Some(ext) if ROM_EXTENSIONS.contains(&ext.as_str())
+    )
+}
+
+fn load_first_rom_from_zip(path: &Path) -> Result<Vec<u8>> {
+    let file = File::open(path).map_err(|source| Error::io(path, source))?;
+    let mut archive = ZipArchive::new(file)
+        .map_err(|error| Error::InvalidRom(format!("failed to read zip archive: {error}")))?;
+
+    for index in 0..archive.len() {
+        let mut member = archive.by_index(index).map_err(|error| {
+            Error::InvalidRom(format!(
+                "failed to read zip member from {}: {error}",
+                path.display()
+            ))
+        })?;
+        if member.is_dir() || !is_rom_member_name(member.name()) {
+            continue;
+        }
+
+        let member_name = member.name().to_owned();
+        let mut rom = Vec::with_capacity(member.size() as usize);
+        member.read_to_end(&mut rom).map_err(|error| {
+            Error::InvalidRom(format!(
+                "failed to extract zip member {member_name} from {}: {error}",
+                path.display()
+            ))
+        })?;
+        debug!(archive = %path.display(), member = %member_name, "loaded ROM from zip archive");
+        return Ok(rom);
+    }
+
+    Err(Error::InvalidRom(format!(
+        "zip archive {} does not contain a supported ROM member",
+        path.display()
+    )))
+}
+
 fn strip_smc_header(bytes: Vec<u8>) -> Result<(Vec<u8>, bool)> {
     if bytes.len() < 0x8000 {
         return Err(Error::InvalidRom("ROM is smaller than 32 KiB".to_owned()));
@@ -182,7 +249,12 @@ fn map_hirom(address: u32) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use std::{fs::File, io::Write};
+    use std::path::Path;
+
     use crate::coprocessor::CoprocessorKind;
+    use tempfile::tempdir;
+    use zip::write::SimpleFileOptions;
 
     use super::{Cartridge, Mapper};
 
@@ -309,6 +381,51 @@ mod tests {
                 .unwrap()
                 .coprocessor_kind(),
             Some(CoprocessorKind::SRtc)
+        );
+    }
+
+    fn write_zip_roms(path: &Path, members: &[(&str, Vec<u8>)]) {
+        let file = File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = SimpleFileOptions::default();
+        for (name, bytes) in members {
+            zip.start_file(name, options).unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn load_reads_supported_rom_from_zip_archive() {
+        let dir = tempdir().unwrap();
+        let zip_path = dir.path().join("bundle.zip");
+        write_zip_roms(
+            &zip_path,
+            &[
+                ("readme.txt", b"ignore me".to_vec()),
+                ("game.smc", make_header(Mapper::LoRom)),
+            ],
+        );
+
+        let cart = Cartridge::load(&zip_path).unwrap();
+
+        assert_eq!(cart.mapper(), Mapper::LoRom);
+        assert_eq!(cart.header().title.trim(), "STARBYTE TEST");
+        assert_eq!(cart.source(), Some(zip_path.as_path()));
+    }
+
+    #[test]
+    fn load_rejects_zip_without_supported_rom_member() {
+        let dir = tempdir().unwrap();
+        let zip_path = dir.path().join("bundle.zip");
+        write_zip_roms(&zip_path, &[("readme.txt", b"ignore me".to_vec())]);
+
+        let error = Cartridge::load(&zip_path).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("does not contain a supported ROM member")
         );
     }
 }

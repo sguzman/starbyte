@@ -3523,6 +3523,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "zip",
 ]
 
 [[package]]
@@ -3536,6 +3537,7 @@ dependencies = [
  "thiserror 2.0.18",
  "toml",
  "tracing",
+ "zip",
 ]
 
 [[package]]

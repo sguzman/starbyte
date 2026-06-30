@@ -115,6 +115,7 @@ impl Spc700 {
             _ => Err(Error::UnsupportedOpcode {
                 cpu: "SPC700",
                 opcode,
+                address: u32::from(opcode_address),
             }),
         }?;
 

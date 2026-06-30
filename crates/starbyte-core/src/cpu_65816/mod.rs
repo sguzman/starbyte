@@ -19,7 +19,18 @@ pub struct Cpu65816 {
 impl Cpu65816 {
     /// Reset to a known power-on-like placeholder state.
     pub fn reset(&mut self) {
-        self.registers = registers::Registers::default();
+        self.registers = registers::Registers {
+            a: 0,
+            x: 0,
+            y: 0,
+            s: 0x01FF,
+            d: 0,
+            pc: 0,
+            pbr: 0,
+            dbr: 0,
+            p: 0x34,
+            emulation: true,
+        };
         self.cycles = 0;
     }
 
@@ -52,36 +63,77 @@ impl Cpu65816 {
         }];
 
         match opcode {
+            0x04 => self.execute_tsb_direct_page(bus, &mut trace),
+            0x05 => self.execute_ora_direct_page(bus, &mut trace),
+            0x08 => self.execute_php(bus, &mut trace),
+            0x10 => self.execute_bpl(bus, &mut trace),
             0xEA => self.execute_nop(bus, &mut trace),
             0x00 => self.execute_brk(bus, &mut trace),
             0x1B => self.execute_tcs(bus, &mut trace),
             0x18 => self.execute_clc(bus, &mut trace),
+            0x1A => self.execute_inc_a(bus, &mut trace),
+            0x20 => self.execute_jsr_absolute(bus, &mut trace),
+            0x22 => self.execute_jsl_long(bus, &mut trace),
+            0x29 => self.execute_and_immediate(bus, &mut trace),
+            0x2C => self.execute_bit_absolute(bus, &mut trace),
+            0x30 => self.execute_bmi(bus, &mut trace),
             0x38 => self.execute_sec(bus, &mut trace),
             0x3B => self.execute_tsc(bus, &mut trace),
+            0x49 => self.execute_eor_immediate(bus, &mut trace),
+            0x4B => self.execute_phk(bus, &mut trace),
             0x58 => self.execute_cli(bus, &mut trace),
+            0x60 => self.execute_rts(bus, &mut trace),
+            0x65 => self.execute_adc_direct_page(bus, &mut trace),
+            0x6B => self.execute_rtl(bus, &mut trace),
             0x5B => self.execute_tcd(bus, &mut trace),
             0x78 => self.execute_sei(bus, &mut trace),
+            0x80 => self.execute_bra(bus, &mut trace),
             0x7B => self.execute_tdc(bus, &mut trace),
+            0x84 => self.execute_sty_direct_page(bus, &mut trace),
+            0x85 => self.execute_sta_direct_page(bus, &mut trace),
+            0x86 => self.execute_stx_direct_page(bus, &mut trace),
             0x88 => self.execute_dey(bus, &mut trace),
+            0x8B => self.execute_phb(bus, &mut trace),
             0xA8 => self.execute_tay(bus, &mut trace),
             0x8A => self.execute_txa(bus, &mut trace),
+            0x8D => self.execute_sta_absolute(bus, &mut trace),
+            0x8E => self.execute_stx_absolute(bus, &mut trace),
+            0x8F => self.execute_sta_long(bus, &mut trace),
             0x9B => self.execute_txy(bus, &mut trace),
+            0x99 => self.execute_sta_absolute_y(bus, &mut trace),
+            0x9C => self.execute_stz_absolute(bus, &mut trace),
+            0x9F => self.execute_sta_long_x(bus, &mut trace),
             0xAA => self.execute_tax(bus, &mut trace),
+            0xA0 => self.execute_ldy_immediate(bus, &mut trace),
+            0xA2 => self.execute_ldx_immediate(bus, &mut trace),
+            0xA5 => self.execute_lda_direct_page(bus, &mut trace),
+            0xA9 => self.execute_lda_immediate(bus, &mut trace),
+            0xAB => self.execute_plb(bus, &mut trace),
             0x98 => self.execute_tya(bus, &mut trace),
+            0xAD => self.execute_lda_absolute(bus, &mut trace),
             0x9A => self.execute_txs(bus, &mut trace),
             0xB8 => self.execute_clv(bus, &mut trace),
+            0xB5 => self.execute_lda_direct_page_x(bus, &mut trace),
+            0xB9 => self.execute_lda_absolute_y(bus, &mut trace),
+            0xBD => self.execute_lda_absolute_x(bus, &mut trace),
             0xBB => self.execute_tyx(bus, &mut trace),
             0xC8 => self.execute_iny(bus, &mut trace),
             0xCA => self.execute_dex(bus, &mut trace),
+            0xCD => self.execute_cmp_absolute(bus, &mut trace),
             0xBA => self.execute_tsx(bus, &mut trace),
             0xC2 => self.execute_rep(bus, &mut trace),
+            0xD0 => self.execute_bne(bus, &mut trace),
             0xD8 => self.execute_cld(bus, &mut trace),
             0xE8 => self.execute_inx(bus, &mut trace),
+            0xE9 => self.execute_sbc_immediate(bus, &mut trace),
             0xE2 => self.execute_sep(bus, &mut trace),
+            0xF0 => self.execute_beq(bus, &mut trace),
+            0xFB => self.execute_xce(bus, &mut trace),
             0xF8 => self.execute_sed(bus, &mut trace),
             _ => Err(Error::UnsupportedOpcode {
                 cpu: "65816",
                 opcode,
+                address: opcode_address,
             }),
         }?;
 
@@ -133,6 +185,26 @@ impl Cpu65816 {
         self.registers.p |= 0x04;
         self.registers.pc = self.registers.pc.wrapping_add(1);
         Ok(())
+    }
+
+    fn execute_bpl<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.execute_branch_relative(bus, trace, self.registers.p & 0x80 == 0)
+    }
+
+    fn execute_bmi<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.execute_branch_relative(bus, trace, self.registers.p & 0x80 != 0)
+    }
+
+    fn execute_bne<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.execute_branch_relative(bus, trace, self.registers.p & 0x02 == 0)
+    }
+
+    fn execute_beq<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.execute_branch_relative(bus, trace, self.registers.p & 0x02 != 0)
+    }
+
+    fn execute_bra<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.execute_branch_relative(bus, trace, true)
     }
 
     fn execute_tay<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
@@ -373,6 +445,506 @@ impl Cpu65816 {
         Ok(())
     }
 
+    fn execute_inc_a<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        if self.accumulator_is_8_bit() {
+            let value = (self.registers.a as u8).wrapping_add(1);
+            self.registers.a = (self.registers.a & 0xFF00) | u16::from(value);
+            self.update_nz_8(value);
+        } else {
+            self.registers.a = self.registers.a.wrapping_add(1);
+            self.update_nz_16(self.registers.a);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_php<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        self.push_stack(bus, trace, self.registers.p)?;
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_phb<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        self.push_stack(bus, trace, self.registers.dbr)?;
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_phk<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        self.push_stack(bus, trace, self.registers.pbr)?;
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_plb<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        let value = self.pull_stack(bus, trace);
+        self.registers.dbr = value;
+        self.update_nz_8(value);
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_jsr_absolute<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let target = self.fetch_operand_u16(bus, trace);
+        let return_pc = self.registers.pc.wrapping_add(2);
+        self.push_stack(bus, trace, (return_pc >> 8) as u8)?;
+        self.push_stack(bus, trace, (return_pc & 0x00FF) as u8)?;
+        self.registers.pc = target;
+        Ok(())
+    }
+
+    fn execute_jsl_long<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        let target = self.fetch_operand_u24(bus, trace);
+        let return_pc = self.registers.pc.wrapping_add(3);
+        self.push_stack(bus, trace, self.registers.pbr)?;
+        self.push_stack(bus, trace, (return_pc >> 8) as u8)?;
+        self.push_stack(bus, trace, (return_pc & 0x00FF) as u8)?;
+        self.registers.pc = target as u16;
+        self.registers.pbr = (target >> 16) as u8;
+        Ok(())
+    }
+
+    fn execute_rts<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        let low = self.pull_stack(bus, trace);
+        let high = self.pull_stack(bus, trace);
+        self.registers.pc = u16::from_le_bytes([low, high]).wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_rtl<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        let low = self.pull_stack(bus, trace);
+        let high = self.pull_stack(bus, trace);
+        let bank = self.pull_stack(bus, trace);
+        self.registers.pc = u16::from_le_bytes([low, high]).wrapping_add(1);
+        self.registers.pbr = bank;
+        Ok(())
+    }
+
+    fn execute_lda_immediate<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        if self.accumulator_is_8_bit() {
+            let value = self.push_read_trace(bus, trace, self.fetch_address(1));
+            self.registers.a = (self.registers.a & 0xFF00) | u16::from(value);
+            self.update_nz_8(value);
+            self.registers.pc = self.registers.pc.wrapping_add(2);
+        } else {
+            let value = self.fetch_operand_u16(bus, trace);
+            self.registers.a = value;
+            self.update_nz_16(value);
+            self.registers.pc = self.registers.pc.wrapping_add(3);
+        }
+        Ok(())
+    }
+
+    fn execute_ldx_immediate<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        if self.index_registers_are_8_bit() {
+            let value = self.push_read_trace(bus, trace, self.fetch_address(1));
+            self.registers.x = u16::from(value);
+            self.update_nz_8(value);
+            self.registers.pc = self.registers.pc.wrapping_add(2);
+        } else {
+            let value = self.fetch_operand_u16(bus, trace);
+            self.registers.x = value;
+            self.update_nz_16(value);
+            self.registers.pc = self.registers.pc.wrapping_add(3);
+        }
+        Ok(())
+    }
+
+    fn execute_ldy_immediate<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        if self.index_registers_are_8_bit() {
+            let value = self.push_read_trace(bus, trace, self.fetch_address(1));
+            self.registers.y = u16::from(value);
+            self.update_nz_8(value);
+            self.registers.pc = self.registers.pc.wrapping_add(2);
+        } else {
+            let value = self.fetch_operand_u16(bus, trace);
+            self.registers.y = value;
+            self.update_nz_16(value);
+            self.registers.pc = self.registers.pc.wrapping_add(3);
+        }
+        Ok(())
+    }
+
+    fn execute_lda_direct_page<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_address(operand);
+        self.load_accumulator_from_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_lda_direct_page_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self
+            .direct_page_address(operand)
+            .wrapping_add(u32::from(self.registers.x & 0x00FF));
+        self.load_accumulator_from_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_lda_absolute<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let address = self.absolute_address(self.fetch_operand_u16(bus, trace));
+        self.load_accumulator_from_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_lda_absolute_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let base = self.fetch_operand_u16(bus, trace);
+        let address = self.absolute_address(base.wrapping_add(self.registers.x));
+        self.load_accumulator_from_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_lda_absolute_y<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let base = self.fetch_operand_u16(bus, trace);
+        let address = self.absolute_address(base.wrapping_add(self.registers.y));
+        self.load_accumulator_from_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_sta_direct_page<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_address(operand);
+        self.store_accumulator_to_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_stx_direct_page<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_address(operand);
+        self.store_index_x_to_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_sty_direct_page<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_address(operand);
+        self.store_index_y_to_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_sta_absolute<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let address = self.absolute_address(self.fetch_operand_u16(bus, trace));
+        self.store_accumulator_to_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_stx_absolute<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let address = self.absolute_address(self.fetch_operand_u16(bus, trace));
+        self.store_index_x_to_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_sta_absolute_y<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let base = self.fetch_operand_u16(bus, trace);
+        let address = self.absolute_address(base.wrapping_add(self.registers.y));
+        self.store_accumulator_to_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_sta_long<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        let address = self.fetch_operand_u24(bus, trace);
+        self.store_accumulator_to_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(4);
+        Ok(())
+    }
+
+    fn execute_sta_long_x<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        let address = self
+            .fetch_operand_u24(bus, trace)
+            .wrapping_add(u32::from(self.registers.x));
+        self.store_accumulator_to_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(4);
+        Ok(())
+    }
+
+    fn execute_stz_absolute<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let address = self.absolute_address(self.fetch_operand_u16(bus, trace));
+        self.store_zero_to_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_ora_direct_page<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_address(operand);
+        if self.accumulator_is_8_bit() {
+            let value = self.read_u8_trace(bus, trace, address);
+            let result = (self.registers.a as u8) | value;
+            self.registers.a = (self.registers.a & 0xFF00) | u16::from(result);
+            self.update_nz_8(result);
+        } else {
+            let value = self.read_u16_trace(bus, trace, address);
+            self.registers.a |= value;
+            self.update_nz_16(self.registers.a);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_and_immediate<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        if self.accumulator_is_8_bit() {
+            let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+            let value = (self.registers.a as u8) & operand;
+            self.registers.a = (self.registers.a & 0xFF00) | u16::from(value);
+            self.update_nz_8(value);
+            self.registers.pc = self.registers.pc.wrapping_add(2);
+        } else {
+            let operand = self.fetch_operand_u16(bus, trace);
+            self.registers.a &= operand;
+            self.update_nz_16(self.registers.a);
+            self.registers.pc = self.registers.pc.wrapping_add(3);
+        }
+        Ok(())
+    }
+
+    fn execute_eor_immediate<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        if self.accumulator_is_8_bit() {
+            let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+            let value = (self.registers.a as u8) ^ operand;
+            self.registers.a = (self.registers.a & 0xFF00) | u16::from(value);
+            self.update_nz_8(value);
+            self.registers.pc = self.registers.pc.wrapping_add(2);
+        } else {
+            let operand = self.fetch_operand_u16(bus, trace);
+            self.registers.a ^= operand;
+            self.update_nz_16(self.registers.a);
+            self.registers.pc = self.registers.pc.wrapping_add(3);
+        }
+        Ok(())
+    }
+
+    fn execute_adc_direct_page<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_address(operand);
+        if self.accumulator_is_8_bit() {
+            let lhs = self.registers.a as u8;
+            let rhs = self.read_u8_trace(bus, trace, address);
+            let carry = u8::from(self.registers.p & 0x01 != 0);
+            let (tmp, carry1) = lhs.overflowing_add(rhs);
+            let (result, carry2) = tmp.overflowing_add(carry);
+            self.registers.a = (self.registers.a & 0xFF00) | u16::from(result);
+            self.set_carry(carry1 || carry2);
+            self.update_nz_8(result);
+        } else {
+            let lhs = self.registers.a;
+            let rhs = self.read_u16_trace(bus, trace, address);
+            let carry = u16::from(self.registers.p & 0x01 != 0);
+            let (tmp, carry1) = lhs.overflowing_add(rhs);
+            let (result, carry2) = tmp.overflowing_add(carry);
+            self.registers.a = result;
+            self.set_carry(carry1 || carry2);
+            self.update_nz_16(result);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_sbc_immediate<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        if self.accumulator_is_8_bit() {
+            let rhs = self.push_read_trace(bus, trace, self.fetch_address(1));
+            let lhs = self.registers.a as u8;
+            let borrow = u8::from(self.registers.p & 0x01 == 0);
+            let (tmp, borrow1) = lhs.overflowing_sub(rhs);
+            let (result, borrow2) = tmp.overflowing_sub(borrow);
+            self.registers.a = (self.registers.a & 0xFF00) | u16::from(result);
+            self.set_carry(!(borrow1 || borrow2));
+            self.update_nz_8(result);
+            self.registers.pc = self.registers.pc.wrapping_add(2);
+        } else {
+            let rhs = self.fetch_operand_u16(bus, trace);
+            let lhs = self.registers.a;
+            let borrow = u16::from(self.registers.p & 0x01 == 0);
+            let (tmp, borrow1) = lhs.overflowing_sub(rhs);
+            let (result, borrow2) = tmp.overflowing_sub(borrow);
+            self.registers.a = result;
+            self.set_carry(!(borrow1 || borrow2));
+            self.update_nz_16(result);
+            self.registers.pc = self.registers.pc.wrapping_add(3);
+        }
+        Ok(())
+    }
+
+    fn execute_xce<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        let carry = (self.registers.p & 0x01) != 0;
+        self.set_carry(self.registers.emulation);
+        self.registers.emulation = carry;
+        if self.registers.emulation {
+            self.registers.p |= 0x30;
+            self.registers.x &= 0x00FF;
+            self.registers.y &= 0x00FF;
+            self.registers.s = 0x0100 | (self.registers.s & 0x00FF);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_tsb_direct_page<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_address(operand);
+        if self.accumulator_is_8_bit() {
+            let value = self.read_u8_trace(bus, trace, address);
+            self.set_zero((value & self.registers.a as u8) == 0);
+            self.write_u8_trace(bus, trace, address, value | self.registers.a as u8);
+        } else {
+            let value = self.read_u16_trace(bus, trace, address);
+            self.set_zero((value & self.registers.a) == 0);
+            self.write_u16_trace(bus, trace, address, value | self.registers.a);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_bit_absolute<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let address = self.absolute_address(self.fetch_operand_u16(bus, trace));
+        if self.accumulator_is_8_bit() {
+            let value = self.read_u8_trace(bus, trace, address);
+            self.set_zero((value & self.registers.a as u8) == 0);
+            self.set_negative(value & 0x80 != 0);
+            self.set_overflow(value & 0x40 != 0);
+        } else {
+            let value = self.read_u16_trace(bus, trace, address);
+            self.set_zero((value & self.registers.a) == 0);
+            self.set_negative(value & 0x8000 != 0);
+            self.set_overflow(value & 0x4000 != 0);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_cmp_absolute<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let address = self.absolute_address(self.fetch_operand_u16(bus, trace));
+        if self.accumulator_is_8_bit() {
+            let lhs = self.registers.a as u8;
+            let rhs = self.read_u8_trace(bus, trace, address);
+            let result = lhs.wrapping_sub(rhs);
+            self.set_carry(lhs >= rhs);
+            self.update_nz_8(result);
+        } else {
+            let lhs = self.registers.a;
+            let rhs = self.read_u16_trace(bus, trace, address);
+            let result = lhs.wrapping_sub(rhs);
+            self.set_carry(lhs >= rhs);
+            self.update_nz_16(result);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
     fn execute_brk<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
         if self.registers.emulation {
             return Err(Error::Unimplemented("65816 BRK emulation mode"));
@@ -420,7 +992,7 @@ impl Cpu65816 {
         trace: &mut Vec<BusEvent>,
         value: u8,
     ) -> Result<()> {
-        let address = u32::from(self.registers.s);
+        let address = u32::from(self.stack_address());
         bus.write(address, value);
         trace.push(BusEvent {
             address,
@@ -430,6 +1002,19 @@ impl Cpu65816 {
         });
         self.registers.s = self.registers.s.wrapping_sub(1);
         Ok(())
+    }
+
+    fn pull_stack<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> u8 {
+        self.registers.s = self.registers.s.wrapping_add(1);
+        let address = u32::from(self.stack_address());
+        let value = bus.read(address);
+        trace.push(BusEvent {
+            address,
+            value,
+            access: AccessKind::Read,
+            cycle: trace.len() as u64,
+        });
+        value
     }
 
     fn push_read_trace<B: Bus>(
@@ -450,6 +1035,168 @@ impl Cpu65816 {
 
     fn fetch_address(&self, offset: u16) -> Address {
         (u32::from(self.registers.pbr) << 16) | u32::from(self.registers.pc.wrapping_add(offset))
+    }
+
+    fn fetch_operand_u16<B: Bus>(&self, bus: &mut B, trace: &mut Vec<BusEvent>) -> u16 {
+        let low = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let high = self.push_read_trace(bus, trace, self.fetch_address(2));
+        u16::from_le_bytes([low, high])
+    }
+
+    fn fetch_operand_u24<B: Bus>(&self, bus: &mut B, trace: &mut Vec<BusEvent>) -> u32 {
+        let low = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let high = self.push_read_trace(bus, trace, self.fetch_address(2));
+        let bank = self.push_read_trace(bus, trace, self.fetch_address(3));
+        u32::from(low) | (u32::from(high) << 8) | (u32::from(bank) << 16)
+    }
+
+    fn direct_page_address(&self, operand: u8) -> Address {
+        u32::from(self.registers.d.wrapping_add(u16::from(operand)))
+    }
+
+    fn absolute_address(&self, operand: u16) -> Address {
+        (u32::from(self.registers.dbr) << 16) | u32::from(operand)
+    }
+
+    fn stack_address(&self) -> u16 {
+        if self.registers.emulation {
+            0x0100 | (self.registers.s & 0x00FF)
+        } else {
+            self.registers.s
+        }
+    }
+
+    fn execute_branch_relative<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        condition: bool,
+    ) -> Result<()> {
+        let offset = self.push_read_trace(bus, trace, self.fetch_address(1)) as i8;
+        let next = self.registers.pc.wrapping_add(2);
+        self.registers.pc = if condition {
+            next.wrapping_add_signed(i16::from(offset))
+        } else {
+            next
+        };
+        Ok(())
+    }
+
+    fn read_u8_trace<B: Bus>(
+        &self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        address: Address,
+    ) -> u8 {
+        self.push_read_trace(bus, trace, address)
+    }
+
+    fn read_u16_trace<B: Bus>(
+        &self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        address: Address,
+    ) -> u16 {
+        let low = self.read_u8_trace(bus, trace, address);
+        let high = self.read_u8_trace(bus, trace, address.wrapping_add(1));
+        u16::from_le_bytes([low, high])
+    }
+
+    fn write_u8_trace<B: Bus>(
+        &self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        address: Address,
+        value: u8,
+    ) {
+        bus.write(address, value);
+        trace.push(BusEvent {
+            address,
+            value,
+            access: AccessKind::Write,
+            cycle: trace.len() as u64,
+        });
+    }
+
+    fn write_u16_trace<B: Bus>(
+        &self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        address: Address,
+        value: u16,
+    ) {
+        let [low, high] = value.to_le_bytes();
+        self.write_u8_trace(bus, trace, address, low);
+        self.write_u8_trace(bus, trace, address.wrapping_add(1), high);
+    }
+
+    fn load_accumulator_from_address<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        address: Address,
+    ) {
+        if self.accumulator_is_8_bit() {
+            let value = self.read_u8_trace(bus, trace, address);
+            self.registers.a = (self.registers.a & 0xFF00) | u16::from(value);
+            self.update_nz_8(value);
+        } else {
+            let value = self.read_u16_trace(bus, trace, address);
+            self.registers.a = value;
+            self.update_nz_16(value);
+        }
+    }
+
+    fn store_accumulator_to_address<B: Bus>(
+        &self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        address: Address,
+    ) {
+        if self.accumulator_is_8_bit() {
+            self.write_u8_trace(bus, trace, address, self.registers.a as u8);
+        } else {
+            self.write_u16_trace(bus, trace, address, self.registers.a);
+        }
+    }
+
+    fn store_index_x_to_address<B: Bus>(
+        &self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        address: Address,
+    ) {
+        if self.index_registers_are_8_bit() {
+            self.write_u8_trace(bus, trace, address, self.registers.x as u8);
+        } else {
+            self.write_u16_trace(bus, trace, address, self.registers.x);
+        }
+    }
+
+    fn store_index_y_to_address<B: Bus>(
+        &self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        address: Address,
+    ) {
+        if self.index_registers_are_8_bit() {
+            self.write_u8_trace(bus, trace, address, self.registers.y as u8);
+        } else {
+            self.write_u16_trace(bus, trace, address, self.registers.y);
+        }
+    }
+
+    fn store_zero_to_address<B: Bus>(
+        &self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        address: Address,
+    ) {
+        if self.accumulator_is_8_bit() {
+            self.write_u8_trace(bus, trace, address, 0);
+        } else {
+            self.write_u16_trace(bus, trace, address, 0);
+        }
     }
 
     fn accumulator_is_8_bit(&self) -> bool {
@@ -477,6 +1224,38 @@ impl Cpu65816 {
         }
         if value == 0 {
             self.registers.p |= 0x02;
+        }
+    }
+
+    fn set_carry(&mut self, enabled: bool) {
+        if enabled {
+            self.registers.p |= 0x01;
+        } else {
+            self.registers.p &= !0x01;
+        }
+    }
+
+    fn set_zero(&mut self, enabled: bool) {
+        if enabled {
+            self.registers.p |= 0x02;
+        } else {
+            self.registers.p &= !0x02;
+        }
+    }
+
+    fn set_overflow(&mut self, enabled: bool) {
+        if enabled {
+            self.registers.p |= 0x40;
+        } else {
+            self.registers.p &= !0x40;
+        }
+    }
+
+    fn set_negative(&mut self, enabled: bool) {
+        if enabled {
+            self.registers.p |= 0x80;
+        } else {
+            self.registers.p &= !0x80;
         }
     }
 }

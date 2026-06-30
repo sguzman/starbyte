@@ -249,8 +249,8 @@ fn map_hirom(address: u32) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, io::Write};
     use std::path::Path;
+    use std::{fs::File, io::Write};
 
     use crate::coprocessor::CoprocessorKind;
     use tempfile::tempdir;

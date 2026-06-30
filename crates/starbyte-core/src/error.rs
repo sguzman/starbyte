@@ -48,12 +48,14 @@ pub enum Error {
     #[error("feature not implemented yet: {0}")]
     Unimplemented(&'static str),
     /// CPU opcode is not implemented by the current core.
-    #[error("unsupported opcode for {cpu}: 0x{opcode:02X}")]
+    #[error("unsupported opcode for {cpu}: 0x{opcode:02X} at 0x{address:06X}")]
     UnsupportedOpcode {
         /// CPU identifier.
         cpu: &'static str,
         /// Opcode byte.
         opcode: u8,
+        /// CPU-visible instruction address.
+        address: u32,
     },
     /// State or data serialization failure.
     #[error("serialization error: {0}")]

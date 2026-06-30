@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use tracing::{debug, trace};
 
+use crate::apu::Apu;
 use crate::Result;
 use crate::bus::{Address, Bus};
 use crate::cartridge::Cartridge;
@@ -24,7 +25,8 @@ pub struct SystemBus {
     save_ram: Vec<u8>,
     wram: Vec<u8>,
     ppu: Ppu,
-    apu_io: Vec<u8>,
+    cpu_to_apu_io: Vec<u8>,
+    apu_to_cpu_io: Vec<u8>,
     dma: DmaController,
     timing: TimingState,
     open_bus: u8,
@@ -43,7 +45,8 @@ impl Default for SystemBus {
             save_ram: Vec::new(),
             wram: vec![0; WRAM_SIZE],
             ppu: Ppu::default(),
-            apu_io: vec![0; APU_IO_PORT_COUNT],
+            cpu_to_apu_io: vec![0; APU_IO_PORT_COUNT],
+            apu_to_cpu_io: vec![0; APU_IO_PORT_COUNT],
             dma: DmaController::default(),
             timing: TimingState::default(),
             open_bus: 0,
@@ -79,7 +82,8 @@ impl SystemBus {
             coprocessor.reset();
         }
         self.ppu = Ppu::default();
-        self.apu_io.fill(0);
+        self.cpu_to_apu_io.fill(0);
+        self.apu_to_cpu_io.fill(0);
         self.dma = DmaController::default();
         self.timing = TimingState::default();
         self.open_bus = 0;
@@ -198,6 +202,20 @@ impl SystemBus {
     #[must_use]
     pub const fn irq_enabled(&self) -> bool {
         self.nmitimen & 0x30 != 0
+    }
+
+    /// Copy CPU-visible APU output ports from the APU runtime into the system bus view.
+    pub fn sync_apu_ports_from_runtime(&mut self, apu: &Apu) {
+        for port in 0..APU_IO_PORT_COUNT {
+            self.apu_to_cpu_io[port] = apu.read_apu_port(port).unwrap_or(0);
+        }
+    }
+
+    /// Copy CPU-written APU input ports from the system bus view into the APU runtime.
+    pub fn sync_apu_ports_to_runtime(&self, apu: &mut Apu) {
+        for port in 0..APU_IO_PORT_COUNT {
+            let _ = apu.write_cpu_port(port, self.cpu_to_apu_io[port]);
+        }
     }
 }
 
@@ -436,7 +454,7 @@ impl SystemBus {
 
         match register {
             0x2100..=0x213F => Some(self.ppu.read_register(register)),
-            0x2140..=0x2143 => Some(self.apu_io[usize::from(register - 0x2140)]),
+            0x2140..=0x2143 => Some(self.apu_to_cpu_io[usize::from(register - 0x2140)]),
             0x2180 => {
                 let value = self.wram[self.wram_address as usize % WRAM_SIZE];
                 self.wram_address = (self.wram_address + 1) & 0x1_FFFF;
@@ -480,7 +498,7 @@ impl SystemBus {
                 Some(())
             }
             0x2140..=0x2143 => {
-                self.apu_io[usize::from(register - 0x2140)] = value;
+                self.cpu_to_apu_io[usize::from(register - 0x2140)] = value;
                 Some(())
             }
             0x2180 => {

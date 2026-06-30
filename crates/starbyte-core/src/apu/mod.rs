@@ -71,7 +71,11 @@ impl Apu {
     pub fn reset(&mut self) {
         self.spc700.reset();
         self.cpu_to_apu_ports = [0; 4];
-        self.apu_to_cpu_ports = [0; 4];
+        self.apu_to_cpu_ports = if self.ipl_rom.is_some() {
+            [0xAA, 0xBB, 0x00, 0x00]
+        } else {
+            [0; 4]
+        };
         self.spc700_steps = 0;
     }
 
@@ -126,6 +130,7 @@ impl Apu {
         for _ in 0..(master_cycles / 6) {
             self.step_spc700();
         }
+        self.advance_bootstrap_handshake();
     }
 
     /// Write one CPU-to-APU communication port byte.
@@ -176,6 +181,27 @@ impl Apu {
             configured_ipl_path: self.configured_ipl_path.clone(),
             spc700_steps: self.spc700_steps,
         }
+    }
+
+    fn advance_bootstrap_handshake(&mut self) {
+        if self.ipl_rom.is_none() {
+            return;
+        }
+
+        if self.apu_to_cpu_ports[0] == 0xAA && self.apu_to_cpu_ports[1] == 0xBB {
+            if self.cpu_to_apu_ports[0] == 0xCC {
+                self.apu_to_cpu_ports[0] = 0xCC;
+                self.apu_to_cpu_ports[1] = self.cpu_to_apu_ports[1];
+                self.apu_to_cpu_ports[2] = self.cpu_to_apu_ports[2];
+                self.apu_to_cpu_ports[3] = self.cpu_to_apu_ports[3];
+            }
+            return;
+        }
+
+        // Keep the bootstrap upload handshake moving even while the full SPC700 IPL program
+        // is not yet modeled. The CPU-side upload loop expects port acknowledgements to
+        // advance with the values it writes.
+        self.apu_to_cpu_ports = self.cpu_to_apu_ports;
     }
 }
 

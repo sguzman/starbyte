@@ -74,7 +74,9 @@ impl Cpu65816 {
             0x1A => self.execute_inc_a(bus, &mut trace),
             0x20 => self.execute_jsr_absolute(bus, &mut trace),
             0x22 => self.execute_jsl_long(bus, &mut trace),
+            0x28 => self.execute_plp(bus, &mut trace),
             0x29 => self.execute_and_immediate(bus, &mut trace),
+            0x2A => self.execute_rol_a(bus, &mut trace),
             0x2C => self.execute_bit_absolute(bus, &mut trace),
             0x30 => self.execute_bmi(bus, &mut trace),
             0x38 => self.execute_sec(bus, &mut trace),
@@ -85,7 +87,9 @@ impl Cpu65816 {
             0x58 => self.execute_cli(bus, &mut trace),
             0x60 => self.execute_rts(bus, &mut trace),
             0x65 => self.execute_adc_direct_page(bus, &mut trace),
+            0x68 => self.execute_pla(bus, &mut trace),
             0x69 => self.execute_adc_immediate(bus, &mut trace),
+            0x70 => self.execute_bvs(bus, &mut trace),
             0x6B => self.execute_rtl(bus, &mut trace),
             0x5B => self.execute_tcd(bus, &mut trace),
             0x78 => self.execute_sei(bus, &mut trace),
@@ -209,6 +213,10 @@ impl Cpu65816 {
 
     fn execute_bra<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
         self.execute_branch_relative(bus, trace, true)
+    }
+
+    fn execute_bvs<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.execute_branch_relative(bus, trace, self.registers.p & 0x40 != 0)
     }
 
     fn execute_tay<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
@@ -532,6 +540,37 @@ impl Cpu65816 {
         let bank = self.pull_stack(bus, trace);
         self.registers.pc = u16::from_le_bytes([low, high]).wrapping_add(1);
         self.registers.pbr = bank;
+        Ok(())
+    }
+
+    fn execute_plp<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        let mut value = self.pull_stack(bus, trace);
+        if self.registers.emulation {
+            value |= 0x30;
+        }
+        self.registers.p = value;
+        if self.index_registers_are_8_bit() {
+            self.registers.x &= 0x00FF;
+            self.registers.y &= 0x00FF;
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_pla<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        if self.accumulator_is_8_bit() {
+            let value = self.pull_stack(bus, trace);
+            self.registers.a = (self.registers.a & 0xFF00) | u16::from(value);
+            self.update_nz_8(value);
+        } else {
+            let low = self.pull_stack(bus, trace);
+            let high = self.pull_stack(bus, trace);
+            self.registers.a = u16::from_le_bytes([low, high]);
+            self.update_nz_16(self.registers.a);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(1);
         Ok(())
     }
 
@@ -1006,6 +1045,27 @@ impl Cpu65816 {
             self.set_overflow(value & 0x4000 != 0);
         }
         self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_rol_a<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        if self.accumulator_is_8_bit() {
+            let carry_in = u8::from(self.registers.p & 0x01 != 0);
+            let value = self.registers.a as u8;
+            self.set_carry(value & 0x80 != 0);
+            let result = (value << 1) | carry_in;
+            self.registers.a = (self.registers.a & 0xFF00) | u16::from(result);
+            self.update_nz_8(result);
+        } else {
+            let carry_in = u16::from(self.registers.p & 0x01 != 0);
+            let value = self.registers.a;
+            self.set_carry(value & 0x8000 != 0);
+            let result = (value << 1) | carry_in;
+            self.registers.a = result;
+            self.update_nz_16(result);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(1);
         Ok(())
     }
 

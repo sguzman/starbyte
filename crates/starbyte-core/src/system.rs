@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 use tracing::{debug, trace};
 
-use crate::apu::Apu;
 use crate::Result;
+use crate::apu::Apu;
 use crate::bus::{Address, Bus};
 use crate::cartridge::Cartridge;
 use crate::coprocessor::Coprocessor;
@@ -958,6 +958,18 @@ mod tests {
         bus.write(0x00420B, 0x01);
 
         assert_eq!(&bus.ppu().cgram()[..2], &[0x1F, 0x00]);
+    }
+
+    #[test]
+    fn cpu_visible_vram_ports_store_tilemap_data() {
+        let mut bus = SystemBus::default();
+        bus.install_cartridge(make_cart(Mapper::LoRom));
+        bus.write(0x002116, 0x00);
+        bus.write(0x002117, 0x00);
+        bus.write(0x002118, 0x34);
+        bus.write(0x002119, 0x12);
+
+        assert_eq!(&bus.ppu().vram()[..2], &[0x34, 0x12]);
     }
 
     #[test]

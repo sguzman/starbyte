@@ -5,7 +5,7 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::cartridge::Cartridge;
 use crate::emulator::EmulatorBuilder;
@@ -38,6 +38,10 @@ pub struct ExpectedOutcome {
     pub frame: Option<u64>,
     /// Expected CPU program counter after execution.
     pub cpu_pc: Option<u16>,
+    /// Expected CPU program counter range after execution.
+    pub cpu_pc_range: Option<[u16; 2]>,
+    /// Expected program bank after execution.
+    pub cpu_pbr: Option<u8>,
     /// Expected framebuffer hash.
     pub frame_hash: Option<u64>,
     /// Expected save-RAM length.
@@ -46,6 +50,57 @@ pub struct ExpectedOutcome {
     pub min_apu_steps: Option<u64>,
     /// Optional first pixel RGBA value.
     pub first_pixel_rgba: Option<[u8; 4]>,
+    /// Optional framebuffer sample expectations.
+    pub pixel_samples: Vec<PixelSampleExpectation>,
+}
+
+/// Expected RGBA value for one framebuffer location.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PixelSampleExpectation {
+    /// Pixel X coordinate.
+    pub x: usize,
+    /// Pixel Y coordinate.
+    pub y: usize,
+    /// Expected RGBA bytes.
+    pub rgba: [u8; 4],
+}
+
+/// Captured evidence from one fixture execution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FixtureRunReport {
+    /// Human-readable fixture name.
+    pub name: String,
+    /// Loaded ROM path.
+    pub rom: String,
+    /// Requested frame count.
+    pub frames_requested: u32,
+    /// Completed frame count.
+    pub frame_counter: u64,
+    /// Final CPU program counter.
+    pub cpu_pc: u16,
+    /// Final CPU program bank.
+    pub cpu_pbr: u8,
+    /// Final framebuffer hash.
+    pub frame_hash: u64,
+    /// First RGBA pixel.
+    pub first_pixel_rgba: [u8; 4],
+    /// APU step count.
+    pub apu_steps: u64,
+    /// Observed host reads requested by the fixture.
+    pub observed_reads: Vec<(u32, u8)>,
+    /// Sampled framebuffer pixels.
+    pub sampled_pixels: Vec<PixelSampleExpectation>,
+}
+
+/// Detailed result from one fixture execution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FixtureEvaluation {
+    /// Human-readable fixture name.
+    pub name: String,
+    /// Failure reasons, if any.
+    pub reasons: Vec<String>,
+    /// Captured execution evidence.
+    pub report: FixtureRunReport,
 }
 
 /// Load every ROM regression file in a suite directory.
@@ -88,20 +143,20 @@ pub fn run_with_current_core(
     assets: &AssetConfig,
     max_failures: usize,
 ) -> RunSummary {
+    let evaluations = run_with_current_core_detailed(fixtures, assets);
     let mut passed = 0;
     let mut failures = Vec::new();
 
-    for fixture in fixtures {
-        let reasons = evaluate_fixture(fixture, assets);
-        if reasons.is_empty() {
+    for evaluation in evaluations {
+        if evaluation.reasons.is_empty() {
             passed += 1;
             continue;
         }
 
         if failures.len() < max_failures {
             failures.push(VectorFailure {
-                label: fixture.name.clone(),
-                reasons,
+                label: evaluation.name,
+                reasons: evaluation.reasons,
             });
         }
     }
@@ -113,6 +168,18 @@ pub fn run_with_current_core(
         failed: fixtures.len().saturating_sub(passed),
         failures,
     }
+}
+
+/// Execute the suite and return detailed reports for each fixture.
+#[must_use]
+pub fn run_with_current_core_detailed(
+    fixtures: &[RomFixture],
+    assets: &AssetConfig,
+) -> Vec<FixtureEvaluation> {
+    fixtures
+        .iter()
+        .map(|fixture| evaluate_fixture(fixture, assets))
+        .collect()
 }
 
 /// Resolve all suite file paths for deterministic iteration.
@@ -136,12 +203,30 @@ pub fn discover_suite_files(dir: impl AsRef<Path>) -> Vec<PathBuf> {
     paths
 }
 
-fn evaluate_fixture(fixture: &RomFixture, assets: &AssetConfig) -> Vec<String> {
+fn evaluate_fixture(fixture: &RomFixture, assets: &AssetConfig) -> FixtureEvaluation {
     let mut reasons = Vec::new();
 
     let cartridge = match Cartridge::load(&fixture.rom) {
         Ok(cartridge) => cartridge,
-        Err(error) => return vec![error.to_string()],
+        Err(error) => {
+            return FixtureEvaluation {
+                name: fixture.name.clone(),
+                reasons: vec![error.to_string()],
+                report: FixtureRunReport {
+                    name: fixture.name.clone(),
+                    rom: fixture.rom.display().to_string(),
+                    frames_requested: fixture.frames,
+                    frame_counter: 0,
+                    cpu_pc: 0,
+                    cpu_pbr: 0,
+                    frame_hash: 0,
+                    first_pixel_rgba: [0, 0, 0, 0],
+                    apu_steps: 0,
+                    observed_reads: Vec::new(),
+                    sampled_pixels: Vec::new(),
+                },
+            };
+        }
     };
 
     let mut emulator = EmulatorBuilder::new().assets(assets.clone()).build();
@@ -154,12 +239,20 @@ fn evaluate_fixture(fixture: &RomFixture, assets: &AssetConfig) -> Vec<String> {
 
     for _ in 0..fixture.frames {
         if let Err(error) = emulator.run_until_frame() {
-            return vec![error.to_string()];
+            let report = build_report(fixture, &mut emulator);
+            reasons.push(error.to_string());
+            return FixtureEvaluation {
+                name: fixture.name.clone(),
+                reasons,
+                report,
+            };
         }
     }
 
+    let mut observed_reads = Vec::with_capacity(fixture.expected_reads.len());
     for (address, expected) in &fixture.expected_reads {
         let actual = emulator.host_read_u8(*address);
+        observed_reads.push((*address, actual));
         if actual != *expected {
             reasons.push(format!(
                 "host read mismatch at 0x{address:06X}: expected 0x{expected:02X}, got 0x{actual:02X}"
@@ -183,6 +276,24 @@ fn evaluate_fixture(fixture: &RomFixture, assets: &AssetConfig) -> Vec<String> {
         reasons.push(format!(
             "cpu pc mismatch: expected 0x{expected_pc:04X}, got 0x{:04X}",
             emulator.cpu_registers().pc
+        ));
+    }
+
+    if let Some([start, end]) = fixture.expected.cpu_pc_range {
+        let actual = emulator.cpu_registers().pc;
+        if !(start..=end).contains(&actual) {
+            reasons.push(format!(
+                "cpu pc range mismatch: expected 0x{actual:04X} to be inside 0x{start:04X}..=0x{end:04X}"
+            ));
+        }
+    }
+
+    if let Some(expected_pbr) = fixture.expected.cpu_pbr
+        && emulator.cpu_registers().pbr != expected_pbr
+    {
+        reasons.push(format!(
+            "cpu pbr mismatch: expected 0x{expected_pbr:02X}, got 0x{:02X}",
+            emulator.cpu_registers().pbr
         ));
     }
 
@@ -226,7 +337,74 @@ fn evaluate_fixture(fixture: &RomFixture, assets: &AssetConfig) -> Vec<String> {
         }
     }
 
-    reasons
+    let mut sampled_pixels = Vec::with_capacity(fixture.expected.pixel_samples.len());
+    for sample in &fixture.expected.pixel_samples {
+        let actual = pixel_rgba(emulator.framebuffer(), sample.x, sample.y);
+        sampled_pixels.push(PixelSampleExpectation {
+            x: sample.x,
+            y: sample.y,
+            rgba: actual,
+        });
+        if actual != sample.rgba {
+            reasons.push(format!(
+                "pixel mismatch at ({}, {}): expected {:?}, got {:?}",
+                sample.x, sample.y, sample.rgba, actual
+            ));
+        }
+    }
+
+    FixtureEvaluation {
+        name: fixture.name.clone(),
+        reasons,
+        report: FixtureRunReport {
+            name: fixture.name.clone(),
+            rom: fixture.rom.display().to_string(),
+            frames_requested: fixture.frames,
+            frame_counter: emulator.timing().frame,
+            cpu_pc: emulator.cpu_registers().pc,
+            cpu_pbr: emulator.cpu_registers().pbr,
+            frame_hash: framebuffer_hash(emulator.framebuffer()),
+            first_pixel_rgba: pixel_rgba(emulator.framebuffer(), 0, 0),
+            apu_steps: emulator.apu_status().spc700_steps,
+            observed_reads,
+            sampled_pixels,
+        },
+    }
+}
+
+fn build_report(
+    fixture: &RomFixture,
+    emulator: &mut crate::emulator::Emulator,
+) -> FixtureRunReport {
+    let observed_reads = fixture
+        .expected_reads
+        .iter()
+        .map(|(address, _)| (*address, emulator.host_read_u8(*address)))
+        .collect();
+    let sampled_pixels = fixture
+        .expected
+        .pixel_samples
+        .iter()
+        .map(|sample| PixelSampleExpectation {
+            x: sample.x,
+            y: sample.y,
+            rgba: pixel_rgba(emulator.framebuffer(), sample.x, sample.y),
+        })
+        .collect();
+
+    FixtureRunReport {
+        name: fixture.name.clone(),
+        rom: fixture.rom.display().to_string(),
+        frames_requested: fixture.frames,
+        frame_counter: emulator.timing().frame,
+        cpu_pc: emulator.cpu_registers().pc,
+        cpu_pbr: emulator.cpu_registers().pbr,
+        frame_hash: framebuffer_hash(emulator.framebuffer()),
+        first_pixel_rgba: pixel_rgba(emulator.framebuffer(), 0, 0),
+        apu_steps: emulator.apu_status().spc700_steps,
+        observed_reads,
+        sampled_pixels,
+    }
 }
 
 fn framebuffer_hash(framebuffer: &crate::ppu::FrameBuffer) -> u64 {
@@ -235,6 +413,21 @@ fn framebuffer_hash(framebuffer: &crate::ppu::FrameBuffer) -> u64 {
     framebuffer.height().hash(&mut hasher);
     framebuffer.pixels().hash(&mut hasher);
     hasher.finish()
+}
+
+fn pixel_rgba(framebuffer: &crate::ppu::FrameBuffer, x: usize, y: usize) -> [u8; 4] {
+    if x >= framebuffer.width() || y >= framebuffer.height() {
+        return [0, 0, 0, 0];
+    }
+
+    let offset = (y * framebuffer.width() + x) * 4;
+    let pixels = framebuffer.pixels();
+    [
+        pixels[offset],
+        pixels[offset + 1],
+        pixels[offset + 2],
+        pixels[offset + 3],
+    ]
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -254,10 +447,14 @@ struct RawFixture {
 struct RawExpectedOutcome {
     frame: Option<u64>,
     cpu_pc: Option<u16>,
+    cpu_pc_range: Option<[u16; 2]>,
+    cpu_pbr: Option<u8>,
     frame_hash: Option<u64>,
     save_ram_len: Option<usize>,
     min_apu_steps: Option<u64>,
     first_pixel_rgba: Option<[u8; 4]>,
+    #[serde(default)]
+    pixel_samples: Vec<PixelSampleExpectation>,
 }
 
 impl RawFixture {
@@ -271,10 +468,13 @@ impl RawFixture {
             expected: ExpectedOutcome {
                 frame: self.expected.frame,
                 cpu_pc: self.expected.cpu_pc,
+                cpu_pc_range: self.expected.cpu_pc_range,
+                cpu_pbr: self.expected.cpu_pbr,
                 frame_hash: self.expected.frame_hash,
                 save_ram_len: self.expected.save_ram_len,
                 min_apu_steps: self.expected.min_apu_steps,
                 first_pixel_rgba: self.expected.first_pixel_rgba,
+                pixel_samples: self.expected.pixel_samples,
             },
         }
     }
@@ -296,7 +496,9 @@ mod tests {
     use crate::manifest::AssetConfig;
 
     use super::{
-        discover_suite_files, framebuffer_hash, load_suite, run_with_current_core, summarize,
+        ExpectedOutcome, PixelSampleExpectation, RomFixture, discover_suite_files,
+        framebuffer_hash, load_suite, run_with_current_core, run_with_current_core_detailed,
+        summarize,
     };
 
     fn write_test_rom(path: &Path) {
@@ -393,6 +595,46 @@ mod tests {
         let run = run_with_current_core(&fixtures, &AssetConfig::default(), 8);
         assert_eq!(run.failed, 0);
         assert_eq!(run.passed, 1);
+    }
+
+    #[test]
+    fn detailed_reports_capture_pc_range_and_sampled_pixels() {
+        let dir = tempdir().unwrap();
+        let rom_path = dir.path().join("case.sfc");
+        write_test_rom(&rom_path);
+
+        let fixtures = vec![RomFixture {
+            name: "detailed report".to_owned(),
+            rom: rom_path,
+            frames: 1,
+            setup_writes: vec![(0x002121, 0x00), (0x002122, 0x00), (0x002122, 0x7C)],
+            expected_reads: vec![],
+            expected: ExpectedOutcome {
+                frame: Some(1),
+                cpu_pc: None,
+                cpu_pc_range: Some([0x0000, 0x0000]),
+                cpu_pbr: Some(0x00),
+                frame_hash: None,
+                save_ram_len: Some(2048),
+                min_apu_steps: Some(1),
+                first_pixel_rgba: Some([248, 0, 0, 255]),
+                pixel_samples: vec![PixelSampleExpectation {
+                    x: 0,
+                    y: 0,
+                    rgba: [248, 0, 0, 255],
+                }],
+            },
+        }];
+
+        let evaluations = run_with_current_core_detailed(&fixtures, &AssetConfig::default());
+        assert_eq!(evaluations.len(), 1);
+        assert!(evaluations[0].reasons.is_empty(), "{evaluations:#?}");
+        assert_eq!(evaluations[0].report.cpu_pbr, 0x00);
+        assert_eq!(evaluations[0].report.sampled_pixels.len(), 1);
+        assert_eq!(
+            evaluations[0].report.sampled_pixels[0].rgba,
+            [248, 0, 0, 255]
+        );
     }
 
     #[test]

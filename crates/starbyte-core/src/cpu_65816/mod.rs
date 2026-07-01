@@ -90,6 +90,7 @@ impl Cpu65816 {
             0x68 => self.execute_pla(bus, &mut trace),
             0x69 => self.execute_adc_immediate(bus, &mut trace),
             0x70 => self.execute_bvs(bus, &mut trace),
+            0x74 => self.execute_stz_direct_page_x(bus, &mut trace),
             0x6B => self.execute_rtl(bus, &mut trace),
             0x5B => self.execute_tcd(bus, &mut trace),
             0x78 => self.execute_sei(bus, &mut trace),
@@ -108,6 +109,7 @@ impl Cpu65816 {
             0x9B => self.execute_txy(bus, &mut trace),
             0x99 => self.execute_sta_absolute_y(bus, &mut trace),
             0x9C => self.execute_stz_absolute(bus, &mut trace),
+            0x9E => self.execute_stz_absolute_x(bus, &mut trace),
             0x9F => self.execute_sta_long_x(bus, &mut trace),
             0xAA => self.execute_tax(bus, &mut trace),
             0xA0 => self.execute_ldy_immediate(bus, &mut trace),
@@ -715,9 +717,8 @@ impl Cpu65816 {
         let low = self.read_u8_trace(bus, trace, base);
         let high = self.read_u8_trace(bus, trace, base.wrapping_add(1));
         let bank = self.read_u8_trace(bus, trace, base.wrapping_add(2));
-        let address =
-            (u32::from(low) | (u32::from(high) << 8) | (u32::from(bank) << 16))
-                .wrapping_add(u32::from(self.registers.y));
+        let address = (u32::from(low) | (u32::from(high) << 8) | (u32::from(bank) << 16))
+            .wrapping_add(u32::from(self.registers.y));
         self.load_accumulator_from_address(bus, trace, address);
         self.registers.pc = self.registers.pc.wrapping_add(2);
         Ok(())
@@ -815,6 +816,30 @@ impl Cpu65816 {
         trace: &mut Vec<BusEvent>,
     ) -> Result<()> {
         let address = self.absolute_address(self.fetch_operand_u16(bus, trace));
+        self.store_zero_to_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_stz_direct_page_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_indexed_x_address(operand);
+        self.store_zero_to_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_stz_absolute_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let base = self.fetch_operand_u16(bus, trace);
+        let address = self.absolute_address(base.wrapping_add(self.registers.x));
         self.store_zero_to_address(bus, trace, address);
         self.registers.pc = self.registers.pc.wrapping_add(3);
         Ok(())
@@ -1214,6 +1239,11 @@ impl Cpu65816 {
         u32::from(self.registers.d.wrapping_add(u16::from(operand)))
     }
 
+    fn direct_page_indexed_x_address(&self, operand: u8) -> Address {
+        self.direct_page_address(operand)
+            .wrapping_add(u32::from(self.registers.x))
+    }
+
     fn absolute_address(&self, operand: u16) -> Address {
         (u32::from(self.registers.dbr) << 16) | u32::from(operand)
     }
@@ -1417,5 +1447,86 @@ impl Cpu65816 {
         } else {
             self.registers.p &= !0x80;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use crate::bus::{AccessKind, Address, Bus};
+
+    use super::Cpu65816;
+
+    #[derive(Default)]
+    struct TestBus {
+        bytes: HashMap<Address, u8>,
+    }
+
+    impl TestBus {
+        fn with_bytes(bytes: &[(Address, u8)]) -> Self {
+            let mut map = HashMap::new();
+            for (address, value) in bytes {
+                map.insert(*address, *value);
+            }
+            Self { bytes: map }
+        }
+    }
+
+    impl Bus for TestBus {
+        fn read(&mut self, address: Address) -> u8 {
+            self.bytes.get(&address).copied().unwrap_or(0)
+        }
+
+        fn write(&mut self, address: Address, value: u8) {
+            self.bytes.insert(address, value);
+        }
+    }
+
+    #[test]
+    fn stz_direct_page_x_stores_zero_without_opcode_failure() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.d = 0x0010;
+        cpu.registers.x = 0x0004;
+        cpu.registers.p = 0x00;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x74),
+            (0x008001, 0x20),
+            (0x000034, 0xAA),
+            (0x000035, 0xBB),
+        ]);
+
+        let trace = cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.pc, 0x8002);
+        assert_eq!(bus.read(0x000034), 0x00);
+        assert_eq!(bus.read(0x000035), 0x00);
+        assert!(trace.iter().any(|event| {
+            event.address == 0x000034 && event.access == AccessKind::Write && event.value == 0x00
+        }));
+    }
+
+    #[test]
+    fn stz_absolute_x_uses_indexed_target_address() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.x = 0x0003;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x9E),
+            (0x008001, 0x34),
+            (0x008002, 0x12),
+            (0x001237, 0xFE),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.pc, 0x8003);
+        assert_eq!(bus.read(0x001237), 0x00);
     }
 }

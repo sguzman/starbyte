@@ -462,8 +462,10 @@ fn run_writes_screenshot_report_and_state_artifacts() {
     let report_json: serde_json::Value =
         serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
     assert_eq!(report_json["frame_counter"], 1);
+    assert_eq!(report_json["cpu"]["pbr"], 0);
     assert!(report_json["audio_sample_count"].as_u64().unwrap() > 0);
     assert_eq!(report_json["framebuffer"]["first_pixel_rgba"][3], 255);
+    assert!(report_json["framebuffer"]["hash"].as_u64().unwrap() > 0);
 
     let auto_state = state_dir.join("sample.state.json");
     assert!(auto_state.exists());
@@ -491,6 +493,12 @@ fn rom_regression_run_current_can_dump_artifacts() {
         serde_json::from_slice(&fs::read(artifact_dir.join("summary.json")).unwrap()).unwrap();
     assert_eq!(summary["failed"], 0);
     assert_eq!(summary["passed"], 1);
+
+    let fixture_report: serde_json::Value =
+        serde_json::from_slice(&fs::read(artifact_dir.join("ppu_regression.json")).unwrap())
+            .unwrap();
+    assert_eq!(fixture_report["report"]["frame_counter"], 1);
+    assert_eq!(fixture_report["report"]["cpu_pbr"], 0);
 }
 
 #[test]

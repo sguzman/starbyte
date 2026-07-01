@@ -8,3 +8,4 @@ artifacts
 *.state.json
 *.trace.json
 *.spc700.rom
+.tmp

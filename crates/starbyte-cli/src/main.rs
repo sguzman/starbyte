@@ -566,9 +566,10 @@ fn run_compliance(args: ComplianceArgs, assets: AssetConfig) -> Result<()> {
             artifact_dir,
         } => {
             let fixtures = testing::rom::load_suite(&dir)?;
-            let summary = testing::rom::run_with_current_core(&fixtures, &assets, max_failures);
+            let evaluations = testing::rom::run_with_current_core_detailed(&fixtures, &assets);
+            let summary = build_rom_run_summary(&evaluations, max_failures);
             print_run_summary(&summary);
-            maybe_write_regression_artifacts(&summary, artifact_dir.as_deref())?;
+            maybe_write_regression_artifacts(&summary, &evaluations, artifact_dir.as_deref())?;
             if summary.failed > 0 {
                 anyhow::bail!(
                     "ROM regression failures: {} of {} fixtures failed",
@@ -797,10 +798,15 @@ fn maybe_write_run_report(
         "rom": rom.display().to_string(),
         "frames": frames,
         "frame_counter": emulator.timing().frame,
+        "cpu": {
+            "pc": emulator.cpu_registers().pc,
+            "pbr": emulator.cpu_registers().pbr,
+        },
         "framebuffer": {
             "width": emulator.framebuffer().width(),
             "height": emulator.framebuffer().height(),
             "first_pixel_rgba": first_pixel,
+            "hash": framebuffer_hash(emulator.framebuffer()),
         },
         "audio_sample_count": emulator.audio_samples().samples.len(),
         "apu_steps": emulator.apu_status().spc700_steps,
@@ -812,8 +818,20 @@ fn maybe_write_run_report(
     Ok(())
 }
 
+fn framebuffer_hash(framebuffer: &starbyte_core::ppu::FrameBuffer) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    framebuffer.width().hash(&mut hasher);
+    framebuffer.height().hash(&mut hasher);
+    framebuffer.pixels().hash(&mut hasher);
+    hasher.finish()
+}
+
 fn maybe_write_regression_artifacts(
     summary: &testing::RunSummary,
+    evaluations: &[testing::rom::FixtureEvaluation],
     artifact_dir: Option<&Path>,
 ) -> Result<()> {
     let Some(artifact_dir) = artifact_dir else {
@@ -842,7 +860,44 @@ fn maybe_write_regression_artifacts(
             summary_path.display()
         )
     })?;
+
+    for evaluation in evaluations {
+        let fixture_name = sanitize_file_stem(&evaluation.name);
+        let path = artifact_dir.join(format!("{fixture_name}.json"));
+        std::fs::write(&path, serde_json::to_string_pretty(evaluation)?)
+            .with_context(|| format!("failed to write fixture report to {}", path.display()))?;
+    }
     Ok(())
+}
+
+fn build_rom_run_summary(
+    evaluations: &[testing::rom::FixtureEvaluation],
+    max_failures: usize,
+) -> testing::RunSummary {
+    let mut passed = 0;
+    let mut failures = Vec::new();
+
+    for evaluation in evaluations {
+        if evaluation.reasons.is_empty() {
+            passed += 1;
+            continue;
+        }
+
+        if failures.len() < max_failures {
+            failures.push(testing::VectorFailure {
+                label: evaluation.name.clone(),
+                reasons: evaluation.reasons.clone(),
+            });
+        }
+    }
+
+    testing::RunSummary {
+        suite_name: "ROM regression",
+        total: evaluations.len(),
+        passed,
+        failed: evaluations.len().saturating_sub(passed),
+        failures,
+    }
 }
 
 fn parse_controller_state(input: &str) -> Result<ControllerState> {

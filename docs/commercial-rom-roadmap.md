@@ -16,6 +16,7 @@ This document tracks the compatibility push from bootstrap/test ROM behavior tow
 - [x] Unsupported-opcode errors now include CPU-visible instruction addresses for faster commercial-ROM debugging.
 - [x] `Super Mario World` can complete at least one headless frame with the current bootstrap core.
 - [x] `Super Mario World` can complete a 60-frame headless run with the current bootstrap core.
+- [x] `Super Mario World` can complete a 300-frame headless run with the current bootstrap core.
 - [x] The early SPC/APU startup wait loop is no longer the first blocker after the APU port/handshake fixes.
 - [x] Core emulator regression tests still pass after the current bootstrap CPU/APU changes.
 
@@ -26,7 +27,7 @@ This document tracks the compatibility push from bootstrap/test ROM behavior tow
 - [x] Correct 65816 reset defaults well enough for commercial reset code to execute meaningfully.
 - [ ] Implement the remaining early commercial-boot opcode and addressing-mode set needed to move past startup/upload loops.
 - [ ] Support the remaining stack, flag, compare, rotate, branch, and memory-access behavior exercised during SMW init.
-- [ ] Keep new 65816 behavior covered by focused unit tests or vector-style checks as each opcode family lands.
+- [x] Keep new 65816 behavior covered by focused unit tests or vector-style checks as each opcode family lands.
 - [ ] Preserve accurate CPU/APU communication-port visibility through the system bus during CPU stepping.
 - [ ] Move past the later SMW startup/upload loops without regressing synthetic bootstrap ROM behavior.
 - [ ] Reach a stable post-init PC/state where SMW starts programming visible display state instead of only bootstrap handshakes.
@@ -35,7 +36,7 @@ This document tracks the compatibility push from bootstrap/test ROM behavior tow
 
 - [ ] Add a dedicated commercial-ROM regression fixture flow alongside the existing ROM regression support.
 - [ ] Add a `Super Mario World` fixture that records milestone expectations such as frame progress, PC/state ranges, and selected MMIO or WRAM reads.
-- [ ] Support richer verification probes for commercial boot cases:
+- [x] Support richer verification probes for commercial boot cases:
 CPU PC or PC-range checks
 frame progression checks
 selected WRAM and MMIO reads
@@ -45,14 +46,14 @@ framebuffer signature or sampled-region checks
 
 ## Phase 3: PPU Bring-Up For Visible Commercial Boot
 
-- [ ] Replace the current synthetic stripe renderer with VRAM-backed rendering behavior.
-- [ ] Implement CPU-visible VRAM address and data access needed for commercial setup code.
+- [x] Replace the current synthetic stripe renderer with VRAM-backed rendering behavior.
+- [x] Implement CPU-visible VRAM address and data access needed for commercial setup code.
 - [ ] Implement tile/tilemap-backed BG rendering for the minimum modes SMW uses during boot and title flow.
-- [ ] Preserve CGRAM-backed palette output through the renderer.
-- [ ] Respect screen enable and forced-blank behavior in a way that matches commercial boot sequencing.
+- [x] Preserve CGRAM-backed palette output through the renderer.
+- [x] Respect screen enable and forced-blank behavior in a way that matches commercial boot sequencing.
 - [ ] Implement enough scroll and screen-base behavior to produce non-placeholder title/boot visuals.
 - [ ] Reach a verified non-black, non-placeholder SMW boot frame in headless artifacts and the GUI.
-- [ ] Keep existing synthetic PPU tests green or replace them with stronger VRAM/tile-backed tests.
+- [x] Keep existing synthetic PPU tests green or replace them with stronger VRAM/tile-backed tests.
 
 ## Phase 4: Title Screen And Menu Interaction
 

@@ -210,6 +210,21 @@ impl Apu {
                 // program is not yet modeled. The CPU-side upload loop expects the APU to
                 // acknowledge each transfer through the communication ports it just wrote.
                 self.apu_to_cpu_ports = self.cpu_to_apu_ports;
+                if self.cpu_to_apu_ports == [0x00, 0x00, 0x00, 0x00] {
+                    self.bootstrap_state = BootstrapState::ProgramRunning;
+                    self.apu_to_cpu_ports[0] = 0xAA;
+                    self.apu_to_cpu_ports[1] = 0xBB;
+                }
+            }
+            BootstrapState::ProgramRunning => {
+                self.apu_to_cpu_ports[0] = 0xAA;
+                self.apu_to_cpu_ports[1] = 0xBB;
+                self.apu_to_cpu_ports[2] = self.cpu_to_apu_ports[2];
+                self.apu_to_cpu_ports[3] = self.cpu_to_apu_ports[3];
+                if self.cpu_to_apu_ports[0] == 0xCC {
+                    self.bootstrap_state = BootstrapState::UploadingProgram;
+                    self.apu_to_cpu_ports = self.cpu_to_apu_ports;
+                }
             }
         }
     }
@@ -221,6 +236,7 @@ enum BootstrapState {
     Idle,
     WaitingForCpuBootstrapAck,
     UploadingProgram,
+    ProgramRunning,
 }
 
 #[cfg(test)]
@@ -280,5 +296,45 @@ mod tests {
         assert_eq!(apu.read_apu_port(1).unwrap(), 0xC7);
         assert_eq!(apu.read_apu_port(2).unwrap(), 0x60);
         assert_eq!(apu.read_apu_port(3).unwrap(), 0x13);
+    }
+
+    #[test]
+    fn bootstrap_upload_completion_exposes_program_ready_ports() {
+        let mut apu = Apu::default();
+        apu.install_ipl_rom_bytes(vec![0xAA; SPC700_IPL_ROM_LEN], None)
+            .unwrap();
+        apu.reset();
+
+        apu.write_cpu_port(0, 0xCC).unwrap();
+        apu.step_master_cycles(6);
+        apu.write_cpu_port(0, 0x00).unwrap();
+        apu.write_cpu_port(1, 0x00).unwrap();
+        apu.step_master_cycles(6);
+
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0xAA);
+        assert_eq!(apu.read_apu_port(1).unwrap(), 0xBB);
+        assert_eq!(apu.read_apu_port(2).unwrap(), 0x00);
+        assert_eq!(apu.read_apu_port(3).unwrap(), 0x00);
+    }
+
+    #[test]
+    fn bootstrap_upload_keeps_echoing_until_all_ports_go_idle() {
+        let mut apu = Apu::default();
+        apu.install_ipl_rom_bytes(vec![0xAA; SPC700_IPL_ROM_LEN], None)
+            .unwrap();
+        apu.reset();
+
+        apu.write_cpu_port(0, 0xCC).unwrap();
+        apu.step_master_cycles(6);
+        apu.write_cpu_port(0, 0x00).unwrap();
+        apu.write_cpu_port(1, 0x00).unwrap();
+        apu.write_cpu_port(2, 0x70).unwrap();
+        apu.write_cpu_port(3, 0x55).unwrap();
+        apu.step_master_cycles(6);
+
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0x00);
+        assert_eq!(apu.read_apu_port(1).unwrap(), 0x00);
+        assert_eq!(apu.read_apu_port(2).unwrap(), 0x70);
+        assert_eq!(apu.read_apu_port(3).unwrap(), 0x55);
     }
 }

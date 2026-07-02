@@ -69,6 +69,7 @@ impl Cpu65816 {
             0x10 => self.execute_bpl(bus, &mut trace),
             0xEA => self.execute_nop(bus, &mut trace),
             0x00 => self.execute_brk(bus, &mut trace),
+            0xE6 => self.execute_inc_direct_page(bus, &mut trace),
             0x1B => self.execute_tcs(bus, &mut trace),
             0x18 => self.execute_clc(bus, &mut trace),
             0x1A => self.execute_inc_a(bus, &mut trace),
@@ -90,6 +91,7 @@ impl Cpu65816 {
             0x68 => self.execute_pla(bus, &mut trace),
             0x69 => self.execute_adc_immediate(bus, &mut trace),
             0x70 => self.execute_bvs(bus, &mut trace),
+            0x7A => self.execute_ply(bus, &mut trace),
             0x74 => self.execute_stz_direct_page_x(bus, &mut trace),
             0x6B => self.execute_rtl(bus, &mut trace),
             0x5B => self.execute_tcd(bus, &mut trace),
@@ -108,6 +110,7 @@ impl Cpu65816 {
             0x8F => self.execute_sta_long(bus, &mut trace),
             0x9B => self.execute_txy(bus, &mut trace),
             0x99 => self.execute_sta_absolute_y(bus, &mut trace),
+            0x9D => self.execute_sta_absolute_x(bus, &mut trace),
             0x9C => self.execute_stz_absolute(bus, &mut trace),
             0x9E => self.execute_stz_absolute_x(bus, &mut trace),
             0x9F => self.execute_sta_long_x(bus, &mut trace),
@@ -474,6 +477,26 @@ impl Cpu65816 {
         Ok(())
     }
 
+    fn execute_inc_direct_page<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_address(operand);
+        if self.accumulator_is_8_bit() {
+            let value = self.read_u8_trace(bus, trace, address).wrapping_add(1);
+            self.write_u8_trace(bus, trace, address, value);
+            self.update_nz_8(value);
+        } else {
+            let value = self.read_u16_trace(bus, trace, address).wrapping_add(1);
+            self.write_u16_trace(bus, trace, address, value);
+            self.update_nz_16(value);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
     fn execute_php<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
         self.push_read_trace(bus, trace, self.fetch_address(1));
         self.push_stack(bus, trace, self.registers.p)?;
@@ -572,6 +595,22 @@ impl Cpu65816 {
             let high = self.pull_stack(bus, trace);
             self.registers.a = u16::from_le_bytes([low, high]);
             self.update_nz_16(self.registers.a);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_ply<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        if self.index_registers_are_8_bit() {
+            let value = self.pull_stack(bus, trace);
+            self.registers.y = u16::from(value);
+            self.update_nz_8(value);
+        } else {
+            let low = self.pull_stack(bus, trace);
+            let high = self.pull_stack(bus, trace);
+            self.registers.y = u16::from_le_bytes([low, high]);
+            self.update_nz_16(self.registers.y);
         }
         self.registers.pc = self.registers.pc.wrapping_add(1);
         Ok(())
@@ -790,6 +829,18 @@ impl Cpu65816 {
     ) -> Result<()> {
         let base = self.fetch_operand_u16(bus, trace);
         let address = self.absolute_address(base.wrapping_add(self.registers.y));
+        self.store_accumulator_to_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_sta_absolute_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let base = self.fetch_operand_u16(bus, trace);
+        let address = self.absolute_address(base.wrapping_add(self.registers.x));
         self.store_accumulator_to_address(bus, trace, address);
         self.registers.pc = self.registers.pc.wrapping_add(3);
         Ok(())
@@ -1543,6 +1594,71 @@ mod tests {
 
         assert_eq!(cpu.registers.pc, 0x8003);
         assert_eq!(bus.read(0x001237), 0x00);
+    }
+
+    #[test]
+    fn sta_absolute_x_uses_indexed_target_address() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.a = 0x00A5;
+        cpu.registers.x = 0x0004;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x9D),
+            (0x008001, 0x34),
+            (0x008002, 0x12),
+            (0x001238, 0x00),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.pc, 0x8003);
+        assert_eq!(bus.read(0x001238), 0xA5);
+    }
+
+    #[test]
+    fn inc_direct_page_increments_memory_and_updates_flags() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.d = 0x0020;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0xE6),
+            (0x008001, 0x10),
+            (0x000030, 0x7F),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.pc, 0x8002);
+        assert_eq!(bus.read(0x000030), 0x80);
+        assert_ne!(cpu.registers.p & 0x80, 0);
+        assert_eq!(cpu.registers.p & 0x02, 0);
+    }
+
+    #[test]
+    fn ply_restores_16_bit_index_register_from_stack() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.s = 0x01FD;
+        cpu.registers.p = 0x00;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x7A),
+            (0x0001FE, 0x34),
+            (0x0001FF, 0x12),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.pc, 0x8001);
+        assert_eq!(cpu.registers.y, 0x1234);
+        assert_eq!(cpu.registers.s, 0x01FF);
     }
 
     #[test]

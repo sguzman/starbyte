@@ -20,6 +20,9 @@ This document tracks the compatibility push from bootstrap/test ROM behavior tow
 - [x] The early SPC/APU startup wait loop is no longer the first blocker after the APU port/handshake fixes.
 - [x] Core emulator regression tests still pass after the current bootstrap CPU/APU changes.
 
+Current live blocker:
+`Super Mario World` now progresses deeper through the bootstrap upload path, but still returns to an early `$2140/$2141` wait loop before visible PPU setup begins. That means the next missing piece is the post-upload APU/program handoff, not the first reset-time opcode gap.
+
 ## Phase 1: CPU And APU Bootstrap Viability
 
 - [x] Fix direct ROM loading so zipped commercial ROM archives can be loaded through the same host paths as extracted ROMs.

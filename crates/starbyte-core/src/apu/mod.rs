@@ -42,6 +42,8 @@ pub struct Apu {
     ipl_rom: Option<Vec<u8>>,
     configured_ipl_path: Option<PathBuf>,
     spc700_steps: u64,
+    #[serde(default)]
+    bootstrap_state: BootstrapState,
 }
 
 impl Default for Apu {
@@ -53,6 +55,7 @@ impl Default for Apu {
             ipl_rom: None,
             configured_ipl_path: None,
             spc700_steps: 0,
+            bootstrap_state: BootstrapState::default(),
         }
     }
 }
@@ -77,6 +80,11 @@ impl Apu {
             [0; 4]
         };
         self.spc700_steps = 0;
+        self.bootstrap_state = if self.ipl_rom.is_some() {
+            BootstrapState::WaitingForCpuBootstrapAck
+        } else {
+            BootstrapState::Idle
+        };
     }
 
     /// Configure or replace the path to a user-supplied IPL ROM.
@@ -188,21 +196,31 @@ impl Apu {
             return;
         }
 
-        if self.apu_to_cpu_ports[0] == 0xAA && self.apu_to_cpu_ports[1] == 0xBB {
-            if self.cpu_to_apu_ports[0] == 0xCC {
-                self.apu_to_cpu_ports[0] = 0xCC;
-                self.apu_to_cpu_ports[1] = self.cpu_to_apu_ports[1];
-                self.apu_to_cpu_ports[2] = self.cpu_to_apu_ports[2];
-                self.apu_to_cpu_ports[3] = self.cpu_to_apu_ports[3];
+        match self.bootstrap_state {
+            BootstrapState::Idle => {}
+            BootstrapState::WaitingForCpuBootstrapAck => {
+                self.apu_to_cpu_ports = [0xAA, 0xBB, 0x00, 0x00];
+                if self.cpu_to_apu_ports[0] == 0xCC {
+                    self.bootstrap_state = BootstrapState::UploadingProgram;
+                    self.apu_to_cpu_ports = self.cpu_to_apu_ports;
+                }
             }
-            return;
+            BootstrapState::UploadingProgram => {
+                // Keep the bootstrap upload handshake moving even while the full SPC700 IPL
+                // program is not yet modeled. The CPU-side upload loop expects the APU to
+                // acknowledge each transfer through the communication ports it just wrote.
+                self.apu_to_cpu_ports = self.cpu_to_apu_ports;
+            }
         }
-
-        // Keep the bootstrap upload handshake moving even while the full SPC700 IPL program
-        // is not yet modeled. The CPU-side upload loop expects port acknowledgements to
-        // advance with the values it writes.
-        self.apu_to_cpu_ports = self.cpu_to_apu_ports;
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+enum BootstrapState {
+    #[default]
+    Idle,
+    WaitingForCpuBootstrapAck,
+    UploadingProgram,
 }
 
 #[cfg(test)]
@@ -235,5 +253,32 @@ mod tests {
         assert_eq!(apu.read_cpu_port(0).unwrap(), 0x12);
         assert_eq!(apu.read_apu_port(3).unwrap(), 0x34);
         assert_eq!(apu.status().spc700_steps, 2);
+    }
+
+    #[test]
+    fn bootstrap_handshake_stays_in_upload_mode_after_cc_ack() {
+        let mut apu = Apu::default();
+        apu.install_ipl_rom_bytes(vec![0xAA; SPC700_IPL_ROM_LEN], None)
+            .unwrap();
+        apu.reset();
+
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0xAA);
+        assert_eq!(apu.read_apu_port(1).unwrap(), 0xBB);
+
+        apu.write_cpu_port(0, 0xCC).unwrap();
+        apu.write_cpu_port(1, 0x00).unwrap();
+        apu.step_master_cycles(6);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0xCC);
+
+        apu.write_cpu_port(0, 0xAB).unwrap();
+        apu.write_cpu_port(1, 0xC7).unwrap();
+        apu.write_cpu_port(2, 0x60).unwrap();
+        apu.write_cpu_port(3, 0x13).unwrap();
+        apu.step_master_cycles(6);
+
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0xAB);
+        assert_eq!(apu.read_apu_port(1).unwrap(), 0xC7);
+        assert_eq!(apu.read_apu_port(2).unwrap(), 0x60);
+        assert_eq!(apu.read_apu_port(3).unwrap(), 0x13);
     }
 }

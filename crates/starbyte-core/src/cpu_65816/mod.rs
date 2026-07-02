@@ -136,6 +136,7 @@ impl Cpu65816 {
             0xE0 => self.execute_cpx_immediate(bus, &mut trace),
             0xE8 => self.execute_inx(bus, &mut trace),
             0xE9 => self.execute_sbc_immediate(bus, &mut trace),
+            0xEB => self.execute_xba(bus, &mut trace),
             0xE2 => self.execute_sep(bus, &mut trace),
             0xF0 => self.execute_beq(bus, &mut trace),
             0xFB => self.execute_xce(bus, &mut trace),
@@ -921,6 +922,7 @@ impl Cpu65816 {
             let (result, carry2) = tmp.overflowing_add(carry);
             self.registers.a = (self.registers.a & 0xFF00) | u16::from(result);
             self.set_carry(carry1 || carry2);
+            self.set_overflow((!(lhs ^ rhs) & (lhs ^ result) & 0x80) != 0);
             self.update_nz_8(result);
         } else {
             let lhs = self.registers.a;
@@ -930,6 +932,7 @@ impl Cpu65816 {
             let (result, carry2) = tmp.overflowing_add(carry);
             self.registers.a = result;
             self.set_carry(carry1 || carry2);
+            self.set_overflow((!(lhs ^ rhs) & (lhs ^ result) & 0x8000) != 0);
             self.update_nz_16(result);
         }
         self.registers.pc = self.registers.pc.wrapping_add(2);
@@ -949,6 +952,7 @@ impl Cpu65816 {
             let (result, carry2) = tmp.overflowing_add(carry);
             self.registers.a = (self.registers.a & 0xFF00) | u16::from(result);
             self.set_carry(carry1 || carry2);
+            self.set_overflow((!(lhs ^ rhs) & (lhs ^ result) & 0x80) != 0);
             self.update_nz_8(result);
             self.registers.pc = self.registers.pc.wrapping_add(2);
         } else {
@@ -959,6 +963,7 @@ impl Cpu65816 {
             let (result, carry2) = tmp.overflowing_add(carry);
             self.registers.a = result;
             self.set_carry(carry1 || carry2);
+            self.set_overflow((!(lhs ^ rhs) & (lhs ^ result) & 0x8000) != 0);
             self.update_nz_16(result);
             self.registers.pc = self.registers.pc.wrapping_add(3);
         }
@@ -1001,6 +1006,7 @@ impl Cpu65816 {
             let (result, borrow2) = tmp.overflowing_sub(borrow);
             self.registers.a = (self.registers.a & 0xFF00) | u16::from(result);
             self.set_carry(!(borrow1 || borrow2));
+            self.set_overflow(((lhs ^ rhs) & (lhs ^ result) & 0x80) != 0);
             self.update_nz_8(result);
             self.registers.pc = self.registers.pc.wrapping_add(2);
         } else {
@@ -1011,9 +1017,18 @@ impl Cpu65816 {
             let (result, borrow2) = tmp.overflowing_sub(borrow);
             self.registers.a = result;
             self.set_carry(!(borrow1 || borrow2));
+            self.set_overflow(((lhs ^ rhs) & (lhs ^ result) & 0x8000) != 0);
             self.update_nz_16(result);
             self.registers.pc = self.registers.pc.wrapping_add(3);
         }
+        Ok(())
+    }
+
+    fn execute_xba<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        self.registers.a = self.registers.a.rotate_left(8);
+        self.update_nz_8((self.registers.a & 0x00FF) as u8);
+        self.registers.pc = self.registers.pc.wrapping_add(1);
         Ok(())
     }
 
@@ -1528,5 +1543,38 @@ mod tests {
 
         assert_eq!(cpu.registers.pc, 0x8003);
         assert_eq!(bus.read(0x001237), 0x00);
+    }
+
+    #[test]
+    fn adc_immediate_sets_overflow_for_signed_wrap() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.a = 0x007F;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0x69), (0x008001, 0x01)]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.a & 0x00FF, 0x80);
+        assert_ne!(cpu.registers.p & 0x40, 0);
+    }
+
+    #[test]
+    fn xba_swaps_accumulator_bytes_and_updates_low_byte_flags() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.a = 0x1234;
+        cpu.registers.p = 0x00;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0xEB)]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.a, 0x3412);
+        assert_eq!(cpu.registers.pc, 0x8001);
+        assert_eq!(cpu.registers.p & 0x02, 0);
     }
 }

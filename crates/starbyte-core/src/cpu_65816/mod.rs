@@ -66,6 +66,7 @@ impl Cpu65816 {
             0x04 => self.execute_tsb_direct_page(bus, &mut trace),
             0x05 => self.execute_ora_direct_page(bus, &mut trace),
             0x08 => self.execute_php(bus, &mut trace),
+            0x0A => self.execute_asl_a(bus, &mut trace),
             0x10 => self.execute_bpl(bus, &mut trace),
             0xEA => self.execute_nop(bus, &mut trace),
             0x00 => self.execute_brk(bus, &mut trace),
@@ -116,6 +117,7 @@ impl Cpu65816 {
             0x9F => self.execute_sta_long_x(bus, &mut trace),
             0xAA => self.execute_tax(bus, &mut trace),
             0xA0 => self.execute_ldy_immediate(bus, &mut trace),
+            0xA4 => self.execute_ldy_direct_page(bus, &mut trace),
             0xA2 => self.execute_ldx_immediate(bus, &mut trace),
             0xA5 => self.execute_lda_direct_page(bus, &mut trace),
             0xA9 => self.execute_lda_immediate(bus, &mut trace),
@@ -698,6 +700,26 @@ impl Cpu65816 {
         Ok(())
     }
 
+    fn execute_ldy_direct_page<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_address(operand);
+        if self.index_registers_are_8_bit() {
+            let value = self.read_u8_trace(bus, trace, address);
+            self.registers.y = u16::from(value);
+            self.update_nz_8(value);
+        } else {
+            let value = self.read_u16_trace(bus, trace, address);
+            self.registers.y = value;
+            self.update_nz_16(value);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
     fn execute_lda_direct_page_x<B: Bus>(
         &mut self,
         bus: &mut B,
@@ -1153,6 +1175,25 @@ impl Cpu65816 {
             let value = self.registers.a;
             self.set_carry(value & 0x8000 != 0);
             let result = (value << 1) | carry_in;
+            self.registers.a = result;
+            self.update_nz_16(result);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_asl_a<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        if self.accumulator_is_8_bit() {
+            let value = self.registers.a as u8;
+            self.set_carry(value & 0x80 != 0);
+            let result = value << 1;
+            self.registers.a = (self.registers.a & 0xFF00) | u16::from(result);
+            self.update_nz_8(result);
+        } else {
+            let value = self.registers.a;
+            self.set_carry(value & 0x8000 != 0);
+            let result = value << 1;
             self.registers.a = result;
             self.update_nz_16(result);
         }
@@ -1659,6 +1700,46 @@ mod tests {
         assert_eq!(cpu.registers.pc, 0x8001);
         assert_eq!(cpu.registers.y, 0x1234);
         assert_eq!(cpu.registers.s, 0x01FF);
+    }
+
+    #[test]
+    fn asl_a_shifts_left_and_updates_carry() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.a = 0x0081;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0x0A)]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.pc, 0x8001);
+        assert_eq!(cpu.registers.a & 0x00FF, 0x02);
+        assert_ne!(cpu.registers.p & 0x01, 0);
+        assert_eq!(cpu.registers.p & 0x02, 0);
+    }
+
+    #[test]
+    fn ldy_direct_page_loads_16_bit_value() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.d = 0x0040;
+        cpu.registers.p = 0x00;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0xA4),
+            (0x008001, 0x20),
+            (0x000060, 0x78),
+            (0x000061, 0x56),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.pc, 0x8002);
+        assert_eq!(cpu.registers.y, 0x5678);
+        assert_eq!(cpu.registers.p & 0x02, 0);
     }
 
     #[test]

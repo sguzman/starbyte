@@ -126,6 +126,7 @@ impl Cpu65816 {
             0xA4 => self.execute_ldy_direct_page(bus, &mut trace),
             0xA2 => self.execute_ldx_immediate(bus, &mut trace),
             0xA5 => self.execute_lda_direct_page(bus, &mut trace),
+            0xA7 => self.execute_lda_direct_page_indirect_long(bus, &mut trace),
             0xA9 => self.execute_lda_immediate(bus, &mut trace),
             0xAB => self.execute_plb(bus, &mut trace),
             0x98 => self.execute_tya(bus, &mut trace),
@@ -837,6 +838,22 @@ impl Cpu65816 {
         let bank = self.read_u8_trace(bus, trace, base.wrapping_add(2));
         let address = (u32::from(low) | (u32::from(high) << 8) | (u32::from(bank) << 16))
             .wrapping_add(u32::from(self.registers.y));
+        self.load_accumulator_from_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_lda_direct_page_indirect_long<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let base = self.direct_page_address(operand);
+        let low = self.read_u8_trace(bus, trace, base);
+        let high = self.read_u8_trace(bus, trace, base.wrapping_add(1));
+        let bank = self.read_u8_trace(bus, trace, base.wrapping_add(2));
+        let address = u32::from(low) | (u32::from(high) << 8) | (u32::from(bank) << 16);
         self.load_accumulator_from_address(bus, trace, address);
         self.registers.pc = self.registers.pc.wrapping_add(2);
         Ok(())
@@ -1951,6 +1968,30 @@ mod tests {
         assert_eq!(cpu.registers.pc, 0x8002);
         assert_eq!(cpu.registers.y, 0x5678);
         assert_eq!(cpu.registers.p & 0x02, 0);
+    }
+
+    #[test]
+    fn lda_direct_page_indirect_long_loads_16_bit_value() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.d = 0x0020;
+        cpu.registers.p = 0x00;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0xA7),
+            (0x008001, 0x10),
+            (0x000030, 0x78),
+            (0x000031, 0x56),
+            (0x000032, 0x7E),
+            (0x7E5678, 0x34),
+            (0x7E5679, 0x12),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.pc, 0x8002);
+        assert_eq!(cpu.registers.a, 0x1234);
     }
 
     #[test]

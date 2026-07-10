@@ -11,7 +11,7 @@ use crate::cpu_65816::registers::Registers;
 use crate::error::{Error, Result};
 use crate::manifest::AssetConfig;
 use crate::ppu::FrameBuffer;
-use crate::system::SystemBus;
+use crate::system::{SystemBus, SystemBusObservability};
 use crate::timing::TimingState;
 
 const CPU_BUS_CYCLE_MASTER_CYCLES: u64 = 6;
@@ -220,6 +220,18 @@ impl Emulator {
         self.system.read(address)
     }
 
+    /// Borrow the current CPU-to-APU communication ports.
+    #[must_use]
+    pub fn cpu_to_apu_ports(&self) -> &[u8] {
+        self.system.cpu_to_apu_ports()
+    }
+
+    /// Borrow the current APU-to-CPU communication ports.
+    #[must_use]
+    pub fn apu_to_cpu_ports(&self) -> &[u8] {
+        self.system.apu_to_cpu_ports()
+    }
+
     /// Borrow the current CPU register file.
     #[must_use]
     pub const fn cpu_registers(&self) -> &Registers {
@@ -235,6 +247,18 @@ impl Emulator {
     /// Set controller-1 state from a host/frontend.
     pub fn set_controller1(&mut self, state: crate::input::ControllerState) {
         self.system.set_controller1(state);
+    }
+
+    /// Borrow compact bus activity counters for CLI reporting and regressions.
+    #[must_use]
+    pub fn system_observability(&self) -> &SystemBusObservability {
+        self.system.observability()
+    }
+
+    /// Read one PPU register without mutating bus-visible side effects.
+    #[must_use]
+    pub fn peek_ppu_register(&self, register: u16) -> Option<u8> {
+        self.system.peek_ppu_register(register)
     }
 
     fn append_audio_samples(&mut self, master_cycles: u64) {
@@ -358,6 +382,39 @@ mod tests {
         assert!(!emulator.audio_samples().samples.is_empty());
         assert_eq!(emulator.host_read_u8(0x004218), 0x08);
         assert_eq!(emulator.host_read_u8(0x004219), 0x01);
+    }
+
+    #[test]
+    fn step_instruction_keeps_apu_ports_coherent_across_cpu_write_and_readback() {
+        let mut rom = rom_bytes();
+        rom[0x7FFC] = 0x00;
+        rom[0x7FFD] = 0x80;
+        rom[0x0000] = 0xA9;
+        rom[0x0001] = 0xCC;
+        rom[0x0002] = 0x8D;
+        rom[0x0003] = 0x40;
+        rom[0x0004] = 0x21;
+        rom[0x0005] = 0xAD;
+        rom[0x0006] = 0x40;
+        rom[0x0007] = 0x21;
+        let cart = Cartridge::from_bytes(rom, None).unwrap();
+
+        let mut emulator = Emulator::default();
+        emulator.load_rom(cart);
+
+        assert_eq!(emulator.host_read_u8(0x002140), 0xAA);
+
+        emulator.step_instruction().unwrap();
+        emulator.step_instruction().unwrap();
+
+        assert_eq!(emulator.cpu_to_apu_ports()[0], 0xCC);
+        assert_eq!(emulator.apu_to_cpu_ports()[0], 0xCC);
+        assert_eq!(emulator.host_read_u8(0x002140), 0xCC);
+
+        emulator.step_instruction().unwrap();
+
+        assert_eq!(emulator.cpu_registers().a as u8, 0xCC);
+        assert_eq!(emulator.host_read_u8(0x002140), 0xCC);
     }
 
     #[test]

@@ -792,6 +792,8 @@ fn maybe_write_run_report(
     } else {
         Vec::new()
     };
+    let ppu_write_activity = build_ppu_write_activity_report(emulator);
+    let apu_io_activity = build_apu_io_activity_report(emulator);
     let report = json!({
         "rom": rom.display().to_string(),
         "frames": frames,
@@ -808,12 +810,73 @@ fn maybe_write_run_report(
         },
         "audio_sample_count": emulator.audio_samples().samples.len(),
         "apu_steps": emulator.apu_status().spc700_steps,
+        "apu_io_activity": apu_io_activity,
+        "ppu_write_activity": ppu_write_activity,
         "save_ram_path": save_ram_path.map(|path| path.display().to_string()),
         "save_state_path": save_state_path.map(|path| path.display().to_string()),
     });
     std::fs::write(report_path, serde_json::to_string_pretty(&report)?)
         .with_context(|| format!("failed to write run report to {}", report_path.display()))?;
     Ok(())
+}
+
+fn build_ppu_write_activity_report(emulator: &starbyte_core::Emulator) -> serde_json::Value {
+    let counts = emulator.system_observability().ppu_write_counts();
+    let mut touched_registers = Vec::new();
+    let mut visible_touched_registers = Vec::new();
+    let mut total_writes = 0_u64;
+    let mut visible_display_write_count = 0_u64;
+    let mut final_register_values = serde_json::Map::new();
+
+    for (index, count) in counts.iter().copied().enumerate() {
+        total_writes = total_writes.saturating_add(u64::from(count));
+        if count == 0 {
+            continue;
+        }
+
+        let register = 0x2100_u16 + index as u16;
+        let label = format!("${register:04X}");
+        touched_registers.push(label.clone());
+
+        if register <= 0x212C {
+            visible_display_write_count = visible_display_write_count.saturating_add(u64::from(count));
+            visible_touched_registers.push(label.clone());
+            if let Some(value) = emulator.peek_ppu_register(register) {
+                final_register_values.insert(label, json!(value));
+            }
+        }
+    }
+
+    json!({
+        "total_writes": total_writes,
+        "touched_registers": touched_registers,
+        "visible_display_write_count": visible_display_write_count,
+        "visible_display_registers_touched": visible_touched_registers,
+        "final_register_values": final_register_values,
+    })
+}
+
+fn build_apu_io_activity_report(emulator: &starbyte_core::Emulator) -> serde_json::Value {
+    let observability = emulator.system_observability();
+    let mut cpu_read_counts = serde_json::Map::new();
+    let mut cpu_write_counts = serde_json::Map::new();
+
+    for port in 0..4 {
+        let register = 0x2140_u16 + port as u16;
+        let label = format!("${register:04X}");
+        cpu_read_counts.insert(
+            label.clone(),
+            json!(observability.apu_port_read_counts()[port]),
+        );
+        cpu_write_counts.insert(label, json!(observability.apu_port_write_counts()[port]));
+    }
+
+    json!({
+        "cpu_to_apu_ports": emulator.cpu_to_apu_ports(),
+        "apu_to_cpu_ports": emulator.apu_to_cpu_ports(),
+        "cpu_read_counts": cpu_read_counts,
+        "cpu_write_counts": cpu_write_counts,
+    })
 }
 
 fn framebuffer_hash(framebuffer: &starbyte_core::ppu::FrameBuffer) -> u64 {

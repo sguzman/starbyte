@@ -18,10 +18,12 @@ This document tracks the compatibility push from bootstrap/test ROM behavior tow
 - [x] `Super Mario World` can complete a 60-frame headless run with the current bootstrap core.
 - [x] `Super Mario World` can complete a 300-frame headless run with the current bootstrap core.
 - [x] The early SPC/APU startup wait loop is no longer the first blocker after the APU port/handshake fixes.
+- [x] The Phase 1 `run --report-json` evidence now records compact APU port traffic and visible-display PPU write activity for commercial boot probing.
+- [x] The 300-frame `Super Mario World` probe reaches repeated visible-display MMIO programming in the normal PPU setup range instead of only bootstrap handshakes.
 - [x] Core emulator regression tests still pass after the current bootstrap CPU/APU changes.
 
 Current live blocker:
-`Super Mario World` now progresses deeper through the bootstrap upload path, but still returns to an early `$2140/$2141` wait loop before visible PPU setup begins. That means the next missing piece is the post-upload APU/program handoff, not the first reset-time opcode gap.
+Phase 1 is complete. The next blocker moves into Phase 3 visual fidelity: the emulator now observes substantial commercial boot-time PPU setup activity, but it still needs fuller BG/tilemap rendering to turn that setup into correct non-placeholder SMW visuals.
 
 ## Phase 1: CPU And APU Bootstrap Viability
 
@@ -29,12 +31,12 @@ Current live blocker:
 - [x] Establish a repeatable `Super Mario World` headless boot probe using CLI `run`, save-state output, and JSON run reports.
 - [x] Provide an in-tree APU bootstrap fallback so commercial-ROM probing does not depend on an external SPC700 IPL dump, while still supporting optional user-supplied firmware.
 - [x] Correct 65816 reset defaults well enough for commercial reset code to execute meaningfully.
-- [ ] Implement the remaining early commercial-boot opcode and addressing-mode set needed to move past startup/upload loops.
-- [ ] Support the remaining stack, flag, compare, rotate, branch, and memory-access behavior exercised during SMW init.
+- [x] Implement the remaining early commercial-boot opcode and addressing-mode set needed to move past startup/upload loops.
+- [x] Support the remaining stack, flag, compare, rotate, branch, and memory-access behavior exercised during SMW init.
 - [x] Keep new 65816 behavior covered by focused unit tests or vector-style checks as each opcode family lands.
-- [ ] Preserve accurate CPU/APU communication-port visibility through the system bus during CPU stepping.
-- [ ] Move past the later SMW startup/upload loops without regressing synthetic bootstrap ROM behavior.
-- [ ] Reach a stable post-init PC/state where SMW starts programming visible display state instead of only bootstrap handshakes.
+- [x] Preserve accurate CPU/APU communication-port visibility through the system bus during CPU stepping.
+- [x] Move past the later SMW startup/upload loops without regressing synthetic bootstrap ROM behavior.
+- [x] Reach a stable post-init PC/state where SMW starts programming visible display state instead of only bootstrap handshakes.
 
 ## Phase 2: Commercial-ROM Boot Harness
 

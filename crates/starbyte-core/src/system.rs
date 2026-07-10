@@ -16,6 +16,45 @@ use crate::timing::TimingState;
 const WRAM_SIZE: usize = 128 * 1024;
 const LOW_WRAM_MIRROR_SIZE: usize = 0x2000;
 const APU_IO_PORT_COUNT: usize = 4;
+const PPU_REGISTER_COUNT: usize = 0x40;
+
+/// Compact MMIO activity gathered during commercial-ROM probing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemBusObservability {
+    ppu_write_counts: Vec<u32>,
+    apu_port_read_counts: Vec<u32>,
+    apu_port_write_counts: Vec<u32>,
+}
+
+impl Default for SystemBusObservability {
+    fn default() -> Self {
+        Self {
+            ppu_write_counts: vec![0; PPU_REGISTER_COUNT],
+            apu_port_read_counts: vec![0; APU_IO_PORT_COUNT],
+            apu_port_write_counts: vec![0; APU_IO_PORT_COUNT],
+        }
+    }
+}
+
+impl SystemBusObservability {
+    /// Per-register write counts for `$2100-$213F`.
+    #[must_use]
+    pub fn ppu_write_counts(&self) -> &[u32] {
+        &self.ppu_write_counts
+    }
+
+    /// Per-port CPU read counts for `$2140-$2143`.
+    #[must_use]
+    pub fn apu_port_read_counts(&self) -> &[u32] {
+        &self.apu_port_read_counts
+    }
+
+    /// Per-port CPU write counts for `$2140-$2143`.
+    #[must_use]
+    pub fn apu_port_write_counts(&self) -> &[u32] {
+        &self.apu_port_write_counts
+    }
+}
 
 /// CPU-visible system bus state needed for bootstrap correctness work.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +74,8 @@ pub struct SystemBus {
     timeup: bool,
     joypad: JoypadIo,
     wram_address: u32,
+    #[serde(default)]
+    observability: SystemBusObservability,
 }
 
 impl Default for SystemBus {
@@ -55,6 +96,7 @@ impl Default for SystemBus {
             timeup: false,
             joypad: JoypadIo::default(),
             wram_address: 0,
+            observability: SystemBusObservability::default(),
         }
     }
 }
@@ -92,6 +134,7 @@ impl SystemBus {
         self.timeup = false;
         self.joypad = JoypadIo::default();
         self.wram_address = 0;
+        self.observability = SystemBusObservability::default();
     }
 
     /// Advance global timing and derive pending interrupt state from it.
@@ -216,6 +259,34 @@ impl SystemBus {
         for port in 0..APU_IO_PORT_COUNT {
             let _ = apu.write_cpu_port(port, self.cpu_to_apu_io[port]);
         }
+    }
+
+    /// Borrow the current CPU-to-APU communication ports.
+    #[must_use]
+    pub fn cpu_to_apu_ports(&self) -> &[u8] {
+        &self.cpu_to_apu_io
+    }
+
+    /// Borrow the current APU-to-CPU communication ports.
+    #[must_use]
+    pub fn apu_to_cpu_ports(&self) -> &[u8] {
+        &self.apu_to_cpu_io
+    }
+
+    /// Borrow compact MMIO observability counters collected during execution.
+    #[must_use]
+    pub const fn observability(&self) -> &SystemBusObservability {
+        &self.observability
+    }
+
+    /// Read one PPU register without mutating bus-visible side effects.
+    #[must_use]
+    pub fn peek_ppu_register(&self, register: u16) -> Option<u8> {
+        if !(0x2100..=0x213F).contains(&register) {
+            return None;
+        }
+
+        Some(self.ppu.read_register(register))
     }
 }
 
@@ -454,7 +525,13 @@ impl SystemBus {
 
         match register {
             0x2100..=0x213F => Some(self.ppu.read_register(register)),
-            0x2140..=0x2143 => Some(self.apu_to_cpu_io[usize::from(register - 0x2140)]),
+            0x2140..=0x2143 => {
+                let port = usize::from(register - 0x2140);
+                self.observability.apu_port_read_counts[port] = self.observability
+                    .apu_port_read_counts[port]
+                    .saturating_add(1);
+                Some(self.apu_to_cpu_io[port])
+            }
             0x2180 => {
                 let value = self.wram[self.wram_address as usize % WRAM_SIZE];
                 self.wram_address = (self.wram_address + 1) & 0x1_FFFF;
@@ -494,11 +571,18 @@ impl SystemBus {
 
         match register {
             0x2100..=0x213F => {
+                let index = usize::from(register - 0x2100);
+                self.observability.ppu_write_counts[index] =
+                    self.observability.ppu_write_counts[index].saturating_add(1);
                 self.ppu.write_register(register, value);
                 Some(())
             }
             0x2140..=0x2143 => {
-                self.cpu_to_apu_io[usize::from(register - 0x2140)] = value;
+                let port = usize::from(register - 0x2140);
+                self.observability.apu_port_write_counts[port] = self.observability
+                    .apu_port_write_counts[port]
+                    .saturating_add(1);
+                self.cpu_to_apu_io[port] = value;
                 Some(())
             }
             0x2180 => {
@@ -645,6 +729,7 @@ fn map_hirom_save_ram(address: Address, len: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use crate::apu::Apu;
     use crate::cartridge::{Cartridge, Mapper};
     use crate::ppu::FrameBuffer;
     use crate::timing::{DOTS_PER_SCANLINE, NTSC_SCANLINES_PER_FRAME, VBLANK_START_SCANLINE};
@@ -722,6 +807,26 @@ mod tests {
         bus.write(0x7E0010, 0x5A);
 
         assert_eq!(bus.read(0x006000), 0x5A);
+    }
+
+    #[test]
+    fn records_ppu_and_apu_port_mmio_activity() {
+        let mut bus = SystemBus::default();
+        bus.install_cartridge(make_cart(Mapper::LoRom));
+
+        let mut apu = Apu::default();
+        apu.reset();
+        bus.sync_apu_ports_from_runtime(&apu);
+
+        bus.write(0x002100, 0x80);
+        bus.write(0x00212C, 0x10);
+        assert_eq!(bus.read(0x002140), 0xAA);
+        bus.write(0x002140, 0xCC);
+
+        assert_eq!(bus.observability().ppu_write_counts()[0], 1);
+        assert_eq!(bus.observability().ppu_write_counts()[0x2C], 1);
+        assert_eq!(bus.observability().apu_port_read_counts()[0], 1);
+        assert_eq!(bus.observability().apu_port_write_counts()[0], 1);
     }
 
     #[test]

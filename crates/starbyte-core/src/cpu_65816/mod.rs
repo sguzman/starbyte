@@ -63,27 +63,49 @@ impl Cpu65816 {
         }];
 
         match opcode {
+            0x01 => self.execute_ora_direct_page_indexed_indirect_x(bus, &mut trace),
             0x04 => self.execute_tsb_direct_page(bus, &mut trace),
             0x05 => self.execute_ora_direct_page(bus, &mut trace),
+            0x07 => self.execute_ora_direct_page_indirect_long(bus, &mut trace),
             0x08 => self.execute_php(bus, &mut trace),
             0x0A => self.execute_asl_a(bus, &mut trace),
+            0x09 => self.execute_ora_immediate(bus, &mut trace),
+            0x0D => self.execute_ora_absolute(bus, &mut trace),
+            0x0F => self.execute_ora_long(bus, &mut trace),
             0x10 => self.execute_bpl(bus, &mut trace),
+            0x11 => self.execute_ora_direct_page_indirect_y(bus, &mut trace),
+            0x12 => self.execute_ora_direct_page_indirect(bus, &mut trace),
+            0x15 => self.execute_ora_direct_page_x(bus, &mut trace),
+            0x17 => self.execute_ora_direct_page_indirect_long_y(bus, &mut trace),
+            0x19 => self.execute_ora_absolute_y(bus, &mut trace),
             0xEA => self.execute_nop(bus, &mut trace),
             0x00 => self.execute_brk(bus, &mut trace),
             0xE6 => self.execute_inc_direct_page(bus, &mut trace),
             0x1B => self.execute_tcs(bus, &mut trace),
             0x18 => self.execute_clc(bus, &mut trace),
             0x1A => self.execute_inc_a(bus, &mut trace),
+            0x1D => self.execute_ora_absolute_x(bus, &mut trace),
+            0x1F => self.execute_ora_long_x(bus, &mut trace),
             0x20 => self.execute_jsr_absolute(bus, &mut trace),
             0x22 => self.execute_jsl_long(bus, &mut trace),
+            0x21 => self.execute_and_direct_page_indexed_indirect_x(bus, &mut trace),
             0x28 => self.execute_plp(bus, &mut trace),
             0x29 => self.execute_and_immediate(bus, &mut trace),
             0x2A => self.execute_rol_a(bus, &mut trace),
+            0x25 => self.execute_and_direct_page(bus, &mut trace),
+            0x27 => self.execute_and_direct_page_indirect_long(bus, &mut trace),
             0x2D => self.execute_and_absolute(bus, &mut trace),
             0x2C => self.execute_bit_absolute(bus, &mut trace),
             0x30 => self.execute_bmi(bus, &mut trace),
+            0x31 => self.execute_and_direct_page_indirect_y(bus, &mut trace),
+            0x32 => self.execute_and_direct_page_indirect(bus, &mut trace),
+            0x35 => self.execute_and_direct_page_x(bus, &mut trace),
+            0x37 => self.execute_and_direct_page_indirect_long_y(bus, &mut trace),
             0x38 => self.execute_sec(bus, &mut trace),
+            0x39 => self.execute_and_absolute_y(bus, &mut trace),
             0x3B => self.execute_tsc(bus, &mut trace),
+            0x3D => self.execute_and_absolute_x(bus, &mut trace),
+            0x3F => self.execute_and_long_x(bus, &mut trace),
             0x48 => self.execute_pha(bus, &mut trace),
             0x49 => self.execute_eor_immediate(bus, &mut trace),
             0x4C => self.execute_jmp_absolute(bus, &mut trace),
@@ -129,6 +151,7 @@ impl Cpu65816 {
             0xA2 => self.execute_ldx_immediate(bus, &mut trace),
             0xA6 => self.execute_ldx_direct_page(bus, &mut trace),
             0xA5 => self.execute_lda_direct_page(bus, &mut trace),
+            0xA1 => self.execute_lda_direct_page_indexed_indirect_x(bus, &mut trace),
             0xA7 => self.execute_lda_direct_page_indirect_long(bus, &mut trace),
             0xA9 => self.execute_lda_immediate(bus, &mut trace),
             0xAE => self.execute_ldx_absolute(bus, &mut trace),
@@ -139,6 +162,8 @@ impl Cpu65816 {
             0xB8 => self.execute_clv(bus, &mut trace),
             0xB0 => self.execute_bcs(bus, &mut trace),
             0xB4 => self.execute_ldy_direct_page_x(bus, &mut trace),
+            0xB1 => self.execute_lda_direct_page_indirect_y(bus, &mut trace),
+            0xB2 => self.execute_lda_direct_page_indirect(bus, &mut trace),
             0xB5 => self.execute_lda_direct_page_x(bus, &mut trace),
             0xB6 => self.execute_ldx_direct_page_y(bus, &mut trace),
             0xB7 => self.execute_lda_direct_page_indirect_long_y(bus, &mut trace),
@@ -903,6 +928,52 @@ impl Cpu65816 {
         Ok(())
     }
 
+    fn execute_lda_direct_page_indirect<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let pointer = self.direct_page_address(operand);
+        let low = self.read_u8_trace(bus, trace, pointer);
+        let high = self.read_u8_trace(bus, trace, pointer.wrapping_add(1));
+        let address = self.absolute_address(u16::from_le_bytes([low, high]));
+        self.load_accumulator_from_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_lda_direct_page_indirect_y<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let pointer = self.direct_page_address(operand);
+        let low = self.read_u8_trace(bus, trace, pointer);
+        let high = self.read_u8_trace(bus, trace, pointer.wrapping_add(1));
+        let base = u16::from_le_bytes([low, high]);
+        let address = self.absolute_address(base.wrapping_add(self.registers.y));
+        self.load_accumulator_from_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_lda_direct_page_indexed_indirect_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let pointer = self.direct_page_indexed_x_address(operand);
+        let low = self.read_u8_trace(bus, trace, pointer);
+        let high = self.read_u8_trace(bus, trace, pointer.wrapping_add(1));
+        let address = self.absolute_address(u16::from_le_bytes([low, high]));
+        self.load_accumulator_from_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
     fn execute_ldy_direct_page_x<B: Bus>(
         &mut self,
         bus: &mut B,
@@ -1214,16 +1285,167 @@ impl Cpu65816 {
     ) -> Result<()> {
         let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
         let address = self.direct_page_address(operand);
+        self.or_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_ora_immediate<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
         if self.accumulator_is_8_bit() {
-            let value = self.read_u8_trace(bus, trace, address);
-            let result = (self.registers.a as u8) | value;
-            self.registers.a = (self.registers.a & 0xFF00) | u16::from(result);
-            self.update_nz_8(result);
+            let rhs = self.push_read_trace(bus, trace, self.fetch_address(1));
+            self.or_accumulator_8(rhs);
+            self.registers.pc = self.registers.pc.wrapping_add(2);
         } else {
-            let value = self.read_u16_trace(bus, trace, address);
-            self.registers.a |= value;
-            self.update_nz_16(self.registers.a);
+            let rhs = self.fetch_operand_u16(bus, trace);
+            self.or_accumulator_16(rhs);
+            self.registers.pc = self.registers.pc.wrapping_add(3);
         }
+        Ok(())
+    }
+
+    fn execute_ora_direct_page_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_indexed_x_address(operand);
+        self.or_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_ora_absolute<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let address = self.absolute_address(self.fetch_operand_u16(bus, trace));
+        self.or_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_ora_absolute_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let base = self.fetch_operand_u16(bus, trace);
+        let address = self.absolute_address(base.wrapping_add(self.registers.x));
+        self.or_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_ora_absolute_y<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let base = self.fetch_operand_u16(bus, trace);
+        let address = self.absolute_address(base.wrapping_add(self.registers.y));
+        self.or_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_ora_long<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let address = self.fetch_operand_u24(bus, trace);
+        self.or_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(4);
+        Ok(())
+    }
+
+    fn execute_ora_long_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let address = self
+            .fetch_operand_u24(bus, trace)
+            .wrapping_add(u32::from(self.registers.x));
+        self.or_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(4);
+        Ok(())
+    }
+
+    fn execute_ora_direct_page_indirect<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let pointer = self.direct_page_address(operand);
+        let low = self.read_u8_trace(bus, trace, pointer);
+        let high = self.read_u8_trace(bus, trace, pointer.wrapping_add(1));
+        let address = self.absolute_address(u16::from_le_bytes([low, high]));
+        self.or_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_ora_direct_page_indirect_y<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let pointer = self.direct_page_address(operand);
+        let low = self.read_u8_trace(bus, trace, pointer);
+        let high = self.read_u8_trace(bus, trace, pointer.wrapping_add(1));
+        let base = u16::from_le_bytes([low, high]);
+        let address = self.absolute_address(base.wrapping_add(self.registers.y));
+        self.or_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_ora_direct_page_indexed_indirect_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let pointer = self.direct_page_indexed_x_address(operand);
+        let low = self.read_u8_trace(bus, trace, pointer);
+        let high = self.read_u8_trace(bus, trace, pointer.wrapping_add(1));
+        let address = self.absolute_address(u16::from_le_bytes([low, high]));
+        self.or_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_ora_direct_page_indirect_long<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_indirect_long_address(bus, trace, operand);
+        self.or_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_ora_direct_page_indirect_long_y<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self
+            .direct_page_indirect_long_address(bus, trace, operand)
+            .wrapping_add(u32::from(self.registers.y));
+        self.or_accumulator_with_address(bus, trace, address);
         self.registers.pc = self.registers.pc.wrapping_add(2);
         Ok(())
     }
@@ -1235,16 +1457,146 @@ impl Cpu65816 {
     ) -> Result<()> {
         if self.accumulator_is_8_bit() {
             let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
-            let value = (self.registers.a as u8) & operand;
-            self.registers.a = (self.registers.a & 0xFF00) | u16::from(value);
-            self.update_nz_8(value);
+            self.and_accumulator_8(operand);
             self.registers.pc = self.registers.pc.wrapping_add(2);
         } else {
             let operand = self.fetch_operand_u16(bus, trace);
-            self.registers.a &= operand;
-            self.update_nz_16(self.registers.a);
+            self.and_accumulator_16(operand);
             self.registers.pc = self.registers.pc.wrapping_add(3);
         }
+        Ok(())
+    }
+
+    fn execute_and_direct_page<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_address(operand);
+        self.and_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_and_direct_page_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_indexed_x_address(operand);
+        self.and_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_and_absolute_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let base = self.fetch_operand_u16(bus, trace);
+        let address = self.absolute_address(base.wrapping_add(self.registers.x));
+        self.and_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_and_absolute_y<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let base = self.fetch_operand_u16(bus, trace);
+        let address = self.absolute_address(base.wrapping_add(self.registers.y));
+        self.and_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_and_long_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let address = self
+            .fetch_operand_u24(bus, trace)
+            .wrapping_add(u32::from(self.registers.x));
+        self.and_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(4);
+        Ok(())
+    }
+
+    fn execute_and_direct_page_indirect<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let pointer = self.direct_page_address(operand);
+        let low = self.read_u8_trace(bus, trace, pointer);
+        let high = self.read_u8_trace(bus, trace, pointer.wrapping_add(1));
+        let address = self.absolute_address(u16::from_le_bytes([low, high]));
+        self.and_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_and_direct_page_indirect_y<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let pointer = self.direct_page_address(operand);
+        let low = self.read_u8_trace(bus, trace, pointer);
+        let high = self.read_u8_trace(bus, trace, pointer.wrapping_add(1));
+        let base = u16::from_le_bytes([low, high]);
+        let address = self.absolute_address(base.wrapping_add(self.registers.y));
+        self.and_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_and_direct_page_indexed_indirect_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let pointer = self.direct_page_indexed_x_address(operand);
+        let low = self.read_u8_trace(bus, trace, pointer);
+        let high = self.read_u8_trace(bus, trace, pointer.wrapping_add(1));
+        let address = self.absolute_address(u16::from_le_bytes([low, high]));
+        self.and_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_and_direct_page_indirect_long<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_indirect_long_address(bus, trace, operand);
+        self.and_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_and_direct_page_indirect_long_y<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self
+            .direct_page_indirect_long_address(bus, trace, operand)
+            .wrapping_add(u32::from(self.registers.y));
+        self.and_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
         Ok(())
     }
 
@@ -1292,14 +1644,7 @@ impl Cpu65816 {
         trace: &mut Vec<BusEvent>,
     ) -> Result<()> {
         let address = self.absolute_address(self.fetch_operand_u16(bus, trace));
-        if self.accumulator_is_8_bit() {
-            let value = (self.registers.a as u8) & self.read_u8_trace(bus, trace, address);
-            self.registers.a = (self.registers.a & 0xFF00) | u16::from(value);
-            self.update_nz_8(value);
-        } else {
-            self.registers.a &= self.read_u16_trace(bus, trace, address);
-            self.update_nz_16(self.registers.a);
-        }
+        self.and_accumulator_with_address(bus, trace, address);
         self.registers.pc = self.registers.pc.wrapping_add(3);
         Ok(())
     }
@@ -1898,6 +2243,36 @@ impl Cpu65816 {
         }
     }
 
+    fn or_accumulator_with_address<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        address: Address,
+    ) {
+        if self.accumulator_is_8_bit() {
+            let rhs = self.read_u8_trace(bus, trace, address);
+            self.or_accumulator_8(rhs);
+        } else {
+            let rhs = self.read_u16_trace(bus, trace, address);
+            self.or_accumulator_16(rhs);
+        }
+    }
+
+    fn and_accumulator_with_address<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        address: Address,
+    ) {
+        if self.accumulator_is_8_bit() {
+            let rhs = self.read_u8_trace(bus, trace, address);
+            self.and_accumulator_8(rhs);
+        } else {
+            let rhs = self.read_u16_trace(bus, trace, address);
+            self.and_accumulator_16(rhs);
+        }
+    }
+
     fn store_accumulator_to_address<B: Bus>(
         &self,
         bus: &mut B,
@@ -2052,6 +2427,28 @@ impl Cpu65816 {
         self.update_nz_16(result);
     }
 
+    fn or_accumulator_8(&mut self, rhs: u8) {
+        let result = (self.registers.a as u8) | rhs;
+        self.registers.a = (self.registers.a & 0xFF00) | u16::from(result);
+        self.update_nz_8(result);
+    }
+
+    fn or_accumulator_16(&mut self, rhs: u16) {
+        self.registers.a |= rhs;
+        self.update_nz_16(self.registers.a);
+    }
+
+    fn and_accumulator_8(&mut self, rhs: u8) {
+        let result = (self.registers.a as u8) & rhs;
+        self.registers.a = (self.registers.a & 0xFF00) | u16::from(result);
+        self.update_nz_8(result);
+    }
+
+    fn and_accumulator_16(&mut self, rhs: u16) {
+        self.registers.a &= rhs;
+        self.update_nz_16(self.registers.a);
+    }
+
     fn increment_memory<B: Bus>(
         &mut self,
         bus: &mut B,
@@ -2084,6 +2481,19 @@ impl Cpu65816 {
             self.write_u16_trace(bus, trace, address, value);
             self.update_nz_16(value);
         }
+    }
+
+    fn direct_page_indirect_long_address<B: Bus>(
+        &self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        operand: u8,
+    ) -> Address {
+        let base = self.direct_page_address(operand);
+        let low = self.read_u8_trace(bus, trace, base);
+        let high = self.read_u8_trace(bus, trace, base.wrapping_add(1));
+        let bank = self.read_u8_trace(bus, trace, base.wrapping_add(2));
+        u32::from(low) | (u32::from(high) << 8) | (u32::from(bank) << 16)
     }
 }
 
@@ -2441,6 +2851,77 @@ mod tests {
     }
 
     #[test]
+    fn ora_direct_page_indirect_long_updates_accumulator() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.d = 0x0020;
+        cpu.registers.a = 0x0003;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x07),
+            (0x008001, 0x10),
+            (0x000030, 0x78),
+            (0x000031, 0x56),
+            (0x000032, 0x7E),
+            (0x7E5678, 0x0C),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.pc, 0x8002);
+        assert_eq!(cpu.registers.a & 0x00FF, 0x0F);
+    }
+
+    #[test]
+    fn ora_direct_page_indirect_long_y_uses_long_pointer_plus_y() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.d = 0x0020;
+        cpu.registers.y = 0x0004;
+        cpu.registers.a = 0x0001;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x17),
+            (0x008001, 0x10),
+            (0x000030, 0x78),
+            (0x000031, 0x56),
+            (0x000032, 0x7E),
+            (0x7E567C, 0x06),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.pc, 0x8002);
+        assert_eq!(cpu.registers.a & 0x00FF, 0x07);
+    }
+
+    #[test]
+    fn lda_direct_page_indirect_loads_accumulator_from_pointer() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.d = 0x0020;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0xB2),
+            (0x008001, 0x10),
+            (0x000030, 0x78),
+            (0x000031, 0x56),
+            (0x005678, 0xA5),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.pc, 0x8002);
+        assert_eq!(cpu.registers.a & 0x00FF, 0xA5);
+    }
+
+    #[test]
     fn lda_direct_page_indirect_long_loads_16_bit_value() {
         let mut cpu = Cpu65816::default();
         cpu.registers.pc = 0x8000;
@@ -2539,6 +3020,27 @@ mod tests {
 
         cpu.step_with_bus(&mut bus).unwrap();
 
+        assert_eq!(cpu.registers.a & 0x00FF, 0xA0);
+    }
+
+    #[test]
+    fn and_direct_page_updates_accumulator() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.d = 0x0020;
+        cpu.registers.a = 0x00F0;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x25),
+            (0x008001, 0x10),
+            (0x000030, 0xAA),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.pc, 0x8002);
         assert_eq!(cpu.registers.a & 0x00FF, 0xA0);
     }
 

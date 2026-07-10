@@ -390,6 +390,8 @@ fn run_succeeds_without_external_spc700_ipl_rom() {
         serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
     assert_eq!(report_json["frame_counter"], 1);
     assert!(report_json["apu_steps"].as_u64().unwrap() > 0);
+    assert!(report_json["apu_io_activity"]["cpu_read_counts"]["$2140"].is_number());
+    assert!(report_json["ppu_write_activity"]["total_writes"].is_number());
 }
 
 #[test]
@@ -492,6 +494,8 @@ fn run_writes_screenshot_report_and_state_artifacts() {
     assert!(report_json["audio_sample_count"].as_u64().unwrap() > 0);
     assert_eq!(report_json["framebuffer"]["first_pixel_rgba"][3], 255);
     assert!(report_json["framebuffer"]["hash"].as_u64().unwrap() > 0);
+    assert!(report_json["apu_io_activity"]["cpu_write_counts"]["$2140"].is_number());
+    assert!(report_json["ppu_write_activity"]["visible_display_registers_touched"].is_array());
 
     let auto_state = state_dir.join("sample.state.json");
     assert!(auto_state.exists());

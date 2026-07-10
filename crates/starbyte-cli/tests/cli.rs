@@ -546,3 +546,106 @@ fn rom_regression_run_current_supports_expected_host_reads() {
         .assert()
         .success();
 }
+
+#[test]
+fn commercial_record_generates_fixture_report_and_trace() {
+    let dir = tempdir().unwrap();
+    let rom = dir.path().join("sample.sfc");
+    let fixture = dir.path().join("commercial-smw/smw-boot.json");
+    let trace = dir.path().join("commercial-smw/smw-boot.trace.json");
+    write_test_rom(&rom);
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "compliance",
+            "commercial-record",
+            rom.to_str().unwrap(),
+            "--frames",
+            "1",
+            "--fixture-out",
+            fixture.to_str().unwrap(),
+            "--trace-out",
+            trace.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let fixture_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert_eq!(fixture_json[0]["expected"]["frame"], 1);
+    assert!(fixture_json[0]["expected"]["mmio_probes"].is_array());
+
+    let report_path = fixture.with_extension("report.json");
+    let report_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(report_path).unwrap()).unwrap();
+    assert_eq!(report_json["frame_counter"], 1);
+    assert!(report_json["ppu_write_activity"]["total_writes"].is_number());
+
+    let trace_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&trace).unwrap()).unwrap();
+    assert!(trace_json.is_array());
+}
+
+#[test]
+fn commercial_summary_and_run_current_work() {
+    let dir = tempdir().unwrap();
+    let rom = dir.path().join("sample.sfc");
+    let suite_dir = dir.path().join("commercial-smw");
+    let fixture = suite_dir.join("smw-boot.json");
+    let artifact_dir = suite_dir.join("artifacts");
+    let trace_dir = suite_dir.join("traces");
+    write_test_rom(&rom);
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "compliance",
+            "commercial-record",
+            rom.to_str().unwrap(),
+            "--frames",
+            "1",
+            "--fixture-out",
+            fixture.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "compliance",
+            "commercial-summary",
+            suite_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "compliance",
+            "commercial-run-current",
+            suite_dir.to_str().unwrap(),
+            "--artifact-dir",
+            artifact_dir.to_str().unwrap(),
+            "--trace-out",
+            trace_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let summary: serde_json::Value =
+        serde_json::from_slice(&fs::read(artifact_dir.join("summary.json")).unwrap()).unwrap();
+    assert_eq!(summary["failed"], 0);
+    assert_eq!(summary["passed"], 1);
+
+    let fixture_report: serde_json::Value =
+        serde_json::from_slice(&fs::read(artifact_dir.join("STARBYTE_CLI_TEST_commercial_boot.json")).unwrap())
+            .unwrap();
+    assert_eq!(fixture_report["report"]["frame_counter"], 1);
+    assert!(fixture_report["report"]["apu_io_activity"]["cpu_read_counts"].is_array());
+
+    let trace_files = fs::read_dir(&trace_dir).unwrap().count();
+    assert!(trace_files > 0);
+}

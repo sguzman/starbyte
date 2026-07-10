@@ -180,6 +180,28 @@ struct ComplianceArgs {
     command: ComplianceCommand,
 }
 
+#[derive(Debug, Args)]
+struct CommercialRecordArgs {
+    /// Commercial ROM to record from.
+    rom: PathBuf,
+
+    /// Number of frames to execute before recording evidence.
+    #[arg(long, default_value_t = 300)]
+    frames: u32,
+
+    /// Output path for the generated fixture JSON.
+    #[arg(long)]
+    fixture_out: PathBuf,
+
+    /// Comma-separated controller-1 buttons to hold during recording.
+    #[arg(long)]
+    controller1: Option<String>,
+
+    /// Optional instruction-trace output path.
+    #[arg(long)]
+    trace_out: Option<PathBuf>,
+}
+
 #[derive(Debug, Subcommand)]
 enum ComplianceCommand {
     /// Count files and vectors in a compliance suite directory.
@@ -220,6 +242,20 @@ enum ComplianceCommand {
         #[arg(long)]
         artifact_dir: Option<PathBuf>,
     },
+    /// Count files and fixtures in a commercial-ROM suite directory.
+    CommercialSummary { dir: PathBuf },
+    /// Execute commercial-ROM fixtures against the current emulator.
+    CommercialRunCurrent {
+        dir: PathBuf,
+        #[arg(long, default_value_t = 8)]
+        max_failures: usize,
+        #[arg(long)]
+        artifact_dir: Option<PathBuf>,
+        #[arg(long)]
+        trace_out: Option<PathBuf>,
+    },
+    /// Record a local commercial-ROM fixture from current emulator evidence.
+    CommercialRecord(CommercialRecordArgs),
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -578,6 +614,95 @@ fn run_compliance(args: ComplianceArgs, assets: AssetConfig) -> Result<()> {
                 );
             }
         }
+        ComplianceCommand::CommercialSummary { dir } => {
+            let summary = testing::commercial::summarize(&dir)?;
+            println!("Suite: {}", summary.suite_name);
+            println!("Files: {}", summary.file_count);
+            println!("Vectors: {}", summary.vector_count);
+        }
+        ComplianceCommand::CommercialRunCurrent {
+            dir,
+            max_failures,
+            artifact_dir,
+            trace_out,
+        } => {
+            let fixtures = testing::commercial::load_suite(&dir)?;
+            let executed = testing::commercial::run_with_current_core_executed(
+                &fixtures,
+                &assets,
+                trace_out.is_some(),
+            );
+            let evaluations = executed
+                .iter()
+                .map(|executed_fixture| executed_fixture.evaluation.clone())
+                .collect::<Vec<_>>();
+            let summary = testing::commercial::build_run_summary(&evaluations, max_failures);
+            print_run_summary(&summary);
+            maybe_write_commercial_artifacts(
+                &summary,
+                &executed,
+                artifact_dir.as_deref(),
+                trace_out.as_deref(),
+            )?;
+            if summary.failed > 0 {
+                anyhow::bail!(
+                    "Commercial ROM regression failures: {} of {} fixtures failed",
+                    summary.failed,
+                    summary.total
+                );
+            }
+        }
+        ComplianceCommand::CommercialRecord(args) => {
+            let controller1 = args
+                .controller1
+                .as_deref()
+                .map(parse_controller_state)
+                .transpose()?
+                .unwrap_or_default();
+            let mut recorded = testing::commercial::record_fixture(
+                &args.rom,
+                args.frames,
+                &assets,
+                controller1,
+                &[],
+                args.trace_out.is_some(),
+            )?;
+            let fixture_dir = args.fixture_out.parent().unwrap_or_else(|| Path::new("."));
+            recorded.fixture.rom = make_relative_path(fixture_dir, &args.rom);
+            ensure_parent_dir(&args.fixture_out)?;
+            std::fs::write(
+                &args.fixture_out,
+                serde_json::to_string_pretty(&vec![recorded.fixture.clone()])?,
+            )
+            .with_context(|| {
+                format!(
+                    "failed to write commercial fixture to {}",
+                    args.fixture_out.display()
+                )
+            })?;
+
+            let report_path = args.fixture_out.with_extension("report.json");
+            std::fs::write(&report_path, serde_json::to_string_pretty(&recorded.report)?)
+                .with_context(|| {
+                    format!(
+                        "failed to write commercial record report to {}",
+                        report_path.display()
+                    )
+                })?;
+
+            if let Some(trace_path) = args.trace_out.as_deref() {
+                if let Some(trace) = recorded.trace.take() {
+                    ensure_parent_dir(trace_path)?;
+                    std::fs::write(trace_path, serde_json::to_string_pretty(&trace)?)
+                        .with_context(|| {
+                            format!(
+                                "failed to write commercial instruction trace to {}",
+                                trace_path.display()
+                            )
+                        })?;
+                }
+            }
+        }
     }
 
     Ok(())
@@ -931,6 +1056,75 @@ fn maybe_write_regression_artifacts(
     Ok(())
 }
 
+fn maybe_write_commercial_artifacts(
+    summary: &testing::RunSummary,
+    executed: &[testing::commercial::ExecutedFixture],
+    artifact_dir: Option<&Path>,
+    trace_out: Option<&Path>,
+) -> Result<()> {
+    if artifact_dir.is_none() && trace_out.is_none() {
+        return Ok(());
+    }
+
+    if let Some(artifact_dir) = artifact_dir {
+        std::fs::create_dir_all(artifact_dir).with_context(|| {
+            format!(
+                "failed to create artifact directory {}",
+                artifact_dir.display()
+            )
+        })?;
+        let summary_path = artifact_dir.join("summary.json");
+        let report = json!({
+            "suite": summary.suite_name,
+            "total": summary.total,
+            "passed": summary.passed,
+            "failed": summary.failed,
+            "failures": summary.failures.iter().map(|failure| json!({
+                "label": failure.label,
+                "reasons": failure.reasons,
+            })).collect::<Vec<_>>(),
+        });
+        std::fs::write(&summary_path, serde_json::to_string_pretty(&report)?).with_context(|| {
+            format!(
+                "failed to write commercial regression summary to {}",
+                summary_path.display()
+            )
+        })?;
+    }
+
+    if let Some(trace_dir) = trace_out {
+        std::fs::create_dir_all(trace_dir).with_context(|| {
+            format!(
+                "failed to create trace directory {}",
+                trace_dir.display()
+            )
+        })?;
+    }
+
+    for executed_fixture in executed {
+        let fixture_name = sanitize_file_stem(&executed_fixture.evaluation.name);
+
+        if let Some(artifact_dir) = artifact_dir {
+            let path = artifact_dir.join(format!("{fixture_name}.json"));
+            std::fs::write(
+                &path,
+                serde_json::to_string_pretty(&executed_fixture.evaluation)?,
+            )
+            .with_context(|| format!("failed to write fixture report to {}", path.display()))?;
+        }
+
+        if let Some(trace_dir) = trace_out
+            && let Some(trace) = &executed_fixture.trace
+        {
+            let path = trace_dir.join(format!("{fixture_name}.trace.json"));
+            std::fs::write(&path, serde_json::to_string_pretty(trace)?)
+                .with_context(|| format!("failed to write trace report to {}", path.display()))?;
+        }
+    }
+
+    Ok(())
+}
+
 fn build_rom_run_summary(
     evaluations: &[testing::rom::FixtureEvaluation],
     max_failures: usize,
@@ -958,6 +1152,34 @@ fn build_rom_run_summary(
         passed,
         failed: evaluations.len().saturating_sub(passed),
         failures,
+    }
+}
+
+fn make_relative_path(base_dir: &Path, target: &Path) -> PathBuf {
+    let base_components = base_dir.components().collect::<Vec<_>>();
+    let target_components = target.components().collect::<Vec<_>>();
+    let common_len = base_components
+        .iter()
+        .zip(&target_components)
+        .take_while(|(left, right)| left == right)
+        .count();
+
+    if common_len == 0 {
+        return target.to_path_buf();
+    }
+
+    let mut relative = PathBuf::new();
+    for _ in common_len..base_components.len() {
+        relative.push("..");
+    }
+    for component in target_components.iter().skip(common_len) {
+        relative.push(component.as_os_str());
+    }
+
+    if relative.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        relative
     }
 }
 

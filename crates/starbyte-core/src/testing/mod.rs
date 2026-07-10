@@ -1,6 +1,7 @@
 //! Compliance and regression harness scaffolding.
 
 pub mod cpu_65816;
+pub mod commercial;
 pub mod rom;
 pub mod spc700;
 
@@ -17,13 +18,18 @@ pub struct ComplianceSuiteConfig {
     pub spc700_dir: Option<PathBuf>,
     /// Directory containing ROM-based regression suites.
     pub rom_suite_dir: Option<PathBuf>,
+    /// Directory containing commercial-ROM boot fixtures.
+    pub commercial_suite_dir: Option<PathBuf>,
 }
 
 impl ComplianceSuiteConfig {
     /// Return true when any compliance suite path has been configured.
     #[must_use]
     pub const fn is_configured(&self) -> bool {
-        self.cpu_65816_dir.is_some() || self.spc700_dir.is_some() || self.rom_suite_dir.is_some()
+        self.cpu_65816_dir.is_some()
+            || self.spc700_dir.is_some()
+            || self.rom_suite_dir.is_some()
+            || self.commercial_suite_dir.is_some()
     }
 
     /// Resolve a suite path if present.

@@ -20,6 +20,9 @@ This document tracks the compatibility push from bootstrap/test ROM behavior tow
 - [x] The early SPC/APU startup wait loop is no longer the first blocker after the APU port/handshake fixes.
 - [x] The Phase 1 `run --report-json` evidence now records compact APU port traffic and visible-display PPU write activity for commercial boot probing.
 - [x] The 300-frame `Super Mario World` probe reaches repeated visible-display MMIO programming in the normal PPU setup range instead of only bootstrap handshakes.
+- [x] A dedicated local-only commercial-ROM fixture flow can now record, summarize, and replay `Super Mario World` boot milestones through CLI `compliance` commands.
+- [x] Commercial fixture artifacts now capture milestone evidence beyond frame count, including CPU state, selected WRAM/MMIO probes, APU I/O activity, and PPU write activity.
+- [x] Optional commercial boot instruction traces can now be emitted as explicit debugging artifacts without coupling debugger UI into the core.
 - [x] Core emulator regression tests still pass after the current bootstrap CPU/APU changes.
 
 Current live blocker:
@@ -40,15 +43,15 @@ Phase 1 is complete. The next blocker moves into Phase 3 visual fidelity: the em
 
 ## Phase 2: Commercial-ROM Boot Harness
 
-- [ ] Add a dedicated commercial-ROM regression fixture flow alongside the existing ROM regression support.
-- [ ] Add a `Super Mario World` fixture that records milestone expectations such as frame progress, PC/state ranges, and selected MMIO or WRAM reads.
+- [x] Add a dedicated commercial-ROM regression fixture flow alongside the existing ROM regression support.
+- [x] Add a `Super Mario World` fixture that records milestone expectations such as frame progress, PC/state ranges, and selected MMIO or WRAM reads.
 - [x] Support richer verification probes for commercial boot cases:
 CPU PC or PC-range checks
 frame progression checks
 selected WRAM and MMIO reads
 framebuffer signature or sampled-region checks
-- [ ] Add optional trace capture useful for commercial-ROM debugging without coupling debugger UI into the core.
-- [ ] Keep the harness local-only and configurable rather than bundling ROM assets into the repo.
+- [x] Add optional trace capture useful for commercial-ROM debugging without coupling debugger UI into the core.
+- [x] Keep the harness local-only and configurable rather than bundling ROM assets into the repo.
 
 ## Phase 3: PPU Bring-Up For Visible Commercial Boot
 

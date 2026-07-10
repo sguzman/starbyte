@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument};
 
 use crate::apu::{Apu, ApuStatus, AudioFrame};
-use crate::bus::Bus;
+use crate::bus::{Bus, BusEvent};
 use crate::cartridge::Cartridge;
 use crate::cpu_65816::Cpu65816;
 use crate::cpu_65816::registers::Registers;
@@ -114,13 +114,19 @@ impl Emulator {
         while self.system.timing().frame == start_frame {
             self.step_instruction()?;
         }
-        self.system.render_frame(&mut self.frame_buffer);
+        self.refresh_framebuffer();
         debug!(frame = self.system.timing().frame, "advanced to next frame");
         Ok(())
     }
 
     /// Step one instruction in the placeholder model.
     pub fn step_instruction(&mut self) -> Result<()> {
+        let _ = self.step_instruction_with_trace()?;
+        Ok(())
+    }
+
+    /// Step one instruction and return the captured CPU bus events.
+    pub fn step_instruction_with_trace(&mut self) -> Result<Vec<BusEvent>> {
         if self.system.cartridge().is_none() {
             return Err(Error::InvalidRom("no ROM loaded".to_owned()));
         }
@@ -133,7 +139,7 @@ impl Emulator {
         self.system.sync_apu_ports_from_runtime(&self.apu);
         self.system.advance_master_clocks(master_cycles);
         self.append_audio_samples(master_cycles);
-        Ok(())
+        Ok(trace)
     }
 
     /// Borrow the current framebuffer.
@@ -259,6 +265,11 @@ impl Emulator {
     #[must_use]
     pub fn peek_ppu_register(&self, register: u16) -> Option<u8> {
         self.system.peek_ppu_register(register)
+    }
+
+    /// Re-render the current system state into the framebuffer.
+    pub fn refresh_framebuffer(&mut self) {
+        self.system.render_frame(&mut self.frame_buffer);
     }
 
     fn append_audio_samples(&mut self, master_cycles: u64) {

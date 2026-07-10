@@ -27,6 +27,7 @@ Current live blocker:
 
 - [x] Fix direct ROM loading so zipped commercial ROM archives can be loaded through the same host paths as extracted ROMs.
 - [x] Establish a repeatable `Super Mario World` headless boot probe using CLI `run`, save-state output, and JSON run reports.
+- [x] Provide an in-tree APU bootstrap fallback so commercial-ROM probing does not depend on an external SPC700 IPL dump, while still supporting optional user-supplied firmware.
 - [x] Correct 65816 reset defaults well enough for commercial reset code to execute meaningfully.
 - [ ] Implement the remaining early commercial-boot opcode and addressing-mode set needed to move past startup/upload loops.
 - [ ] Support the remaining stack, flag, compare, rotate, branch, and memory-access behavior exercised during SMW init.

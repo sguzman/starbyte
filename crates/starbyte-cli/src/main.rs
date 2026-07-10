@@ -584,10 +584,6 @@ fn run_compliance(args: ComplianceArgs, assets: AssetConfig) -> Result<()> {
 }
 
 fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
-    if assets.spc700_ipl.is_none() {
-        anyhow::bail!("missing required firmware path: pass --spc700-ipl /path/to/spc700.rom");
-    }
-
     let cartridge = Cartridge::load(&args.rom)
         .with_context(|| format!("failed to load ROM at {}", args.rom.display()))?;
     let save_ram_path = resolve_save_ram_path(&cartridge, assets.save_dir.as_deref())?;
@@ -603,7 +599,7 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
     )?;
 
     let mut emulator = EmulatorBuilder::new().assets(assets).build();
-    emulator.load_apu_ipl_rom()?;
+    let external_ipl_loaded = emulator.load_apu_ipl_rom()?;
     emulator.load_rom(cartridge);
     maybe_load_save_ram(&mut emulator, save_ram_path.as_deref())?;
     maybe_load_state(&mut emulator, load_state_path.as_deref())?;
@@ -635,7 +631,9 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
     let apu_status = emulator.apu_status();
     info!(
         frames = args.frames,
+        apu_external_ipl_loaded = external_ipl_loaded,
         apu_has_ipl_rom = apu_status.has_ipl_rom,
+        apu_using_builtin_bootstrap = apu_status.using_builtin_bootstrap,
         apu_spc700_steps = apu_status.spc700_steps,
         "completed bootstrap run"
     );

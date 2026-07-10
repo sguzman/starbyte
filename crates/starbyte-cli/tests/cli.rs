@@ -367,6 +367,32 @@ fn run_persists_save_ram_to_configured_directory() {
 }
 
 #[test]
+fn run_succeeds_without_external_spc700_ipl_rom() {
+    let dir = tempdir().unwrap();
+    let rom = dir.path().join("sample.sfc");
+    let report = dir.path().join("artifacts/run.json");
+    write_test_rom(&rom);
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "run",
+            rom.to_str().unwrap(),
+            "--frames",
+            "1",
+            "--report-json",
+            report.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let report_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
+    assert_eq!(report_json["frame_counter"], 1);
+    assert!(report_json["apu_steps"].as_u64().unwrap() > 0);
+}
+
+#[test]
 fn run_fails_for_mismatched_existing_save_ram() {
     let dir = tempdir().unwrap();
     let rom = dir.path().join("sample.sfc");

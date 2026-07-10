@@ -26,6 +26,8 @@ pub struct AudioFrame {
 pub struct ApuStatus {
     /// Whether a user-supplied IPL ROM is currently loaded.
     pub has_ipl_rom: bool,
+    /// Whether the emulator is using the in-tree bootstrap fallback instead of external firmware.
+    pub using_builtin_bootstrap: bool,
     /// Configured firmware path if any.
     pub configured_ipl_path: Option<PathBuf>,
     /// Total SPC700 bootstrap steps executed through the APU boundary.
@@ -74,13 +76,13 @@ impl Apu {
     pub fn reset(&mut self) {
         self.spc700.reset();
         self.cpu_to_apu_ports = [0; 4];
-        self.apu_to_cpu_ports = if self.ipl_rom.is_some() {
+        self.apu_to_cpu_ports = if self.bootstrap_program_available() {
             [0xAA, 0xBB, 0x00, 0x00]
         } else {
             [0; 4]
         };
         self.spc700_steps = 0;
-        self.bootstrap_state = if self.ipl_rom.is_some() {
+        self.bootstrap_state = if self.bootstrap_program_available() {
             BootstrapState::WaitingForCpuBootstrapAck
         } else {
             BootstrapState::Idle
@@ -186,13 +188,14 @@ impl Apu {
     pub fn status(&self) -> ApuStatus {
         ApuStatus {
             has_ipl_rom: self.ipl_rom.is_some(),
+            using_builtin_bootstrap: self.ipl_rom.is_none(),
             configured_ipl_path: self.configured_ipl_path.clone(),
             spc700_steps: self.spc700_steps,
         }
     }
 
     fn advance_bootstrap_handshake(&mut self) {
-        if self.ipl_rom.is_none() {
+        if !self.bootstrap_program_available() {
             return;
         }
 
@@ -227,6 +230,10 @@ impl Apu {
                 }
             }
         }
+    }
+
+    const fn bootstrap_program_available(&self) -> bool {
+        true
     }
 }
 
@@ -269,6 +276,30 @@ mod tests {
         assert_eq!(apu.read_cpu_port(0).unwrap(), 0x12);
         assert_eq!(apu.read_apu_port(3).unwrap(), 0x34);
         assert_eq!(apu.status().spc700_steps, 2);
+    }
+
+    #[test]
+    fn builtin_bootstrap_handshake_runs_without_external_ipl_rom() {
+        let mut apu = Apu::default();
+        apu.reset();
+
+        assert!(!apu.status().has_ipl_rom);
+        assert!(apu.status().using_builtin_bootstrap);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0xAA);
+        assert_eq!(apu.read_apu_port(1).unwrap(), 0xBB);
+
+        apu.write_cpu_port(0, 0xCC).unwrap();
+        apu.step_master_cycles(6);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0xCC);
+
+        apu.write_cpu_port(0, 0x00).unwrap();
+        apu.write_cpu_port(1, 0x00).unwrap();
+        apu.write_cpu_port(2, 0x00).unwrap();
+        apu.write_cpu_port(3, 0x00).unwrap();
+        apu.step_master_cycles(6);
+
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0xAA);
+        assert_eq!(apu.read_apu_port(1).unwrap(), 0xBB);
     }
 
     #[test]

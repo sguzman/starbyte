@@ -53,6 +53,20 @@ impl Cpu65816 {
 
     /// Execute one instruction against a bus and return the captured bus trace.
     pub fn step_with_bus<B: Bus>(&mut self, bus: &mut B) -> Result<Vec<BusEvent>> {
+        if bus.poll_nmi() {
+            let mut trace = Vec::new();
+            self.service_interrupt(bus, &mut trace, InterruptKind::Nmi)?;
+            self.cycles = trace.len() as u64;
+            return Ok(trace);
+        }
+
+        if self.irq_enabled() && bus.poll_irq() {
+            let mut trace = Vec::new();
+            self.service_interrupt(bus, &mut trace, InterruptKind::Irq)?;
+            self.cycles = trace.len() as u64;
+            return Ok(trace);
+        }
+
         let opcode_address = self.program_address();
         let opcode = bus.read(opcode_address);
         let mut trace = vec![BusEvent {
@@ -103,11 +117,14 @@ impl Cpu65816 {
             0x37 => self.execute_and_direct_page_indirect_long_y(bus, &mut trace),
             0x38 => self.execute_sec(bus, &mut trace),
             0x39 => self.execute_and_absolute_y(bus, &mut trace),
+            0x3A => self.execute_dec_a(bus, &mut trace),
             0x3B => self.execute_tsc(bus, &mut trace),
             0x3D => self.execute_and_absolute_x(bus, &mut trace),
             0x3F => self.execute_and_long_x(bus, &mut trace),
+            0x40 => self.execute_rti(bus, &mut trace),
             0x48 => self.execute_pha(bus, &mut trace),
             0x49 => self.execute_eor_immediate(bus, &mut trace),
+            0x4A => self.execute_lsr_a(bus, &mut trace),
             0x4C => self.execute_jmp_absolute(bus, &mut trace),
             0x4B => self.execute_phk(bus, &mut trace),
             0x4D => self.execute_eor_absolute(bus, &mut trace),
@@ -118,8 +135,12 @@ impl Cpu65816 {
             0x65 => self.execute_adc_direct_page(bus, &mut trace),
             0x68 => self.execute_pla(bus, &mut trace),
             0x69 => self.execute_adc_immediate(bus, &mut trace),
+            0x6D => self.execute_adc_absolute(bus, &mut trace),
+            0x6A => self.execute_ror_a(bus, &mut trace),
             0x70 => self.execute_bvs(bus, &mut trace),
+            0x79 => self.execute_adc_absolute_y(bus, &mut trace),
             0x7A => self.execute_ply(bus, &mut trace),
+            0x7D => self.execute_adc_absolute_x(bus, &mut trace),
             0x74 => self.execute_stz_direct_page_x(bus, &mut trace),
             0x6B => self.execute_rtl(bus, &mut trace),
             0x5B => self.execute_tcd(bus, &mut trace),
@@ -155,6 +176,7 @@ impl Cpu65816 {
             0xA7 => self.execute_lda_direct_page_indirect_long(bus, &mut trace),
             0xA9 => self.execute_lda_immediate(bus, &mut trace),
             0xAE => self.execute_ldx_absolute(bus, &mut trace),
+            0xAC => self.execute_ldy_absolute(bus, &mut trace),
             0xAB => self.execute_plb(bus, &mut trace),
             0x98 => self.execute_tya(bus, &mut trace),
             0xAD => self.execute_lda_absolute(bus, &mut trace),
@@ -177,6 +199,7 @@ impl Cpu65816 {
             0xC5 => self.execute_cmp_direct_page(bus, &mut trace),
             0xC6 => self.execute_dec_direct_page(bus, &mut trace),
             0xC9 => self.execute_cmp_immediate(bus, &mut trace),
+            0xCC => self.execute_cpy_absolute(bus, &mut trace),
             0xCD => self.execute_cmp_absolute(bus, &mut trace),
             0xCE => self.execute_dec_absolute(bus, &mut trace),
             0xDC => self.execute_jmp_absolute_indirect_long(bus, &mut trace),
@@ -192,6 +215,7 @@ impl Cpu65816 {
             0xDD => self.execute_cmp_absolute_x(bus, &mut trace),
             0xDE => self.execute_dec_absolute_x(bus, &mut trace),
             0xE0 => self.execute_cpx_immediate(bus, &mut trace),
+            0xEC => self.execute_cpx_absolute(bus, &mut trace),
             0xE8 => self.execute_inx(bus, &mut trace),
             0xE9 => self.execute_sbc_immediate(bus, &mut trace),
             0xEB => self.execute_xba(bus, &mut trace),
@@ -224,6 +248,10 @@ impl Cpu65816 {
     #[must_use]
     pub const fn cycles(&self) -> u64 {
         self.cycles
+    }
+
+    fn irq_enabled(&self) -> bool {
+        self.registers.p & 0x04 == 0
     }
 
     fn execute_nop<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
@@ -544,6 +572,20 @@ impl Cpu65816 {
         Ok(())
     }
 
+    fn execute_dec_a<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        if self.accumulator_is_8_bit() {
+            let value = (self.registers.a as u8).wrapping_sub(1);
+            self.registers.a = (self.registers.a & 0xFF00) | u16::from(value);
+            self.update_nz_8(value);
+        } else {
+            self.registers.a = self.registers.a.wrapping_sub(1);
+            self.update_nz_16(self.registers.a);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
     fn execute_inc_direct_page<B: Bus>(
         &mut self,
         bus: &mut B,
@@ -716,6 +758,26 @@ impl Cpu65816 {
         let bank = self.pull_stack(bus, trace);
         self.registers.pc = u16::from_le_bytes([low, high]).wrapping_add(1);
         self.registers.pbr = bank;
+        Ok(())
+    }
+
+    fn execute_rti<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        let mut status = self.pull_stack(bus, trace);
+        if self.registers.emulation {
+            status |= 0x30;
+        }
+        self.registers.p = status;
+        let low = self.pull_stack(bus, trace);
+        let high = self.pull_stack(bus, trace);
+        self.registers.pc = u16::from_le_bytes([low, high]);
+        if !self.registers.emulation {
+            self.registers.pbr = self.pull_stack(bus, trace);
+        }
+        if self.index_registers_are_8_bit() {
+            self.registers.x &= 0x00FF;
+            self.registers.y &= 0x00FF;
+        }
         Ok(())
     }
 
@@ -1020,6 +1082,17 @@ impl Cpu65816 {
     ) -> Result<()> {
         let address = self.absolute_address(self.fetch_operand_u16(bus, trace));
         self.load_index_x_from_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_ldy_absolute<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let address = self.absolute_address(self.fetch_operand_u16(bus, trace));
+        self.load_index_y_from_address(bus, trace, address);
         self.registers.pc = self.registers.pc.wrapping_add(3);
         Ok(())
     }
@@ -1712,6 +1785,41 @@ impl Cpu65816 {
         Ok(())
     }
 
+    fn execute_adc_absolute<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let address = self.absolute_address(self.fetch_operand_u16(bus, trace));
+        self.add_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_adc_absolute_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let base = self.fetch_operand_u16(bus, trace);
+        let address = self.absolute_address(base.wrapping_add(self.registers.x));
+        self.add_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_adc_absolute_y<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let base = self.fetch_operand_u16(bus, trace);
+        let address = self.absolute_address(base.wrapping_add(self.registers.y));
+        self.add_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
     fn execute_cpx_immediate<B: Bus>(
         &mut self,
         bus: &mut B,
@@ -1743,6 +1851,40 @@ impl Cpu65816 {
             self.compare_index_y_16(rhs);
             self.registers.pc = self.registers.pc.wrapping_add(3);
         }
+        Ok(())
+    }
+
+    fn execute_cpx_absolute<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let address = self.absolute_address(self.fetch_operand_u16(bus, trace));
+        if self.index_registers_are_8_bit() {
+            let rhs = self.read_u8_trace(bus, trace, address);
+            self.compare_index_x_8(rhs);
+        } else {
+            let rhs = self.read_u16_trace(bus, trace, address);
+            self.compare_index_x_16(rhs);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_cpy_absolute<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let address = self.absolute_address(self.fetch_operand_u16(bus, trace));
+        if self.index_registers_are_8_bit() {
+            let rhs = self.read_u8_trace(bus, trace, address);
+            self.compare_index_y_8(rhs);
+        } else {
+            let rhs = self.read_u16_trace(bus, trace, address);
+            self.compare_index_y_16(rhs);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(3);
         Ok(())
     }
 
@@ -1812,6 +1954,46 @@ impl Cpu65816 {
             self.registers.x &= 0x00FF;
             self.registers.y &= 0x00FF;
             self.registers.s = 0x0100 | (self.registers.s & 0x00FF);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_lsr_a<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        if self.accumulator_is_8_bit() {
+            let value = self.registers.a as u8;
+            self.set_carry(value & 0x01 != 0);
+            let result = value >> 1;
+            self.registers.a = (self.registers.a & 0xFF00) | u16::from(result);
+            self.update_nz_8(result);
+        } else {
+            let value = self.registers.a;
+            self.set_carry(value & 0x0001 != 0);
+            let result = value >> 1;
+            self.registers.a = result;
+            self.update_nz_16(result);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_ror_a<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        if self.accumulator_is_8_bit() {
+            let value = self.registers.a as u8;
+            let incoming = u8::from(self.registers.p & 0x01 != 0) << 7;
+            self.set_carry(value & 0x01 != 0);
+            let result = (value >> 1) | incoming;
+            self.registers.a = (self.registers.a & 0xFF00) | u16::from(result);
+            self.update_nz_8(result);
+        } else {
+            let value = self.registers.a;
+            let incoming = u16::from(self.registers.p & 0x01 != 0) << 15;
+            self.set_carry(value & 0x0001 != 0);
+            let result = (value >> 1) | incoming;
+            self.registers.a = result;
+            self.update_nz_16(result);
         }
         self.registers.pc = self.registers.pc.wrapping_add(1);
         Ok(())
@@ -2020,6 +2202,32 @@ impl Cpu65816 {
         } else {
             0x00FFE6
         };
+        self.finish_interrupt_vector_load(bus, trace, vector_base);
+        Ok(())
+    }
+
+    fn service_interrupt<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        kind: InterruptKind,
+    ) -> Result<()> {
+        if !self.registers.emulation {
+            self.push_stack(bus, trace, self.registers.pbr)?;
+        }
+        self.push_stack(bus, trace, (self.registers.pc >> 8) as u8)?;
+        self.push_stack(bus, trace, (self.registers.pc & 0x00FF) as u8)?;
+        self.push_stack(bus, trace, self.registers.p & !0x10)?;
+        self.finish_interrupt_vector_load(bus, trace, kind.vector_base(self.registers.emulation));
+        Ok(())
+    }
+
+    fn finish_interrupt_vector_load<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        vector_base: Address,
+    ) {
         let vector_low = bus.read(vector_base);
         trace.push(BusEvent {
             address: vector_base,
@@ -2040,7 +2248,6 @@ impl Cpu65816 {
             self.registers.pbr = 0;
         }
         self.registers.p = (self.registers.p | 0x04) & !0x08;
-        Ok(())
     }
 
     fn push_stack<B: Bus>(
@@ -2427,6 +2634,43 @@ impl Cpu65816 {
         self.update_nz_16(result);
     }
 
+    fn add_accumulator_8(&mut self, rhs: u8) {
+        let lhs = self.registers.a as u8;
+        let carry = u8::from(self.registers.p & 0x01 != 0);
+        let (tmp, carry1) = lhs.overflowing_add(rhs);
+        let (result, carry2) = tmp.overflowing_add(carry);
+        self.registers.a = (self.registers.a & 0xFF00) | u16::from(result);
+        self.set_carry(carry1 || carry2);
+        self.set_overflow((!(lhs ^ rhs) & (lhs ^ result) & 0x80) != 0);
+        self.update_nz_8(result);
+    }
+
+    fn add_accumulator_16(&mut self, rhs: u16) {
+        let lhs = self.registers.a;
+        let carry = u16::from(self.registers.p & 0x01 != 0);
+        let (tmp, carry1) = lhs.overflowing_add(rhs);
+        let (result, carry2) = tmp.overflowing_add(carry);
+        self.registers.a = result;
+        self.set_carry(carry1 || carry2);
+        self.set_overflow((!(lhs ^ rhs) & (lhs ^ result) & 0x8000) != 0);
+        self.update_nz_16(result);
+    }
+
+    fn add_accumulator_with_address<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        address: Address,
+    ) {
+        if self.accumulator_is_8_bit() {
+            let rhs = self.read_u8_trace(bus, trace, address);
+            self.add_accumulator_8(rhs);
+        } else {
+            let rhs = self.read_u16_trace(bus, trace, address);
+            self.add_accumulator_16(rhs);
+        }
+    }
+
     fn or_accumulator_8(&mut self, rhs: u8) {
         let result = (self.registers.a as u8) | rhs;
         self.registers.a = (self.registers.a & 0xFF00) | u16::from(result);
@@ -2497,6 +2741,23 @@ impl Cpu65816 {
     }
 }
 
+#[derive(Clone, Copy)]
+enum InterruptKind {
+    Nmi,
+    Irq,
+}
+
+impl InterruptKind {
+    fn vector_base(self, emulation: bool) -> Address {
+        match (self, emulation) {
+            (Self::Nmi, true) => 0x00FFFA,
+            (Self::Nmi, false) => 0x00FFEA,
+            (Self::Irq, true) => 0x00FFFE,
+            (Self::Irq, false) => 0x00FFEE,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -2508,6 +2769,8 @@ mod tests {
     #[derive(Default)]
     struct TestBus {
         bytes: HashMap<Address, u8>,
+        pending_nmi: bool,
+        pending_irq: bool,
     }
 
     impl TestBus {
@@ -2516,7 +2779,11 @@ mod tests {
             for (address, value) in bytes {
                 map.insert(*address, *value);
             }
-            Self { bytes: map }
+            Self {
+                bytes: map,
+                pending_nmi: false,
+                pending_irq: false,
+            }
         }
     }
 
@@ -2527,6 +2794,18 @@ mod tests {
 
         fn write(&mut self, address: Address, value: u8) {
             self.bytes.insert(address, value);
+        }
+
+        fn poll_nmi(&mut self) -> bool {
+            let pending = self.pending_nmi;
+            self.pending_nmi = false;
+            pending
+        }
+
+        fn poll_irq(&mut self) -> bool {
+            let pending = self.pending_irq;
+            self.pending_irq = false;
+            pending
         }
     }
 
@@ -3062,6 +3341,72 @@ mod tests {
     }
 
     #[test]
+    fn ldy_absolute_loads_index_y() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0xAC),
+            (0x008001, 0x34),
+            (0x008002, 0x12),
+            (0x001234, 0x7F),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.pc, 0x8003);
+        assert_eq!(cpu.registers.y, 0x007F);
+        assert_eq!(cpu.registers.p & 0x80, 0);
+        assert_eq!(cpu.registers.p & 0x02, 0);
+    }
+
+    #[test]
+    fn cpy_absolute_updates_flags() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.y = 0x0050;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0xCC),
+            (0x008001, 0x34),
+            (0x008002, 0x12),
+            (0x001234, 0x40),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.pc, 0x8003);
+        assert_ne!(cpu.registers.p & 0x01, 0);
+        assert_eq!(cpu.registers.p & 0x02, 0);
+    }
+
+    #[test]
+    fn cpx_absolute_updates_flags() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.x = 0x0040;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0xEC),
+            (0x008001, 0x34),
+            (0x008002, 0x12),
+            (0x001234, 0x40),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.pc, 0x8003);
+        assert_ne!(cpu.registers.p & 0x01, 0);
+        assert_ne!(cpu.registers.p & 0x02, 0);
+    }
+
+    #[test]
     fn dec_direct_page_decrements_memory_and_updates_flags() {
         let mut cpu = Cpu65816::default();
         cpu.registers.pc = 0x8000;
@@ -3116,6 +3461,27 @@ mod tests {
     }
 
     #[test]
+    fn adc_absolute_adds_memory_operand() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.a = 0x0005;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x6D),
+            (0x008001, 0x34),
+            (0x008002, 0x12),
+            (0x001234, 0x07),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.a & 0x00FF, 0x0C);
+        assert_eq!(cpu.registers.pc, 0x8003);
+    }
+
+    #[test]
     fn xba_swaps_accumulator_bytes_and_updates_low_byte_flags() {
         let mut cpu = Cpu65816::default();
         cpu.registers.pc = 0x8000;
@@ -3130,5 +3496,97 @@ mod tests {
         assert_eq!(cpu.registers.a, 0x3412);
         assert_eq!(cpu.registers.pc, 0x8001);
         assert_eq!(cpu.registers.p & 0x02, 0);
+    }
+
+    #[test]
+    fn lsr_a_shifts_right_and_sets_carry() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.a = 0x0003;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0x4A)]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.a & 0x00FF, 0x01);
+        assert_ne!(cpu.registers.p & 0x01, 0);
+        assert_eq!(cpu.registers.pc, 0x8001);
+    }
+
+    #[test]
+    fn ror_a_rotates_in_carry() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.a = 0x0002;
+        cpu.registers.p = 0x21;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0x6A)]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.a & 0x00FF, 0x81);
+        assert_eq!(cpu.registers.p & 0x01, 0);
+        assert_eq!(cpu.registers.pc, 0x8001);
+    }
+
+    #[test]
+    fn dec_a_decrements_accumulator() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.a = 0x0001;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0x3A)]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.a & 0x00FF, 0x00);
+        assert_ne!(cpu.registers.p & 0x02, 0);
+        assert_eq!(cpu.registers.pc, 0x8001);
+    }
+
+    #[test]
+    fn nmi_is_serviced_before_next_opcode_fetch() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[(0x00FFEA, 0x34), (0x00FFEB, 0x12)]);
+        bus.pending_nmi = true;
+
+        let trace = cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.pc, 0x1234);
+        assert_eq!(cpu.registers.pbr, 0x00);
+        assert_ne!(cpu.registers.p & 0x04, 0);
+        assert!(trace.iter().any(|event| event.address == 0x00FFEA));
+        assert!(trace.iter().any(|event| event.address == 0x00FFEB));
+    }
+
+    #[test]
+    fn rti_restores_status_and_program_counter() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x1234;
+        cpu.registers.p = 0x04;
+        cpu.registers.s = 0x01FB;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x001234, 0x40),
+            (0x001235, 0x00),
+            (0x0001FC, 0x22),
+            (0x0001FD, 0x78),
+            (0x0001FE, 0x56),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.p, 0x32);
+        assert_eq!(cpu.registers.pc, 0x5678);
+        assert_eq!(cpu.registers.s, 0x01FE);
     }
 }

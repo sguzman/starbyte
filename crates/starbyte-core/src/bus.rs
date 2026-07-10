@@ -36,4 +36,14 @@ pub trait Bus {
 
     /// Write one byte.
     fn write(&mut self, address: Address, value: u8);
+
+    /// Poll and acknowledge one pending NMI edge if present.
+    fn poll_nmi(&mut self) -> bool {
+        false
+    }
+
+    /// Poll and acknowledge one pending IRQ edge if present.
+    fn poll_irq(&mut self) -> bool {
+        false
+    }
 }

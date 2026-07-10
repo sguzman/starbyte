@@ -71,7 +71,11 @@ pub struct SystemBus {
     open_bus: u8,
     nmitimen: u8,
     rdnmi: bool,
+    #[serde(default)]
+    pending_nmi: bool,
     timeup: bool,
+    #[serde(default)]
+    pending_irq: bool,
     joypad: JoypadIo,
     wram_address: u32,
     #[serde(default)]
@@ -93,7 +97,9 @@ impl Default for SystemBus {
             open_bus: 0,
             nmitimen: 0,
             rdnmi: false,
+            pending_nmi: false,
             timeup: false,
+            pending_irq: false,
             joypad: JoypadIo::default(),
             wram_address: 0,
             observability: SystemBusObservability::default(),
@@ -131,7 +137,9 @@ impl SystemBus {
         self.open_bus = 0;
         self.nmitimen = 0;
         self.rdnmi = false;
+        self.pending_nmi = false;
         self.timeup = false;
+        self.pending_irq = false;
         self.joypad = JoypadIo::default();
         self.wram_address = 0;
         self.observability = SystemBusObservability::default();
@@ -156,9 +164,13 @@ impl SystemBus {
                 "entered vblank"
             );
             self.rdnmi = true;
+            if self.nmi_enabled() {
+                self.pending_nmi = true;
+            }
         }
         if events.crossed_scanline && self.irq_enabled() {
             self.timeup = true;
+            self.pending_irq = true;
         }
     }
 
@@ -341,6 +353,18 @@ impl Bus for SystemBus {
         }
 
         let _ = self.write_mmio(address, value);
+    }
+
+    fn poll_nmi(&mut self) -> bool {
+        let pending = self.pending_nmi;
+        self.pending_nmi = false;
+        pending
+    }
+
+    fn poll_irq(&mut self) -> bool {
+        let pending = self.pending_irq;
+        self.pending_irq = false;
+        pending
     }
 }
 
@@ -613,6 +637,7 @@ impl SystemBus {
                 self.nmitimen = value;
                 if self.nmi_enabled() && !nmi_was_enabled && self.timing.in_vblank() {
                     self.rdnmi = true;
+                    self.pending_nmi = true;
                 }
                 Some(())
             }

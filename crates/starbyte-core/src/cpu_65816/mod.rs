@@ -78,18 +78,24 @@ impl Cpu65816 {
 
         match opcode {
             0x01 => self.execute_ora_direct_page_indexed_indirect_x(bus, &mut trace),
+            0x02 => self.execute_cop(bus, &mut trace),
+            0x03 => self.execute_ora_stack_relative(bus, &mut trace),
             0x04 => self.execute_tsb_direct_page(bus, &mut trace),
             0x05 => self.execute_ora_direct_page(bus, &mut trace),
+            0x06 => self.execute_asl_direct_page(bus, &mut trace),
             0x07 => self.execute_ora_direct_page_indirect_long(bus, &mut trace),
             0x08 => self.execute_php(bus, &mut trace),
             0x0A => self.execute_asl_a(bus, &mut trace),
             0x09 => self.execute_ora_immediate(bus, &mut trace),
             0x0D => self.execute_ora_absolute(bus, &mut trace),
+            0x0E => self.execute_asl_absolute(bus, &mut trace),
             0x0F => self.execute_ora_long(bus, &mut trace),
             0x10 => self.execute_bpl(bus, &mut trace),
             0x11 => self.execute_ora_direct_page_indirect_y(bus, &mut trace),
             0x12 => self.execute_ora_direct_page_indirect(bus, &mut trace),
+            0x13 => self.execute_ora_stack_relative_indirect_y(bus, &mut trace),
             0x15 => self.execute_ora_direct_page_x(bus, &mut trace),
+            0x16 => self.execute_asl_direct_page_x(bus, &mut trace),
             0x17 => self.execute_ora_direct_page_indirect_long_y(bus, &mut trace),
             0x19 => self.execute_ora_absolute_y(bus, &mut trace),
             0xEA => self.execute_nop(bus, &mut trace),
@@ -99,6 +105,7 @@ impl Cpu65816 {
             0x18 => self.execute_clc(bus, &mut trace),
             0x1A => self.execute_inc_a(bus, &mut trace),
             0x1D => self.execute_ora_absolute_x(bus, &mut trace),
+            0x1E => self.execute_asl_absolute_x(bus, &mut trace),
             0x1F => self.execute_ora_long_x(bus, &mut trace),
             0x20 => self.execute_jsr_absolute(bus, &mut trace),
             0x22 => self.execute_jsl_long(bus, &mut trace),
@@ -107,19 +114,23 @@ impl Cpu65816 {
             0x29 => self.execute_and_immediate(bus, &mut trace),
             0x2A => self.execute_rol_a(bus, &mut trace),
             0x25 => self.execute_and_direct_page(bus, &mut trace),
+            0x26 => self.execute_rol_direct_page(bus, &mut trace),
             0x27 => self.execute_and_direct_page_indirect_long(bus, &mut trace),
             0x2D => self.execute_and_absolute(bus, &mut trace),
+            0x2E => self.execute_rol_absolute(bus, &mut trace),
             0x2C => self.execute_bit_absolute(bus, &mut trace),
             0x30 => self.execute_bmi(bus, &mut trace),
             0x31 => self.execute_and_direct_page_indirect_y(bus, &mut trace),
             0x32 => self.execute_and_direct_page_indirect(bus, &mut trace),
             0x35 => self.execute_and_direct_page_x(bus, &mut trace),
+            0x36 => self.execute_rol_direct_page_x(bus, &mut trace),
             0x37 => self.execute_and_direct_page_indirect_long_y(bus, &mut trace),
             0x38 => self.execute_sec(bus, &mut trace),
             0x39 => self.execute_and_absolute_y(bus, &mut trace),
             0x3A => self.execute_dec_a(bus, &mut trace),
             0x3B => self.execute_tsc(bus, &mut trace),
             0x3D => self.execute_and_absolute_x(bus, &mut trace),
+            0x3E => self.execute_rol_absolute_x(bus, &mut trace),
             0x3F => self.execute_and_long_x(bus, &mut trace),
             0x40 => self.execute_rti(bus, &mut trace),
             0x48 => self.execute_pha(bus, &mut trace),
@@ -128,31 +139,54 @@ impl Cpu65816 {
             0x4C => self.execute_jmp_absolute(bus, &mut trace),
             0x4B => self.execute_phk(bus, &mut trace),
             0x4D => self.execute_eor_absolute(bus, &mut trace),
+            0x46 => self.execute_lsr_direct_page(bus, &mut trace),
+            0x4E => self.execute_lsr_absolute(bus, &mut trace),
+            0x50 => self.execute_bvc(bus, &mut trace),
             0x5A => self.execute_phy(bus, &mut trace),
             0x58 => self.execute_cli(bus, &mut trace),
+            0x56 => self.execute_lsr_direct_page_x(bus, &mut trace),
+            0x5E => self.execute_lsr_absolute_x(bus, &mut trace),
             0x60 => self.execute_rts(bus, &mut trace),
+            0x63 => self.execute_adc_stack_relative(bus, &mut trace),
             0x64 => self.execute_stz_direct_page(bus, &mut trace),
             0x65 => self.execute_adc_direct_page(bus, &mut trace),
+            0x66 => self.execute_ror_direct_page(bus, &mut trace),
             0x68 => self.execute_pla(bus, &mut trace),
             0x69 => self.execute_adc_immediate(bus, &mut trace),
             0x6D => self.execute_adc_absolute(bus, &mut trace),
             0x6A => self.execute_ror_a(bus, &mut trace),
+            0x6E => self.execute_ror_absolute(bus, &mut trace),
+            0x6F => self.execute_adc_long(bus, &mut trace),
             0x70 => self.execute_bvs(bus, &mut trace),
+            0x73 => self.execute_adc_stack_relative_indirect_y(bus, &mut trace),
             0x79 => self.execute_adc_absolute_y(bus, &mut trace),
             0x7A => self.execute_ply(bus, &mut trace),
             0x7D => self.execute_adc_absolute_x(bus, &mut trace),
+            0x76 => self.execute_ror_direct_page_x(bus, &mut trace),
+            0x7E => self.execute_ror_absolute_x(bus, &mut trace),
+            0x7F => self.execute_adc_long_x(bus, &mut trace),
             0x74 => self.execute_stz_direct_page_x(bus, &mut trace),
             0x6B => self.execute_rtl(bus, &mut trace),
             0x5B => self.execute_tcd(bus, &mut trace),
             0x78 => self.execute_sei(bus, &mut trace),
             0x80 => self.execute_bra(bus, &mut trace),
+            0x81 => self.execute_sta_direct_page_indexed_indirect_x(bus, &mut trace),
+            0x82 => self.execute_brl(bus, &mut trace),
+            0x83 => self.execute_sta_stack_relative(bus, &mut trace),
             0x7B => self.execute_tdc(bus, &mut trace),
             0x84 => self.execute_sty_direct_page(bus, &mut trace),
             0x85 => self.execute_sta_direct_page(bus, &mut trace),
             0x86 => self.execute_stx_direct_page(bus, &mut trace),
+            0x87 => self.execute_sta_direct_page_indirect_long(bus, &mut trace),
             0x88 => self.execute_dey(bus, &mut trace),
             0x90 => self.execute_bcc(bus, &mut trace),
+            0x91 => self.execute_sta_direct_page_indirect_y(bus, &mut trace),
+            0x92 => self.execute_sta_direct_page_indirect(bus, &mut trace),
+            0x93 => self.execute_sta_stack_relative_indirect_y(bus, &mut trace),
             0x8B => self.execute_phb(bus, &mut trace),
+            0x94 => self.execute_sty_direct_page_x(bus, &mut trace),
+            0x95 => self.execute_sta_direct_page_x(bus, &mut trace),
+            0x96 => self.execute_stx_direct_page_y(bus, &mut trace),
             0xA8 => self.execute_tay(bus, &mut trace),
             0x8A => self.execute_txa(bus, &mut trace),
             0x8D => self.execute_sta_absolute(bus, &mut trace),
@@ -207,6 +241,7 @@ impl Cpu65816 {
             0xBA => self.execute_tsx(bus, &mut trace),
             0xC2 => self.execute_rep(bus, &mut trace),
             0xC0 => self.execute_cpy_immediate(bus, &mut trace),
+            0xC4 => self.execute_cpy_direct_page(bus, &mut trace),
             0xD0 => self.execute_bne(bus, &mut trace),
             0xD5 => self.execute_cmp_direct_page_x(bus, &mut trace),
             0xD6 => self.execute_dec_direct_page_x(bus, &mut trace),
@@ -215,6 +250,7 @@ impl Cpu65816 {
             0xDD => self.execute_cmp_absolute_x(bus, &mut trace),
             0xDE => self.execute_dec_absolute_x(bus, &mut trace),
             0xE0 => self.execute_cpx_immediate(bus, &mut trace),
+            0xE4 => self.execute_cpx_direct_page(bus, &mut trace),
             0xEC => self.execute_cpx_absolute(bus, &mut trace),
             0xE8 => self.execute_inx(bus, &mut trace),
             0xE9 => self.execute_sbc_immediate(bus, &mut trace),
@@ -225,6 +261,7 @@ impl Cpu65816 {
             0xF6 => self.execute_inc_direct_page_x(bus, &mut trace),
             0xFA => self.execute_plx(bus, &mut trace),
             0xFB => self.execute_xce(bus, &mut trace),
+            0xFC => self.execute_jsr_absolute_indexed_indirect_x(bus, &mut trace),
             0xFE => self.execute_inc_absolute_x(bus, &mut trace),
             0xF8 => self.execute_sed(bus, &mut trace),
             _ => Err(Error::UnsupportedOpcode {
@@ -308,8 +345,117 @@ impl Cpu65816 {
         self.execute_branch_relative(bus, trace, true)
     }
 
+    fn execute_brl<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        let offset = self.fetch_operand_u16(bus, trace) as i16;
+        let next = self.registers.pc.wrapping_add(3);
+        self.registers.pc = next.wrapping_add_signed(offset);
+        Ok(())
+    }
+
+    fn execute_asl_direct_page<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_address(operand);
+        self.asl_memory(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_asl_direct_page_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self
+            .direct_page_address(operand)
+            .wrapping_add(u32::from(self.registers.x & 0x00FF));
+        self.asl_memory(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_asl_absolute<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let address = self.absolute_address(self.fetch_operand_u16(bus, trace));
+        self.asl_memory(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_asl_absolute_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let base = self.fetch_operand_u16(bus, trace);
+        let address = self.absolute_address(base.wrapping_add(self.registers.x));
+        self.asl_memory(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_rol_direct_page<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_address(operand);
+        self.rol_memory(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_rol_direct_page_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self
+            .direct_page_address(operand)
+            .wrapping_add(u32::from(self.registers.x & 0x00FF));
+        self.rol_memory(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_rol_absolute<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let address = self.absolute_address(self.fetch_operand_u16(bus, trace));
+        self.rol_memory(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_rol_absolute_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let base = self.fetch_operand_u16(bus, trace);
+        let address = self.absolute_address(base.wrapping_add(self.registers.x));
+        self.rol_memory(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
     fn execute_bvs<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
         self.execute_branch_relative(bus, trace, self.registers.p & 0x40 != 0)
+    }
+
+    fn execute_bvc<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.execute_branch_relative(bus, trace, self.registers.p & 0x40 == 0)
     }
 
     fn execute_bcc<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
@@ -318,6 +464,42 @@ impl Cpu65816 {
 
     fn execute_bcs<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
         self.execute_branch_relative(bus, trace, self.registers.p & 0x01 != 0)
+    }
+
+    fn execute_ora_stack_relative<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.stack_relative_address(operand);
+        if self.accumulator_is_8_bit() {
+            let rhs = self.read_u8_trace(bus, trace, address);
+            self.or_accumulator_8(rhs);
+        } else {
+            let rhs = self.read_u16_trace(bus, trace, address);
+            self.or_accumulator_16(rhs);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_ora_stack_relative_indirect_y<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.stack_relative_indirect_y_address(bus, trace, operand);
+        if self.accumulator_is_8_bit() {
+            let rhs = self.read_u8_trace(bus, trace, address);
+            self.or_accumulator_8(rhs);
+        } else {
+            let rhs = self.read_u16_trace(bus, trace, address);
+            self.or_accumulator_16(rhs);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
     }
 
     fn execute_tay<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
@@ -720,6 +902,22 @@ impl Cpu65816 {
         trace: &mut Vec<BusEvent>,
     ) -> Result<()> {
         let target = self.fetch_operand_u16(bus, trace);
+        let return_pc = self.registers.pc.wrapping_add(2);
+        self.push_stack(bus, trace, (return_pc >> 8) as u8)?;
+        self.push_stack(bus, trace, (return_pc & 0x00FF) as u8)?;
+        self.registers.pc = target;
+        Ok(())
+    }
+
+    fn execute_jsr_absolute_indexed_indirect_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let pointer = self.fetch_operand_u16(bus, trace).wrapping_add(self.registers.x);
+        let low = self.read_u8_trace(bus, trace, u32::from(pointer));
+        let high = self.read_u8_trace(bus, trace, u32::from(pointer.wrapping_add(1)));
+        let target = u16::from_le_bytes([low, high]);
         let return_pc = self.registers.pc.wrapping_add(2);
         self.push_stack(bus, trace, (return_pc >> 8) as u8)?;
         self.push_stack(bus, trace, (return_pc & 0x00FF) as u8)?;
@@ -1225,6 +1423,20 @@ impl Cpu65816 {
         Ok(())
     }
 
+    fn execute_sty_direct_page_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self
+            .direct_page_address(operand)
+            .wrapping_add(u32::from(self.registers.x & 0x00FF));
+        self.store_index_y_to_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
     fn execute_sta_absolute<B: Bus>(
         &mut self,
         bus: &mut B,
@@ -1233,6 +1445,59 @@ impl Cpu65816 {
         let address = self.absolute_address(self.fetch_operand_u16(bus, trace));
         self.store_accumulator_to_address(bus, trace, address);
         self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_sta_direct_page_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self
+            .direct_page_address(operand)
+            .wrapping_add(u32::from(self.registers.x & 0x00FF));
+        self.store_accumulator_to_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_sta_direct_page_indexed_indirect_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let pointer = self.direct_page_indexed_x_address(operand);
+        let low = self.read_u8_trace(bus, trace, pointer);
+        let high = self.read_u8_trace(bus, trace, pointer.wrapping_add(1));
+        let address = self.absolute_address(u16::from_le_bytes([low, high]));
+        self.store_accumulator_to_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_sta_stack_relative<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.stack_relative_address(operand);
+        self.store_accumulator_to_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_sta_direct_page_indirect_long<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_indirect_long_address(bus, trace, operand);
+        self.store_accumulator_to_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
         Ok(())
     }
 
@@ -1247,6 +1512,20 @@ impl Cpu65816 {
         Ok(())
     }
 
+    fn execute_stx_direct_page_y<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self
+            .direct_page_address(operand)
+            .wrapping_add(u32::from(self.registers.y & 0x00FF));
+        self.store_index_x_to_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
     fn execute_sta_absolute_y<B: Bus>(
         &mut self,
         bus: &mut B,
@@ -1256,6 +1535,49 @@ impl Cpu65816 {
         let address = self.absolute_address(base.wrapping_add(self.registers.y));
         self.store_accumulator_to_address(bus, trace, address);
         self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_sta_direct_page_indirect_y<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let pointer = self.direct_page_address(operand);
+        let low = self.read_u8_trace(bus, trace, pointer);
+        let high = self.read_u8_trace(bus, trace, pointer.wrapping_add(1));
+        let base = u16::from_le_bytes([low, high]);
+        let address = self.absolute_address(base.wrapping_add(self.registers.y));
+        self.store_accumulator_to_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_sta_direct_page_indirect<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let pointer = self.direct_page_address(operand);
+        let low = self.read_u8_trace(bus, trace, pointer);
+        let high = self.read_u8_trace(bus, trace, pointer.wrapping_add(1));
+        let address = self.absolute_address(u16::from_le_bytes([low, high]));
+        self.store_accumulator_to_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_sta_stack_relative_indirect_y<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.stack_relative_indirect_y_address(bus, trace, operand);
+        self.store_accumulator_to_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
         Ok(())
     }
 
@@ -1754,6 +2076,18 @@ impl Cpu65816 {
         Ok(())
     }
 
+    fn execute_adc_stack_relative<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.stack_relative_address(operand);
+        self.add_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
     fn execute_adc_immediate<B: Bus>(
         &mut self,
         bus: &mut B,
@@ -1820,6 +2154,37 @@ impl Cpu65816 {
         Ok(())
     }
 
+    fn execute_adc_long<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        let address = self.fetch_operand_u24(bus, trace);
+        self.add_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(4);
+        Ok(())
+    }
+
+    fn execute_adc_long_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let base = self.fetch_operand_u24(bus, trace);
+        let address = base.wrapping_add(u32::from(self.registers.x));
+        self.add_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(4);
+        Ok(())
+    }
+
+    fn execute_adc_stack_relative_indirect_y<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.stack_relative_indirect_y_address(bus, trace, operand);
+        self.add_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
     fn execute_cpx_immediate<B: Bus>(
         &mut self,
         bus: &mut B,
@@ -1851,6 +2216,42 @@ impl Cpu65816 {
             self.compare_index_y_16(rhs);
             self.registers.pc = self.registers.pc.wrapping_add(3);
         }
+        Ok(())
+    }
+
+    fn execute_cpx_direct_page<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_address(operand);
+        if self.index_registers_are_8_bit() {
+            let rhs = self.read_u8_trace(bus, trace, address);
+            self.compare_index_x_8(rhs);
+        } else {
+            let rhs = self.read_u16_trace(bus, trace, address);
+            self.compare_index_x_16(rhs);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_cpy_direct_page<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_address(operand);
+        if self.index_registers_are_8_bit() {
+            let rhs = self.read_u8_trace(bus, trace, address);
+            self.compare_index_y_8(rhs);
+        } else {
+            let rhs = self.read_u16_trace(bus, trace, address);
+            self.compare_index_y_16(rhs);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(2);
         Ok(())
     }
 
@@ -1996,6 +2397,104 @@ impl Cpu65816 {
             self.update_nz_16(result);
         }
         self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_lsr_direct_page<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_address(operand);
+        self.lsr_memory(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_lsr_direct_page_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self
+            .direct_page_address(operand)
+            .wrapping_add(u32::from(self.registers.x & 0x00FF));
+        self.lsr_memory(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_lsr_absolute<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let address = self.absolute_address(self.fetch_operand_u16(bus, trace));
+        self.lsr_memory(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_lsr_absolute_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let base = self.fetch_operand_u16(bus, trace);
+        let address = self.absolute_address(base.wrapping_add(self.registers.x));
+        self.lsr_memory(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_ror_direct_page<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_address(operand);
+        self.ror_memory(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_ror_direct_page_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self
+            .direct_page_address(operand)
+            .wrapping_add(u32::from(self.registers.x & 0x00FF));
+        self.ror_memory(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_ror_absolute<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let address = self.absolute_address(self.fetch_operand_u16(bus, trace));
+        self.ror_memory(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_ror_absolute_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let base = self.fetch_operand_u16(bus, trace);
+        let address = self.absolute_address(base.wrapping_add(self.registers.x));
+        self.ror_memory(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
         Ok(())
     }
 
@@ -2201,6 +2700,41 @@ impl Cpu65816 {
             0x00FFFE
         } else {
             0x00FFE6
+        };
+        self.finish_interrupt_vector_load(bus, trace, vector_base);
+        Ok(())
+    }
+
+    fn execute_cop<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        let signature_address = self.fetch_address(1);
+        let signature = bus.read(signature_address);
+        trace.push(BusEvent {
+            address: signature_address,
+            value: signature,
+            access: AccessKind::Read,
+            cycle: trace.len() as u64,
+        });
+
+        let return_pc = self.registers.pc.wrapping_add(2);
+        if !self.registers.emulation {
+            self.push_stack(bus, trace, self.registers.pbr)?;
+        }
+        self.push_stack(bus, trace, (return_pc >> 8) as u8)?;
+        self.push_stack(bus, trace, (return_pc & 0x00FF) as u8)?;
+        self.push_stack(
+            bus,
+            trace,
+            if self.registers.emulation {
+                self.registers.p | 0x10
+            } else {
+                self.registers.p
+            },
+        )?;
+
+        let vector_base = if self.registers.emulation {
+            0x00FFF4
+        } else {
+            0x00FFE4
         };
         self.finish_interrupt_vector_load(bus, trace, vector_base);
         Ok(())
@@ -2671,6 +3205,74 @@ impl Cpu65816 {
         }
     }
 
+    fn asl_memory<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>, address: Address) {
+        if self.accumulator_is_8_bit() {
+            let value = self.read_u8_trace(bus, trace, address);
+            self.set_carry(value & 0x80 != 0);
+            let result = value << 1;
+            self.write_u8_trace(bus, trace, address, result);
+            self.update_nz_8(result);
+        } else {
+            let value = self.read_u16_trace(bus, trace, address);
+            self.set_carry(value & 0x8000 != 0);
+            let result = value << 1;
+            self.write_u16_trace(bus, trace, address, result);
+            self.update_nz_16(result);
+        }
+    }
+
+    fn lsr_memory<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>, address: Address) {
+        if self.accumulator_is_8_bit() {
+            let value = self.read_u8_trace(bus, trace, address);
+            self.set_carry(value & 0x01 != 0);
+            let result = value >> 1;
+            self.write_u8_trace(bus, trace, address, result);
+            self.update_nz_8(result);
+        } else {
+            let value = self.read_u16_trace(bus, trace, address);
+            self.set_carry(value & 0x0001 != 0);
+            let result = value >> 1;
+            self.write_u16_trace(bus, trace, address, result);
+            self.update_nz_16(result);
+        }
+    }
+
+    fn rol_memory<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>, address: Address) {
+        if self.accumulator_is_8_bit() {
+            let value = self.read_u8_trace(bus, trace, address);
+            let incoming = u8::from(self.registers.p & 0x01 != 0);
+            self.set_carry(value & 0x80 != 0);
+            let result = (value << 1) | incoming;
+            self.write_u8_trace(bus, trace, address, result);
+            self.update_nz_8(result);
+        } else {
+            let value = self.read_u16_trace(bus, trace, address);
+            let incoming = u16::from(self.registers.p & 0x01 != 0);
+            self.set_carry(value & 0x8000 != 0);
+            let result = (value << 1) | incoming;
+            self.write_u16_trace(bus, trace, address, result);
+            self.update_nz_16(result);
+        }
+    }
+
+    fn ror_memory<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>, address: Address) {
+        if self.accumulator_is_8_bit() {
+            let value = self.read_u8_trace(bus, trace, address);
+            let incoming = u8::from(self.registers.p & 0x01 != 0) << 7;
+            self.set_carry(value & 0x01 != 0);
+            let result = (value >> 1) | incoming;
+            self.write_u8_trace(bus, trace, address, result);
+            self.update_nz_8(result);
+        } else {
+            let value = self.read_u16_trace(bus, trace, address);
+            let incoming = u16::from(self.registers.p & 0x01 != 0) << 15;
+            self.set_carry(value & 0x0001 != 0);
+            let result = (value >> 1) | incoming;
+            self.write_u16_trace(bus, trace, address, result);
+            self.update_nz_16(result);
+        }
+    }
+
     fn or_accumulator_8(&mut self, rhs: u8) {
         let result = (self.registers.a as u8) | rhs;
         self.registers.a = (self.registers.a & 0xFF00) | u16::from(result);
@@ -2738,6 +3340,23 @@ impl Cpu65816 {
         let high = self.read_u8_trace(bus, trace, base.wrapping_add(1));
         let bank = self.read_u8_trace(bus, trace, base.wrapping_add(2));
         u32::from(low) | (u32::from(high) << 8) | (u32::from(bank) << 16)
+    }
+
+    fn stack_relative_address(&self, operand: u8) -> Address {
+        u32::from(self.stack_address().wrapping_add(u16::from(operand)))
+    }
+
+    fn stack_relative_indirect_y_address<B: Bus>(
+        &self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        operand: u8,
+    ) -> Address {
+        let pointer = self.stack_relative_address(operand);
+        let low = self.read_u8_trace(bus, trace, pointer);
+        let high = self.read_u8_trace(bus, trace, pointer.wrapping_add(1));
+        let base = u16::from_le_bytes([low, high]);
+        self.absolute_address(base.wrapping_add(self.registers.y))
     }
 }
 
@@ -3407,6 +4026,349 @@ mod tests {
     }
 
     #[test]
+    fn cpx_direct_page_updates_flags() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.d = 0x0020;
+        cpu.registers.x = 0x0040;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0xE4),
+            (0x008001, 0x10),
+            (0x000030, 0x40),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.pc, 0x8002);
+        assert_ne!(cpu.registers.p & 0x01, 0);
+        assert_ne!(cpu.registers.p & 0x02, 0);
+    }
+
+    #[test]
+    fn brl_applies_signed_16_bit_offset() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x82),
+            (0x008001, 0xFC),
+            (0x008002, 0xFF),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.pc, 0x7FFF);
+    }
+
+    #[test]
+    fn bvc_branches_when_overflow_clear() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.p = 0x00;
+
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0x50), (0x008001, 0x02)]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.pc, 0x8004);
+    }
+
+    #[test]
+    fn jsr_absolute_indexed_indirect_uses_indexed_pointer() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.x = 0x0004;
+        cpu.registers.s = 0x01FF;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0xFC),
+            (0x008001, 0x00),
+            (0x008002, 0x20),
+            (0x00002004, 0x34),
+            (0x00002005, 0x12),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.pc, 0x1234);
+        assert_eq!(bus.read(0x0001FF), 0x80);
+        assert_eq!(bus.read(0x0001FE), 0x02);
+    }
+
+    #[test]
+    fn sty_direct_page_x_uses_indexed_target() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.d = 0x0020;
+        cpu.registers.x = 0x0004;
+        cpu.registers.y = 0x005A;
+        cpu.registers.p = 0x10;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0x94), (0x008001, 0x10)]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(bus.read(0x000034), 0x5A);
+    }
+
+    #[test]
+    fn sta_direct_page_indexed_indirect_x_uses_indexed_pointer_target() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.d = 0x0020;
+        cpu.registers.x = 0x0004;
+        cpu.registers.a = 0x005A;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x81),
+            (0x008001, 0x10),
+            (0x000034, 0x78),
+            (0x000035, 0x56),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(bus.read(0x005678), 0x5A);
+    }
+
+    #[test]
+    fn sta_stack_relative_stores_to_stack_page_offset() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.s = 0x01F0;
+        cpu.registers.a = 0x005A;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0x83), (0x008001, 0x10)]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(bus.read(0x000200), 0x5A);
+    }
+
+    #[test]
+    fn sta_direct_page_indirect_stores_to_pointer_target() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.d = 0x0020;
+        cpu.registers.a = 0x005A;
+        cpu.registers.p = 0x20;
+        cpu.registers.dbr = 0x7E;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x92),
+            (0x008001, 0x10),
+            (0x000030, 0x34),
+            (0x000031, 0x12),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(bus.read(0x7E1234), 0x5A);
+    }
+
+    #[test]
+    fn sta_direct_page_indirect_y_stores_to_indexed_pointer_target() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.d = 0x0020;
+        cpu.registers.y = 0x0002;
+        cpu.registers.a = 0x005A;
+        cpu.registers.p = 0x20;
+        cpu.registers.dbr = 0x7E;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x91),
+            (0x008001, 0x10),
+            (0x000030, 0x34),
+            (0x000031, 0x12),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(bus.read(0x7E1236), 0x5A);
+    }
+
+    #[test]
+    fn sta_stack_relative_indirect_y_stores_to_stack_pointer_target() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.s = 0x01F0;
+        cpu.registers.y = 0x0002;
+        cpu.registers.a = 0x005A;
+        cpu.registers.p = 0x20;
+        cpu.registers.dbr = 0x7E;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x93),
+            (0x008001, 0x10),
+            (0x000200, 0x34),
+            (0x000201, 0x12),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(bus.read(0x7E1236), 0x5A);
+    }
+
+    #[test]
+    fn sta_direct_page_indirect_long_stores_to_long_pointer_target() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.d = 0x0020;
+        cpu.registers.a = 0x005A;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x87),
+            (0x008001, 0x10),
+            (0x000030, 0x34),
+            (0x000031, 0x12),
+            (0x000032, 0x7E),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(bus.read(0x7E1234), 0x5A);
+    }
+
+    #[test]
+    fn ora_stack_relative_reads_from_stack_page() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.s = 0x01F0;
+        cpu.registers.a = 0x000F;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x03),
+            (0x008001, 0x10),
+            (0x000200, 0xF0),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.a & 0x00FF, 0xFF);
+    }
+
+    #[test]
+    fn ora_stack_relative_indirect_y_uses_dbr_indexed_target() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.s = 0x01F0;
+        cpu.registers.y = 0x0002;
+        cpu.registers.dbr = 0x7E;
+        cpu.registers.a = 0x0001;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x13),
+            (0x008001, 0x10),
+            (0x000200, 0x34),
+            (0x000201, 0x12),
+            (0x7E1236, 0x80),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.a & 0x00FF, 0x81);
+    }
+
+    #[test]
+    fn asl_direct_page_shifts_memory_and_sets_carry() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.d = 0x0020;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x06),
+            (0x008001, 0x10),
+            (0x000030, 0x81),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(bus.read(0x000030), 0x02);
+        assert_ne!(cpu.registers.p & 0x01, 0);
+    }
+
+    #[test]
+    fn rol_absolute_rotates_carry_into_memory() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.p = 0x21;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x2E),
+            (0x008001, 0x34),
+            (0x008002, 0x12),
+            (0x001234, 0x40),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(bus.read(0x001234), 0x81);
+        assert_eq!(cpu.registers.p & 0x01, 0);
+    }
+
+    #[test]
+    fn lsr_absolute_shifts_memory_right() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x4E),
+            (0x008001, 0x34),
+            (0x008002, 0x12),
+            (0x001234, 0x03),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(bus.read(0x001234), 0x01);
+        assert_ne!(cpu.registers.p & 0x01, 0);
+    }
+
+    #[test]
+    fn ror_direct_page_x_rotates_memory_right_through_carry() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.d = 0x0020;
+        cpu.registers.x = 0x0004;
+        cpu.registers.p = 0x21;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x76),
+            (0x008001, 0x10),
+            (0x000034, 0x02),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(bus.read(0x000034), 0x81);
+        assert_eq!(cpu.registers.p & 0x01, 0);
+    }
+
+    #[test]
     fn dec_direct_page_decrements_memory_and_updates_flags() {
         let mut cpu = Cpu65816::default();
         cpu.registers.pc = 0x8000;
@@ -3479,6 +4441,73 @@ mod tests {
 
         assert_eq!(cpu.registers.a & 0x00FF, 0x0C);
         assert_eq!(cpu.registers.pc, 0x8003);
+    }
+
+    #[test]
+    fn adc_long_x_adds_long_addressed_operand() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.a = 0x0005;
+        cpu.registers.x = 0x0002;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x7F),
+            (0x008001, 0x34),
+            (0x008002, 0x12),
+            (0x008003, 0x7E),
+            (0x7E1236, 0x07),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.a & 0x00FF, 0x0C);
+        assert_eq!(cpu.registers.pc, 0x8004);
+    }
+
+    #[test]
+    fn adc_stack_relative_adds_stack_page_operand() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.s = 0x01F0;
+        cpu.registers.a = 0x0005;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x63),
+            (0x008001, 0x10),
+            (0x000200, 0x07),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.a & 0x00FF, 0x0C);
+    }
+
+    #[test]
+    fn adc_stack_relative_indirect_y_adds_indexed_indirect_operand() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.s = 0x01F0;
+        cpu.registers.y = 0x0002;
+        cpu.registers.dbr = 0x7E;
+        cpu.registers.a = 0x0005;
+        cpu.registers.p = 0x20;
+        cpu.registers.emulation = false;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x73),
+            (0x008001, 0x10),
+            (0x000200, 0x34),
+            (0x000201, 0x12),
+            (0x7E1236, 0x07),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.a & 0x00FF, 0x0C);
     }
 
     #[test]
@@ -3588,5 +4617,25 @@ mod tests {
         assert_eq!(cpu.registers.p, 0x32);
         assert_eq!(cpu.registers.pc, 0x5678);
         assert_eq!(cpu.registers.s, 0x01FE);
+    }
+
+    #[test]
+    fn cop_uses_cop_vector() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.s = 0x01FF;
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x02),
+            (0x008001, 0x99),
+            (0x00FFF4, 0x34),
+            (0x00FFF5, 0x12),
+        ]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+
+        assert_eq!(cpu.registers.pc, 0x1234);
+        assert_eq!(bus.read(0x0001FF), 0x80);
+        assert_eq!(bus.read(0x0001FE), 0x02);
     }
 }

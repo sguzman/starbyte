@@ -10,8 +10,9 @@ pub const SCREEN_HEIGHT: usize = 224;
 const PPU_REGISTER_COUNT: usize = 0x40;
 const CGRAM_BYTES: usize = 512;
 const VRAM_BYTES: usize = 64 * 1024;
-const TILEMAP_TILE_COUNT: usize = 32 * 32;
+const BACKGROUND_COUNT: usize = 4;
 const TILE_BYTES_4BPP: usize = 32;
+const TILE_BYTES_2BPP: usize = 16;
 
 /// Software framebuffer in RGBA8 format.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,10 +67,10 @@ pub struct Ppu {
     cgram_address: u16,
     vram_address: u16,
     vram_increment: u16,
-    bg1_scroll_x: u16,
-    bg1_scroll_y: u16,
-    bg1_hofs_latch: Option<u8>,
-    bg1_vofs_latch: Option<u8>,
+    bg_scroll_x: [u16; BACKGROUND_COUNT],
+    bg_scroll_y: [u16; BACKGROUND_COUNT],
+    bg_hofs_latch: [Option<u8>; BACKGROUND_COUNT],
+    bg_vofs_latch: [Option<u8>; BACKGROUND_COUNT],
 }
 
 impl Default for Ppu {
@@ -81,10 +82,10 @@ impl Default for Ppu {
             cgram_address: 0,
             vram_address: 0,
             vram_increment: 1,
-            bg1_scroll_x: 0,
-            bg1_scroll_y: 0,
-            bg1_hofs_latch: None,
-            bg1_vofs_latch: None,
+            bg_scroll_x: [0; BACKGROUND_COUNT],
+            bg_scroll_y: [0; BACKGROUND_COUNT],
+            bg_hofs_latch: [None; BACKGROUND_COUNT],
+            bg_vofs_latch: [None; BACKGROUND_COUNT],
         }
     }
 }
@@ -110,20 +111,7 @@ impl Ppu {
 
         self.registers[usize::from(register - 0x2100)] = value;
         match register {
-            0x210D => {
-                if let Some(low) = self.bg1_hofs_latch.take() {
-                    self.bg1_scroll_x = u16::from(low) | (u16::from(value) << 8);
-                } else {
-                    self.bg1_hofs_latch = Some(value);
-                }
-            }
-            0x210E => {
-                if let Some(low) = self.bg1_vofs_latch.take() {
-                    self.bg1_scroll_y = u16::from(low) | (u16::from(value) << 8);
-                } else {
-                    self.bg1_vofs_latch = Some(value);
-                }
-            }
+            0x210D..=0x2114 => self.write_bg_scroll(register, value),
             0x2115 => {
                 self.vram_increment = match value & 0x03 {
                     0 => 1,
@@ -160,12 +148,34 @@ impl Ppu {
         }
 
         let backdrop = bgr555_to_rgba(self.backdrop_color());
-        if self.registers[0x2C] & 0x01 == 0 {
+        let main_screen_enable = self.registers[0x2C] & 0x0F;
+        if main_screen_enable == 0 {
             fill_frame(framebuffer, backdrop);
             return;
         }
 
-        self.render_bg1(framebuffer, backdrop);
+        fill_frame(framebuffer, backdrop);
+        let bgmode = self.registers[0x05] & 0x07;
+        match bgmode {
+            0 => self.render_background_stack(
+                framebuffer,
+                &[
+                    BackgroundConfig::for_mode0(3),
+                    BackgroundConfig::for_mode0(2),
+                    BackgroundConfig::for_mode0(1),
+                    BackgroundConfig::for_mode0(0),
+                ],
+            ),
+            1 => self.render_background_stack(
+                framebuffer,
+                &[
+                    BackgroundConfig::for_mode1(2),
+                    BackgroundConfig::for_mode1(1),
+                    BackgroundConfig::for_mode1(0),
+                ],
+            ),
+            _ => {}
+        }
     }
 
     /// Borrow raw CGRAM bytes for tests and regression harnesses.
@@ -197,44 +207,42 @@ impl Ppu {
         (word_index + usize::from(high_byte)) % VRAM_BYTES
     }
 
-    fn render_bg1(&self, framebuffer: &mut FrameBuffer, backdrop: [u8; 4]) {
-        let bgmode = self.registers[0x05] & 0x07;
-        if bgmode > 1 {
-            fill_frame(framebuffer, backdrop);
-            return;
+    fn render_background_stack(
+        &self,
+        framebuffer: &mut FrameBuffer,
+        backgrounds: &[BackgroundConfig],
+    ) {
+        let main_screen_enable = self.registers[0x2C] & 0x0F;
+        for background in backgrounds {
+            if main_screen_enable & (1 << background.index) == 0 {
+                continue;
+            }
+            self.render_background(framebuffer, self.resolve_background_config(*background));
         }
+    }
 
-        let tilemap_base = usize::from(self.registers[0x07] & 0xFC) << 8;
-        let tiledata_base = usize::from(self.registers[0x0B] & 0x0F) << 12;
-
+    fn render_background(&self, framebuffer: &mut FrameBuffer, background: BackgroundConfig) {
         for y in 0..framebuffer.height {
             for x in 0..framebuffer.width {
-                let pixel =
-                    self.bg1_pixel(x as u16, y as u16, tilemap_base, tiledata_base, backdrop);
-                let offset = (y * framebuffer.width + x) * 4;
-                framebuffer.pixels[offset..offset + 4].copy_from_slice(&pixel);
+                if let Some(pixel) = self.background_pixel(background, x as u16, y as u16) {
+                    let offset = (y * framebuffer.width + x) * 4;
+                    framebuffer.pixels[offset..offset + 4].copy_from_slice(&pixel);
+                }
             }
         }
     }
 
-    fn bg1_pixel(
+    fn background_pixel(
         &self,
+        background: BackgroundConfig,
         x: u16,
         y: u16,
-        tilemap_base: usize,
-        tiledata_base: usize,
-        backdrop: [u8; 4],
-    ) -> [u8; 4] {
-        let world_x = x.wrapping_add(self.bg1_scroll_x) & 0x00FF;
-        let world_y = y.wrapping_add(self.bg1_scroll_y) & 0x00FF;
-        let tile_x = usize::from(world_x / 8);
-        let tile_y = usize::from(world_y / 8);
-        let tile_index = tile_y * 32 + tile_x;
-        if tile_index >= TILEMAP_TILE_COUNT {
-            return backdrop;
-        }
-
-        let entry_index = (tilemap_base + tile_index * 2) % VRAM_BYTES;
+    ) -> Option<[u8; 4]> {
+        let world_x = usize::from(x.wrapping_add(self.bg_scroll_x[background.index]));
+        let world_y = usize::from(y.wrapping_add(self.bg_scroll_y[background.index]));
+        let tile_x = world_x / 8;
+        let tile_y = world_y / 8;
+        let entry_index = self.tilemap_entry_index(background, tile_x, tile_y);
         let entry = u16::from_le_bytes([
             self.vram[entry_index],
             self.vram[(entry_index + 1) % VRAM_BYTES],
@@ -244,21 +252,55 @@ impl Ppu {
         let hflip = entry & 0x4000 != 0;
         let vflip = entry & 0x8000 != 0;
 
-        let fine_x = usize::from(world_x % 8);
-        let fine_y = usize::from(world_y % 8);
+        let fine_x = world_x % 8;
+        let fine_y = world_y % 8;
         let tile_x = if hflip { 7 - fine_x } else { fine_x };
         let tile_y = if vflip { 7 - fine_y } else { fine_y };
-        let color_index = self.tile_pixel_4bpp(tiledata_base, tile_number, tile_x, tile_y);
+        let color_index = match background.bits_per_pixel {
+            BitsPerPixel::Two => self.tile_pixel_2bpp(background.tiledata_base, tile_number, tile_x, tile_y),
+            BitsPerPixel::Four => self.tile_pixel_4bpp(background.tiledata_base, tile_number, tile_x, tile_y),
+        };
         if color_index == 0 {
-            return backdrop;
+            return None;
         }
 
-        let cgram_index = (palette * 16 + usize::from(color_index)) * 2;
+        let cgram_color = match background.bits_per_pixel {
+            BitsPerPixel::Two => background.palette_base + palette * 4 + usize::from(color_index),
+            BitsPerPixel::Four => palette * 16 + usize::from(color_index),
+        };
+        let cgram_index = cgram_color * 2;
         let color = u16::from_le_bytes([
             self.cgram[cgram_index % CGRAM_BYTES],
             self.cgram[(cgram_index + 1) % CGRAM_BYTES],
         ]);
-        bgr555_to_rgba(color)
+        Some(bgr555_to_rgba(color))
+    }
+
+    fn tilemap_entry_index(
+        &self,
+        background: BackgroundConfig,
+        tile_x: usize,
+        tile_y: usize,
+    ) -> usize {
+        let screens_wide = if background.size_code & 0x01 != 0 { 2 } else { 1 };
+        let screens_high = if background.size_code & 0x02 != 0 { 2 } else { 1 };
+        let wrapped_tile_x = tile_x % (screens_wide * 32);
+        let wrapped_tile_y = tile_y % (screens_high * 32);
+        let screen_x = wrapped_tile_x / 32;
+        let screen_y = wrapped_tile_y / 32;
+        let local_x = wrapped_tile_x % 32;
+        let local_y = wrapped_tile_y % 32;
+        let screen_index = screen_y * screens_wide + screen_x;
+        (background.tilemap_base + screen_index * 0x800 + (local_y * 32 + local_x) * 2) % VRAM_BYTES
+    }
+
+    fn tile_pixel_2bpp(&self, tiledata_base: usize, tile_number: usize, x: usize, y: usize) -> u8 {
+        let tile_base = (tiledata_base + tile_number * TILE_BYTES_2BPP) % VRAM_BYTES;
+        let plane0 = self.vram[(tile_base + y * 2) % VRAM_BYTES];
+        let plane1 = self.vram[(tile_base + y * 2 + 1) % VRAM_BYTES];
+        let shift = 7 - x;
+
+        ((plane0 >> shift) & 0x01) | (((plane1 >> shift) & 0x01) << 1)
     }
 
     fn tile_pixel_4bpp(&self, tiledata_base: usize, tile_number: usize, x: usize, y: usize) -> u8 {
@@ -277,6 +319,104 @@ impl Ppu {
 
     fn backdrop_color(&self) -> u16 {
         u16::from(self.cgram[0]) | (u16::from(self.cgram[1]) << 8)
+    }
+
+    fn resolve_background_config(&self, background: BackgroundConfig) -> BackgroundConfig {
+        let tilemap_register = self.registers[0x07 + background.index];
+        let tiledata_nibbles = if background.index < 2 {
+            self.registers[0x0B]
+        } else {
+            self.registers[0x0C]
+        };
+        let tiledata_base = if background.index % 2 == 0 {
+            usize::from(tiledata_nibbles & 0x0F) << 12
+        } else {
+            usize::from((tiledata_nibbles >> 4) & 0x0F) << 12
+        };
+
+        BackgroundConfig {
+            tilemap_base: usize::from(tilemap_register & 0xFC) << 8,
+            size_code: tilemap_register & 0x03,
+            tiledata_base,
+            ..background
+        }
+    }
+
+    fn write_bg_scroll(&mut self, register: u16, value: u8) {
+        let Some((background, axis_is_vertical)) = (match register {
+            0x210D => Some((0, false)),
+            0x210E => Some((0, true)),
+            0x210F => Some((1, false)),
+            0x2110 => Some((1, true)),
+            0x2111 => Some((2, false)),
+            0x2112 => Some((2, true)),
+            0x2113 => Some((3, false)),
+            0x2114 => Some((3, true)),
+            _ => None,
+        }) else {
+            return;
+        };
+
+        let latches = if axis_is_vertical {
+            &mut self.bg_vofs_latch
+        } else {
+            &mut self.bg_hofs_latch
+        };
+        let scroll_values = if axis_is_vertical {
+            &mut self.bg_scroll_y
+        } else {
+            &mut self.bg_scroll_x
+        };
+
+        if let Some(low) = latches[background].take() {
+            scroll_values[background] = u16::from(low) | (u16::from(value) << 8);
+        } else {
+            latches[background] = Some(value);
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum BitsPerPixel {
+    Two,
+    Four,
+}
+
+#[derive(Clone, Copy)]
+struct BackgroundConfig {
+    index: usize,
+    bits_per_pixel: BitsPerPixel,
+    tilemap_base: usize,
+    tiledata_base: usize,
+    size_code: u8,
+    palette_base: usize,
+}
+
+impl BackgroundConfig {
+    fn for_mode0(index: usize) -> Self {
+        Self {
+            index,
+            bits_per_pixel: BitsPerPixel::Two,
+            tilemap_base: 0,
+            tiledata_base: 0,
+            size_code: 0,
+            palette_base: index * 32,
+        }
+    }
+
+    fn for_mode1(index: usize) -> Self {
+        Self {
+            index,
+            bits_per_pixel: if index == 2 {
+                BitsPerPixel::Two
+            } else {
+                BitsPerPixel::Four
+            },
+            tilemap_base: 0,
+            tiledata_base: 0,
+            size_code: 0,
+            palette_base: index * 32,
+        }
     }
 }
 

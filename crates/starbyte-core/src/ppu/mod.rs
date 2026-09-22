@@ -11,6 +11,7 @@ const PPU_REGISTER_COUNT: usize = 0x40;
 const CGRAM_BYTES: usize = 512;
 const VRAM_BYTES: usize = 64 * 1024;
 const BACKGROUND_COUNT: usize = 4;
+const OAM_BYTES: usize = 544;
 const TILE_BYTES_4BPP: usize = 32;
 const TILE_BYTES_2BPP: usize = 16;
 
@@ -64,8 +65,14 @@ pub struct Ppu {
     registers: Vec<u8>,
     cgram: Vec<u8>,
     vram: Vec<u8>,
+    oam: Vec<u8>,
     cgram_address: u16,
     vram_address: u16,
+    oam_address: u16,
+    #[serde(default)]
+    oam_byte_address: u16,
+    #[serde(default)]
+    oam_write_latch: u8,
     vram_increment: u16,
     bg_scroll_x: [u16; BACKGROUND_COUNT],
     bg_scroll_y: [u16; BACKGROUND_COUNT],
@@ -79,8 +86,12 @@ impl Default for Ppu {
             registers: vec![0; PPU_REGISTER_COUNT],
             cgram: vec![0; CGRAM_BYTES],
             vram: vec![0; VRAM_BYTES],
+            oam: vec![0; OAM_BYTES],
             cgram_address: 0,
             vram_address: 0,
+            oam_address: 0,
+            oam_byte_address: 0,
+            oam_write_latch: 0,
             vram_increment: 1,
             bg_scroll_x: [0; BACKGROUND_COUNT],
             bg_scroll_y: [0; BACKGROUND_COUNT],
@@ -95,6 +106,7 @@ impl Ppu {
     #[must_use]
     pub fn read_register(&self, register: u16) -> u8 {
         match register {
+            0x2138 => self.read_oam_data(),
             0x2139 => self.vram_word_byte(self.vram_address, false),
             0x213A => self.vram_word_byte(self.vram_address, true),
             0x213B => self.cgram[self.cgram_address as usize % CGRAM_BYTES],
@@ -112,6 +124,15 @@ impl Ppu {
         self.registers[usize::from(register - 0x2100)] = value;
         match register {
             0x210D..=0x2114 => self.write_bg_scroll(register, value),
+            0x2102 => {
+                self.oam_address = (self.oam_address & 0x0100) | u16::from(value);
+                self.reload_oam_byte_address();
+            }
+            0x2103 => {
+                self.oam_address = (self.oam_address & 0x00FF) | (u16::from(value & 0x01) << 8);
+                self.reload_oam_byte_address();
+            }
+            0x2104 => self.write_oam_data(value),
             0x2115 => {
                 self.vram_increment = match value & 0x03 {
                     0 => 1,
@@ -148,7 +169,7 @@ impl Ppu {
         }
 
         let backdrop = bgr555_to_rgba(self.backdrop_color());
-        let main_screen_enable = self.registers[0x2C] & 0x0F;
+        let main_screen_enable = self.registers[0x2C];
         if main_screen_enable == 0 {
             fill_frame(framebuffer, backdrop);
             return;
@@ -176,6 +197,10 @@ impl Ppu {
             ),
             _ => {}
         }
+
+        if main_screen_enable & 0x10 != 0 {
+            self.render_objects(framebuffer);
+        }
     }
 
     /// Borrow raw CGRAM bytes for tests and regression harnesses.
@@ -188,6 +213,42 @@ impl Ppu {
     #[must_use]
     pub fn vram(&self) -> &[u8] {
         &self.vram
+    }
+
+    /// Borrow raw OAM bytes for tests and regression harnesses.
+    #[must_use]
+    pub fn oam(&self) -> &[u8] {
+        &self.oam
+    }
+
+    fn reload_oam_byte_address(&mut self) {
+        let word_address = self.oam_address & 0x00FF;
+        let table_select = (self.oam_address & 0x0100) != 0;
+        self.oam_byte_address = if table_select {
+            512 + ((word_address & 0x000F) << 1)
+        } else {
+            word_address << 1
+        };
+    }
+
+    fn read_oam_data(&self) -> u8 {
+        self.oam[usize::from(self.oam_byte_address % OAM_BYTES as u16)]
+    }
+
+    fn write_oam_data(&mut self, value: u8) {
+        let index = usize::from(self.oam_byte_address % OAM_BYTES as u16);
+        if index < 512 {
+            if index & 1 == 0 {
+                self.oam_write_latch = value;
+            } else {
+                self.oam[index - 1] = self.oam_write_latch;
+                self.oam[index] = value;
+            }
+        } else {
+            self.oam[index] = value;
+        }
+
+        self.oam_byte_address = (self.oam_byte_address + 1) % OAM_BYTES as u16;
     }
 
     fn write_vram_data(&mut self, value: u8, high_byte: bool) {
@@ -321,6 +382,93 @@ impl Ppu {
         u16::from(self.cgram[0]) | (u16::from(self.cgram[1]) << 8)
     }
 
+    fn render_objects(&self, framebuffer: &mut FrameBuffer) {
+        let objsel = self.registers[0x01];
+        let (small_size, large_size) = object_size_pair(objsel >> 5);
+
+        for sprite_index in (0..128).rev() {
+            let base = sprite_index * 4;
+            let x_low = self.oam[base];
+            let y = self.oam[base + 1];
+            let tile_number = usize::from(self.oam[base + 2]);
+            let attributes = self.oam[base + 3];
+            let high_entry = self.oam[512 + (sprite_index / 4)];
+            let bit_shift = (sprite_index % 4) * 2;
+            let x_high = (high_entry >> bit_shift) & 0x01 != 0;
+            let large = (high_entry >> (bit_shift + 1)) & 0x01 != 0;
+            let size = if large { large_size } else { small_size };
+
+            let sprite_x = if x_high {
+                i16::from(x_low) - 512
+            } else {
+                i16::from(x_low)
+            };
+            let sprite_y = i16::from(y);
+            let palette = usize::from((attributes >> 1) & 0x07);
+            let name_select = attributes & 0x01 != 0;
+            let hflip = attributes & 0x40 != 0;
+            let vflip = attributes & 0x80 != 0;
+            let tile_base = self.object_tile_base(objsel, name_select);
+            let tiles_per_side = usize::from(size / 8);
+
+            for local_y in 0..usize::from(size) {
+                let screen_y = sprite_y + local_y as i16;
+                if !(0..framebuffer.height as i16).contains(&screen_y) {
+                    continue;
+                }
+
+                for local_x in 0..usize::from(size) {
+                    let screen_x = sprite_x + local_x as i16;
+                    if !(0..framebuffer.width as i16).contains(&screen_x) {
+                        continue;
+                    }
+
+                    let source_x = if hflip {
+                        usize::from(size) - 1 - local_x
+                    } else {
+                        local_x
+                    };
+                    let source_y = if vflip {
+                        usize::from(size) - 1 - local_y
+                    } else {
+                        local_y
+                    };
+                    let tile_x = source_x / 8;
+                    let tile_y = source_y / 8;
+                    let fine_x = source_x % 8;
+                    let fine_y = source_y % 8;
+                    let tile_offset = tile_y * 16 + tile_x;
+                    if tile_x >= tiles_per_side || tile_y >= tiles_per_side {
+                        continue;
+                    }
+
+                    let color_index =
+                        self.tile_pixel_4bpp(tile_base, tile_number + tile_offset, fine_x, fine_y);
+                    if color_index == 0 {
+                        continue;
+                    }
+
+                    let cgram_color = 128 + palette * 16 + usize::from(color_index);
+                    let cgram_index = cgram_color * 2;
+                    let color = u16::from_le_bytes([
+                        self.cgram[cgram_index % CGRAM_BYTES],
+                        self.cgram[(cgram_index + 1) % CGRAM_BYTES],
+                    ]);
+                    let offset = (screen_y as usize * framebuffer.width + screen_x as usize) * 4;
+                    framebuffer.pixels[offset..offset + 4].copy_from_slice(&bgr555_to_rgba(color));
+                }
+            }
+        }
+    }
+
+    fn object_tile_base(&self, objsel: u8, name_select: bool) -> usize {
+        let base_words = usize::from(objsel & 0x07) << 13;
+        let select_offset_words = (usize::from((objsel >> 3) & 0x03) + 1) << 12;
+        let word_address =
+            (base_words + if name_select { select_offset_words } else { 0 }) & 0x7FFF;
+        (word_address << 1) % VRAM_BYTES
+    }
+
     fn resolve_background_config(&self, background: BackgroundConfig) -> BackgroundConfig {
         let tilemap_register = self.registers[0x07 + background.index];
         let tiledata_nibbles = if background.index < 2 {
@@ -390,6 +538,20 @@ struct BackgroundConfig {
     tiledata_base: usize,
     size_code: u8,
     palette_base: usize,
+}
+
+fn object_size_pair(select: u8) -> (u8, u8) {
+    match select & 0x07 {
+        0 => (8, 16),
+        1 => (8, 32),
+        2 => (8, 64),
+        3 => (16, 32),
+        4 => (16, 64),
+        5 => (32, 64),
+        6 => (16, 32),
+        7 => (16, 32),
+        _ => (8, 8),
+    }
 }
 
 impl BackgroundConfig {
@@ -530,5 +692,71 @@ mod tests {
                 .chunks_exact(4)
                 .all(|pixel| pixel == [248, 0, 0, 0xFF])
         );
+    }
+
+    #[test]
+    fn oam_data_port_writes_store_and_advance_address() {
+        let mut ppu = Ppu::default();
+        ppu.write_register(0x2102, 0x00);
+        ppu.write_register(0x2103, 0x00);
+        ppu.write_register(0x2104, 0x12);
+        ppu.write_register(0x2104, 0x34);
+
+        assert_eq!(&ppu.oam()[..2], &[0x12, 0x34]);
+    }
+
+    #[test]
+    fn oam_word_address_targets_low_table_pairs() {
+        let mut ppu = Ppu::default();
+        ppu.write_register(0x2102, 0x01);
+        ppu.write_register(0x2103, 0x00);
+        ppu.write_register(0x2104, 0x12);
+        ppu.write_register(0x2104, 0x34);
+
+        assert_eq!(&ppu.oam()[2..4], &[0x12, 0x34]);
+    }
+
+    #[test]
+    fn oam_high_table_writes_are_immediate() {
+        let mut ppu = Ppu::default();
+        ppu.write_register(0x2102, 0x00);
+        ppu.write_register(0x2103, 0x01);
+        ppu.write_register(0x2104, 0xAA);
+        ppu.write_register(0x2104, 0x55);
+
+        assert_eq!(&ppu.oam()[512..514], &[0xAA, 0x55]);
+    }
+
+    #[test]
+    fn obj_render_draws_sprite_pixels_when_enabled() {
+        let mut ppu = Ppu::default();
+        let mut frame = FrameBuffer::default();
+
+        write_color(&mut ppu, 0x00, 0x0000);
+        write_color(&mut ppu, 0x81, 0x7C00);
+
+        ppu.write_register(0x2116, 0x00);
+        ppu.write_register(0x2117, 0x00);
+        ppu.write_register(0x2118, 0x80);
+        ppu.write_register(0x2119, 0x00);
+        for _ in 0..7 {
+            ppu.write_register(0x2118, 0x00);
+            ppu.write_register(0x2119, 0x00);
+        }
+        for _ in 0..8 {
+            ppu.write_register(0x2118, 0x00);
+            ppu.write_register(0x2119, 0x00);
+        }
+
+        ppu.write_register(0x2102, 0x00);
+        ppu.write_register(0x2103, 0x00);
+        ppu.write_register(0x2104, 0x00);
+        ppu.write_register(0x2104, 0x00);
+        ppu.write_register(0x2104, 0x00);
+        ppu.write_register(0x2104, 0x00);
+        ppu.write_register(0x212C, 0x10);
+        ppu.render_frame(&mut frame);
+
+        assert_eq!(&frame.pixels()[..4], &[248, 0, 0, 0xFF]);
     }
 }

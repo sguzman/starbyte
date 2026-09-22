@@ -17,6 +17,9 @@ pub struct DmaChannel {
     pub a_bus_bank: u8,
     /// DASx byte count or indirect HDMA pointer.
     pub byte_count: u16,
+    /// DASBx bank for indirect HDMA data fetches.
+    #[serde(default)]
+    pub indirect_bank: u8,
     /// Resolved indirect HDMA data address.
     pub indirect_address: u16,
     /// A2Ax HDMA table address.
@@ -118,7 +121,7 @@ impl DmaController {
             0x4 => channel.a_bus_bank,
             0x5 => channel.byte_count as u8,
             0x6 => (channel.byte_count >> 8) as u8,
-            0x7 => channel.indirect_address as u8,
+            0x7 => channel.indirect_bank,
             0x8 => channel.hdma_table_address as u8,
             0x9 => (channel.hdma_table_address >> 8) as u8,
             0xA => channel.hdma_line_counter,
@@ -144,9 +147,7 @@ impl DmaController {
             0x4 => channel.a_bus_bank = value,
             0x5 => channel.byte_count = (channel.byte_count & 0xFF00) | u16::from(value),
             0x6 => channel.byte_count = (channel.byte_count & 0x00FF) | (u16::from(value) << 8),
-            0x7 => {
-                channel.indirect_address = (channel.indirect_address & 0xFF00) | u16::from(value)
-            }
+            0x7 => channel.indirect_bank = value,
             0x8 => {
                 channel.hdma_table_address =
                     (channel.hdma_table_address & 0xFF00) | u16::from(value)
@@ -231,6 +232,7 @@ mod tests {
         dma.write_register(0x04, 0x7E);
         dma.write_register(0x05, 0x78);
         dma.write_register(0x06, 0x56);
+        dma.write_register(0x07, 0x40);
         dma.write_register(0x08, 0xCD);
         dma.write_register(0x09, 0xAB);
         dma.write_register(0x0A, 0xFE);
@@ -244,6 +246,7 @@ mod tests {
                 a_bus_address: 0x1234,
                 a_bus_bank: 0x7E,
                 byte_count: 0x5678,
+                indirect_bank: 0x40,
                 indirect_address: 0,
                 hdma_table_address: 0xABCD,
                 hdma_data_address: 0,
@@ -253,6 +256,7 @@ mod tests {
             }
         );
         assert_eq!(dma.read_register(0x03), 0x12);
+        assert_eq!(dma.read_register(0x07), 0x40);
         assert_eq!(dma.read_register(0x09), 0xAB);
     }
 

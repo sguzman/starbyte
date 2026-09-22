@@ -529,8 +529,13 @@ impl SystemBus {
     fn perform_hdma_transfer(&mut self, channel: &mut crate::dma::DmaChannel) {
         let pattern = DmaController::b_bus_offsets_for_mode(channel.transfer_mode());
         for pattern_offset in pattern {
+            let source_bank = if channel.hdma_indirect() {
+                channel.indirect_bank
+            } else {
+                channel.a_bus_bank
+            };
             let source_address =
-                (u32::from(channel.a_bus_bank) << 16) | u32::from(channel.hdma_data_address);
+                (u32::from(source_bank) << 16) | u32::from(channel.hdma_data_address);
             let target_address =
                 0x002100_u32 + u32::from(channel.b_bus_address) + u32::from(*pattern_offset);
             let value = self.read(source_address);
@@ -1116,6 +1121,31 @@ mod tests {
         bus.write(0x004302, 0x00);
         bus.write(0x004303, 0x01);
         bus.write(0x004304, 0x7E);
+        bus.write(0x00420C, 0x01);
+        bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE));
+
+        assert_eq!(&bus.ppu().cgram()[..2], &[0x00, 0x7C]);
+    }
+
+    #[test]
+    fn hdma_indirect_uses_dedicated_indirect_bank() {
+        let mut bus = SystemBus::default();
+        bus.install_cartridge(make_cart(Mapper::LoRom));
+        bus.write(0x002121, 0x00);
+
+        // HDMA table in bank 7E points at data in bank 7F.
+        bus.write(0x7E0100, 0x01);
+        bus.write(0x7E0101, 0x00);
+        bus.write(0x7E0102, 0x02);
+        bus.write(0x7F0200, 0x00);
+        bus.write(0x7F0201, 0x7C);
+
+        bus.write(0x004300, 0x42);
+        bus.write(0x004301, 0x22);
+        bus.write(0x004302, 0x00);
+        bus.write(0x004303, 0x01);
+        bus.write(0x004304, 0x7E);
+        bus.write(0x004307, 0x7F);
         bus.write(0x00420C, 0x01);
         bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE));
 

@@ -23,7 +23,7 @@ For a game whose display flashes, corrupts, or turns black before emulation stal
 cargo run --release -p starbyte-cli -- run /path/to/game.sfc --frames 60 --no-save-ram --frame-log /tmp/starbyte-frames.jsonl --report-json /tmp/starbyte-final.json
 ```
 
-Each completed frame emits and flushes a `starbyte.frame_log.v1` JSON object containing the requested frame, actual completed frame count, CPU bank/program counter, framebuffer hash, nonblack pixel count, distinct RGB color count, PPU display setup, and APU steps. If a frame returns an emulation error, the log contains a final `status: "error"` record with the error string and the **last fully rendered framebuffer**. The separate end-of-run report is **not** written when emulation errors; the frame log preserves completed evidence. These reports cannot establish that the visible scene is *correct*, only what the emulator computed.
+Each completed frame emits and flushes a `starbyte.frame_log.v1` JSON object containing the requested frame, actual completed frame count, 65816 CPU register state, framebuffer hash, nonblack pixel count, distinct RGB color count, PPU display setup, cumulative PPU register write activity, CPU↔APU communication ports/read/write counters, and APU steps. If a frame returns an emulation error, the log contains a final `status: "error"` record with the error string and the **last fully rendered framebuffer**. The separate end-of-run report is **not** written when emulation errors; the frame log preserves completed evidence. These reports cannot establish that the visible scene is *correct*, only what the emulator computed.
 
 The frame log is **opt-in**, writes only to its explicitly supplied local path, truncates a preexisting file at that path, and is flushed after each attempted frame.
 
@@ -41,6 +41,16 @@ The path above is an example, not a claim that a particular archive exists local
 Read-only Cheatarium lookup: `starbyte cheatarium --index /path/to/snes.json.gz --title 'Donkey Kong Country' --json`. It reads an explicit local index file only, reports unverified title candidates and source provenance, and cannot write to a ROM or enable cheats. See [Cheatarium integration](cheatarium.md).
 
 Other existing CLI actions include `inspect /path/to/game.sfc --json` (schema `starbyte.rom_inspect.v1`, no playability claim), `print-config json`, `library scan --json`, and `run /path/to/game.sfc --frames 1 --report-json /path/to/report.json`. The ROM run writes its report explicitly. Library scanning may write cache data and should not be treated as read-only. Provider-refresh commands may access the network if enabled.
+
+### Instruction-level startup investigation
+
+When black frames persist, the frame counters alone cannot reveal what the CPU is waiting for. For a single-ROM local ZIP, record one frame of instruction/bus evidence using:
+
+```sh
+cargo run --release -p starbyte-cli -- compliance commercial-record /path/to/game.zip --frames 1 --fixture-out /tmp/starbyte-boot-fixture.json --trace-out /tmp/starbyte-boot-trace.json
+```
+
+The command writes the fixture, a sibling `.report.json` file and the instruction trace only to the requested local paths. It does not save cartridge SRAM. One frame is normally sufficient to inspect the first busy loop; the captured trace can still be large. Use the trace's `frame`, `pbr`, `pc`, `opcode` and `mmio_events` to identify repeated reads and unmet handshakes. This captures *emulator behavior*, not proof of ROM correctness or commercial playability. Never commit private game traces or proprietary ROM bytes to the source repository.
 
 ## Agent safety rules
 

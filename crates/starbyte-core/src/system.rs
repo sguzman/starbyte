@@ -11,7 +11,9 @@ use crate::coprocessor::Coprocessor;
 use crate::dma::DmaController;
 use crate::input::ControllerState;
 use crate::ppu::{FrameBuffer, Ppu};
-use crate::timing::{DOTS_PER_SCANLINE, NTSC_SCANLINES_PER_FRAME, TimingState};
+use crate::timing::{
+    DOTS_PER_SCANLINE, MASTER_CLOCKS_PER_DOT, NTSC_SCANLINES_PER_FRAME, TimingState,
+};
 
 const WRAM_SIZE: usize = 128 * 1024;
 const LOW_WRAM_MIRROR_SIZE: usize = 0x2000;
@@ -195,6 +197,11 @@ impl SystemBus {
     /// H-only: each scanline at HTIME. V-only: once per frame at VTIME/0.
     /// H+V: once per frame at VTIME/HTIME. Cycle-level offsets remain TODO.
     fn irq_timer_crossed(&self, clocks: u64) -> bool {
+        let sub_dot_clocks = self.timing.master_clock % MASTER_CLOCKS_PER_DOT;
+        let elapsed_dots = (sub_dot_clocks + clocks) / MASTER_CLOCKS_PER_DOT;
+        if elapsed_dots == 0 {
+            return false;
+        }
         let dots = u64::from(DOTS_PER_SCANLINE);
         let scanlines = u64::from(NTSC_SCANLINES_PER_FRAME);
         let frame_dots = dots * scanlines;
@@ -203,17 +210,17 @@ impl SystemBus {
         match self.nmitimen & 0x30 {
             0x10 if self.htime < DOTS_PER_SCANLINE => crosses_periodic_position(
                 u64::from(self.timing.dot),
-                clocks,
+                elapsed_dots,
                 u64::from(self.htime),
                 dots,
             ),
             0x20 if self.vtime < NTSC_SCANLINES_PER_FRAME => {
-                crosses_periodic_position(start, clocks, u64::from(self.vtime) * dots, frame_dots)
+                crosses_periodic_position(start, elapsed_dots, u64::from(self.vtime) * dots, frame_dots)
             }
             0x30 if self.htime < DOTS_PER_SCANLINE && self.vtime < NTSC_SCANLINES_PER_FRAME => {
                 crosses_periodic_position(
                     start,
-                    clocks,
+                    elapsed_dots,
                     u64::from(self.vtime) * dots + u64::from(self.htime),
                     frame_dots,
                 )
@@ -1320,7 +1327,7 @@ mod tests {
         bus.write(0x004303, 0x01);
         bus.write(0x004304, 0x7E);
         bus.write(0x00420C, 0x01);
-        bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE));
+        bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT);
 
         assert_eq!(&bus.ppu().cgram()[..2], &[0x00, 0x7C]);
     }
@@ -1345,7 +1352,7 @@ mod tests {
         bus.write(0x004304, 0x7E);
         bus.write(0x004307, 0x7F);
         bus.write(0x00420C, 0x01);
-        bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE));
+        bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT);
 
         assert_eq!(&bus.ppu().cgram()[..2], &[0x00, 0x7C]);
     }
@@ -1354,19 +1361,19 @@ mod tests {
     fn h_timer_irq_only_triggers_at_programmed_dot() {
         let mut bus = SystemBus::default();
         bus.write(0x004200, 0x10);
-        bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE) * 3);
+        bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE) * 3 * MASTER_CLOCKS_PER_DOT);
         // Default HTIME is out of range: no phantom scanline IRQs.
         assert_eq!(bus.read(0x004211) & 0x80, 0);
 
         bus.write(0x004207, 32);
         bus.write(0x004208, 0);
-        bus.advance_master_clocks(31);
+        bus.advance_master_clocks(31 * MASTER_CLOCKS_PER_DOT);
         assert_eq!(bus.read(0x004211) & 0x80, 0);
-        bus.advance_master_clocks(1);
+        bus.advance_master_clocks(MASTER_CLOCKS_PER_DOT);
         assert_eq!(bus.read(0x004211) & 0x80, 0x80);
         assert_eq!(bus.read(0x004211) & 0x80, 0);
 
-        bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE));
+        bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT);
         assert_eq!(bus.read(0x004211) & 0x80, 0x80);
         bus.write(0x004200, 0); // Disabling IRQ acknowledges it.
         assert_eq!(bus.read(0x004211) & 0x80, 0);
@@ -1379,10 +1386,10 @@ mod tests {
         bus.write(0x004209, 2);
         bus.write(0x00420A, 0);
         bus.write(0x004200, 0x20);
-        let dots = u64::from(DOTS_PER_SCANLINE);
+        let dots = u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT;
         bus.advance_master_clocks(dots * 2 - 1);
         assert_eq!(bus.read(0x004211) & 0x80, 0);
-        bus.advance_master_clocks(1);
+        bus.advance_master_clocks(MASTER_CLOCKS_PER_DOT);
         assert_eq!(bus.read(0x004211) & 0x80, 0x80);
         bus.advance_master_clocks(dots * 4);
         assert_eq!(bus.read(0x004211) & 0x80, 0);
@@ -1398,12 +1405,13 @@ mod tests {
         bus.write(0x004209, 2);
         bus.write(0x00420A, 0);
         bus.write(0x004200, 0x30);
-        let target = u64::from(DOTS_PER_SCANLINE) * 2 + 20;
+        let target =
+            (u64::from(DOTS_PER_SCANLINE) * 2 + 20) * MASTER_CLOCKS_PER_DOT;
         bus.advance_master_clocks(target - 1);
         assert_eq!(bus.read(0x004211) & 0x80, 0);
-        bus.advance_master_clocks(1);
+        bus.advance_master_clocks(MASTER_CLOCKS_PER_DOT);
         assert_eq!(bus.read(0x004211) & 0x80, 0x80);
-        bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE) * 5);
+        bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE) * 5 * MASTER_CLOCKS_PER_DOT);
         assert_eq!(bus.read(0x004211) & 0x80, 0);
     }
 
@@ -1414,11 +1422,13 @@ mod tests {
         bus.write(0x004208, 0);
         bus.write(0x004200, 0x90);
 
-        bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE));
+        bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT);
         assert_eq!(bus.read(0x004211) & 0x80, 0x80);
         assert_eq!(bus.read(0x004211) & 0x80, 0x00);
 
-        let clocks_to_vblank = u64::from(DOTS_PER_SCANLINE) * u64::from(VBLANK_START_SCANLINE - 1);
+        let clocks_to_vblank = u64::from(DOTS_PER_SCANLINE)
+            * u64::from(VBLANK_START_SCANLINE - 1)
+            * MASTER_CLOCKS_PER_DOT;
         bus.advance_master_clocks(clocks_to_vblank);
         assert!(bus.timing().in_vblank());
         assert_eq!(bus.read(0x004210) & 0x80, 0x80);
@@ -1428,7 +1438,9 @@ mod tests {
     #[test]
     fn wraps_frames_through_explicit_timing() {
         let mut bus = SystemBus::default();
-        let frame_clocks = u64::from(DOTS_PER_SCANLINE) * u64::from(NTSC_SCANLINES_PER_FRAME);
+        let frame_clocks = u64::from(DOTS_PER_SCANLINE)
+            * u64::from(NTSC_SCANLINES_PER_FRAME)
+            * MASTER_CLOCKS_PER_DOT;
         bus.advance_master_clocks(frame_clocks);
 
         assert_eq!(bus.timing().frame, 1);

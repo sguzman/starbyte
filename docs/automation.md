@@ -25,7 +25,18 @@ cargo run --release -p starbyte-cli -- run /path/to/game.sfc --frames 60 --frame
 
 Each completed frame emits and flushes a `starbyte.frame_log.v1` JSON object containing the requested frame, actual completed frame count, CPU bank/program counter, framebuffer hash, nonblack pixel count, distinct RGB color count, PPU display setup, and APU steps. If a frame returns an emulation error, the log contains a final `status: "error"` record with the error string and the **last fully rendered framebuffer**. The separate end-of-run report is **not** written when emulation errors; the frame log preserves completed evidence. These reports cannot establish that the visible scene is *correct*, only what the emulator computed.
 
-The frame log is **opt-in**, writes only to its explicitly supplied local path, truncates a preexisting file at that path, and is flushed after each attempted frame. Do not publish ROM-specific file paths or proprietary traces without review. The CLI also accepts a ZIP path and currently selects its first supported ROM member; multi-ROM ZIPs must be disambiguated outside this command. Source archives are not modified.
+The frame log is **opt-in**, writes only to its explicitly supplied local path, truncates a preexisting file at that path, and is flushed after each attempted frame.
+
+For hands-free visual evidence, add `--frame-images-dir /tmp/starbyte-images`. The CLI saves PPM screenshots of completed frames: the first frame and then every frame by default, capped at **24** files per run. Use `--frame-image-every 10` to sample more widely or `--max-frame-images 8` to reduce disk use. Image paths are named `frame-000001.ppm` and so on using the actual completed frame counter. These are local generated outputs, not uploaded, and an existing matching filename in the chosen directory is replaced. Frames that fail before completion are not newly rendered or saved.
+
+Example capturing early SMW behavior from a single-ROM ZIP:
+
+```sh
+cargo run --release -p starbyte-cli -- run "$HOME/Games/Roms/SNES/Super Mario World (USA).zip" --frames 60 --frame-log /tmp/starbyte-smw.jsonl --frame-images-dir /tmp/starbyte-smw-frames --frame-image-every 5 --max-frame-images 16
+```
+
+The path above is an example, not a claim that a particular archive exists locally; pass your actual file path.
+ Do not publish ROM-specific file paths or proprietary traces without review. The CLI also accepts a ZIP path and currently selects its first supported ROM member; multi-ROM ZIPs must be disambiguated outside this command. Source archives are not modified.
 
 Read-only Cheatarium lookup: `starbyte cheatarium --index /path/to/snes.json.gz --title 'Donkey Kong Country' --json`. It reads an explicit local index file only, reports unverified title candidates and source provenance, and cannot write to a ROM or enable cheats. See [Cheatarium integration](cheatarium.md).
 

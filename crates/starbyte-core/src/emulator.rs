@@ -551,8 +551,10 @@ mod tests {
         emulator.cpu.registers.dbr = 0x14;
         emulator.cpu.registers.s = 0x01FF;
         emulator.cpu.registers.a = 0xBEEF;
-        emulator.cpu.registers.x = 0x1234;
-        emulator.cpu.registers.y = 0x5678;
+        // X=1 means 8-bit index registers; their upper bytes cannot survive
+        // the handler's REP/SEP mode changes and must already be zero.
+        emulator.cpu.registers.x = 0x0034;
+        emulator.cpu.registers.y = 0x0078;
         emulator.host_write_u8(0x004200, 0x80);
 
         for _ in 0..3 {
@@ -562,8 +564,8 @@ mod tests {
             assert_eq!(regs.p & 0x30, 0x30, "NMI erased accumulator/index width");
             assert_eq!(regs.s, 0x01FF, "NMI failed to restore stack pointer");
             assert_eq!(regs.a, 0xBEEF, "NMI failed to restore accumulator");
-            assert_eq!(regs.x, 0x1234, "NMI failed to restore X");
-            assert_eq!(regs.y, 0x5678, "NMI failed to restore Y");
+            assert_eq!(regs.x, 0x0034, "NMI failed to restore X");
+            assert_eq!(regs.y, 0x0078, "NMI failed to restore Y");
             assert_eq!(regs.dbr, 0x14, "NMI failed to restore data bank");
         }
     }

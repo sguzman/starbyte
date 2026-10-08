@@ -1174,13 +1174,16 @@ mod tests {
 
     use tempfile::tempdir;
 
+    use crate::cartridge::Cartridge;
+    use crate::emulator::EmulatorBuilder;
     use crate::input::ControllerState;
     use crate::manifest::AssetConfig;
 
     use super::{
         ByteProbeExpectation, CommercialFixture, ExpectedCommercialOutcome, MmioProbeExpectation,
         PpuWriteActivityExpectation, load_suite, record_fixture, record_fixture_with_trace_start,
-        run_with_current_core_detailed, run_with_current_core_executed, summarize,
+        run_emulator_for_frames, run_with_current_core_detailed,
+        run_with_current_core_executed, summarize,
     };
 
     fn write_test_rom(path: &Path) {
@@ -1312,6 +1315,29 @@ mod tests {
             error
                 .to_string()
                 .contains("trace start frame 2 exceeds requested 1")
+        );
+    }
+
+    #[test]
+    fn interrupt_service_step_has_no_misleading_opcode() {
+        let dir = tempdir().unwrap();
+        let rom_path = dir.path().join("commercial.sfc");
+        write_test_rom(&rom_path);
+        let mut emulator = EmulatorBuilder::new().build();
+        emulator.load_rom(Cartridge::load(&rom_path).unwrap());
+        // Enable VBlank NMI; servicing it writes the stack before reading the
+        // interrupt vector, so the first bus event is not an opcode fetch.
+        emulator.host_write_u8(0x004200, 0x80);
+
+        let trace = run_emulator_for_frames(&mut emulator, 1, true, 0)
+            .unwrap()
+            .unwrap();
+        assert!(trace.iter().any(|entry| entry.opcode.is_some()));
+        assert!(trace.iter().any(|entry| entry.opcode.is_none()));
+        assert!(
+            trace
+                .iter()
+                .any(|entry| entry.opcode.is_none() && entry.frame == 0)
         );
     }
 

@@ -33,7 +33,7 @@ Retail box art is not ordinarily embedded in SNES ROM images. The library offers
 
 ## Launch and background-work isolation
 
-The library's **Play Selected** toolbar action and each installed grid card's **Play game** button now queue an explicit ROM launch. Resume/Pause applies only to a previously loaded game. ROM materialization has a separate worker queue from network artwork/metadata, so slow artwork downloads cannot block the start of a selected local game. A persistent bottom status strip displays launch/worker feedback. This removes a startup scheduling problem; it does **not** prove that Super Mario World renders or plays correctly.
+The library's **Play Selected** toolbar action and each installed grid card's **Play game** button now queue an explicit ROM launch. Resume/Pause applies only to a previously loaded game. ROM materialization has a separate worker queue from network artwork/metadata, so slow artwork downloads cannot block the start of a selected local game. A persistent bottom status strip displays launch/worker feedback. The launcher/isolation changes passed hosted CI at `9fe41ff5` (2026-10-08); native Wayland behavior remains unverified. This removes a startup scheduling problem; it does **not** prove that Super Mario World renders or plays correctly.
 
 ## Built-in visual smoke test
 
@@ -54,9 +54,9 @@ The Session panel's 60-frame debug step now advances one frame per UI update wit
 
 A test of a commercial game that stops within a few frames needs the exact game's name and diagnostic log before its root cause can be determined. Starbyte now surfaces a recoverable emulation error in Play View, pauses playback, and records the error in Logs; this cannot protect against native process crashes or Rust panics. A terminal backtrace is required for those. A successful native checkerboard still does not demonstrate commercial playability.
 
-## Future Cheatarium integration
+## Cheatarium integration boundary
 
-Starbyte intends to consume the separate Cheatarium project once curated SNES entries and console/region identity are stable. The integration should read versioned, attributed records and never silently enable cheats. This is planned, not implemented.
+The CLI already provides a **read-only candidate lookup** against a locally supplied, versioned Cheatarium SNES index (`starbyte-cli cheatarium --index PATH --title TITLE`). The lookup does not establish exact ROM identity or region, decode/apply cheat devices, alter a loaded cartridge, or enable any cheat. Interactive integration remains future work: require explicit cartridge/region matching, provenance display, user opt-in, and verified runtime execution before advertising usable cheats.
 
 ## Playability acceptance gates still open
 

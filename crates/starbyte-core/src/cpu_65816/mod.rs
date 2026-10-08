@@ -277,6 +277,16 @@ impl Cpu65816 {
             0xFC => self.execute_jsr_absolute_indexed_indirect_x(bus, &mut trace),
             0xFE => self.execute_inc_absolute_x(bus, &mut trace),
             0xF8 => self.execute_sed(bus, &mut trace),
+            // Remaining legal accumulator ALU memory addressing forms.
+            0xA3 | 0xB3 => self.execute_lda_addressed(bus, &mut trace, opcode),
+            0x23 | 0x2F | 0x33 => self.execute_and_addressed(bus, &mut trace, opcode),
+            0x61 | 0x67 | 0x71 | 0x72 | 0x75 | 0x77 => {
+                self.execute_adc_addressed(bus, &mut trace, opcode)
+            }
+            0x41 | 0x43 | 0x45 | 0x47 | 0x4F | 0x51 | 0x52 | 0x53 | 0x55 | 0x57
+            | 0x59 | 0x5D | 0x5F => self.execute_eor_addressed(bus, &mut trace, opcode),
+            0xE1 | 0xE3 | 0xE5 | 0xE7 | 0xED | 0xEF | 0xF1 | 0xF2 | 0xF3 | 0xF5
+            | 0xF7 | 0xF9 | 0xFD | 0xFF => self.execute_sbc_addressed(bus, &mut trace, opcode),
             _ => Err(Error::UnsupportedOpcode {
                 cpu: "65816",
                 opcode,
@@ -2360,25 +2370,11 @@ impl Cpu65816 {
     ) -> Result<()> {
         if self.accumulator_is_8_bit() {
             let rhs = self.push_read_trace(bus, trace, self.fetch_address(1));
-            let lhs = self.registers.a as u8;
-            let borrow = u8::from(self.registers.p & 0x01 == 0);
-            let (tmp, borrow1) = lhs.overflowing_sub(rhs);
-            let (result, borrow2) = tmp.overflowing_sub(borrow);
-            self.registers.a = (self.registers.a & 0xFF00) | u16::from(result);
-            self.set_carry(!(borrow1 || borrow2));
-            self.set_overflow(((lhs ^ rhs) & (lhs ^ result) & 0x80) != 0);
-            self.update_nz_8(result);
+            self.subtract_accumulator_8(rhs);
             self.registers.pc = self.registers.pc.wrapping_add(2);
         } else {
             let rhs = self.fetch_operand_u16(bus, trace);
-            let lhs = self.registers.a;
-            let borrow = u16::from(self.registers.p & 0x01 == 0);
-            let (tmp, borrow1) = lhs.overflowing_sub(rhs);
-            let (result, borrow2) = tmp.overflowing_sub(borrow);
-            self.registers.a = result;
-            self.set_carry(!(borrow1 || borrow2));
-            self.set_overflow(((lhs ^ rhs) & (lhs ^ result) & 0x8000) != 0);
-            self.update_nz_16(result);
+            self.subtract_accumulator_16(rhs);
             self.registers.pc = self.registers.pc.wrapping_add(3);
         }
         Ok(())
@@ -3344,6 +3340,28 @@ impl Cpu65816 {
         self.update_nz_16(result);
     }
 
+    fn subtract_accumulator_8(&mut self, rhs: u8) {
+        let lhs = self.registers.a as u8;
+        let borrow = u8::from(self.registers.p & 0x01 == 0);
+        let (tmp, borrow1) = lhs.overflowing_sub(rhs);
+        let (result, borrow2) = tmp.overflowing_sub(borrow);
+        self.registers.a = (self.registers.a & 0xFF00) | u16::from(result);
+        self.set_carry(!(borrow1 || borrow2));
+        self.set_overflow(((lhs ^ rhs) & (lhs ^ result) & 0x80) != 0);
+        self.update_nz_8(result);
+    }
+
+    fn subtract_accumulator_16(&mut self, rhs: u16) {
+        let lhs = self.registers.a;
+        let borrow = u16::from(self.registers.p & 0x01 == 0);
+        let (tmp, borrow1) = lhs.overflowing_sub(rhs);
+        let (result, borrow2) = tmp.overflowing_sub(borrow);
+        self.registers.a = result;
+        self.set_carry(!(borrow1 || borrow2));
+        self.set_overflow(((lhs ^ rhs) & (lhs ^ result) & 0x8000) != 0);
+        self.update_nz_16(result);
+    }
+
     fn add_accumulator_8(&mut self, rhs: u8) {
         let lhs = self.registers.a as u8;
         let carry = u8::from(self.registers.p & 0x01 != 0);
@@ -3503,6 +3521,160 @@ impl Cpu65816 {
             self.write_u16_trace(bus, trace, address, value);
             self.update_nz_16(value);
         }
+    }
+
+    /// Resolve one of the standard memory addressing modes shared by the
+    /// 65816 accumulator ALU opcode families (ORA/AND/EOR/ADC/STA/LDA/CMP/SBC).
+    /// The bottom five opcode bits encode the address mode across families.
+    /// Immediate mode is handled separately because its width affects PC.
+    fn accumulator_memory_operand<B: Bus>(
+        &self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        opcode: u8,
+    ) -> (Address, u16) {
+        match opcode & 0x1F {
+            0x01 => {
+                let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+                let pointer = self.direct_page_indexed_x_address(operand);
+                let low = self.read_u8_trace(bus, trace, pointer);
+                let high = self.read_u8_trace(bus, trace, pointer.wrapping_add(1));
+                (self.absolute_address(u16::from_le_bytes([low, high])), 2)
+            }
+            0x03 => {
+                let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+                (self.stack_relative_address(operand), 2)
+            }
+            0x05 => {
+                let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+                (self.direct_page_address(operand), 2)
+            }
+            0x07 => {
+                let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+                (self.direct_page_indirect_long_address(bus, trace, operand), 2)
+            }
+            0x0D => (self.absolute_address(self.fetch_operand_u16(bus, trace)), 3),
+            0x0F => (self.fetch_operand_u24(bus, trace), 4),
+            0x11 | 0x12 => {
+                let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+                let pointer = self.direct_page_address(operand);
+                let low = self.read_u8_trace(bus, trace, pointer);
+                let high = self.read_u8_trace(bus, trace, pointer.wrapping_add(1));
+                let mut base = u16::from_le_bytes([low, high]);
+                if opcode & 0x1F == 0x11 {
+                    base = base.wrapping_add(self.registers.y);
+                }
+                (self.absolute_address(base), 2)
+            }
+            0x13 => {
+                let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+                (self.stack_relative_indirect_y_address(bus, trace, operand), 2)
+            }
+            0x15 => {
+                let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+                (self.direct_page_indexed_x_address(operand), 2)
+            }
+            0x17 => {
+                let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+                let address = self
+                    .direct_page_indirect_long_address(bus, trace, operand)
+                    .wrapping_add(u32::from(self.registers.y))
+                    & 0x00FF_FFFF;
+                (address, 2)
+            }
+            0x19 | 0x1D => {
+                let base = self.fetch_operand_u16(bus, trace);
+                let index = if opcode & 0x1F == 0x19 {
+                    self.registers.y
+                } else {
+                    self.registers.x
+                };
+                (self.absolute_address(base.wrapping_add(index)), 3)
+            }
+            0x1F => {
+                let address = self
+                    .fetch_operand_u24(bus, trace)
+                    .wrapping_add(u32::from(self.registers.x))
+                    & 0x00FF_FFFF;
+                (address, 4)
+            }
+            _ => unreachable!("unsupported accumulator addressing mode"),
+        }
+    }
+
+    fn execute_lda_addressed<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        opcode: u8,
+    ) -> Result<()> {
+        let (address, instruction_len) = self.accumulator_memory_operand(bus, trace, opcode);
+        self.load_accumulator_from_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(instruction_len);
+        Ok(())
+    }
+
+    fn execute_and_addressed<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        opcode: u8,
+    ) -> Result<()> {
+        let (address, instruction_len) = self.accumulator_memory_operand(bus, trace, opcode);
+        self.and_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(instruction_len);
+        Ok(())
+    }
+
+    fn execute_adc_addressed<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        opcode: u8,
+    ) -> Result<()> {
+        let (address, instruction_len) = self.accumulator_memory_operand(bus, trace, opcode);
+        self.add_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(instruction_len);
+        Ok(())
+    }
+
+    fn execute_eor_addressed<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        opcode: u8,
+    ) -> Result<()> {
+        let (address, instruction_len) = self.accumulator_memory_operand(bus, trace, opcode);
+        if self.accumulator_is_8_bit() {
+            let rhs = self.read_u8_trace(bus, trace, address);
+            let result = (self.registers.a as u8) ^ rhs;
+            self.registers.a = (self.registers.a & 0xFF00) | u16::from(result);
+            self.update_nz_8(result);
+        } else {
+            let rhs = self.read_u16_trace(bus, trace, address);
+            self.registers.a ^= rhs;
+            self.update_nz_16(self.registers.a);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(instruction_len);
+        Ok(())
+    }
+
+    fn execute_sbc_addressed<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        opcode: u8,
+    ) -> Result<()> {
+        let (address, instruction_len) = self.accumulator_memory_operand(bus, trace, opcode);
+        if self.accumulator_is_8_bit() {
+            let rhs = self.read_u8_trace(bus, trace, address);
+            self.subtract_accumulator_8(rhs);
+        } else {
+            let rhs = self.read_u16_trace(bus, trace, address);
+            self.subtract_accumulator_16(rhs);
+        }
+        self.registers.pc = self.registers.pc.wrapping_add(instruction_len);
+        Ok(())
     }
 
     fn direct_page_indirect_long_address<B: Bus>(

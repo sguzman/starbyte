@@ -686,3 +686,22 @@ fn capabilities_and_doctor_produce_versioned_json() {
     assert_eq!(doctor["cache_root"], custom_cache.display().to_string());
     assert_eq!(doctor["config_exists"], false);
 }
+
+#[test]
+fn inspect_json_reports_cartridge_metadata_without_claiming_playability() {
+    let dir = tempdir().unwrap();
+    let rom = dir.path().join("inspect.sfc");
+    write_test_rom(&rom);
+
+    let output = Command::cargo_bin("starbyte")
+        .unwrap()
+        .args(["inspect", rom.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["schema"], "starbyte.rom_inspect.v1");
+    assert_eq!(report["title"], "STARBYTE CLI TEST");
+    assert_eq!(report["gameplay_compatibility_verified"], false);
+    assert!(report["rom_size_declared_bytes"].is_number());
+}

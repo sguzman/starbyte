@@ -72,7 +72,13 @@ enum Command {
     /// Inspect or validate external compliance corpora.
     Compliance(ComplianceArgs),
     /// Inspect ROM metadata without running emulation.
-    Inspect { rom: PathBuf },
+    Inspect {
+        /// Local ROM to inspect.
+        rom: PathBuf,
+        /// Emit a versioned JSON report instead of text.
+        #[arg(long)]
+        json: bool,
+    },
     /// Scan ROM libraries and manage cached metadata, covers, and cheats.
     Library(LibraryArgs),
     /// Run the bootstrap emulator for a fixed number of frames.
@@ -314,7 +320,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::Compliance(args) => run_compliance(args, assets),
-        Command::Inspect { rom } => inspect_rom(rom),
+        Command::Inspect { rom, json } => inspect_rom(rom, json),
         Command::Library(args) => run_library(args, assets),
         Command::Run(args) => run_rom(args, assets),
         Command::PrintConfig { format } => print_config(format),
@@ -351,6 +357,11 @@ fn capabilities_manifest() -> serde_json::Value {
                 "name": "print_config",
                 "argv": ["print-config", "json"],
                 "side_effects": "none"
+            },
+            {
+                "name": "rom_inspect",
+                "argv": ["inspect", "<user_rom_path>", "--json"],
+                "side_effects": "read_local_rom"
             },
             {
                 "name": "library_scan",
@@ -478,9 +489,27 @@ const fn level_from_verbosity(verbose: u8) -> Level {
     }
 }
 
-fn inspect_rom(path: PathBuf) -> Result<()> {
+fn inspect_rom(path: PathBuf, json_output: bool) -> Result<()> {
     let cartridge = Cartridge::load(&path)
         .with_context(|| format!("failed to inspect ROM at {}", path.display()))?;
+
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "schema": "starbyte.rom_inspect.v1",
+                "path": path.display().to_string(),
+                "title": cartridge.header().title,
+                "mapper": format!("{:?}", cartridge.mapper()),
+                "coprocessor": cartridge.coprocessor_kind().map(|kind| kind.to_string()),
+                "region": format!("{:?}", cartridge.header().region),
+                "rom_size_declared_bytes": cartridge.header().rom_size_bytes(),
+                "ram_size_declared_bytes": cartridge.header().ram_size_bytes(),
+                "gameplay_compatibility_verified": false
+            }))?
+        );
+        return Ok(());
+    }
 
     println!("Title: {}", cartridge.header().title);
     println!("Mapper: {:?}", cartridge.mapper());

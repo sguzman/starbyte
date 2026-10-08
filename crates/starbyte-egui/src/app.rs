@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     process::Command,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::Result;
@@ -587,6 +587,9 @@ impl StarbyteApp {
                     self.quick_load(ctx);
                 }
                 ui.menu_button("Disk Slots", |ui| self.draw_persistent_slots(ui, ctx));
+                if ui.button("Screenshot (F12)").clicked() {
+                    self.save_screenshot();
+                }
                 if ui.button("Fullscreen").clicked() {
                     self.config.video.fullscreen = !self.config.video.fullscreen;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(
@@ -1072,6 +1075,34 @@ impl StarbyteApp {
         }
     }
 
+    fn save_screenshot(&mut self) {
+        let snapshot = self.session.snapshot();
+        if !snapshot.has_rom {
+            self.status_line = "Load a game before taking a screenshot.".to_owned();
+            return;
+        }
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = self.assets.screenshot_root().join(format!(
+            "starbyte-{timestamp}-frame-{}.png",
+            snapshot.frame
+        ));
+        match write_png_screenshot(
+            &path,
+            self.session.framebuffer_rgba(),
+            snapshot.framebuffer_width,
+            snapshot.framebuffer_height,
+        ) {
+            Ok(()) => self.status_line = format!("Screenshot saved to {}", path.display()),
+            Err(error) => {
+                warn!("could not save screenshot: {error}");
+                self.status_line = format!("Screenshot failed: {error}");
+            }
+        }
+    }
+
     fn draw_persistent_slots(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         for slot in 1..=3 {
             ui.horizontal(|ui| {
@@ -1488,6 +1519,11 @@ impl eframe::App for StarbyteApp {
             {
                 self.quick_load(ctx);
             }
+            if ctx.input(|input| input.key_pressed(egui::Key::F12))
+                && self.session.snapshot().has_rom
+            {
+                self.save_screenshot();
+            }
             if ctx.input(|input| input.key_pressed(egui::Key::F9))
                 && self.session.snapshot().has_rom
             {
@@ -1612,7 +1648,7 @@ impl Drop for StarbyteApp {
 mod playback_tests {
     use std::time::{Duration, Instant};
 
-    use super::{FRAME_INTERVAL, FrameClock, Vec2, fit_game_size, is_compact_layout};
+    use super::{FRAME_INTERVAL, FrameClock, Vec2, fit_game_size, is_compact_layout, write_png_screenshot};
 
     #[test]
     fn clock_limits_work_to_one_frame_per_tick_and_does_not_accumulate_lag() {
@@ -1646,6 +1682,24 @@ mod playback_tests {
         let fractional = fit_game_size(source, Vec2::new(800.0, 600.0), false);
         assert!(fractional.x > 512.0);
         assert_eq!(fractional.y, 600.0);
+    }
+
+    #[test]
+    fn png_screenshot_exports_exact_framebuffer_colors() {
+        let dir = std::env::temp_dir().join(format!(
+            "starbyte-screenshot-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = dir.join("frame.png");
+        write_png_screenshot(&path, &[248, 0, 0, 255, 0, 0, 248, 255], 2, 1).unwrap();
+        let pixels = image::open(&path).unwrap().to_rgba8();
+        assert_eq!(pixels.dimensions(), (2, 1));
+        assert_eq!(pixels.as_raw(), &[248, 0, 0, 255, 0, 0, 248, 255]);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -1824,6 +1878,21 @@ fn fit_game_size(source: Vec2, available: Vec2, integer_scale: bool) -> Vec2 {
         maximum_scale
     };
     source * scale
+}
+
+fn write_png_screenshot(path: &Path, rgba: &[u8], width: u32, height: u32) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    image::save_buffer_with_format(
+        path,
+        rgba,
+        width,
+        height,
+        image::ColorType::Rgba8,
+        image::ImageFormat::Png,
+    )?;
+    Ok(())
 }
 
 fn fit_size(source: Vec2, available: Vec2) -> Vec2 {

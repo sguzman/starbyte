@@ -46,6 +46,14 @@ impl AssetConfig {
         })
     }
 
+    /// Directory used for native-resolution PNG gameplay screenshots.
+    #[must_use]
+    pub fn screenshot_root(&self) -> PathBuf {
+        user_directory("XDG_DATA_HOME", ".local/share")
+            .join("starbyte")
+            .join("screenshots")
+    }
+
     /// Resolve the directory for durable game-specific save-state slots.
     ///
     /// Defaults to XDG_STATE_HOME/starbyte/states, with HOME fallback.

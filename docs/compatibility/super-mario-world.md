@@ -87,12 +87,35 @@ The timing implementation previously treated **each CPU master clock as a whole 
 
 The 65816 core also now implements `PHD`/`PLD`, forces interrupt vector targets to bank zero in both modes, and keeps emulation-mode stack transfers inside page `$01`. These are general hardware correctness changes; **none was validated on this user's ROM at documentation time**.
 
+## Fourth headless probe: corrected master-clock timing, 360 requested
+
+The user ran the corrected master-clock build (`44779da5`) against the same ZIP with per-frame logging on 2026-10-08. This run completed **38 frames** and returned an emulator error when attempting **frame 39**:
+
+```text
+unsupported opcode for 65816: 0xFF at 0x0004A0
+```
+
+The 39-line JSONL includes the final failed-frame record. The 24-sample budget captured only frames 1, 18, and 36; all were still black, consistent with early initialization having shifted to a more realistic master-clock schedule.
+
+| Frame | End-frame CPU bank:PC | Stack | NMITIMEN | Display |
+| --- | --- | --- | --- | --- |
+| 36 | `$00:AAD4` | `$01F9` | `$00` | forced blank |
+| 37 | `$00:806D` | `$01FF` | `$81` | forced blank cleared, still black |
+| 38 | `$00:FFFF` | `$F886` | `$81` | 301 nonblack pixels (not recognizable screen) |
+| 39 failed | `$00:04A0` | `$AFDE` | `$81` | frame 38 remains the last rendered buffer |
+
+DMA bytes remained **9,952** and PPU writes **22,353** at failure. The ordinary frame log tells us the first major stack/control-flow corruption occurs *inside frame 38*, immediately after NMI is enabled and the display transitions out of forced blank. The final `$FF` opcode is a symptom: implementing additional CPU opcodes without determining why execution reached WRAM `$04A0` risks hiding the true defect.
+
+### Next diagnostic capability
+
+A new opt-in `run --trace-frame 38 --trace-out PATH` path runs prior frames normally, then records each successful instruction in **only frame 38** with before/after CPU registers, bus events, and a null opcode on interrupt service. The trace file includes a final status record even if the selected frame errors. This is specifically intended to find the **first** wrong stack write, RTI, vector fetch, or jump leading to `$00:FFFF`. The trace implementation has synthetic integration tests; commercial-frame conclusions must wait for the user's returned trace.
+
 ## Next evidence needed
 
-1. Re-run a bounded 360-frame probe after pulling the 65816 and master-clock/dot corrections; report the last successfully completed frame, any error, and whether recognizable graphics advance.
-2. If control flow still leaves the expected startup/NMI routines, capture **frames 149–150** using `compliance commercial-record --frames 150 --trace-from-frame 148` (or the equivalent earlier boundary after corrected timing). Look for the first wrong interrupt, stack access, or transfer, not merely the final unsupported opcode.
+1. Capture **frame 38** only using `run --frames 38 --no-save-ram --trace-frame 38 --trace-out /tmp/starbyte-frame38.jsonl`. The one-based frame selection is important; `--trace-frame 37` would miss the corruption.
+2. Inspect the frame-38 trace for the earliest wrong stack update, NMI entry/exit, or unexpected branch. Compare against the legitimate [SMW NMI disassembly](https://github.com/IsoFrieze/SMWDisX/blob/master/bank_00.asm), then correct the first demonstrated 65816/system defect and write a copyright-free regression.
 3. Record the local cartridge digest and precise revision; the ZIP filename is not sufficient evidence.
-4. Fix additional demonstrated core defects with copyright-free regressions before another ROM probe.
+4. Repeat a bounded commercial probe after each meaningful fix, avoiding uncontrolled long traces.
 5. Do not mark title/gameplay verified until the startup/title screen is stable and controller input is responsive.
 
 ## Acceptance criteria

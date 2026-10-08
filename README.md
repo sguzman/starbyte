@@ -55,6 +55,16 @@ cargo run -p starbyte-cli -- --help
 
 The GUI uses `eframe` with both Wayland and X11 backends enabled. **Native Wayland behavior and dependencies still require verification on the target Linux system.** These are source-build instructions, not a claim of a working packaged release.
 
+## Linux configuration and cache
+
+By default Starbyte now uses the XDG user directories, independent of the directory from which it is launched:
+
+- Config: `$XDG_CONFIG_HOME/starbyte/config.toml`, falling back to `~/.config/starbyte/config.toml`.
+- Cache: `$XDG_CACHE_HOME/starbyte/`, falling back to `~/.cache/starbyte/`.
+- An explicit `--config` or `--cache-dir` takes precedence.
+
+If the new config does not exist, the CLI and desktop app can read the old worktree-relative `.config/starbyte/config.toml` or legacy cache-relative configuration when launched from the same directory. The desktop app writes its settings to the new XDG path; the old file is not overwritten. For a different working directory, supply `--config /path/to/old/config.toml` explicitly. No save files are automatically moved.
+
 ## Development
 
 ```sh

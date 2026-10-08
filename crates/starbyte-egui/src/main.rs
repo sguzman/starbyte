@@ -113,6 +113,14 @@ fn load_runtime_config(assets: &AssetConfig) -> Result<RuntimeConfig> {
         return RuntimeConfig::load_or_default(&config_path).map_err(anyhow::Error::from);
     }
 
+    if assets.config_path.is_none() {
+        let worktree_path = assets.legacy_worktree_config_path();
+        if worktree_path.exists() {
+            return RuntimeConfig::load_or_default(&worktree_path)
+                .map_err(anyhow::Error::from);
+        }
+    }
+
     let legacy_path = assets.legacy_config_path();
     if legacy_path.exists() {
         return RuntimeConfig::load_or_default(&legacy_path).map_err(anyhow::Error::from);

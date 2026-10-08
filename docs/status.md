@@ -34,6 +34,10 @@ The GUI now has a 520×360 minimum, a Play/Pause frame scheduler, compact-width 
 
 **Important:** the audio sample synthesis in `starbyte-core/src/emulator.rs` is a placeholder, and `starbyte-egui` has no sound-device output backend. The audio configuration UI does not mean that live game sound currently works.
 
+## Linux state directories
+
+Configuration and cache defaults now follow XDG paths with a HOME fallback, rather than writing into the current checkout. Existing worktree/cached configuration is read as a fallback on matching working directories; explicit path overrides are respected. This change has not yet been smoke-tested on the user's Wayland machine.
+
 ## Current functional gap
 
 The original commercial-ROM roadmap explicitly leaves SNES background/tilemap presentation, non-placeholder Super Mario World boot visuals, title/menu navigation, and first controllable gameplay incomplete. This is a **blocking playability gap**, not an optional accuracy task.

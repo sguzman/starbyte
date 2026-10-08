@@ -8,6 +8,7 @@ Mission: a fun-first, comfy Rust SNES emulator for Linux/Wayland, with a delight
 
 - [ ] Run and record Linux `fmt`, `clippy`, `test`, GUI build, and headless smoke checks.
 - [ ] Verify native Wayland startup in a real compositor and observe resize, tiling, fullscreen, focus and dialogs.
+- [x] Redirect config and cache defaults to XDG user directories while retaining legacy reading and explicit overrides (code change; local verification pending).
 - [ ] Inspect the PPU title-screen path, especially background tiles, scroll, screen base, sprites and palettes.
 - [ ] Reach a verified, non-placeholder Super Mario World title scene with a user-supplied ROM.
 - [ ] Reach input-driven title/menu transition and first controllable gameplay.

@@ -31,24 +31,53 @@ impl AssetConfig {
     pub fn cache_root(&self) -> PathBuf {
         self.cache_dir
             .clone()
-            .unwrap_or_else(|| PathBuf::from(".cache").join("starbyte"))
+            .unwrap_or_else(|| user_directory("XDG_CACHE_HOME", ".cache").join("starbyte"))
     }
 
     /// Resolve the effective configuration path for persisted GUI/runtime settings.
     #[must_use]
     pub fn config_path(&self) -> PathBuf {
         self.config_path.clone().unwrap_or_else(|| {
-            PathBuf::from(".config")
+            user_directory("XDG_CONFIG_HOME", ".config")
                 .join("starbyte")
                 .join("config.toml")
         })
     }
 
-    /// Resolve the legacy configuration path used before config relocation.
+    /// Previous worktree-relative config path (before XDG adoption).
+    #[must_use]
+    pub fn legacy_worktree_config_path(&self) -> PathBuf {
+        PathBuf::from(".config")
+            .join("starbyte")
+            .join("config.toml")
+    }
+
+    /// Previous cache-relative config path; explicit cache overrides still apply.
     #[must_use]
     pub fn legacy_config_path(&self) -> PathBuf {
-        self.cache_root().join("config.toml")
+        self.cache_dir
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(".cache").join("starbyte"))
+            .join("config.toml")
     }
+}
+
+/// Prefer an absolute XDG directory, then HOME, then a relative fallback.
+fn user_directory(xdg_name: &str, fallback: &str) -> PathBuf {
+    choose_user_directory(
+        std::env::var_os(xdg_name).map(PathBuf::from),
+        std::env::var_os("HOME").map(PathBuf::from),
+        fallback,
+    )
+}
+
+fn choose_user_directory(xdg: Option<PathBuf>, home: Option<PathBuf>, fallback: &str) -> PathBuf {
+    xdg.filter(|path| path.is_absolute())
+        .or_else(|| {
+            home.filter(|path| path.is_absolute())
+                .map(|path| path.join(fallback))
+        })
+        .unwrap_or_else(|| PathBuf::from(fallback))
 }
 
 /// Library presentation mode shared by persistent config and host shells.
@@ -341,9 +370,7 @@ impl RuntimeConfig {
     /// Return the default configuration path used by CLI and GUI shells.
     #[must_use]
     pub fn default_path() -> PathBuf {
-        PathBuf::from(".config")
-            .join("starbyte")
-            .join("config.toml")
+        AssetConfig::default().config_path()
     }
 
     /// Load a config file if it exists, otherwise return defaults.
@@ -431,26 +458,59 @@ fn default_gamepad_bindings() -> BTreeMap<String, String> {
 mod tests {
     use tempfile::tempdir;
 
-    use super::{AppMode, AssetConfig, LibraryViewMode, RuntimeConfig};
+    use super::{AppMode, AssetConfig, LibraryViewMode, RuntimeConfig, choose_user_directory};
 
     #[test]
     fn asset_config_resolves_default_paths() {
         let config = AssetConfig::default();
+        assert!(config.cache_root().ends_with("starbyte"));
+        assert!(config.config_path().ends_with("starbyte/config.toml"));
+        assert_eq!(config.config_path(), RuntimeConfig::default_path());
         assert_eq!(
-            config.cache_root(),
-            std::path::PathBuf::from(".cache").join("starbyte")
-        );
-        assert_eq!(
-            config.config_path(),
-            std::path::PathBuf::from(".config")
-                .join("starbyte")
-                .join("config.toml")
+            config.legacy_worktree_config_path(),
+            std::path::PathBuf::from(".config/starbyte/config.toml")
         );
         assert_eq!(
             config.legacy_config_path(),
-            std::path::PathBuf::from(".cache")
-                .join("starbyte")
-                .join("config.toml")
+            std::path::PathBuf::from(".cache/starbyte/config.toml")
+        );
+    }
+
+    #[test]
+    fn xdg_resolution_rejects_relative_overrides_and_preserves_explicit_paths() {
+        use std::path::PathBuf;
+
+        let cwd = std::env::current_dir().unwrap();
+        let home = cwd.join("test-home");
+        let xdg = cwd.join("test-xdg");
+
+        assert_eq!(
+            choose_user_directory(Some(xdg.clone()), Some(home.clone()), ".config"),
+            xdg
+        );
+        assert_eq!(
+            choose_user_directory(Some(PathBuf::from("relative")), Some(home.clone()), ".config"),
+            home.join(".config")
+        );
+        assert_eq!(
+            choose_user_directory(None, Some(home.clone()), ".cache"),
+            home.join(".cache")
+        );
+        assert_eq!(
+            choose_user_directory(None, None, ".cache"),
+            PathBuf::from(".cache")
+        );
+
+        let config = AssetConfig {
+            cache_dir: Some(cwd.join("custom-cache")),
+            config_path: Some(cwd.join("custom.toml")),
+            ..AssetConfig::default()
+        };
+        assert_eq!(config.cache_root(), cwd.join("custom-cache"));
+        assert_eq!(config.config_path(), cwd.join("custom.toml"));
+        assert_eq!(
+            config.legacy_config_path(),
+            cwd.join("custom-cache/config.toml")
         );
     }
 

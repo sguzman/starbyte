@@ -4658,6 +4658,53 @@ mod tests {
     }
 
     #[test]
+    fn eight_bit_index_dispatcher_can_unpack_long_call_return_pointer() {
+        // Synthetic version of a common 65816 jump-table convention:
+        // a long call enters with X=1, PLY removes the *low* return byte,
+        // then REP #$30 and PLA consume its remaining high byte and bank.
+        // PLY must not consume both return bytes in eight-bit index mode.
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x9325;
+        cpu.registers.p = 0x30; // Native M=1, X=1.
+        cpu.registers.emulation = false;
+        cpu.registers.s = 0x01FD; // Outer JSR return is already on stack.
+        cpu.registers.a = 0x0001; // Choose table entry one.
+        cpu.registers.y = 0x0004; // Preserve caller Y.
+
+        let mut bus = TestBus::with_bytes(&[
+            (0x009325, 0x22), (0x009326, 0xDF), (0x009327, 0x86), (0x009328, 0x00),
+            (0x009329, 0x00), (0x00932A, 0x94), (0x00932B, 0x20), (0x00932C, 0x94),
+            (0x0086DF, 0x84), (0x0086E0, 0x03),
+            (0x0086E1, 0x7A),
+            (0x0086E2, 0x84), (0x0086E3, 0x00),
+            (0x0086E4, 0xC2), (0x0086E5, 0x30),
+            (0x0086E6, 0x29), (0x0086E7, 0xFF), (0x0086E8, 0x00),
+            (0x0086E9, 0x0A),
+            (0x0086EA, 0xA8),
+            (0x0086EB, 0x68),
+            (0x0086EC, 0x85), (0x0086ED, 0x01),
+            (0x0086EE, 0xC8),
+            (0x0086EF, 0xB7), (0x0086F0, 0x00),
+            (0x0086F1, 0x85), (0x0086F2, 0x00),
+            (0x0086F3, 0xE2), (0x0086F4, 0x30),
+            (0x0086F5, 0xA4), (0x0086F6, 0x03),
+            (0x0086F7, 0xDC), (0x0086F8, 0x00), (0x0086F9, 0x00),
+            (0x0001FE, 0x74), (0x0001FF, 0x80),
+        ]);
+        for _ in 0..16 {
+            cpu.step_with_bus(&mut bus).unwrap();
+        }
+        assert_eq!(cpu.registers.pbr, 0);
+        assert_eq!(cpu.registers.pc, 0x9420);
+        assert_eq!(cpu.registers.s, 0x01FD);
+        assert_eq!(cpu.registers.p & 0x30, 0x30);
+        assert_eq!(cpu.registers.y, 4);
+        assert_eq!(bus.read(0x000000), 0x20);
+        assert_eq!(bus.read(0x000001), 0x94);
+        assert_eq!(bus.read(0x000002), 0x00);
+    }
+
+    #[test]
     fn cop_uses_cop_vector() {
         let mut cpu = Cpu65816::default();
         cpu.reset(); // The $FFF4 COP vector is the emulation-mode vector.

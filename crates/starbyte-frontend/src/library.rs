@@ -573,6 +573,22 @@ impl LibraryService {
             .join("archive-members.json")
     }
 
+    /// Extract a ZIP supplied directly by the file picker or drop gesture.
+    /// If there are multiple ROMs, let the user select one in the library
+    /// instead of launching an arbitrary first entry.
+    pub fn materialize_single_rom_zip(&self, archive_path: &Path) -> Result<PathBuf> {
+        let mut listing = ArchiveListingManifest::default();
+        let members = discover_zip_members(archive_path, &mut listing)?;
+        anyhow::ensure!(
+            members.len() == 1,
+            "ZIP {} contains {} ROM members; expected exactly one. Add the containing folder to the library and select a specific game.",
+            archive_path.display(),
+            members.len()
+        );
+        let info = inspect_rom_candidate(&members[0], &self.cache_root())?;
+        self.materialize_rom(&info)
+    }
+
     /// Resolve a local library entry to a playable ROM path, extracting archive members into cache when needed.
     pub fn materialize_rom(&self, local: &LocalRomInfo) -> Result<PathBuf> {
         match local.source_kind {
@@ -1621,6 +1637,35 @@ mod tests {
                 .join("archive-members.json")
                 .exists()
         );
+    }
+
+    #[test]
+    fn direct_zip_open_extracts_only_when_a_single_rom_is_present() {
+        let dir = tempdir().unwrap();
+        let one = dir.path().join("single.zip");
+        let many = dir.path().join("multiple.zip");
+        write_zip_roms(
+            &one,
+            &[("game.sfc", synthetic_rom_bytes(b"STARBYTE ZIP LOAD    "))],
+        );
+        write_zip_roms(
+            &many,
+            &[
+                ("one.sfc", synthetic_rom_bytes(b"STARBYTE ZIP GAME 01 ")),
+                ("two.sfc", synthetic_rom_bytes(b"STARBYTE ZIP GAME 02 ")),
+            ],
+        );
+        let original = fs::read(&one).unwrap();
+        let mut config = RuntimeConfig::default();
+        config.library.cache_dir = Some(dir.path().join(".cache"));
+        let service = LibraryService::new(config, Default::default()).unwrap();
+        let extracted = service.materialize_single_rom_zip(&one).unwrap();
+        assert_eq!(
+            Cartridge::load(&extracted).unwrap().header().title.trim(),
+            "STARBYTE ZIP LOAD"
+        );
+        assert_eq!(fs::read(&one).unwrap(), original);
+        assert!(service.materialize_single_rom_zip(&many).is_err());
     }
 
     #[test]

@@ -554,7 +554,24 @@ impl StarbyteApp {
     }
 
     fn open_local_rom(&mut self, path: &Path, ctx: &egui::Context) {
-        match self.session.load_rom(path) {
+        let resolved = if path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"))
+        {
+            LibraryService::new(self.config.clone(), self.assets.clone())
+                .and_then(|service| service.materialize_single_rom_zip(path))
+        } else {
+            Ok(path.to_path_buf())
+        };
+        let resolved = match resolved {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                self.status_line = format!("Could not open ROM archive: {error}");
+                return;
+            }
+        };
+        match self.session.load_rom(&resolved) {
             Ok(()) => {
                 let matching = self
                     .library_snapshot
@@ -563,7 +580,7 @@ impl StarbyteApp {
                     .find(|entry| {
                         entry.local.as_ref().is_some_and(|local| {
                             local.rom_path.as_path() == path
-                                || local.extracted_cache_path.as_deref() == Some(path)
+                                || local.extracted_cache_path.as_deref() == Some(resolved.as_path())
                         })
                     })
                     .cloned();
@@ -726,7 +743,7 @@ impl StarbyteApp {
             }
             if ui.button("Open ROM...").clicked()
                 && let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Super Nintendo ROM", &["sfc", "smc", "swc", "fig"])
+                    .add_filter("Super Nintendo ROM or ZIP", &["sfc", "smc", "swc", "fig", "zip"])
                     .pick_file()
             {
                 self.open_local_rom(&path, ctx);

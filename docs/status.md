@@ -46,6 +46,10 @@ Configuration and cache defaults now follow XDG paths with a HOME fallback, rath
 
 A pre-inheritance CI review found a large rustfmt backlog, a missing `libudev-dev` dependency on Ubuntu runners, and tests that constructed a native-mode CPU while asserting emulation-mode results. The first CI cleanup applies the formatter's exact reported diffs, installs Linux build dependencies, and initializes those CPU tests explicitly. The remaining commercial fixture failure was reproduced on Linux and Windows: one full frame ends with PC 0x0000 and WRAM[0x7E0100] = 0x34, not the old 0x8001 and 0x00 expectations. The fixture now asserts the observed end-of-frame state. No broad CI-green claim is made until the next runs complete.
 
+## In-session quick save
+
+The frontend now supports one **temporary**, memory-only quick-save slot per loaded ROM session, with F5/F8 shortcuts and buttons in the Session panel. ROM loads invalidate the slot and quick-load regenerates the framebuffer. These are *not* disk-backed save slots or battery-backed SRAM persistence. This feature is not yet tested in a real Wayland gaming session.
+
 ## Agent-readable CLI (no MCP server)
 
 The CLI now exposes `starbyte capabilities` as a versioned JSON command manifest and `starbyte doctor --json` for opt-in local platform/path diagnostics. These require no ROM or network and report Wayland/audio verification as false. A real MCP server and permission-bounded tools remain future work.

@@ -21,7 +21,8 @@ Mission: a fun-first, comfy Rust SNES emulator for Linux/Wayland, with a delight
 
 - [x] Lower the forced window minimum and add compact-width/short-height pop-up panels, including logs (source change; native Wayland UX still unverified).
 - [ ] Make the library fast, readable and keyboard/gamepad friendly; improve cover/metadata fallback and offline behavior.
-- [ ] Add thoughtful pause/resume, recent games, per-game controls and quick save/load affordances.
+- [x] Implement Play/Pause and memory-only quick-save/load controls with F5/F8, clearing slot on ROM change (source; CI verification pending).
+- [ ] Add persistent save-slot browsing, recent games, and per-game controls.
 - [ ] Test remapping, controller reconnect, Wayland focus and hot-plug across realistic play sessions.
 - [ ] Improve scaling, aspect-ratio handling, crisp pixel rendering, fullscreen transitions and frame pacing.
 - [ ] Replace the new bounded GUI frame scheduler with a measured, responsive gameplay loop once real-game frame costs are known.

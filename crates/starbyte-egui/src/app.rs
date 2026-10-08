@@ -986,6 +986,24 @@ impl StarbyteApp {
         }
     }
 
+    fn quick_save(&mut self) {
+        match self.session.quick_save() {
+            Ok(()) => self.status_line = "Quick save stored for this session (F5).".to_owned(),
+            Err(error) => self.status_line = error.to_string(),
+        }
+    }
+
+    fn quick_load(&mut self, ctx: &egui::Context) {
+        match self.session.quick_load() {
+            Ok(()) => {
+                self.refresh_framebuffer(ctx);
+                self.frame_clock.reset(Instant::now());
+                self.status_line = "Quick save restored (F8).".to_owned();
+            }
+            Err(error) => self.status_line = error.to_string(),
+        }
+    }
+
     fn draw_session_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.heading("Session");
         let snapshot = self.session.snapshot();
@@ -994,6 +1012,20 @@ impl StarbyteApp {
         } else {
             ui.label("No ROM selected");
         }
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(snapshot.has_rom, egui::Button::new("Quick Save (F5)"))
+                .clicked()
+            {
+                self.quick_save();
+            }
+            if ui
+                .add_enabled(self.session.has_quick_save(), egui::Button::new("Quick Load (F8)"))
+                .clicked()
+            {
+                self.quick_load(ctx);
+            }
+        });
         if ui
             .add_enabled(
                 !self.is_playing && snapshot.has_rom,
@@ -1336,6 +1368,19 @@ impl eframe::App for StarbyteApp {
         self.capture_keyboard_binding(ctx);
         self.poll_gamepad_events();
         self.poll_worker_events(ctx);
+        // Hotkeys should never fire while editing controls or recording a new binding.
+        if !ctx.wants_keyboard_input() && self.pending_keyboard_bind.is_none() {
+            if ctx.input(|input| input.key_pressed(egui::Key::F5))
+                && self.session.snapshot().has_rom
+            {
+                self.quick_save();
+            }
+            if ctx.input(|input| input.key_pressed(egui::Key::F8))
+                && self.session.has_quick_save()
+            {
+                self.quick_load(ctx);
+            }
+        }
 
         let available = ctx.available_rect();
         let compact = is_compact_layout(available.width(), available.height());

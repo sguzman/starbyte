@@ -58,6 +58,7 @@ pub struct FrontendSession {
     emulator: Emulator,
     rom_path: Option<PathBuf>,
     active_cheat_patches: Vec<CheatPatch>,
+    quick_state: Option<String>,
 }
 
 impl FrontendSession {
@@ -69,6 +70,7 @@ impl FrontendSession {
             emulator,
             rom_path: None,
             active_cheat_patches: Vec::new(),
+            quick_state: None,
         })
     }
 
@@ -81,6 +83,7 @@ impl FrontendSession {
         let cartridge = Cartridge::load(&path)
             .with_context(|| format!("failed to load ROM at {}", path.display()))?;
         self.emulator.load_rom(cartridge);
+        self.quick_state = None;
         self.rom_path = Some(path);
         self.apply_active_cheats();
         Ok(())
@@ -105,6 +108,30 @@ impl FrontendSession {
         for _ in 0..frame_count {
             self.run_frame()?;
         }
+        Ok(())
+    }
+
+    /// Save a memory-only quick slot for the loaded ROM.
+    ///
+    /// The slot is discarded whenever another ROM is loaded or the app closes.
+    pub fn quick_save(&mut self) -> Result<()> {
+        anyhow::ensure!(self.rom_path.is_some(), "No ROM loaded for quick save");
+        self.quick_state = Some(self.emulator.save_state().context("quick save failed")?);
+        Ok(())
+    }
+
+    /// Whether a memory-only quick-save slot is available.
+    #[must_use]
+    pub fn has_quick_save(&self) -> bool {
+        self.quick_state.is_some()
+    }
+
+    /// Load the quick slot and refresh the restored framebuffer.
+    pub fn quick_load(&mut self) -> Result<()> {
+        let state = self.quick_state.as_deref().context("No quick save in this session")?;
+        self.emulator.load_state(state).context("quick load failed")?;
+        self.emulator.refresh_framebuffer();
+        self.apply_active_cheats();
         Ok(())
     }
 
@@ -296,6 +323,31 @@ mod tests {
             session.framebuffer_rgba().len(),
             (snapshot.framebuffer_width * snapshot.framebuffer_height * 4) as usize
         );
+    }
+
+    #[test]
+    fn quick_save_roundtrip_and_rom_reload_invalidate_slot() {
+        let temp_dir = tempdir().unwrap();
+        let rom_path = temp_dir.path().join("quick-save-test.sfc");
+        fs::write(&rom_path, synthetic_rom_bytes()).unwrap();
+
+        let mut session = FrontendSession::new(Default::default()).unwrap();
+        assert!(session.quick_save().is_err());
+        assert!(session.quick_load().is_err());
+        session.load_rom(&rom_path).unwrap();
+        session.run_frames(2).unwrap();
+        let saved_frame = session.snapshot().frame;
+        session.quick_save().unwrap();
+        assert!(session.has_quick_save());
+
+        session.run_frames(2).unwrap();
+        assert!(session.snapshot().frame > saved_frame);
+        session.quick_load().unwrap();
+        assert_eq!(session.snapshot().frame, saved_frame);
+
+        session.load_rom(&rom_path).unwrap();
+        assert!(!session.has_quick_save());
+        assert!(session.quick_load().is_err());
     }
 
     #[test]

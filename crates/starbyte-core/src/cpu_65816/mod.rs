@@ -216,6 +216,7 @@ impl Cpu65816 {
             0xAB => self.execute_plb(bus, &mut trace),
             0x98 => self.execute_tya(bus, &mut trace),
             0xAD => self.execute_lda_absolute(bus, &mut trace),
+            0xAF => self.execute_lda_long(bus, &mut trace),
             0x9A => self.execute_txs(bus, &mut trace),
             0xB8 => self.execute_clv(bus, &mut trace),
             0xB0 => self.execute_bcs(bus, &mut trace),
@@ -229,6 +230,7 @@ impl Cpu65816 {
             0xBC => self.execute_ldy_absolute_x(bus, &mut trace),
             0xBD => self.execute_lda_absolute_x(bus, &mut trace),
             0xBE => self.execute_ldx_absolute_y(bus, &mut trace),
+            0xBF => self.execute_lda_long_x(bus, &mut trace),
             0xBB => self.execute_tyx(bus, &mut trace),
             0xC8 => self.execute_iny(bus, &mut trace),
             0xCA => self.execute_dex(bus, &mut trace),
@@ -1303,6 +1305,25 @@ impl Cpu65816 {
         let address = self.absolute_address(self.fetch_operand_u16(bus, trace));
         self.load_accumulator_from_address(bus, trace, address);
         self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_lda_long<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        // 24-bit absolute addressing ignores DBR and carries across banks.
+        let address = self.fetch_operand_u24(bus, trace);
+        self.load_accumulator_from_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(4);
+        Ok(())
+    }
+
+    fn execute_lda_long_x<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        // Unlike absolute,X, long,X can cross a 64 KiB bank boundary.
+        let address = self
+            .fetch_operand_u24(bus, trace)
+            .wrapping_add(u32::from(self.registers.x))
+            & 0x00FF_FFFF;
+        self.load_accumulator_from_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(4);
         Ok(())
     }
 

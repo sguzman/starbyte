@@ -110,13 +110,28 @@ DMA bytes remained **9,952** and PPU writes **22,353** at failure. The ordinary 
 
 A new opt-in `run --trace-frame 38 --trace-out PATH` path runs prior frames normally, then records each successful instruction in **only frame 38** with before/after CPU registers, bus events, and a null opcode on interrupt service. The trace file includes a final status record even if the selected frame errors. This is specifically intended to find the **first** wrong stack write, RTI, vector fetch, or jump leading to `$00:FFFF`. The trace implementation has synthetic integration tests; commercial-frame conclusions must wait for the user's returned trace.
 
+## Fifth probe: frame-38 CPU instruction trace — first proven divergence
+
+On 2026-10-08 the user captured **22,220 CPU steps of frame 38** with `run --frames 38 --trace-frame 38`. The command completed; the trace includes a successful footer and **20,880 ordinary/interrupt steps before the decisive jump**.
+
+**This is the first instruction-level, causal explanation of the runaway stack:**
+
+1. At instruction 20,863, `JSR RunGameMode` (`$00:8072`) enters `$00:9322`. The mode value is **1** (Nintendo Presents). `JSL ExecutePtr` at `$00:9325` jumps to `$00:86DF`, pushing a three-byte long-call return address on stack.
+2. On entry to `ExecutePtr` the processor status is **`$20`**, with the `X` index-width flag **clear** (16-bit index registers). This is incorrect for the indexed-return dispatcher, which expects `X=1` (8-bit Y) at entry. The public [SMWDisX `ExecutePtr` routine](https://github.com/IsoFrieze/SMWDisX/blob/master/bank_00.asm) uses `STY $03; PLY; STY $00; REP #$30; ...; PLA; STA $01; ...; JML [$00]`. Thus `PLY` must remove **one** byte from the long-call return before `REP` promotes the index to 16 bits.
+3. With `X=0`, `PLY` at `$00:86E1` removes **two** bytes, incorrectly consuming return address `$9328`. The subsequent `PLA` removes the remaining bank byte `$00` **and the low byte `$74` of the outer `JSR` return**, leaving `$7400`. `STA $01` constructs pointer bank `$74`, and `JML [$00]` at instruction **20,880**, address **`$00:86F7`**, jumps to **`$74:0000`**.
+4. At `$74:0000` the CPU reads `$00` (`BRK`); the native-mode BRK vector at `$00:FFE6` is `$FFFF`. A repeating `$00:FFFF` / `$00:0002` / `$00:0004` BRK path then pushes four more bytes per iteration until the stack wraps. This **fully explains the stack and PC explosion observed in frame 38**, without implicating the PPU as the initiating fault.
+
+**Important distinction:** the trace proves **how** a cleared X flag corrupts the long-call dispatcher. It does **not yet prove where X was cleared**. The first frame-38 instruction already has P=`$22` (X=0), and the CPU returns from an NMI with that same width before calling `RunGameMode`. The transition must be located earlier, likely during the previous frame's first game-mode initialization/return. Do **not** force X=1 at this game-specific code address; find and fix the general 65816 flag or stack cause.
+
+**Next best capture is frame 37** (one-based `--trace-frame 37`) to identify the earliest transition of processor-status bit `$10`. It can be extracted from the existing bounded per-instruction trace implementation; do not repeat frame 38 or run 360 frames unnecessarily.
+
 ## Next evidence needed
 
-1. Capture **frame 38** only using `run --frames 38 --no-save-ram --trace-frame 38 --trace-out /tmp/starbyte-frame38.jsonl`. The one-based frame selection is important; `--trace-frame 37` would miss the corruption.
-2. Inspect the frame-38 trace for the earliest wrong stack update, NMI entry/exit, or unexpected branch. Compare against the legitimate [SMW NMI disassembly](https://github.com/IsoFrieze/SMWDisX/blob/master/bank_00.asm), then correct the first demonstrated 65816/system defect and write a copyright-free regression.
-3. Record the local cartridge digest and precise revision; the ZIP filename is not sufficient evidence.
-4. Repeat a bounded commercial probe after each meaningful fix, avoiding uncontrolled long traces.
-5. Do not mark title/gameplay verified until the startup/title screen is stable and controller input is responsive.
+1. Capture **frame 37**, not 38, using `run --frames 37 --no-save-ram --trace-frame 37 --trace-out /tmp/starbyte-frame37.jsonl`. Find the *first* unexpected clearing of CPU P bit `$10` before the second game-mode dispatch. Trace the responsible instruction and its stack/register input.
+2. Validate any proposed 65816 flag or memory fix with copyright-free synthetic tests; compare resulting behavior with the public SMW initialization/disassembly (no ROM-specific hacks).
+3. Re-run a bounded 60-frame commercial probe after the fix; confirm the ExecutePtr indirect jump uses a valid bank/target, no cascading BRK sequence, and steady native stack before attempting graphics work.
+4. Record the exact local cartridge digest and region/revision without uploading ROM bytes.
+5. Mark game playable only after a stable title scene and controller navigation are observed.
 
 ## Acceptance criteria
 

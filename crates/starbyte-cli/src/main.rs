@@ -2,6 +2,7 @@
 
 mod cheatarium;
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -206,6 +207,10 @@ struct RunArgs {
     /// Comma-separated controller-1 buttons to hold during the run.
     #[arg(long)]
     controller1: Option<String>,
+
+    /// Write one flushed JSON object per attempted frame, including failures.
+    #[arg(long)]
+    frame_log: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -401,6 +406,7 @@ fn capabilities_manifest() -> serde_json::Value {
             {
                 "name": "run_probe",
                 "argv": ["run", "<user_rom_path>", "--frames", "<count>", "--report-json", "<report_path>"],
+                "optional_frame_log": "--frame-log <explicit_jsonl_path>",
                 "side_effects": "execute_local_rom_and_write_explicit_report"
             }
         ],
@@ -909,8 +915,23 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
     if let Some(controller) = args.controller1.as_deref() {
         emulator.set_controller1(parse_controller_state(controller)?);
     }
-    for _ in 0..args.frames {
-        emulator.run_until_frame()?;
+    // Only an explicitly requested path is written. Flush each frame so a
+    // later emulation error preserves the preceding history.
+    let mut frame_log = args
+        .frame_log
+        .as_deref()
+        .map(|path| -> Result<std::fs::File> {
+            ensure_parent_dir(path)?;
+            std::fs::File::create(path)
+                .with_context(|| format!("failed to create frame log at {}", path.display()))
+        })
+        .transpose()?;
+    for index in 0..args.frames {
+        let step = emulator.run_until_frame();
+        if let Some(file) = frame_log.as_mut() {
+            write_frame_log_entry(file, &emulator, index + 1, step.as_ref().err())?;
+        }
+        step.with_context(|| format!("emulation failed at requested frame {}", index + 1))?;
     }
 
     maybe_write_save_ram(&emulator, save_ram_path.as_deref())?;
@@ -1073,6 +1094,42 @@ fn maybe_write_screenshot(
     }
     std::fs::write(path, bytes)
         .with_context(|| format!("failed to write screenshot to {}", path.display()))?;
+    Ok(())
+}
+
+/// Append one independent JSONL record after a frame attempt. The framebuffer
+/// describes the most recently *completed* frame when an attempt fails.
+fn write_frame_log_entry(
+    writer: &mut std::fs::File,
+    emulator: &starbyte_core::Emulator,
+    requested_frame: u32,
+    error: Option<&starbyte_core::error::Error>,
+) -> Result<()> {
+    let frame = emulator.framebuffer();
+    let (nonblack_pixels, distinct_rgb_colors) = framebuffer_color_metrics(frame);
+    let report = json!({
+        "schema": "starbyte.frame_log.v1",
+        "requested_frame": requested_frame,
+        "completed_frame": emulator.timing().frame,
+        "status": if error.is_some() { "error" } else { "ok" },
+        "error": error.map(ToString::to_string),
+        "cpu": {
+            "pc": emulator.cpu_registers().pc,
+            "pbr": emulator.cpu_registers().pbr,
+        },
+        "framebuffer": {
+            "hash": framebuffer_hash(frame),
+            "nonblack_pixels": nonblack_pixels,
+            "distinct_rgb_colors": distinct_rgb_colors,
+            "width": frame.width(),
+            "height": frame.height(),
+        },
+        "ppu_display": build_ppu_display_report(emulator),
+        "apu_steps": emulator.apu_status().spc700_steps,
+    });
+    serde_json::to_writer(&mut *writer, &report)?;
+    writer.write_all(b"\n")?;
+    writer.flush()?;
     Ok(())
 }
 

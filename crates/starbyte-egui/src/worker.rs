@@ -131,10 +131,12 @@ fn handle_command(
                 config: service.config().clone(),
                 status: format!(
                     "Library: {} indexed from {} ROM candidates; {} skipped. See Scan Report in Settings.",
-                    report.discovered, report.candidates, report.skipped.len()
+                    report.discovered,
+                    report.candidates,
+                    report.skipped.len()
                 ),
             }
-        },
+        }
         WorkerCommandKind::RefreshMetadata => {
             let count = service.refresh_metadata_index()?;
             service.save_config()?;

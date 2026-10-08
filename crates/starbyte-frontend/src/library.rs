@@ -359,7 +359,9 @@ impl LibraryService {
         // can carry the same abbreviated title or matching archive member.
         let mut discovered = BTreeMap::<String, LocalRomInfo>::new();
         for rom_dir in &self.config.library.rom_dirs {
-            for candidate in discover_rom_files(rom_dir, &mut archive_manifest, &mut report.skipped)? {
+            for candidate in
+                discover_rom_files(rom_dir, &mut archive_manifest, &mut report.skipped)?
+            {
                 report.candidates += 1;
                 let cache_key = candidate.cache_key();
                 seen_keys.insert(cache_key.clone());
@@ -394,7 +396,10 @@ impl LibraryService {
                         discovered.entry(candidate.cache_key()).or_insert(info);
                     }
                     Err(error) => {
-                        warn!("skipping ROM candidate {}: {error}", candidate.display_label());
+                        warn!(
+                            "skipping ROM candidate {}: {error}",
+                            candidate.display_label()
+                        );
                         report.skipped.push(RomScanIssue {
                             source: candidate.display_label(),
                             reason: error.to_string(),
@@ -794,7 +799,9 @@ impl CoverProvider for LibretroCoverProvider {
             .bytes()
             .context("failed to read cover response bytes")?;
         let mut temp = tempfile::NamedTempFile::new_in(
-            cache_path.parent().context("cover cache path has no parent")?,
+            cache_path
+                .parent()
+                .context("cover cache path has no parent")?,
         )?;
         temp.write_all(&bytes)?;
         temp.persist(&cache_path)?;

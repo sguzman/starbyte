@@ -1,12 +1,14 @@
 # Starbyte state of the project
 
-Snapshot: 2026-10-07. Evidence: repository inspection at `76fef8a53a9fccc7f73de891f6fc2439388826e7`, existing source layout and project documentation. **This is a source/documentation audit, not a fresh local build or game test.**
+Initial inventory: 2026-10-07, originally inspected at `76fef8a53a9fccc7f73de891f6fc2439388826e7`. Updated: 2026-10-08. **This document separates source inspection, successful hosted CI, and as-yet-unverified real-game/native Wayland behavior.**
+
+Current verified CI baseline: `6b0ec7fd` (Linux/Windows test suites plus formatting/Clippy all passed in [GitHub Actions](https://github.com/sguzman/starbyte/actions/runs/37736697446)). Newer code may be pending CI; never infer green status from a prior commit.
 
 ## Confidence vocabulary
 
 - **Present in source**: component/files are visible, not necessarily complete or working.
 - **Previously reported**: existing project docs assert a test or behavior; not independently reproduced during this audit.
-- **Verified now**: executed and inspected during this audit. **None.**
+- **Verified in hosted CI**: completed Linux/Windows jobs with passing tests and lint at the specific named commit; does not establish native desktop or commercial playability.
 - **Unverified**: needs direct execution/evidence before a product claim.
 
 ## Inventory

@@ -26,7 +26,13 @@ This document tracks the compatibility push from bootstrap/test ROM behavior tow
 - [x] Core emulator regression tests still pass after the current bootstrap CPU/APU changes.
 
 Current live blocker:
-Phase 1 is complete. The next blocker moves into Phase 3 visual fidelity: the emulator now observes substantial commercial boot-time PPU setup activity, but it still needs fuller BG/tilemap rendering to turn that setup into correct non-placeholder SMW visuals.
+Phase 1 is complete. The remaining acceptance gate is **real-game visual evidence** from Phase 3: commercial boot PPU activity has been observed historically, but actual non-placeholder SMW title-screen output has **not** been verified here. Synthetic PPU regressions must not be mistaken for this milestone.
+
+### General PPU work completed since the original roadmap
+
+The Mode 0/1 software renderer now handles prioritized BG/OBJ composition, Mode 1 BG3 high-priority layers, 8×8 and 16×16 characters, BG map/character VRAM word base addresses, screen-anchored mosaic, brightness/forced blank, corrected CGRAM RGB channels, sequential VRAM/OAM/CGRAM read ports, and VMAIN write/read increments and VRAM remapping. Sprite X/Y coordinate and character-index wrapping also have synthetic regression coverage. All checks through `6b0ec7fd` passed hosted Linux/Windows tests and lint.
+
+**Still missing or unverified:** commercial SMW boot pixels, title/menu input transitions, first gameplay, native Wayland game sessions, SPC/DSP audio playback, per-scanline sprite limits, complete PPU modes, window masks/color math, raster timing and selected DMA/HDMA behavior. The Phase 3/4/5 milestone boxes remain open until real ROM evidence exists.
 
 ## Phase 1: CPU And APU Bootstrap Viability
 

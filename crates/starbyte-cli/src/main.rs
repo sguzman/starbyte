@@ -1068,12 +1068,10 @@ fn maybe_write_run_report(
     let ppu_write_activity = build_ppu_write_activity_report(emulator);
     let apu_io_activity = build_apu_io_activity_report(emulator);
     let ppu_display = build_ppu_display_report(emulator);
-    let (nonblack_pixels, distinct_rgb_colors) =
-        framebuffer_color_metrics(emulator.framebuffer());
-    let center_offset =
-        (emulator.framebuffer().height() / 2 * emulator.framebuffer().width()
-            + emulator.framebuffer().width() / 2)
-            * 4;
+    let (nonblack_pixels, distinct_rgb_colors) = framebuffer_color_metrics(emulator.framebuffer());
+    let center_offset = (emulator.framebuffer().height() / 2 * emulator.framebuffer().width()
+        + emulator.framebuffer().width() / 2)
+        * 4;
     let center_pixel = pixels
         .get(center_offset..center_offset + 4)
         .map_or_else(Vec::new, |value| value.to_vec());

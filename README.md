@@ -49,7 +49,7 @@ cargo run -p starbyte-egui -- --demo
 
 The game toolbar's **Input** toggle displays currently held SNES controller buttons, so you can test keyboard/gamepad mapping with the demo even though its checkerboard does not respond to input. This exercises the emulator and windowing, but is **not** evidence that any commercial game is playable.
 
-Starbyte automatically discovers an existing `~/Games/Roms/SNES` directory on launch and remembers it in the local config. This is a convenience, not a fixed requirement: use **Settings → Library → ROM Directories** to add/remove other folders. Entering `~/...` is supported there.
+On first launch with that folder available, Starbyte automatically discovers `~/Games/Roms/SNES` and remembers it in the local config. Removing the directory later is respected: automatic discovery does not repeatedly re-add it. This is a convenience, not a fixed requirement: use **Settings → Library → ROM Directories** to add/remove other folders. Entering `~/...` is supported there.
 
 ZIP collections are supported natively. The scanner indexes valid `.sfc`, `.smc`, `.swc`, and `.fig` ROM files *inside* `.zip` archives. It keeps source ZIPs unchanged and only extracts a game into the XDG cache when selected. You do **not** need to unzip your library.
 

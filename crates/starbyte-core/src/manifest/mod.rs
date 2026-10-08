@@ -236,6 +236,10 @@ pub struct LibrarySettings {
     /// Up to eight most recently opened local ROM paths, newest first.
     #[serde(default)]
     pub recent_roms: Vec<PathBuf>,
+    /// Track one-time local SNES directory adoption. If the user removes the
+    /// folder from settings, do not silently restore it on every launch.
+    #[serde(default)]
+    pub home_snes_discovery_complete: bool,
     /// Current library presentation mode.
     pub active_view: LibraryViewMode,
     /// Whether to filter the library down to installed entries only.
@@ -249,6 +253,7 @@ impl Default for LibrarySettings {
         Self {
             rom_dirs: Vec::new(),
             recent_roms: Vec::new(),
+            home_snes_discovery_complete: false,
             active_view: LibraryViewMode::default(),
             show_installed_only: false,
             cache_dir: None,

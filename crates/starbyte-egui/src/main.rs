@@ -149,8 +149,15 @@ fn load_runtime_config(assets: &AssetConfig) -> Result<RuntimeConfig> {
 }
 
 fn discover_snes_library(config: &mut RuntimeConfig, home: &std::path::Path) -> bool {
+    if config.library.home_snes_discovery_complete {
+        return false;
+    }
     let path = home.join("Games").join("Roms").join("SNES");
-    if !path.is_dir() || config.library.rom_dirs.contains(&path) {
+    if !path.is_dir() {
+        return false;
+    }
+    config.library.home_snes_discovery_complete = true;
+    if config.library.rom_dirs.contains(&path) {
         return false;
     }
     config.library.rom_dirs.push(path);
@@ -179,6 +186,11 @@ mod library_discovery_tests {
         config.save_to_path(&path).unwrap();
         let loaded = RuntimeConfig::load_or_default(path).unwrap();
         assert_eq!(loaded.library.rom_dirs, config.library.rom_dirs);
+        assert!(loaded.library.home_snes_discovery_complete);
+        // Removing the discovered folder is an intentional user choice.
+        config.library.rom_dirs.retain(|folder| folder != &snes);
+        assert!(!discover_snes_library(&mut config, home.path()));
+        assert!(!config.library.rom_dirs.contains(&snes));
     }
 
     #[test]

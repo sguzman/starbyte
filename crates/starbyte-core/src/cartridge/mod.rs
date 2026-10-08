@@ -18,6 +18,8 @@ use crate::error::{Error, Result};
 pub use self::header::{CartridgeHeader, Region};
 
 const SMC_HEADER_LEN: usize = 512;
+/// Upper bound shared in spirit with the library's ZIP extraction budget.
+const MAX_ZIP_ROM_MEMBER_BYTES: u64 = 64 * 1024 * 1024;
 const ROM_EXTENSIONS: &[&str] = &["sfc", "smc", "swc", "fig"];
 
 /// Supported SNES mapper families for the bootstrap.
@@ -156,9 +158,10 @@ fn load_first_rom_from_zip(path: &Path) -> Result<Vec<u8>> {
     let file = File::open(path).map_err(|source| Error::io(path, source))?;
     let mut archive = ZipArchive::new(file)
         .map_err(|error| Error::InvalidRom(format!("failed to read zip archive: {error}")))?;
+    let mut rejected = Vec::new();
 
     for index in 0..archive.len() {
-        let mut member = archive.by_index(index).map_err(|error| {
+        let member = archive.by_index(index).map_err(|error| {
             Error::InvalidRom(format!(
                 "failed to read zip member from {}: {error}",
                 path.display()
@@ -169,20 +172,49 @@ fn load_first_rom_from_zip(path: &Path) -> Result<Vec<u8>> {
         }
 
         let member_name = member.name().to_owned();
-        let mut rom = Vec::with_capacity(member.size() as usize);
-        member.read_to_end(&mut rom).map_err(|error| {
-            Error::InvalidRom(format!(
-                "failed to extract zip member {member_name} from {}: {error}",
-                path.display()
-            ))
-        })?;
+        if member.size() > MAX_ZIP_ROM_MEMBER_BYTES {
+            rejected.push(format!("{member_name}: exceeds the 64 MiB ROM limit"));
+            continue;
+        }
+
+        // Also bound the actual decompressed bytes; do not trust ZIP headers.
+        let mut rom = Vec::new();
+        let mut bounded = member.take(MAX_ZIP_ROM_MEMBER_BYTES + 1);
+        if let Err(error) = bounded.read_to_end(&mut rom) {
+            rejected.push(format!("{member_name}: cannot extract ({error})"));
+            continue;
+        }
+        if rom.len() as u64 > MAX_ZIP_ROM_MEMBER_BYTES {
+            rejected.push(format!("{member_name}: exceeds the 64 MiB ROM limit"));
+            continue;
+        }
+
+        // A ZIP may contain a bad/unrelated ROM first and a valid one later.
+        // Validate the same header criteria used by Cartridge::from_bytes.
+        let payload = if rom.len() % 1024 == SMC_HEADER_LEN {
+            &rom[SMC_HEADER_LEN..]
+        } else {
+            &rom[..]
+        };
+        if payload.len() < 0x8000 || detect_header(payload).is_err() {
+            rejected.push(format!("{member_name}: invalid SNES cartridge header"));
+            continue;
+        }
+
         debug!(archive = %path.display(), member = %member_name, "loaded ROM from zip archive");
         return Ok(rom);
     }
 
+    if rejected.is_empty() {
+        return Err(Error::InvalidRom(format!(
+            "zip archive {} does not contain a supported ROM member",
+            path.display()
+        )));
+    }
     Err(Error::InvalidRom(format!(
-        "zip archive {} does not contain a supported ROM member",
-        path.display()
+        "zip archive {} contains no usable ROM members: {}",
+        path.display(),
+        rejected.into_iter().take(8).collect::<Vec<_>>().join("; ")
     )))
 }
 

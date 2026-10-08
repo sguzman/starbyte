@@ -283,10 +283,10 @@ impl Cpu65816 {
             0x61 | 0x67 | 0x71 | 0x72 | 0x75 | 0x77 => {
                 self.execute_adc_addressed(bus, &mut trace, opcode)
             }
-            0x41 | 0x43 | 0x45 | 0x47 | 0x4F | 0x51 | 0x52 | 0x53 | 0x55 | 0x57
-            | 0x59 | 0x5D | 0x5F => self.execute_eor_addressed(bus, &mut trace, opcode),
-            0xE1 | 0xE3 | 0xE5 | 0xE7 | 0xED | 0xEF | 0xF1 | 0xF2 | 0xF3 | 0xF5
-            | 0xF7 | 0xF9 | 0xFD | 0xFF => self.execute_sbc_addressed(bus, &mut trace, opcode),
+            0x41 | 0x43 | 0x45 | 0x47 | 0x4F | 0x51 | 0x52 | 0x53 | 0x55 | 0x57 | 0x59 | 0x5D
+            | 0x5F => self.execute_eor_addressed(bus, &mut trace, opcode),
+            0xE1 | 0xE3 | 0xE5 | 0xE7 | 0xED | 0xEF | 0xF1 | 0xF2 | 0xF3 | 0xF5 | 0xF7 | 0xF9
+            | 0xFD | 0xFF => self.execute_sbc_addressed(bus, &mut trace, opcode),
             _ => Err(Error::UnsupportedOpcode {
                 cpu: "65816",
                 opcode,
@@ -3551,7 +3551,10 @@ impl Cpu65816 {
             }
             0x07 => {
                 let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
-                (self.direct_page_indirect_long_address(bus, trace, operand), 2)
+                (
+                    self.direct_page_indirect_long_address(bus, trace, operand),
+                    2,
+                )
             }
             0x0D => (self.absolute_address(self.fetch_operand_u16(bus, trace)), 3),
             0x0F => (self.fetch_operand_u24(bus, trace), 4),
@@ -3568,7 +3571,10 @@ impl Cpu65816 {
             }
             0x13 => {
                 let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
-                (self.stack_relative_indirect_y_address(bus, trace, operand), 2)
+                (
+                    self.stack_relative_indirect_y_address(bus, trace, operand),
+                    2,
+                )
             }
             0x15 => {
                 let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
@@ -4126,9 +4132,9 @@ mod tests {
         // A compact synthetic bus fixture exercises all 38 newly supported
         // LDA/AND/EOR/ADC/SBC addressing forms without commercial ROM data.
         const OPCODES: &[u8] = &[
-            0xA3, 0xB3, 0x23, 0x2F, 0x33, 0x61, 0x67, 0x71, 0x72, 0x75, 0x77,
-            0x41, 0x43, 0x45, 0x47, 0x4F, 0x51, 0x52, 0x53, 0x55, 0x57, 0x59, 0x5D, 0x5F,
-            0xE1, 0xE3, 0xE5, 0xE7, 0xED, 0xEF, 0xF1, 0xF2, 0xF3, 0xF5, 0xF7, 0xF9, 0xFD, 0xFF,
+            0xA3, 0xB3, 0x23, 0x2F, 0x33, 0x61, 0x67, 0x71, 0x72, 0x75, 0x77, 0x41, 0x43, 0x45,
+            0x47, 0x4F, 0x51, 0x52, 0x53, 0x55, 0x57, 0x59, 0x5D, 0x5F, 0xE1, 0xE3, 0xE5, 0xE7,
+            0xED, 0xEF, 0xF1, 0xF2, 0xF3, 0xF5, 0xF7, 0xF9, 0xFD, 0xFF,
         ];
 
         for &opcode in OPCODES {
@@ -4162,11 +4168,7 @@ mod tests {
                 0x03 => (0x000200, 2),
                 0x05 => (0x000210, 2),
                 0x07 => {
-                    bytes.extend([
-                        (0x000210, 0x00),
-                        (0x000211, 0x40),
-                        (0x000212, 0x7F),
-                    ]);
+                    bytes.extend([(0x000210, 0x00), (0x000211, 0x40), (0x000212, 0x7F)]);
                     (0x7F4000, 2)
                 }
                 0x0D => {
@@ -4191,11 +4193,7 @@ mod tests {
                 }
                 0x15 => (0x000212, 2),
                 0x17 => {
-                    bytes.extend([
-                        (0x000210, 0x00),
-                        (0x000211, 0x40),
-                        (0x000212, 0x7F),
-                    ]);
+                    bytes.extend([(0x000210, 0x00), (0x000211, 0x40), (0x000212, 0x7F)]);
                     (0x7F4003, 2)
                 }
                 0x19 => {
@@ -4238,9 +4236,16 @@ mod tests {
         cpu.registers.x = 1;
         cpu.registers.a = 0x1234;
         let mut bus = TestBus::with_bytes(&[
-            (0x008000, 0x5F), (0x008001, 0xFF), (0x008002, 0xFF), (0x008003, 0x7E),
-            (0x008004, 0xFF), (0x008005, 0xFF), (0x008006, 0xFF), (0x008007, 0x7E),
-            (0x7F0000, 0x34), (0x7F0001, 0x12),
+            (0x008000, 0x5F),
+            (0x008001, 0xFF),
+            (0x008002, 0xFF),
+            (0x008003, 0x7E),
+            (0x008004, 0xFF),
+            (0x008005, 0xFF),
+            (0x008006, 0xFF),
+            (0x008007, 0x7E),
+            (0x7F0000, 0x34),
+            (0x7F0001, 0x12),
         ]);
         cpu.step_with_bus(&mut bus).unwrap(); // EOR $7EFFFF,X
         assert_eq!(cpu.registers.a, 0);
@@ -4285,11 +4290,7 @@ mod tests {
                 }
                 0xC7 => {
                     // [$10] reads all three bytes, ignoring DBR.
-                    bytes.extend([
-                        (0x000210, 0x00),
-                        (0x000211, 0x40),
-                        (0x000212, 0x7F),
-                    ]);
+                    bytes.extend([(0x000210, 0x00), (0x000211, 0x40), (0x000212, 0x7F)]);
                     0x7F4000
                 }
                 0xD1 => {
@@ -4309,11 +4310,7 @@ mod tests {
                 }
                 0xD7 => {
                     // [$10],Y carries across the 24-bit long pointer.
-                    bytes.extend([
-                        (0x000210, 0x00),
-                        (0x000211, 0x40),
-                        (0x000212, 0x7F),
-                    ]);
+                    bytes.extend([(0x000210, 0x00), (0x000211, 0x40), (0x000212, 0x7F)]);
                     0x7F4003
                 }
                 _ => unreachable!(),

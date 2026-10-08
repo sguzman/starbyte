@@ -63,6 +63,7 @@ By default Starbyte uses XDG user directories, independent of the directory from
 
 - Config: `$XDG_CONFIG_HOME/starbyte/config.toml`, falling back to `~/.config/starbyte/config.toml`.
 - Cache: `$XDG_CACHE_HOME/starbyte/`, falling back to `~/.cache/starbyte/`.
+- Cartridge SRAM: `$XDG_DATA_HOME/starbyte/saves/`, falling back to `~/.local/share/starbyte/saves/`. Modified save RAM is written atomically on game switch, roughly every 30 seconds during desktop sessions, and when Starbyte exits.
 - Persistent slots: `$XDG_STATE_HOME/starbyte/states/`, falling back to `~/.local/state/starbyte/states/`. Disk slots are keyed to the ROM's content and can be redirected with an explicit state-directory override in host integrations.
 - An explicit `--config` or `--cache-dir` takes precedence.
 

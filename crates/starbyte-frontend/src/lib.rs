@@ -64,6 +64,8 @@ pub struct FrontendSession {
     cartridge_identity: Option<String>,
     active_cheat_patches: Vec<CheatPatch>,
     quick_state: Option<String>,
+    /// Last SRAM image successfully read from or written to disk.
+    last_saved_ram: Option<Vec<u8>>,
 }
 
 impl FrontendSession {
@@ -77,6 +79,7 @@ impl FrontendSession {
             cartridge_identity: None,
             active_cheat_patches: Vec::new(),
             quick_state: None,
+            last_saved_ram: None,
         })
     }
 
@@ -93,11 +96,36 @@ impl FrontendSession {
         let mut hasher = Sha1::new();
         hasher.update(cartridge.rom());
         let identity = format!("{:x}", hasher.finalize());
+        // Read the new game's save before mutating the active session. A
+        // corrupt existing file must not eject the currently loaded game.
+        let expected_save_len = cartridge.header().ram_size_bytes();
+        let new_save_path = self.emulator.assets().save_root().join(format!("{identity}.srm"));
+        let stored_save = if expected_save_len > 0 && new_save_path.exists() {
+            let data = std::fs::read(&new_save_path)
+                .with_context(|| format!("failed reading SRAM {}", new_save_path.display()))?;
+            anyhow::ensure!(
+                data.len() == expected_save_len,
+                "invalid SRAM length for {}: expected {expected_save_len}, got {}",
+                new_save_path.display(),
+                data.len()
+            );
+            Some(data)
+        } else {
+            None
+        };
+
+        // Preserve the old game's pending SRAM before replacing the cartridge.
+        self.flush_save_ram()?;
         self.emulator.load_rom(cartridge);
         self.cartridge_identity = Some(identity);
         self.quick_state = None;
         self.rom_path = Some(path);
-        self.apply_active_cheats();
+        // Never replay the previous game's cheat patches into the new game.
+        self.active_cheat_patches.clear();
+        if let Some(ref bytes) = stored_save {
+            self.emulator.load_save_ram(bytes).context("could not restore SRAM")?;
+        }
+        self.last_saved_ram = self.emulator.save_ram();
         Ok(())
     }
 
@@ -152,6 +180,36 @@ impl FrontendSession {
         Ok(())
     }
 
+    /// Return the current cartridge's on-disk SRAM location, if present.
+    pub fn save_ram_path(&self) -> Option<PathBuf> {
+        let identity = self.cartridge_identity.as_deref()?;
+        let ram = self.emulator.save_ram()?;
+        if ram.is_empty() {
+            return None;
+        }
+        Some(
+            self.emulator
+                .assets()
+                .save_root()
+                .join(format!("{identity}.srm")),
+        )
+    }
+
+    /// Flush changed battery-backed RAM to the disk using atomic replacement.
+    /// Avoid rewriting unchanged SRAM, including during ordinary test teardown.
+    pub fn flush_save_ram(&mut self) -> Result<()> {
+        let Some(path) = self.save_ram_path() else {
+            return Ok(());
+        };
+        let ram = self.emulator.save_ram().context("No SRAM in loaded game")?;
+        if self.last_saved_ram.as_deref() == Some(ram.as_slice()) {
+            return Ok(());
+        }
+        write_atomic(&path, &ram)?;
+        self.last_saved_ram = Some(ram);
+        Ok(())
+    }
+
     /// Deterministic, game-scoped disk slot. Slot names never contain untrusted
     /// paths or game titles; SHA-1 is for local naming, not authentication.
     pub fn state_slot_path(&self, slot: u8) -> Result<PathBuf> {
@@ -179,22 +237,11 @@ impl FrontendSession {
     /// partial/truncated states after a failed write or an interrupted save.
     pub fn save_state_slot(&self, slot: u8) -> Result<PathBuf> {
         let path = self.state_slot_path(slot)?;
-        let parent = path.parent().context("save slot path has no parent")?;
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create state directory {}", parent.display()))?;
         let state = self
             .emulator
             .save_state()
             .context("could not serialize state")?;
-        let mut temp = tempfile::NamedTempFile::new_in(parent)
-            .context("failed to create temporary save-state file")?;
-        temp.write_all(state.as_bytes())
-            .context("failed writing save state")?;
-        temp.as_file()
-            .sync_all()
-            .context("failed syncing save state")?;
-        temp.persist(&path)
-            .with_context(|| format!("failed to persist save state to {}", path.display()))?;
+        write_atomic(&path, state.as_bytes())?;
         Ok(path)
     }
 
@@ -272,6 +319,19 @@ impl FrontendSession {
             self.emulator.host_write_u8(patch.address, patch.value);
         }
     }
+}
+
+fn write_atomic(path: &Path, content: &[u8]) -> Result<()> {
+    let parent = path.parent().context("save path has no parent")?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create save directory {}", parent.display()))?;
+    let mut temp = tempfile::NamedTempFile::new_in(parent)
+        .context("failed to create temporary save file")?;
+    temp.write_all(content).context("failed to write temporary save")?;
+    temp.as_file().sync_all().context("failed to sync temporary save")?;
+    temp.persist(path)
+        .with_context(|| format!("failed to commit save to {}", path.display()))?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -469,6 +529,61 @@ mod tests {
         assert!(reopened.load_state_slot(1).is_err());
         assert_ne!(reopened.state_slot_path(1).unwrap(), slot_path);
     }
+
+    #[test]
+    fn battery_backed_sram_is_saved_on_flush_and_game_switch() {
+        let dir = tempdir().unwrap();
+        let rom = dir.path().join("first.sfc");
+        let second_rom = dir.path().join("other.sfc");
+        let save_dir = dir.path().join("battery");
+        let original = synthetic_rom_bytes();
+        fs::write(&rom, &original).unwrap();
+        let mut changed = original.clone();
+        changed[0x2100] = 0xA9; // Same title, different content.
+        fs::write(&second_rom, changed).unwrap();
+        let assets = AssetConfig {
+            save_dir: Some(save_dir.clone()),
+            ..AssetConfig::default()
+        };
+
+        let mut session = FrontendSession::new(assets.clone()).unwrap();
+        session.load_rom(&rom).unwrap();
+        session.set_active_cheats(&[CheatEntry {
+            id: "sram-cheat".to_owned(),
+            game_id: "first".to_owned(),
+            name: "Store test byte".to_owned(),
+            code: "700000:5A".to_owned(),
+            source: "test".to_owned(),
+            kind: "Action Replay".to_owned(),
+            enabled: true,
+        }]);
+        session.run_frame().unwrap();
+        session.clear_active_cheats();
+        assert_eq!(session.host_read_u8(0x700000), 0x5A);
+        let path = session.save_ram_path().unwrap();
+        assert!(path.starts_with(&save_dir));
+        session.flush_save_ram().unwrap();
+        assert_eq!(fs::read(&path).unwrap()[0], 0x5A);
+
+        // Game switching must not erase the old SRAM or import old cheats.
+        session.load_rom(&second_rom).unwrap();
+        assert_ne!(session.save_ram_path(), Some(path.clone()));
+        session.load_rom(&rom).unwrap();
+        assert_eq!(session.host_read_u8(0x700000), 0x5A);
+
+        let mut reopened = FrontendSession::new(assets.clone()).unwrap();
+        reopened.load_rom(&rom).unwrap();
+        assert_eq!(reopened.host_read_u8(0x700000), 0x5A);
+
+        // A corrupt save must not eject the already loaded game.
+        // The invalid data is written to the content-scoped identity path.
+        let mut probe = FrontendSession::new(assets).unwrap();
+        probe.load_rom(&second_rom).unwrap();
+        let second_path = probe.save_ram_path().unwrap();
+        fs::write(&second_path, [0xFF]).unwrap();
+        assert!(reopened.load_rom(&second_rom).is_err());
+        assert_eq!(reopened.loaded_rom_path(), Some(rom.as_path()));
+     }
 
     #[test]
     fn cheat_parser_supports_raw_ram_patch_formats() {

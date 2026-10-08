@@ -95,6 +95,7 @@ pub struct StarbyteApp {
     is_playing: bool,
     play_view: bool,
     frame_clock: FrameClock,
+    last_sram_flush: Instant,
     show_compact_settings: bool,
     show_compact_session: bool,
     show_compact_logs: bool,
@@ -184,6 +185,7 @@ impl StarbyteApp {
             is_playing: start_playing,
             play_view: start_playing,
             frame_clock: FrameClock::new(Instant::now()),
+            last_sram_flush: Instant::now(),
             show_compact_settings: false,
             show_compact_session: false,
             show_compact_logs: false,
@@ -279,6 +281,7 @@ impl StarbyteApp {
                         self.is_playing = true;
                         self.play_view = true;
                         self.frame_clock.reset(Instant::now());
+                        self.last_sram_flush = Instant::now();
                         let detail = format!("Loaded {}", rom_path.display());
                         self.update_job(job_id, "Load Game", "done", &detail);
                         self.status_line = detail;
@@ -1584,6 +1587,23 @@ impl eframe::App for StarbyteApp {
             }
         } else {
             ctx.request_repaint_after(Duration::from_millis(100));
+        }
+
+        if self.session.snapshot().has_rom
+            && self.last_sram_flush.elapsed() >= Duration::from_secs(30)
+        {
+            self.last_sram_flush = Instant::now();
+            if let Err(error) = self.session.flush_save_ram() {
+                warn!("could not autosave cartridge SRAM: {error}");
+            }
+        }
+    }
+}
+
+impl Drop for StarbyteApp {
+    fn drop(&mut self) {
+        if let Err(error) = self.session.flush_save_ram() {
+            warn!("could not persist cartridge SRAM on exit: {error}");
         }
     }
 }

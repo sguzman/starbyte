@@ -34,6 +34,18 @@ impl AssetConfig {
             .unwrap_or_else(|| user_directory("XDG_CACHE_HOME", ".cache").join("starbyte"))
     }
 
+    /// Resolve the directory for battery-backed cartridge SRAM.
+    ///
+    /// Defaults to XDG_DATA_HOME/starbyte/saves, with HOME fallback.
+    #[must_use]
+    pub fn save_root(&self) -> PathBuf {
+        self.save_dir.clone().unwrap_or_else(|| {
+            user_directory("XDG_DATA_HOME", ".local/share")
+                .join("starbyte")
+                .join("saves")
+        })
+    }
+
     /// Resolve the directory for durable game-specific save-state slots.
     ///
     /// Defaults to XDG_STATE_HOME/starbyte/states, with HOME fallback.

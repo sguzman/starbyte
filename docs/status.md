@@ -2,7 +2,7 @@
 
 **Updated:** 2026-10-08. **Product maturity:** experimental Rust SNES emulator, intended for comfortable Linux/Wayland play rather than cycle-perfect hardware accuracy.
 
-**Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. The latest fully verified CI baseline at this writing is [`a0459619`](https://github.com/sguzman/starbyte/actions/runs/37738795816): Ubuntu and Windows tests, plus Linux formatting/Clippy, all passed. Later commits need their own CI results. This is not a local Wayland acceptance test.
+**Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
 ## What exists today
 

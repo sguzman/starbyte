@@ -526,6 +526,48 @@ mod tests {
     }
 
     #[test]
+    fn native_nmi_with_full_register_save_restores_stack_and_program_bank() {
+        let mut rom = rom_bytes();
+        // LoROM NMI vector ($00:FFEA) enters bank zero at $8100.
+        rom[0x7FEA] = 0x00;
+        rom[0x7FEB] = 0x81;
+        rom[0] = 0x80; // BRA -2, a stable native-mode main loop.
+        rom[1] = 0xFE;
+        // SEI, PHP, REP #$30, PHA, PHX, PHY, PHB, PHK, PLB,
+        // SEP #$30, LDA $4210, REP #$30, PLB, PLY, PLX, PLA,
+        // PLP, RTI: standard SNES interrupt prologue/epilogue.
+        let handler: &[u8] = &[
+            0x78, 0x08, 0xC2, 0x30, 0x48, 0xDA, 0x5A, 0x8B, 0x4B, 0xAB, 0xE2, 0x30, 0xAD,
+            0x10, 0x42, 0xC2, 0x30, 0xAB, 0x7A, 0xFA, 0x68, 0x28, 0x40,
+        ];
+        rom[0x100..0x100 + handler.len()].copy_from_slice(handler);
+
+        let mut emulator = Emulator::default();
+        emulator.load_rom(Cartridge::from_bytes(rom, None).unwrap());
+        emulator.cpu.registers.emulation = false;
+        emulator.cpu.registers.p = 0;
+        emulator.cpu.registers.pc = 0x8000;
+        emulator.cpu.registers.pbr = 0x80;
+        emulator.cpu.registers.dbr = 0x14;
+        emulator.cpu.registers.s = 0x01FF;
+        emulator.cpu.registers.a = 0xBEEF;
+        emulator.cpu.registers.x = 0x1234;
+        emulator.cpu.registers.y = 0x5678;
+        emulator.host_write_u8(0x004200, 0x80);
+
+        for _ in 0..3 {
+            emulator.run_until_frame().unwrap();
+            let regs = &emulator.cpu.registers;
+            assert_eq!(regs.pbr, 0x80, "NMI failed to restore program bank");
+            assert_eq!(regs.s, 0x01FF, "NMI failed to restore stack pointer");
+            assert_eq!(regs.a, 0xBEEF, "NMI failed to restore accumulator");
+            assert_eq!(regs.x, 0x1234, "NMI failed to restore X");
+            assert_eq!(regs.y, 0x5678, "NMI failed to restore Y");
+            assert_eq!(regs.dbr, 0x14, "NMI failed to restore data bank");
+        }
+    }
+
+    #[test]
     fn run_until_frame_renders_framebuffer() {
         let mut rom = rom_bytes();
         rom[0x7FFC] = 0x00;

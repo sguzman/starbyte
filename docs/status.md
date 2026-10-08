@@ -74,6 +74,10 @@ VMAIN now controls low-versus-high data-port address increments, 1/32/128-word s
 
 CGRAM stores red in bits 0–4, green in 5–9, and blue in 10–14. The previous software renderer interpreted the red and blue channels backwards. The conversion and affected synthetic test palettes are corrected; a direct framebuffer regression explicitly checks red and blue extremes. This is a cross-game visual correctness fix, not a claim of accurate brightness/fades or true commercial playability.
 
+## Brightness and fade groundwork
+
+The PPU now interprets the `$2100` brightness nibble: 0 renders black, 15 renders the full palette, and intermediate levels scale the composited frame. The existing synthetic color tests now explicitly request full brightness rather than relying on the prior always-bright default. This is whole-frame scaling only, not raster-accurate per-scanline brightness or color math.
+
 ## Current functional gap
 
 The original commercial-ROM roadmap explicitly leaves SNES background/tilemap presentation, non-placeholder Super Mario World boot visuals, title/menu navigation, and first controllable gameplay incomplete. This is a **blocking playability gap**, not an optional accuracy task.

@@ -203,7 +203,8 @@ impl Ppu {
     /// Render one deterministic bootstrap frame.
     pub fn render_frame(&self, framebuffer: &mut FrameBuffer) {
         let forced_blank = self.registers[0x00] & 0x80 != 0;
-        if forced_blank {
+        let brightness = self.registers[0x00] & 0x0F;
+        if forced_blank || brightness == 0 {
             fill_frame(framebuffer, [0, 0, 0, 0xFF]);
             return;
         }
@@ -212,6 +213,7 @@ impl Ppu {
         let main_screen_enable = self.registers[0x2C];
         if main_screen_enable == 0 {
             fill_frame(framebuffer, backdrop);
+            apply_brightness(framebuffer, brightness);
             return;
         }
 
@@ -246,6 +248,7 @@ impl Ppu {
         if main_screen_enable & 0x10 != 0 {
             self.render_objects(framebuffer, &mut depth, bgmode);
         }
+        apply_brightness(framebuffer, brightness);
     }
 
     /// Borrow raw CGRAM bytes for tests and regression harnesses.
@@ -735,6 +738,19 @@ fn fill_frame(framebuffer: &mut FrameBuffer, rgba: [u8; 4]) {
     }
 }
 
+/// Uniform frame brightness for the bootstrap renderer; scanline fades are
+/// a later step. Full intensity is 15; 0 is handled as an early black frame.
+fn apply_brightness(framebuffer: &mut FrameBuffer, brightness: u8) {
+    if brightness == 15 {
+        return;
+    }
+    for pixel in framebuffer.pixels.chunks_exact_mut(4) {
+        for component in &mut pixel[..3] {
+            *component = (u16::from(*component) * u16::from(brightness) / 15) as u8;
+        }
+    }
+}
+
 fn bgr555_to_rgba(color: u16) -> [u8; 4] {
     // SNES CGRAM words encode BBBBBGGGGGRRRRR, red in bits 0..4.
     let red = ((color & 0x1F) as u8) << 3;
@@ -757,6 +773,7 @@ mod tests {
     #[test]
     fn cgram_channel_mapping_uses_red_low_bits_and_blue_high_bits() {
         let mut ppu = Ppu::default();
+        ppu.write_register(0x2100, 0x0F); // Full screen brightness.
         let mut frame = FrameBuffer::default();
         write_color(&mut ppu, 0, 0x001F);
         ppu.render_frame(&mut frame);
@@ -792,6 +809,21 @@ mod tests {
     }
 
     #[test]
+    fn brightness_zero_blacks_the_screen_and_scales_midtones() {
+        let mut ppu = Ppu::default();
+        let mut frame = FrameBuffer::default();
+        write_color(&mut ppu, 0, 0x001F);
+        ppu.render_frame(&mut frame);
+        assert_eq!(&frame.pixels()[..4], &[0, 0, 0, 255]);
+        ppu.write_register(0x2100, 0x08);
+        ppu.render_frame(&mut frame);
+        assert_eq!(&frame.pixels()[..4], &[132, 0, 0, 255]);
+        ppu.write_register(0x2100, 0x0F);
+        ppu.render_frame(&mut frame);
+        assert_eq!(&frame.pixels()[..4], &[248, 0, 0, 255]);
+    }
+
+    #[test]
     fn forced_blank_renders_black() {
         let mut ppu = Ppu::default();
         let mut frame = FrameBuffer::default();
@@ -809,6 +841,7 @@ mod tests {
     #[test]
     fn bg1_tilemap_render_uses_vram_tiles_and_cgram_palette() {
         let mut ppu = Ppu::default();
+        ppu.write_register(0x2100, 0x0F); // Full screen brightness.
         ppu.write_register(0x2115, 0x80); // Sequential low/high word stores.
         let mut frame = FrameBuffer::default();
 
@@ -844,6 +877,7 @@ mod tests {
     #[test]
     fn screen_disable_falls_back_to_backdrop() {
         let mut ppu = Ppu::default();
+        ppu.write_register(0x2100, 0x0F); // Full screen brightness.
         let mut frame = FrameBuffer::default();
         write_color(&mut ppu, 0x00, 0x001F);
         ppu.render_frame(&mut frame);
@@ -892,6 +926,7 @@ mod tests {
     #[test]
     fn obj_render_draws_sprite_pixels_when_enabled() {
         let mut ppu = Ppu::default();
+        ppu.write_register(0x2100, 0x0F); // Full screen brightness.
         ppu.write_register(0x2115, 0x80); // Sequential low/high word stores.
         let mut frame = FrameBuffer::default();
 

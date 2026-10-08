@@ -29,6 +29,7 @@ fn pixel(frame: &FrameBuffer, x: usize, y: usize) -> [u8; 4] {
 
 fn sample_mode1_bg1_bg2() -> Ppu {
     let mut ppu = Ppu::default();
+    ppu.write_register(0x2100, 0x0F);
     palette(&mut ppu, 0, 0);
     palette(&mut ppu, 1, 0x001F); // Red BG1 palette 0, color 1.
     palette(&mut ppu, 17, 0x03E0); // Green BG2 palette 1, color 1.
@@ -90,6 +91,7 @@ fn sprite_priority_places_objects_behind_and_in_front_of_bg_tiles() {
 #[test]
 fn mode1_bg3_high_priority_switches_foreground_hud_order() {
     let mut ppu = Ppu::default();
+    ppu.write_register(0x2100, 0x0F);
     palette(&mut ppu, 1, 0x001F); // BG1 red.
     palette(&mut ppu, 5, 0x7C00); // BG3 2bpp palette 1 blue.
     vram_word(&mut ppu, 0x0000, 0x0000);
@@ -113,6 +115,7 @@ fn mode1_bg3_high_priority_switches_foreground_hud_order() {
 #[test]
 fn sixteen_pixel_characters_select_four_tiles_and_flip_as_a_unit() {
     let mut ppu = Ppu::default();
+    ppu.write_register(0x2100, 0x0F);
     palette(&mut ppu, 1, 0x001F); // red
     palette(&mut ppu, 2, 0x03E0); // green
     palette(&mut ppu, 3, 0x7C00); // blue

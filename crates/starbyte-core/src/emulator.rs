@@ -362,6 +362,7 @@ mod tests {
 
         let mut emulator = Emulator::default();
         emulator.load_rom(cart);
+        emulator.host_write_u8(0x002100, 0x0F);
         emulator.host_write_u8(0x002121, 0x00);
         emulator.host_write_u8(0x002122, 0x1F);
         emulator.host_write_u8(0x002122, 0x00);

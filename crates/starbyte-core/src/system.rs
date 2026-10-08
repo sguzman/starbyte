@@ -1182,6 +1182,7 @@ mod tests {
     fn ppu_register_writes_drive_rendered_frame() {
         let mut bus = SystemBus::default();
         let mut frame = FrameBuffer::default();
+        bus.write(0x002100, 0x0F);
         bus.write(0x002121, 0x00);
         bus.write(0x002122, 0x1F);
         bus.write(0x002122, 0x00);

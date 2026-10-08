@@ -557,6 +557,7 @@ mod tests {
         let expected_hash = {
             let mut emulator = Emulator::default();
             emulator.load_rom(Cartridge::load(&rom_path).unwrap());
+            emulator.host_write_u8(0x002100, 0x0F);
             emulator.host_write_u8(0x002121, 0x00);
             emulator.host_write_u8(0x002122, 0x1F);
             emulator.host_write_u8(0x002122, 0x00);
@@ -572,7 +573,7 @@ mod tests {
                   "name":"ppu backdrop",
                   "rom":"case.sfc",
                   "frames":1,
-                  "setup_writes":[[8481,0],[8482,31],[8482,0],[8492,1]],
+                  "setup_writes":[[8448,15],[8481,0],[8482,31],[8482,0],[8492,1]],
                   "expected_reads":[],
                   "expected":{{
                     "frame":1,
@@ -607,7 +608,12 @@ mod tests {
             name: "detailed report".to_owned(),
             rom: rom_path,
             frames: 1,
-            setup_writes: vec![(0x002121, 0x00), (0x002122, 0x1F), (0x002122, 0x00)],
+            setup_writes: vec![
+                (0x002100, 0x0F),
+                (0x002121, 0x00),
+                (0x002122, 0x1F),
+                (0x002122, 0x00),
+            ],
             expected_reads: vec![],
             expected: ExpectedOutcome {
                 frame: Some(1),

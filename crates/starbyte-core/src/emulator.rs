@@ -191,6 +191,20 @@ impl Emulator {
                 state.version
             )));
         }
+        // Save states include the full original cartridge. Never silently
+        // replace an already loaded different game with snapshot contents.
+        // An empty emulator may still be initialized from a full snapshot.
+        if let Some(current) = self.system.cartridge() {
+            match state.system.cartridge() {
+                Some(saved)
+                    if current.mapper() == saved.mapper() && current.rom() == saved.rom() => {}
+                _ => {
+                    return Err(Error::InvalidRom(
+                        "save state belongs to a different cartridge".to_owned(),
+                    ));
+                }
+            }
+        }
         self.cpu = state.cpu;
         self.apu = state.apu;
         self.system = state.system;
@@ -334,6 +348,36 @@ mod tests {
         let mut restored = Emulator::default();
         restored.load_state(&state).unwrap();
         assert_eq!(restored.save_state().unwrap(), state);
+    }
+
+    #[test]
+    fn loading_wrong_cartridge_state_is_rejected_without_mutating_session() {
+        let mut first_rom = rom_bytes();
+        first_rom[0x7FFC] = 0x00;
+        first_rom[0x7FFD] = 0x80;
+        first_rom[0x0000] = 0xEA;
+
+        let mut first = Emulator::default();
+        first.load_rom(Cartridge::from_bytes(first_rom.clone(), None).unwrap());
+        first.step_instruction().unwrap();
+        let state = first.save_state().unwrap();
+
+        let mut second_rom = first_rom.clone();
+        second_rom[0x0001] = 0xFF; // Same title/header but a different ROM.
+        let mut second = Emulator::default();
+        second.load_rom(Cartridge::from_bytes(second_rom, None).unwrap());
+        let before = second.save_state().unwrap();
+        assert!(second.load_state(&state).is_err());
+        assert_eq!(second.save_state().unwrap(), before);
+
+        // Content identity, not filename equality, is what matters.
+        let mut same_rom = Emulator::default();
+        same_rom.load_rom(
+            Cartridge::from_bytes(first_rom, Some(std::path::PathBuf::from("elsewhere.sfc")))
+                .unwrap(),
+        );
+        same_rom.load_state(&state).unwrap();
+        assert_eq!(same_rom.timing().frame, first.timing().frame);
     }
 
     #[test]

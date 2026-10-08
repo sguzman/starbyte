@@ -1346,8 +1346,67 @@ mod tests {
     }
 
     #[test]
+    fn h_timer_irq_only_triggers_at_programmed_dot() {
+        let mut bus = SystemBus::default();
+        bus.write(0x004200, 0x10);
+        bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE) * 3);
+        // Default HTIME is out of range: no phantom scanline IRQs.
+        assert_eq!(bus.read(0x004211) & 0x80, 0);
+
+        bus.write(0x004207, 32);
+        bus.write(0x004208, 0);
+        bus.advance_master_clocks(31);
+        assert_eq!(bus.read(0x004211) & 0x80, 0);
+        bus.advance_master_clocks(1);
+        assert_eq!(bus.read(0x004211) & 0x80, 0x80);
+        assert_eq!(bus.read(0x004211) & 0x80, 0);
+
+        bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE));
+        assert_eq!(bus.read(0x004211) & 0x80, 0x80);
+        bus.write(0x004200, 0); // Disabling IRQ acknowledges it.
+        assert_eq!(bus.read(0x004211) & 0x80, 0);
+        assert!(!bus.poll_irq());
+    }
+
+    #[test]
+    fn v_timer_irq_fires_once_per_frame_at_programmed_scanline() {
+        let mut bus = SystemBus::default();
+        bus.write(0x004209, 2);
+        bus.write(0x00420A, 0);
+        bus.write(0x004200, 0x20);
+        let dots = u64::from(DOTS_PER_SCANLINE);
+        bus.advance_master_clocks(dots * 2 - 1);
+        assert_eq!(bus.read(0x004211) & 0x80, 0);
+        bus.advance_master_clocks(1);
+        assert_eq!(bus.read(0x004211) & 0x80, 0x80);
+        bus.advance_master_clocks(dots * 4);
+        assert_eq!(bus.read(0x004211) & 0x80, 0);
+        bus.advance_master_clocks(dots * u64::from(NTSC_SCANLINES_PER_FRAME - 4));
+        assert_eq!(bus.read(0x004211) & 0x80, 0x80);
+    }
+
+    #[test]
+    fn hv_timer_irq_requires_both_programmed_coordinates() {
+        let mut bus = SystemBus::default();
+        bus.write(0x004207, 20);
+        bus.write(0x004208, 0);
+        bus.write(0x004209, 2);
+        bus.write(0x00420A, 0);
+        bus.write(0x004200, 0x30);
+        let target = u64::from(DOTS_PER_SCANLINE) * 2 + 20;
+        bus.advance_master_clocks(target - 1);
+        assert_eq!(bus.read(0x004211) & 0x80, 0);
+        bus.advance_master_clocks(1);
+        assert_eq!(bus.read(0x004211) & 0x80, 0x80);
+        bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE) * 5);
+        assert_eq!(bus.read(0x004211) & 0x80, 0);
+    }
+
+    #[test]
     fn raises_nmi_and_irq_from_timing_progression() {
         let mut bus = SystemBus::default();
+        bus.write(0x004207, 32);
+        bus.write(0x004208, 0);
         bus.write(0x004200, 0x90);
 
         bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE));

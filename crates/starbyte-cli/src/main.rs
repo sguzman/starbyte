@@ -319,7 +319,10 @@ fn main() -> Result<()> {
         Command::Run(args) => run_rom(args, assets),
         Command::PrintConfig { format } => print_config(format),
         Command::Capabilities => {
-            println!("{}", serde_json::to_string_pretty(&capabilities_manifest())?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&capabilities_manifest())?
+            );
             Ok(())
         }
         Command::Doctor(args) => print_doctor(&assets, args.json),

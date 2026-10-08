@@ -158,6 +158,9 @@ pub struct PpuWriteActivityExpectation {
 pub struct TraceCaptureOptions {
     /// Whether instruction trace capture is desired for this fixture.
     pub capture_instruction_trace: bool,
+    /// Number of initial completed frames excluded from trace capture.
+    #[serde(default)]
+    pub trace_start_frame: u32,
 }
 
 /// Recorded evidence from one commercial boot.
@@ -412,6 +415,33 @@ pub fn record_fixture(
     setup_writes: &[(u32, u8)],
     capture_trace: bool,
 ) -> Result<RecordedFixture> {
+    record_fixture_with_trace_start(
+        rom_path,
+        frames,
+        assets,
+        controller1,
+        setup_writes,
+        capture_trace,
+        0,
+    )
+}
+
+/// Record a commercial fixture while tracing only from a selected frame.
+/// Earlier frames are executed through the normal guarded frame runner.
+pub fn record_fixture_with_trace_start(
+    rom_path: &Path,
+    frames: u32,
+    assets: &AssetConfig,
+    controller1: ControllerState,
+    setup_writes: &[(u32, u8)],
+    capture_trace: bool,
+    trace_start_frame: u32,
+) -> Result<RecordedFixture> {
+    if trace_start_frame > frames {
+        return Err(Error::InvalidRom(format!(
+            "trace start frame {trace_start_frame} exceeds requested {frames} frames"
+        )));
+    }
     let cartridge = Cartridge::load(rom_path)?;
     let title = cartridge.header().title.trim().to_owned();
 
@@ -423,7 +453,7 @@ pub fn record_fixture(
         emulator.host_write_u8(*address, *value);
     }
 
-    let trace = run_emulator_for_frames(&mut emulator, frames, capture_trace)?;
+    let trace = run_emulator_for_frames(&mut emulator, frames, capture_trace, trace_start_frame)?;
     let wram_probes = select_default_wram_probes(&mut emulator, DEFAULT_WRAM_PROBE_LIMIT);
     let mmio_probes = default_mmio_probe_expectations(&emulator);
     let report = build_report(
@@ -461,6 +491,7 @@ pub fn record_fixture(
         },
         trace: Some(TraceCaptureOptions {
             capture_instruction_trace: capture_trace,
+            trace_start_frame,
         }),
     };
 
@@ -545,7 +576,16 @@ fn execute_fixture(
         emulator.host_write_u8(*address, *value);
     }
 
-    let trace = match run_emulator_for_frames(&mut emulator, fixture.frames, capture_trace) {
+    let trace_start_frame = fixture
+        .trace
+        .as_ref()
+        .map_or(0, |options| options.trace_start_frame);
+    let trace = match run_emulator_for_frames(
+        &mut emulator,
+        fixture.frames,
+        capture_trace,
+        trace_start_frame,
+    ) {
         Ok(trace) => trace,
         Err(error) => {
             reasons.push(error.to_string());
@@ -842,14 +882,15 @@ fn run_emulator_for_frames(
     emulator: &mut Emulator,
     frames: u32,
     capture_trace: bool,
+    trace_start_frame: u32,
 ) -> Result<Option<Vec<InstructionTraceRecord>>> {
     // Match the core's deterministic frame guard so a broken commercial ROM
     // cannot hang evidence recording (including instruction-trace capture).
     const MAX_FRAME_INSTRUCTIONS: usize = 20_000;
     let mut trace_records = capture_trace.then(Vec::new);
-    for _ in 0..frames {
+    for frame_index in 0..frames {
         let _ = emulator.audio_samples();
-        if !capture_trace {
+        if !capture_trace || frame_index < trace_start_frame {
             emulator.run_until_frame()?;
             continue;
         }

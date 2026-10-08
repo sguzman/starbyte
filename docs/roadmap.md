@@ -17,7 +17,8 @@
 - [x] Provide a Play View rather than confining the framebuffer to the session sidebar (code and hosted CI; native usability unverified).
 - [x] Provide Play/Pause, F9/Escape library navigation, F5/F8 volatile quick saves, pixel scaling and fullscreen commands (native usability unverified).
 - [x] Replace oversized window minimums with small-tile-friendly settings/session/log popups (native usability unverified).
-- [ ] Build a friendly persistent save-slot browser with thumbnails, backups and clear cartridge identity.
+- [x] Add three ROM-content-scoped persistent disk slots with atomic writes and a safe cartridge match check (source; CI pending).
+- [ ] Build a friendly save-slot browser with thumbnails, backup/export and recovery affordances.
 - [ ] Make library covers/metadata and installed/offline status pleasant even with no network; measure large-library performance.
 - [ ] Improve gamepad/keyboard remapping, reconnection, key focus and full-screen transitions on Wayland.
 - [ ] Explore optional shaders, screenshots, rewind and session history only after the core loop is comfortable.

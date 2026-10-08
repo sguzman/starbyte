@@ -583,6 +583,7 @@ impl StarbyteApp {
                 {
                     self.quick_load(ctx);
                 }
+                ui.menu_button("Disk Slots", |ui| self.draw_persistent_slots(ui, ctx));
                 if ui.button("Fullscreen").clicked() {
                     self.config.video.fullscreen = !self.config.video.fullscreen;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(
@@ -1050,6 +1051,41 @@ impl StarbyteApp {
         }
     }
 
+    fn save_persistent_slot(&mut self, slot: u8) {
+        match self.session.save_state_slot(slot) {
+            Ok(_) => self.status_line = format!("Saved game to disk slot {slot}."),
+            Err(error) => self.status_line = error.to_string(),
+        }
+    }
+
+    fn load_persistent_slot(&mut self, slot: u8, ctx: &egui::Context) {
+        match self.session.load_state_slot(slot) {
+            Ok(()) => {
+                self.refresh_framebuffer(ctx);
+                self.frame_clock.reset(Instant::now());
+                self.status_line = format!("Restored disk slot {slot}.");
+            }
+            Err(error) => self.status_line = error.to_string(),
+        }
+    }
+
+    fn draw_persistent_slots(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        for slot in 1..=3 {
+            ui.horizontal(|ui| {
+                ui.label(format!("Slot {slot}"));
+                if ui.button("Save").clicked() {
+                    self.save_persistent_slot(slot);
+                }
+                if ui
+                    .add_enabled(self.session.has_state_slot(slot), egui::Button::new("Load"))
+                    .clicked()
+                {
+                    self.load_persistent_slot(slot, ctx);
+                }
+            });
+        }
+    }
+
     fn draw_play_view(&mut self, ui: &mut egui::Ui) {
         let rect = ui.max_rect();
         ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
@@ -1092,6 +1128,9 @@ impl StarbyteApp {
             {
                 self.quick_load(ctx);
             }
+        });
+        ui.collapsing("Disk save slots (1–3)", |ui| {
+            self.draw_persistent_slots(ui, ctx);
         });
         if ui
             .add_enabled(

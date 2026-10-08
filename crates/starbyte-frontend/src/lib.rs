@@ -2,9 +2,13 @@
 
 mod library;
 
-use std::path::{Path, PathBuf};
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
+use sha1::{Digest, Sha1};
 
 use starbyte_core::{
     Emulator, EmulatorBuilder, cartridge::Cartridge, input::ControllerState, manifest::AssetConfig,
@@ -135,6 +139,57 @@ impl FrontendSession {
         self.emulator
             .load_state(state)
             .context("quick load failed")?;
+        self.emulator.refresh_framebuffer();
+        self.apply_active_cheats();
+        Ok(())
+    }
+
+    /// Deterministic, game-scoped disk slot. Slot names never contain untrusted
+    /// paths or game titles; SHA-1 is for local naming, not authentication.
+    pub fn state_slot_path(&self, slot: u8) -> Result<PathBuf> {
+        anyhow::ensure!((1..=3).contains(&slot), "save slot must be 1, 2, or 3");
+        let cartridge = self.emulator.cartridge().context("No ROM loaded for save slots")?;
+        let mut hasher = Sha1::new();
+        hasher.update(cartridge.rom());
+        let identity = format!("{:x}", hasher.finalize());
+        Ok(self.emulator.assets().state_root().join(format!(
+            "{identity}.slot{slot}.state.json"
+        )))
+    }
+
+    /// Whether a game-scoped persistent slot currently exists.
+    #[must_use]
+    pub fn has_state_slot(&self, slot: u8) -> bool {
+        self.state_slot_path(slot).is_ok_and(|path| path.is_file())
+    }
+
+    /// Atomically replace a durable slot in the user's XDG state directory.
+    ///
+    /// The temporary file is created in the destination directory to avoid
+    /// partial/truncated states after a failed write or an interrupted save.
+    pub fn save_state_slot(&self, slot: u8) -> Result<PathBuf> {
+        let path = self.state_slot_path(slot)?;
+        let parent = path.parent().context("save slot path has no parent")?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create state directory {}", parent.display()))?;
+        let state = self.emulator.save_state().context("could not serialize state")?;
+        let mut temp = tempfile::NamedTempFile::new_in(parent)
+            .context("failed to create temporary save-state file")?;
+        temp.write_all(state.as_bytes()).context("failed writing save state")?;
+        temp.as_file().sync_all().context("failed syncing save state")?;
+        temp.persist(&path)
+            .with_context(|| format!("failed to persist save state to {}", path.display()))?;
+        Ok(path)
+    }
+
+    /// Restore a durable slot for the currently loaded cartridge.
+    ///
+    /// The core checks full ROM bytes before any state mutation.
+    pub fn load_state_slot(&mut self, slot: u8) -> Result<()> {
+        let path = self.state_slot_path(slot)?;
+        let data = std::fs::read_to_string(&path)
+            .with_context(|| format!("failed to read save state {}", path.display()))?;
+        self.emulator.load_state(&data).context("failed to load saved state")?;
         self.emulator.refresh_framebuffer();
         self.apply_active_cheats();
         Ok(())
@@ -353,6 +408,48 @@ mod tests {
         session.load_rom(&rom_path).unwrap();
         assert!(!session.has_quick_save());
         assert!(session.quick_load().is_err());
+    }
+
+    #[test]
+    fn persistent_save_slots_survive_new_sessions_and_are_game_scoped() {
+        let temp_dir = tempdir().unwrap();
+        let rom_path = temp_dir.path().join("slot-test.sfc");
+        let state_dir = temp_dir.path().join("states");
+        let base_rom = synthetic_rom_bytes();
+        fs::write(&rom_path, &base_rom).unwrap();
+        let assets = AssetConfig {
+            state_dir: Some(state_dir.clone()),
+            ..AssetConfig::default()
+        };
+        let mut session = FrontendSession::new(assets.clone()).unwrap();
+        assert!(!session.has_state_slot(1));
+        assert!(session.save_state_slot(0).is_err());
+        assert!(session.load_state_slot(1).is_err());
+        session.load_rom(&rom_path).unwrap();
+        session.run_frames(2).unwrap();
+        let saved_frame = session.snapshot().frame;
+        let slot_path = session.save_state_slot(1).unwrap();
+        assert!(slot_path.starts_with(&state_dir));
+        assert!(slot_path.is_file());
+        assert!(session.has_state_slot(1));
+        session.run_frames(2).unwrap();
+        session.load_state_slot(1).unwrap();
+        assert_eq!(session.snapshot().frame, saved_frame);
+
+        let mut reopened = FrontendSession::new(assets.clone()).unwrap();
+        reopened.load_rom(&rom_path).unwrap();
+        assert!(reopened.has_state_slot(1));
+        reopened.load_state_slot(1).unwrap();
+        assert_eq!(reopened.snapshot().frame, saved_frame);
+
+        let other_path = temp_dir.path().join("same-title-different-game.sfc");
+        let mut modified_rom = base_rom;
+        modified_rom[0x2000] ^= 0xFF; // Same title/header, different bytes.
+        fs::write(&other_path, modified_rom).unwrap();
+        reopened.load_rom(&other_path).unwrap();
+        assert!(!reopened.has_state_slot(1));
+        assert!(reopened.load_state_slot(1).is_err());
+        assert_ne!(reopened.state_slot_path(1).unwrap(), slot_path);
     }
 
     #[test]

@@ -53,16 +53,17 @@ For CLI help:
 cargo run -p starbyte-cli -- --help
 ```
 
-The desktop has a dedicated **Play View**, which makes the rendered game the main content rather than a small sidebar preview. Launching a ROM opens Play View automatically. Use **F9** to switch between the game and library, **Escape** to return to the library, **F5/F8** for temporary quick save/load, and the in-game toolbar for pause and fullscreen. The `integer_scale` setting preserves whole-pixel multiples when there is room, but scales down to fit narrow tiling windows.
+The desktop has a dedicated **Play View**, which makes the rendered game the main content rather than a small sidebar preview. Launching a ROM opens Play View automatically. Use **F9** to switch between the game and library, **Escape** to return to the library, **F5/F8** for temporary quick save/load, and the in-game toolbar for pause, fullscreen, and three **disk-backed save slots**. Disk slots are local JSON snapshots that include the current ROM and may be large; they are not battery-backed SRAM. The `integer_scale` setting preserves whole-pixel multiples when there is room, but scales down to fit narrow tiling windows.
 
 The GUI uses `eframe` with both Wayland and X11 backends enabled. **Native Wayland behavior and dependencies still require verification on the target Linux system.** These are source-build instructions, not a claim of a working packaged release.
 
 ## Linux configuration and cache
 
-By default Starbyte now uses the XDG user directories, independent of the directory from which it is launched:
+By default Starbyte uses XDG user directories, independent of the directory from which it is launched:
 
 - Config: `$XDG_CONFIG_HOME/starbyte/config.toml`, falling back to `~/.config/starbyte/config.toml`.
 - Cache: `$XDG_CACHE_HOME/starbyte/`, falling back to `~/.cache/starbyte/`.
+- Persistent slots: `$XDG_STATE_HOME/starbyte/states/`, falling back to `~/.local/state/starbyte/states/`. Disk slots are keyed to the ROM's content and can be redirected with an explicit state-directory override in host integrations.
 - An explicit `--config` or `--cache-dir` takes precedence.
 
 If the new config does not exist, the CLI and desktop app can read the old worktree-relative `.config/starbyte/config.toml` or legacy cache-relative configuration when launched from the same directory. The desktop app writes its settings to the new XDG path; the old file is not overwritten. For a different working directory, supply `--config /path/to/old/config.toml` explicitly. No save files are automatically moved.

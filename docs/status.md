@@ -12,7 +12,7 @@
 | CPU and system | 65816, cartridge mapping, DMA/HDMA, timing, joypads and multiple enhancement-chip implementations; extensive synthetic tests | Individual commercial ROM compatibility not proven |
 | PPU | Software Mode 0/1 tile backgrounds, sprites, CGRAM, priority, scroll, window masks, fixed-color math and brightness; synthetic pixel regressions | No verified Super Mario World title/gameplay; other modes, subscreen, full raster timing and color effects incomplete |
 | APU/audio | SPC700/APU bootstrap, port traffic and placeholder sample generation | No authentic DSP audio output or working speaker backend |
-| Saves | Core state serialization and save-RAM paths, CLI state handling; frontend in-memory quick slot F5/F8 | Persistent friendly save-slot browser and save reliability in actual games not proven |
+| Saves | Core state serialization and save-RAM paths, CLI state handling; frontend in-memory quick slot F5/F8 | Disk-backed slots 1–3 now exist, but native Wayland UX and save reliability in actual games not proven |
 | Desktop | Library, covers, metadata, cheats, gamepads, Play View, F9/Escape navigation, responsive tiled-window layout, fullscreen and integer display scaling | Native Hyprland/Wayland play, input focus, frame pacing, resize and dialogs not firsthand tested |
 | Automation | Versioned CLI JSON introspection, diagnostics, ROM inspection and run reports; extensive CI coverage | No running MCP server; tools are CLI only |
 | Packaging | Cargo sources and test workflow | No release installer or app repository |
@@ -22,7 +22,7 @@ See [PPU coverage](ppu-coverage.md) for a register-by-register account. The old 
 ## How to use what's implemented
 
 - Start the desktop with `cargo run -p starbyte-egui --`; pass `--rom /path/to/game.sfc` or `--rom-dir /path/to/roms`. Opening a ROM switches to the central **Play View**.
-- In Play View: **F9** toggles the game/library; **Escape** returns to library; **F5/F8** save/load one temporary in-memory slot. The toolbar has Pause and Fullscreen. Don't interpret the slot as a persistent game save.
+- In Play View: **F9** toggles the game/library; **Escape** returns to library; **F5/F8** save/load one temporary in-memory slot. The toolbar has Pause, Fullscreen and a Disk Slots menu for three per-ROM persistent slots. Disk slots remain local and are never uploaded.
 - For reproducible, local-only inspection: `cargo run -p starbyte-cli -- doctor --json`, `capabilities`, `inspect /path/to/game.sfc --json`, or `run /path/to/game.sfc --frames 1 --report-json /path/to/report.json`. See [automation](automation.md).
 - New settings default to XDG config/cache locations. Prior checkout-local settings can be read on first run from the original directory; see [README](../README.md).
 

@@ -34,6 +34,18 @@ impl AssetConfig {
             .unwrap_or_else(|| user_directory("XDG_CACHE_HOME", ".cache").join("starbyte"))
     }
 
+    /// Resolve the directory for durable game-specific save-state slots.
+    ///
+    /// Defaults to XDG_STATE_HOME/starbyte/states, with HOME fallback.
+    #[must_use]
+    pub fn state_root(&self) -> PathBuf {
+        self.state_dir.clone().unwrap_or_else(|| {
+            user_directory("XDG_STATE_HOME", ".local/state")
+                .join("starbyte")
+                .join("states")
+        })
+    }
+
     /// Resolve the effective configuration path for persisted GUI/runtime settings.
     #[must_use]
     pub fn config_path(&self) -> PathBuf {

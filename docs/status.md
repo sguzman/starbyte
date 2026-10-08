@@ -52,6 +52,8 @@ The Session panel's 60-frame debug step now advances one frame per UI update wit
 
 ## Early-frame compatibility failures
 
+The commercial-ROM fixture recorder now uses the core's guarded frame runner for ordinary capture and an explicit 20,000-instruction-per-frame ceiling while collecting full instruction traces. Stalled probes return a frame/CPU-address error rather than running indefinitely. This bounds instruction count, not wall-clock time or trace size across many requested frames; it does not imply that an actual commercial title is playable.
+
 A test of a commercial game that stops within a few frames needs the exact game's name and diagnostic log before its root cause can be determined. Starbyte now surfaces a recoverable emulation error in Play View, pauses playback, and records the error in Logs; this cannot protect against native process crashes or Rust panics. A terminal backtrace is required for those. A successful native checkerboard still does not demonstrate commercial playability.
 
 ## Cheatarium integration boundary

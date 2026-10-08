@@ -517,13 +517,13 @@ fn selected_frame_instruction_trace_has_cpu_snapshots_and_bus_events() {
 }
 
 #[test]
-fn selected_frame_instruction_trace_survives_cpu_opcode_error() {
+fn selected_frame_instruction_trace_accepts_sbc_long_x() {
     let dir = tempdir().unwrap();
-    let rom = dir.path().join("bad.sfc");
-    let trace_path = dir.path().join("failed.jsonl");
+    let rom = dir.path().join("legal.sfc");
+    let trace_path = dir.path().join("opcode.jsonl");
     write_test_rom(&rom);
     let mut bytes = fs::read(&rom).unwrap();
-    bytes[1] = 0xFF; // NOP succeeds, unsupported opcode then stops the frame.
+    bytes[1] = 0xFF; // SBC long,X is a legal 65816 opcode.
     fs::write(&rom, bytes).unwrap();
 
     Command::cargo_bin("starbyte")
@@ -540,7 +540,7 @@ fn selected_frame_instruction_trace_survives_cpu_opcode_error() {
             "--no-save-ram",
         ])
         .assert()
-        .failure();
+        .success();
 
     let text = fs::read_to_string(trace_path).unwrap();
     let records: Vec<serde_json::Value> = text
@@ -548,14 +548,10 @@ fn selected_frame_instruction_trace_survives_cpu_opcode_error() {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     assert_eq!(records[0]["opcode"], 0xEA);
+    assert!(records.iter().any(|record| record["opcode"] == 0xFF));
     let footer = records.last().unwrap();
-    assert_eq!(footer["status"], "error");
-    assert!(
-        footer["error"]
-            .as_str()
-            .unwrap()
-            .contains("unsupported opcode")
-    );
+    assert_eq!(footer["status"], "ok");
+    assert!(footer["error"].is_null());
 }
 
 #[test]

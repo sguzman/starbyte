@@ -110,17 +110,31 @@ impl Emulator {
     /// Advance one frame with a deterministic progress guard. Headless
     /// clients are not subject to a host wall-clock deadline.
     pub fn run_until_frame(&mut self) -> Result<()> {
-        self.run_until_frame_guarded(None)
+        self.run_until_frame_guarded(None, None)
     }
 
     /// Advance one frame with an additional wall-clock budget for synchronous
     /// desktop UIs. A stalled commercial ROM returns a diagnostic error
     /// rather than holding the event loop indefinitely.
     pub fn run_until_frame_with_timeout(&mut self, timeout: Duration) -> Result<()> {
-        self.run_until_frame_guarded(Some(timeout))
+        self.run_until_frame_guarded(Some(timeout), None)
     }
 
-    fn run_until_frame_guarded(&mut self, timeout: Option<Duration>) -> Result<()> {
+    /// Run one guarded frame, reporting CPU register state and bus events for
+    /// each successfully completed instruction. This is opt-in diagnostics;
+    /// the ordinary frame loop retains its minimal-cost execution path.
+    pub fn run_until_frame_observed(
+        &mut self,
+        observer: &mut dyn FnMut(&Registers, &Registers, &[BusEvent]),
+    ) -> Result<()> {
+        self.run_until_frame_guarded(None, Some(observer))
+    }
+
+    fn run_until_frame_guarded(
+        &mut self,
+        timeout: Option<Duration>,
+        mut observer: Option<&mut dyn FnMut(&Registers, &Registers, &[BusEvent])>,
+    ) -> Result<()> {
         if self.system.cartridge().is_none() {
             return Err(Error::InvalidRom("no ROM loaded".to_owned()));
         }
@@ -136,7 +150,13 @@ impl Emulator {
                 return Err(self.frame_stalled(start_frame, instructions, started.elapsed()));
             }
             let before_clock = self.system.timing().master_clock;
-            self.step_instruction()?;
+            if let Some(record) = observer.as_mut() {
+                let before = self.cpu.registers.clone();
+                let bus_events = self.step_instruction_with_trace()?;
+                record(&before, &self.cpu.registers, &bus_events);
+            } else {
+                self.step_instruction()?;
+            }
             instructions += 1;
             if self.system.timing().master_clock == before_clock
                 || timeout.is_some_and(|budget| started.elapsed() >= budget)

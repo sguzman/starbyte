@@ -467,7 +467,7 @@ fn run_captures_bounded_frame_images_without_interactive_screenshots() {
     assert_eq!(paths, vec!["frame-000001.ppm", "frame-000002.ppm"]);
     for file in &paths {
         let bytes = fs::read(frames_dir.join(file)).unwrap();
-        assert!(bytes.starts_with(b"P6\\n256 224\\n255\\n"));
+        assert!(bytes.starts_with(b"P6\n256 224\n255\n"));
     }
 }
 

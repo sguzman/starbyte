@@ -503,6 +503,27 @@ mod tests {
     }
 
     #[test]
+    fn a_waiting_or_stopped_cpu_does_not_halt_ppu_frame_timing() {
+        for opcode in [0xCB, 0xDB] {
+            let mut rom = rom_bytes();
+            rom[0x7FFC] = 0x00;
+            rom[0x7FFD] = 0x80;
+            rom[0] = opcode;
+            rom[1] = 0xEA;
+
+            let mut emulator = Emulator::default();
+            emulator.load_rom(Cartridge::from_bytes(rom, None).unwrap());
+            emulator.run_until_frame().unwrap();
+            assert_eq!(emulator.timing().frame, 1, "opcode {opcode:02X}");
+            assert_eq!(emulator.cpu_registers().pc, 0x8001);
+
+            emulator.run_until_frame().unwrap();
+            assert_eq!(emulator.timing().frame, 2, "opcode {opcode:02X}");
+            assert_eq!(emulator.cpu_registers().pc, 0x8001);
+        }
+    }
+
+    #[test]
     fn a_game_program_receives_one_nmi_at_ntsc_vblank_per_frame() {
         let mut rom = rom_bytes();
         rom[0x7FFC] = 0x00;

@@ -4389,6 +4389,88 @@ mod tests {
     }
 
     #[test]
+    fn bit_immediate_affects_only_zero_and_preserves_n_and_v() {
+        for (status, operand, expected_z) in [(0xF0, 0xF0, true), (0xF0, 0x0F, false)] {
+            let mut cpu = Cpu65816::default();
+            cpu.registers.pc = 0x8000;
+            cpu.registers.emulation = false;
+            cpu.registers.a = 0x000F;
+            cpu.registers.p = status;
+            let mut bus = TestBus::with_bytes(&[(0x008000, 0x89), (0x008001, operand)]);
+            cpu.step_with_bus(&mut bus).unwrap();
+            assert_eq!(cpu.registers.pc, 0x8002);
+            assert_eq!(cpu.registers.p & 0xC0, 0xC0, "BIT #imm must keep N/V");
+            assert_eq!((cpu.registers.p & 0x02) != 0, expected_z);
+        }
+    }
+
+    #[test]
+    fn bit_memory_modes_observe_effective_address_and_operand_n_v_bits() {
+        for (opcode, target, len) in [
+            (0x24, 0x000210_u32, 2),
+            (0x34, 0x000212_u32, 2),
+            (0x3C, 0x7E4012_u32, 3),
+        ] {
+            let mut cpu = Cpu65816::default();
+            cpu.registers.pc = 0x8000;
+            cpu.registers.emulation = false;
+            cpu.registers.d = 0x0200;
+            cpu.registers.dbr = 0x7E;
+            cpu.registers.x = 2;
+            cpu.registers.a = 0x000F;
+            cpu.registers.p = 0x30;
+            let mut bus = TestBus::with_bytes(&[
+                (0x008000, opcode),
+                (0x008001, 0x10),
+                (0x008002, 0x40),
+                (target, 0xC0),
+            ]);
+            let trace = cpu.step_with_bus(&mut bus).unwrap();
+            assert_eq!(cpu.registers.pc, 0x8000 + len);
+            assert_eq!(cpu.registers.p & 0xC2, 0xC2, "opcode {opcode:02X}");
+            assert!(trace.iter().any(|event| event.address == target));
+        }
+    }
+
+    #[test]
+    fn trb_and_tsb_handle_eight_and_sixteen_bit_memory_and_z_flag() {
+        // TSB absolute, M=8: ($50 & $0F) == 0, so Z is set and bits are set.
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.emulation = false;
+        cpu.registers.dbr = 0x7E;
+        cpu.registers.a = 0x000F;
+        cpu.registers.p = 0x30;
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x0C), (0x008001, 0x00), (0x008002, 0x40),
+            (0x008003, 0x14), (0x008004, 0x10),
+            (0x7E4000, 0x50), (0x000010, 0xFF),
+        ]);
+        cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(bus.read(0x7E4000), 0x5F);
+        assert_eq!(cpu.registers.p & 0x02, 0x02);
+        cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(bus.read(0x000010), 0xF0);
+        assert_eq!(cpu.registers.p & 0x02, 0);
+
+        // TRB absolute, M=16: removes only A's set bits across both bytes.
+        let mut cpu16 = Cpu65816::default();
+        cpu16.registers.pc = 0x9000;
+        cpu16.registers.emulation = false;
+        cpu16.registers.dbr = 0x7E;
+        cpu16.registers.a = 0x0FF0;
+        cpu16.registers.p = 0x00;
+        let mut bus16 = TestBus::with_bytes(&[
+            (0x009000, 0x1C), (0x009001, 0x00), (0x009002, 0x40),
+            (0x7E4000, 0xF0), (0x7E4001, 0xF0),
+        ]);
+        cpu16.step_with_bus(&mut bus16).unwrap();
+        assert_eq!(bus16.read(0x7E4000), 0x00);
+        assert_eq!(bus16.read(0x7E4001), 0xF0);
+        assert_eq!(cpu16.registers.p & 0x02, 0);
+    }
+
+    #[test]
     fn all_new_accumulator_alu_modes_use_the_documented_effective_address() {
         // A compact synthetic bus fixture exercises all 38 newly supported
         // LDA/AND/EOR/ADC/SBC addressing forms without commercial ROM data.

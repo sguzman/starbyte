@@ -335,3 +335,97 @@ fn large_sprite_wraps_character_row_and_vertical_position() {
     ppu.render_frame(&mut frame);
     assert_eq!(pixel(&frame, 24, 0), [248, 0, 0, 255]);
 }
+
+#[test]
+fn background_window_masks_pixels_and_supports_inversion() {
+    let mut ppu = sample_mode1_bg1_bg2();
+    palette(&mut ppu, 0, 0x03E0); // Backdrop is green.
+    vram_word(&mut ppu, 0x2000, 0x00FF); // Eight opaque red pixels.
+    ppu.write_register(0x212C, 0x01); // BG1 only.
+    ppu.write_register(0x2126, 2);
+    ppu.write_register(0x2127, 4);
+    ppu.write_register(0x2123, 0x02); // BG1 window 1 enabled.
+    ppu.write_register(0x212E, 0x01); // BG1 window on main screen.
+    let mut frame = FrameBuffer::default();
+    ppu.render_frame(&mut frame);
+    assert_eq!(pixel(&frame, 0, 0), [248, 0, 0, 255]);
+    assert_eq!(pixel(&frame, 2, 0), [0, 248, 0, 255]);
+    assert_eq!(pixel(&frame, 4, 0), [0, 248, 0, 255]); // Right edge inclusive.
+    assert_eq!(pixel(&frame, 5, 0), [248, 0, 0, 255]);
+
+    ppu.write_register(0x2123, 0x03); // Invert window 1.
+    ppu.render_frame(&mut frame);
+    assert_eq!(pixel(&frame, 0, 0), [0, 248, 0, 255]);
+    assert_eq!(pixel(&frame, 2, 0), [248, 0, 0, 255]);
+
+    ppu.write_register(0x2123, 0x00); // No windows selected.
+    ppu.render_frame(&mut frame);
+    assert_eq!(pixel(&frame, 2, 0), [248, 0, 0, 255]);
+}
+
+#[test]
+fn background_window_logic_supports_or_and_xor_xnor() {
+    let mut ppu = sample_mode1_bg1_bg2();
+    palette(&mut ppu, 0, 0x03E0);
+    vram_word(&mut ppu, 0x2000, 0x00FF);
+    ppu.write_register(0x212C, 0x01);
+    ppu.write_register(0x212E, 0x01);
+    ppu.write_register(0x2123, 0x0A); // BG1: both windows enabled.
+    ppu.write_register(0x2126, 1);
+    ppu.write_register(0x2127, 3);
+    ppu.write_register(0x2128, 3);
+    ppu.write_register(0x2129, 5);
+    let mut frame = FrameBuffer::default();
+    let red = [248, 0, 0, 255];
+    let green = [0, 248, 0, 255];
+
+    ppu.write_register(0x212A, 0); // OR: mask union.
+    ppu.render_frame(&mut frame);
+    assert_eq!(pixel(&frame, 1, 0), green);
+    assert_eq!(pixel(&frame, 3, 0), green);
+    assert_eq!(pixel(&frame, 5, 0), green);
+    assert_eq!(pixel(&frame, 6, 0), red);
+
+    ppu.write_register(0x212A, 1); // AND: only overlap.
+    ppu.render_frame(&mut frame);
+    assert_eq!(pixel(&frame, 1, 0), red);
+    assert_eq!(pixel(&frame, 3, 0), green);
+    assert_eq!(pixel(&frame, 5, 0), red);
+
+    ppu.write_register(0x212A, 2); // XOR: exclude overlap.
+    ppu.render_frame(&mut frame);
+    assert_eq!(pixel(&frame, 1, 0), green);
+    assert_eq!(pixel(&frame, 3, 0), red);
+    assert_eq!(pixel(&frame, 5, 0), green);
+
+    ppu.write_register(0x212A, 3); // XNOR: overlap and outside both.
+    ppu.render_frame(&mut frame);
+    assert_eq!(pixel(&frame, 0, 0), green);
+    assert_eq!(pixel(&frame, 1, 0), red);
+    assert_eq!(pixel(&frame, 3, 0), green);
+}
+
+#[test]
+fn object_window_masks_high_priority_sprite_pixels() {
+    let mut ppu = Ppu::default();
+    let mut frame = FrameBuffer::default();
+    ppu.write_register(0x2100, 0x0F);
+    palette(&mut ppu, 0, 0x03E0); // Backdrop green.
+    palette(&mut ppu, 129, 0x7C00); // OBJ blue.
+    vram_word(&mut ppu, 0x4000, 0x00FF);
+    ppu.write_register(0x2101, 0x01);
+    ppu.write_register(0x2102, 0);
+    ppu.write_register(0x2103, 0);
+    for byte in [0, 0, 0, 0x30] {
+        ppu.write_register(0x2104, byte);
+    }
+    ppu.write_register(0x212C, 0x10); // OBJ main screen.
+    ppu.write_register(0x212E, 0x10); // OBJ window on main.
+    ppu.write_register(0x2125, 0x02); // OBJ window 1.
+    ppu.write_register(0x2126, 2);
+    ppu.write_register(0x2127, 4);
+    ppu.render_frame(&mut frame);
+    assert_eq!(pixel(&frame, 0, 0), [0, 0, 248, 255]);
+    assert_eq!(pixel(&frame, 3, 0), [0, 248, 0, 255]);
+    assert_eq!(pixel(&frame, 7, 0), [0, 0, 248, 255]);
+}

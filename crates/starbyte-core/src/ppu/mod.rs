@@ -361,6 +361,9 @@ impl Ppu {
         let bg3_high = self.registers[0x05] & 0x08 != 0;
         for y in 0..framebuffer.height {
             for x in 0..framebuffer.width {
+                if self.window_masks_main_layer(background.index, x) {
+                    continue;
+                }
                 if let Some((pixel, high)) = self.background_pixel(background, x as u16, y as u16) {
                     let index = y * framebuffer.width + x;
                     let rank = background_priority_rank(mode, background.index, high, bg3_high);
@@ -489,6 +492,48 @@ impl Ppu {
             | (((plane3 >> shift) & 0x01) << 3)
     }
 
+    /// Window masking for BG1..BG4 and OBJ on the main screen. Window
+    /// selectors are low/high nibbles of W12SEL/W34SEL, or OBJ's low
+    /// nibble of WOBJSEL. If neither window is active, the layer is unmasked.
+    fn window_masks_main_layer(&self, layer: usize, x: usize) -> bool {
+        if self.registers[0x2E] & (1 << layer) == 0 {
+            return false;
+        }
+
+        let (selection, logic) = if layer < 4 {
+            let selection = self.registers[0x23 + layer / 2] >> ((layer % 2) * 4);
+            let logic = (self.registers[0x2A] >> (layer * 2)) & 0x03;
+            (selection, logic)
+        } else {
+            (self.registers[0x25], self.registers[0x2B] & 0x03)
+        };
+        let window1_enabled = selection & 0x02 != 0;
+        let window2_enabled = selection & 0x08 != 0;
+        if !window1_enabled && !window2_enabled {
+            return false;
+        }
+
+        let window1 = self.inside_window(x, 0) ^ (selection & 0x01 != 0);
+        let window2 = self.inside_window(x, 1) ^ (selection & 0x04 != 0);
+        match (window1_enabled, window2_enabled) {
+            (true, false) => window1,
+            (false, true) => window2,
+            (true, true) => match logic {
+                0 => window1 || window2,
+                1 => window1 && window2,
+                2 => window1 ^ window2,
+                _ => !(window1 ^ window2),
+            },
+            (false, false) => false,
+        }
+    }
+
+    fn inside_window(&self, x: usize, window: usize) -> bool {
+        let start = usize::from(self.registers[0x26 + window * 2]);
+        let end = usize::from(self.registers[0x27 + window * 2]);
+        start <= x && x <= end
+    }
+
     fn backdrop_color(&self) -> u16 {
         u16::from(self.cgram[0]) | (u16::from(self.cgram[1]) << 8)
     }
@@ -535,7 +580,9 @@ impl Ppu {
 
                 for local_x in 0..usize::from(size) {
                     let screen_x = sprite_x + local_x as i16;
-                    if !(0..framebuffer.width as i16).contains(&screen_x) {
+                    if !(0..framebuffer.width as i16).contains(&screen_x)
+                        || self.window_masks_main_layer(4, screen_x as usize)
+                    {
                         continue;
                     }
 

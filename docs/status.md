@@ -96,6 +96,10 @@ OBJ sprite tiles now wrap tile numbers inside the 16×16 character table instead
 
 `starbyte run --report-json` now includes a versioned display register snapshot and framebuffer statistics (nonblack pixels, distinct RGB colors, center pixel) alongside existing hash and MMIO activity. This makes startup-black-screen regressions auditable in headless/agent workflows without implicitly exporting ROM contents. Integration tests cover report schema and an all-black synthetic boot frame.
 
+## Main-screen window masks
+
+The software PPU now applies the SNES BG1–BG4 and OBJ main-screen window registers to Mode 0/1 pixel composition: per-layer W12SEL/W34SEL/WOBJSEL, horizontal WH0–WH3 bounds, WBGLOG/WOBJLOG union/intersection/XOR/XNOR, inversion, and TMW enable. Synthetic pixel tests assert masked backgrounds, foreground sprites, inclusive edges and logic modes. Subscreen windowing, color-window clipping/color math, and scanline-time changes remain unimplemented.
+
 ## Current functional gap
 
 The original commercial-ROM roadmap explicitly leaves SNES background/tilemap presentation, non-placeholder Super Mario World boot visuals, title/menu navigation, and first controllable gameplay incomplete. This is a **blocking playability gap**, not an optional accuracy task.

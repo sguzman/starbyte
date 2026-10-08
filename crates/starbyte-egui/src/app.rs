@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     process::Command,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::Result;
@@ -24,6 +24,41 @@ use starbyte_frontend::{
     FrontendSession, InstalledStatus, LibraryEntry, LibraryFilter, LibraryService, LibrarySnapshot,
     LibraryTarget,
 };
+
+const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
+const COMPACT_LAYOUT_WIDTH: f32 = 960.0;
+
+fn is_compact_layout(width: f32) -> bool {
+    width < COMPACT_LAYOUT_WIDTH
+}
+
+/// Schedule no more than one frame per UI update; never pile up catch-up work.
+#[derive(Debug, Clone, Copy)]
+struct FrameClock {
+    next_frame_at: Instant,
+}
+
+impl FrameClock {
+    fn new(now: Instant) -> Self {
+        Self { next_frame_at: now }
+    }
+
+    fn reset(&mut self, now: Instant) {
+        self.next_frame_at = now;
+    }
+
+    fn take_due_frame(&mut self, now: Instant) -> bool {
+        if now < self.next_frame_at {
+            return false;
+        }
+        self.next_frame_at = now + FRAME_INTERVAL;
+        true
+    }
+
+    fn time_until_next_frame(&self, now: Instant) -> Duration {
+        self.next_frame_at.saturating_duration_since(now)
+    }
+}
 
 #[derive(Debug, Clone)]
 struct JobRecord {
@@ -57,6 +92,10 @@ pub struct StarbyteApp {
     gamepad_buttons_down: BTreeSet<String>,
     pending_keyboard_bind: Option<String>,
     pending_gamepad_bind: Option<String>,
+    is_playing: bool,
+    frame_clock: FrameClock,
+    show_compact_settings: bool,
+    show_compact_session: bool,
 }
 
 impl StarbyteApp {
@@ -105,6 +144,7 @@ impl StarbyteApp {
             status_line = format!("Loaded {}", path.display());
         }
 
+        let start_playing = session.snapshot().has_rom;
         let worker = AppWorker::spawn(assets.clone());
         let gilrs = Gilrs::new().ok();
         let cached_snapshot = LibraryService::new(config.clone(), assets.clone())
@@ -139,6 +179,10 @@ impl StarbyteApp {
             gamepad_buttons_down: BTreeSet::new(),
             pending_keyboard_bind: None,
             pending_gamepad_bind: None,
+            is_playing: start_playing,
+            frame_clock: FrameClock::new(Instant::now()),
+            show_compact_settings: false,
+            show_compact_session: false,
         };
         app.persist_config();
         if app.config.advanced.refresh_on_startup {
@@ -228,6 +272,8 @@ impl StarbyteApp {
                         let _ = self.session.set_active_cheats(&entry.cheats);
                         let _ = self.session.run_frame();
                         self.refresh_framebuffer(ctx);
+                        self.is_playing = true;
+                        self.frame_clock.reset(Instant::now());
                         let detail = format!("Loaded {}", rom_path.display());
                         self.update_job(job_id, "Load Game", "done", &detail);
                         self.status_line = detail;
@@ -333,6 +379,12 @@ impl StarbyteApp {
     }
 
     fn effective_controller_state(&self, ctx: &egui::Context) -> ControllerState {
+        // Do not trigger in-game buttons while typing into the library search or settings.
+        if self.config.input.active_device == InputDeviceMode::Keyboard
+            && ctx.wants_keyboard_input()
+        {
+            return ControllerState::default();
+        }
         let mut state = self.held_input;
         match self.config.input.active_device {
             InputDeviceMode::Keyboard => {
@@ -422,6 +474,7 @@ impl StarbyteApp {
             Err(error) => {
                 warn!("{error}");
                 self.status_line = error.to_string();
+                self.is_playing = false;
             }
         }
     }
@@ -496,11 +549,22 @@ impl StarbyteApp {
         }
     }
 
-    fn draw_top_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn draw_top_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, compact: bool) {
         ui.horizontal_wrapped(|ui| {
             ui.heading("Starbyte");
-            ui.label("Library-first frontend");
+            ui.label("Cozy SNES · experimental");
             ui.separator();
+            let has_rom = self.session.snapshot().has_rom;
+            if ui
+                .add_enabled(
+                    has_rom,
+                    egui::Button::new(if self.is_playing { "Pause" } else { "Play" }),
+                )
+                .clicked()
+            {
+                self.is_playing = !self.is_playing;
+                self.frame_clock.reset(Instant::now());
+            }
             if ui
                 .add(egui::TextEdit::singleline(&mut self.search_query).hint_text("Search library"))
                 .changed()
@@ -572,14 +636,23 @@ impl StarbyteApp {
             }
 
             ui.separator();
-            ui.checkbox(&mut self.config.ui.show_left_panel, "Left");
-            ui.add_enabled_ui(
-                self.config.library.active_view == LibraryViewMode::List,
-                |ui| {
-                    ui.checkbox(&mut self.config.ui.show_details_panel, "Details");
-                },
-            );
-            ui.checkbox(&mut self.config.ui.show_right_panel, "Session");
+            if compact {
+                if ui.button("Settings").clicked() {
+                    self.show_compact_settings = !self.show_compact_settings;
+                }
+                if ui.button("Session").clicked() {
+                    self.show_compact_session = !self.show_compact_session;
+                }
+            } else {
+                ui.checkbox(&mut self.config.ui.show_left_panel, "Left");
+                ui.add_enabled_ui(
+                    self.config.library.active_view == LibraryViewMode::List,
+                    |ui| {
+                        ui.checkbox(&mut self.config.ui.show_details_panel, "Details");
+                    },
+                );
+                ui.checkbox(&mut self.config.ui.show_right_panel, "Session");
+            }
             ui.checkbox(&mut self.config.ui.show_log_panel, "Logs");
             if ui.button("Save Layout").clicked() {
                 self.persist_config();
@@ -638,7 +711,7 @@ impl StarbyteApp {
             }
 
             ui.separator();
-            egui::CollapsingHeader::new("Audio")
+            egui::CollapsingHeader::new("Audio (output not connected yet)")
                 .default_open(true)
                 .show(ui, |ui| {
                     let audio = &mut self.config.audio;
@@ -668,7 +741,13 @@ impl StarbyteApp {
                 .show(ui, |ui| {
                     let video = &mut self.config.video;
                     let mut changed = false;
-                    changed |= ui.checkbox(&mut video.fullscreen, "Fullscreen").changed();
+                    let fullscreen_changed =
+                        ui.checkbox(&mut video.fullscreen, "Fullscreen").changed();
+                    if fullscreen_changed {
+                        ui.ctx()
+                            .send_viewport_cmd(egui::ViewportCommand::Fullscreen(video.fullscreen));
+                    }
+                    changed |= fullscreen_changed;
                     changed |= ui
                         .checkbox(&mut video.integer_scale, "Integer scale")
                         .changed();
@@ -904,10 +983,19 @@ impl StarbyteApp {
         } else {
             ui.label("No ROM selected");
         }
-        if ui.button("Run Frame").clicked() {
+        if ui
+            .add_enabled(!self.is_playing && snapshot.has_rom, egui::Button::new("Step Frame"))
+            .clicked()
+        {
             self.run_frame(ctx);
         }
-        if ui.button("Run 60 Frames").clicked() {
+        if ui
+            .add_enabled(
+                !self.is_playing && snapshot.has_rom,
+                egui::Button::new("Step 60 Frames"),
+            )
+            .clicked()
+        {
             self.session
                 .set_controller1(self.effective_controller_state(ctx));
             match self.session.run_frames(60) {
@@ -1235,10 +1323,12 @@ impl eframe::App for StarbyteApp {
         self.poll_gamepad_events();
         self.poll_worker_events(ctx);
 
-        egui::TopBottomPanel::top("top_bar").show(ctx, |ui| self.draw_top_bar(ui, ctx));
+        let compact = is_compact_layout(ctx.available_rect().width());
+        egui::TopBottomPanel::top("top_bar")
+            .show(ctx, |ui| self.draw_top_bar(ui, ctx, compact));
         self.draw_log_panel(ctx);
 
-        if self.config.ui.show_left_panel {
+        if !compact && self.config.ui.show_left_panel {
             let response = egui::SidePanel::left("settings")
                 .resizable(true)
                 .default_width(self.config.ui.left_panel_width)
@@ -1247,7 +1337,7 @@ impl eframe::App for StarbyteApp {
             self.config.ui.left_panel_width = response.response.rect.width();
         }
 
-        if self.config.ui.show_right_panel {
+        if !compact && self.config.ui.show_right_panel {
             let response = egui::SidePanel::right("session")
                 .resizable(true)
                 .default_width(self.config.ui.right_panel_width)
@@ -1257,7 +1347,8 @@ impl eframe::App for StarbyteApp {
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            if self.config.library.active_view == LibraryViewMode::List
+            if !compact
+                && self.config.library.active_view == LibraryViewMode::List
                 && self.config.ui.show_details_panel
             {
                 let response = egui::SidePanel::right("details")
@@ -1271,11 +1362,69 @@ impl eframe::App for StarbyteApp {
             self.draw_library_browser(ui, ctx);
         });
 
+        if compact && self.show_compact_settings {
+            let mut open = self.show_compact_settings;
+            egui::Window::new("Settings")
+                .open(&mut open)
+                .default_width(340.0)
+                .resizable(true)
+                .show(ctx, |ui| self.draw_settings_panel(ui));
+            self.show_compact_settings = open;
+        }
+        if compact && self.show_compact_session {
+            let mut open = self.show_compact_session;
+            egui::Window::new("Session")
+                .open(&mut open)
+                .default_width(340.0)
+                .resizable(true)
+                .show(ctx, |ui| self.draw_session_panel(ui, ctx));
+            self.show_compact_session = open;
+        }
+
         if self.show_properties {
             self.draw_properties_window(ctx);
         }
 
-        ctx.request_repaint_after(Duration::from_millis(100));
+        if self.is_playing && self.session.snapshot().has_rom {
+            if self.frame_clock.take_due_frame(Instant::now()) {
+                self.run_frame(ctx);
+            }
+            if self.is_playing {
+                ctx.request_repaint_after(self.frame_clock.time_until_next_frame(Instant::now()));
+            }
+        } else {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+    }
+}
+
+#[cfg(test)]
+mod playback_tests {
+    use std::time::{Duration, Instant};
+
+    use super::{FRAME_INTERVAL, FrameClock, is_compact_layout};
+
+    #[test]
+    fn clock_limits_work_to_one_frame_per_tick_and_does_not_accumulate_lag() {
+        let start = Instant::now();
+        let mut clock = FrameClock::new(start);
+        assert!(clock.take_due_frame(start));
+        assert!(!clock.take_due_frame(start + FRAME_INTERVAL / 2));
+
+        let late = start + Duration::from_secs(2);
+        assert!(clock.take_due_frame(late));
+        assert!(!clock.take_due_frame(late));
+        assert_eq!(clock.time_until_next_frame(late), FRAME_INTERVAL);
+
+        clock.reset(late);
+        assert!(clock.take_due_frame(late));
+    }
+
+    #[test]
+    fn small_tiled_windows_use_popup_panels() {
+        assert!(is_compact_layout(520.0));
+        assert!(is_compact_layout(959.0));
+        assert!(!is_compact_layout(960.0));
     }
 }
 

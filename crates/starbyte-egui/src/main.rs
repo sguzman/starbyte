@@ -1,4 +1,4 @@
-//! Native `egui` frontend bootstrap for Starbyte.
+//! Native Wayland-first `egui` desktop frontend for Starbyte.
 
 mod app;
 mod logging;
@@ -16,7 +16,7 @@ use crate::{app::StarbyteApp, logging::install_tracing};
 use starbyte_core::manifest::{AssetConfig, RuntimeConfig};
 
 #[derive(Debug, Parser)]
-#[command(name = "starbyte-egui", about = "Bootstrap egui frontend for Starbyte")]
+#[command(name = "starbyte-egui", about = "Rust-native SNES library and desktop frontend")]
 struct Args {
     /// Optional ROM to load at startup.
     #[arg(long)]
@@ -78,8 +78,9 @@ fn main() -> Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1440.0, 900.0])
-            .with_min_inner_size([1100.0, 720.0])
-            .with_title("Starbyte"),
+            .with_min_inner_size([520.0, 360.0])
+            .with_title("Starbyte")
+            .with_fullscreen(config.video.fullscreen),
         ..Default::default()
     };
 

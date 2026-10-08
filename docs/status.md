@@ -28,6 +28,12 @@ Snapshot: 2026-10-07. Evidence: repository inspection at `76fef8a53a9fccc7f73de8
 | MCP server | Not established | No MCP server identified in inspected layout; design is a future goal |
 | Packaging and release | Unverified | No Linux distribution/release pipeline established by this audit |
 
+## Desktop interaction work staged after this snapshot
+
+The GUI now has a 520×360 minimum, a Play/Pause frame scheduler, compact-width floating settings/session panels, and an explicit fullscreen viewport command. The scheduler is capped to one emulated frame per UI update at a nominal 60 Hz; it is not an audio-synchronized production emulation loop. No native Wayland run, audio-output validation, or end-to-end user acceptance was performed during this source-only patch.
+
+**Important:** the audio sample synthesis in `starbyte-core/src/emulator.rs` is a placeholder, and `starbyte-egui` has no sound-device output backend. The audio configuration UI does not mean that live game sound currently works.
+
 ## Current functional gap
 
 The original commercial-ROM roadmap explicitly leaves SNES background/tilemap presentation, non-placeholder Super Mario World boot visuals, title/menu navigation, and first controllable gameplay incomplete. This is a **blocking playability gap**, not an optional accuracy task.

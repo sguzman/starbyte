@@ -327,7 +327,7 @@ fn parse_hex_u8(value: &str) -> Option<u8> {
 mod tests {
     use std::{fs, path::PathBuf};
 
-    use starbyte_core::input::ControllerState;
+    use starbyte_core::{input::ControllerState, manifest::AssetConfig};
     use tempfile::tempdir;
 
     use super::{CheatEntry, FrontendSession, parse_cheat_patches};

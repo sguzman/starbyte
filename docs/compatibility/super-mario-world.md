@@ -147,13 +147,36 @@ Bit `$10` is an emulation-mode B marker in the pushed processor status, **but th
 
 **Post-fix Super Mario World gameplay has not yet been verified.** The proof here establishes the specific cause of frame-37 index-width loss and the resulting frame-38 wrong-bank jump. It does not prove other CPU, PPU, DMA or audio correctness.
 
+## Seventh probe: native NMI fix confirmed by a real ROM, then missing LDA long,X
+
+On 2026-10-08, after the native-status NMI correction passed CI, the user reran the locally held `Super Mario World.zip` with `run --frames 120 --no-save-ram --frame-log` and sampled PPM images. The run **completed 108 frames**, stopping on the first instruction of the following segment with:
+
+```text
+emulation failed at requested frame 109
+unsupported opcode for 65816: 0xBF at 0x00B8B0
+```
+
+Compared with the previously failing frame 39, this confirms that the native NMI correction removed the specific bad-width `ExecutePtr` jump and runaway stack. The measured CPU PC stays in the expected `$00:806B`–`$00:806D` main-loop range from frames 38–100, with the stack pointer stable at **`$01FF`**. The end-frame framebuffer first contains nonblack pixels at frame **38**, and sampled frames 40 through 100 show a **stable, recognizable white "Nintendo Presents" logo on black**. Unlike earlier corrupt tile samples, this is a visibly coherent startup graphic, but a full title screen and gameplay have not been tested.
+
+Frame 101 enters the next game-mode transition, with the stack at `$01F9` and CPU PC near `$00:B933`. During frames 101–108, the engine begins unpacking graphics; it stops at `$00:B8B0` during frame 109, with the stack still in the normal `$01FB` area. This is **not an arbitrary illegal-opcode location**. The public [SMWDisX disassembly of `CODE_00B8AD`](https://github.com/IsoFrieze/SMWDisX/blob/master/bank_00.asm) shows:
+
+```asm
+CODE_00B8AD:
+    LDY.W #$0008
+  - LDA.L MarioGraphics,X
+```
+
+At `$00:B8B0`, the `LDA.L ...,X` instruction uses the **legal opcode `$BF`** (65816 absolute long indexed X). Starbyte lacked this decoder entry. Generic support for both `LDA long` (`$AF`) and `LDA long,X` (`$BF`) is now committed, with synthetic tests covering accumulator width, bank carry, the independent DBR and 24-bit address wrap. No game-specific special case or proprietary ROM data was added.
+
+**Evidence-bound conclusion:** The first major CPU corruption is fixed, and real startup rendering is stable through frame 100. The new failure is a specific missing instruction in an otherwise legitimate game graphics routine. The new opcode implementations still require a **post-fix ROM retest** before title/gameplay compatibility can be assessed.
+
 ## Next evidence needed
 
-1. Re-run a bounded **120-frame** `run --no-save-ram --frame-log` after pulling the native-interrupt-status fix. Verify that execution gets beyond 38 frames, the frame-38 `$74:0000` jump/BRK chain is absent, and stack registers remain plausible.
-2. If CPU execution advances but video is corrupt, inspect PPU/DMA activity and capture selectively, using a single later instruction frame only when necessary. Avoid inferring graphics correctness from frame counts alone.
-3. Record the exact local cartridge digest and region/revision without uploading ROM bytes.
-4. Validate any further demonstrated emulator defect with copyright-free synthetic regressions before another commercial probe.
-5. Mark the game playable only after a stable title scene and responsive controller navigation are observed.
+1. Once the `$AF`/`$BF` opcode fix passes CI, rerun **180 frames** with `--no-save-ram`, `--frame-log` and bounded screenshots. Verify frame 109 now completes and whether the Nintendo Presents animation advances to title-screen loading; stop and capture the first new instruction error if one arises.
+2. If the game completes more initialization but remains visually wrong, compare selected screenshots and PPU/DMA counters; use a bounded per-instruction trace only when an exact CPU divergence is suspected.
+3. Record the local cartridge digest/region/revision (the archive filename is not sufficient identity), without committing or distributing ROM bytes.
+4. Fix any new legitimate missing opcode or demonstrated hardware fault with copyright-free synthetic regressions. Do not silently claim all 65816 opcodes are implemented.
+5. Do not mark title/gameplay compatibility verified until the title scene is stable and controller input reaches actual gameplay.
 
 ## Acceptance criteria
 

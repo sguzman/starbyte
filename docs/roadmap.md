@@ -23,6 +23,7 @@
 - [x] Add three ROM-content-scoped persistent disk slots with atomic writes and a safe cartridge match check (implemented; real-game verification remains open).
 - [ ] Build a friendly save-slot browser with thumbnails, backup/export and recovery affordances.
 - [ ] Make library covers/metadata and installed/offline status pleasant even with no network; measure large-library performance.
+- [x] Batch ROM scan manifest writes, safely skip corrupt ZIPs, limit ZIP member size, and atomically repair truncated extracted ROM caches (CI pending).
 - [x] Discover local ~/Games/Roms/SNES when present; persist source directory in config and rescan alongside cached snapshots on restart (CI pending).
 - [x] Add local, bounded Recent Games menu with deduplication and safe missing-file handling (source; native verification pending).
 - [x] Allow a single local ROM to be opened through a native file picker or drag-and-drop without preconfiguring a library directory (implemented; native desktop verification remains open).

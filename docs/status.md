@@ -25,7 +25,7 @@ Starbyte's desktop session now loads content-scoped SRAM from XDG data storage w
 
 ## Archive-backed user libraries
 
-Starbyte discovers the existing `~/Games/Roms/SNES` collection when that directory is present and persists it as a normal removable `library.rom_dirs` configuration entry. ROMs within ZIP archives are indexed by their internal cartridge header; archives remain read-only, and only chosen members are materialized in `$XDG_CACHE_HOME/starbyte/extracted-roms/`. Library cache scans are performed in the worker thread and refreshed at each launch, even when a previous snapshot exists. This is implementation behavior, not a claim that every ZIP or every SNES title loads.
+Starbyte discovers the existing `~/Games/Roms/SNES` collection when that directory is present and persists it as a normal removable `library.rom_dirs` configuration entry. ROMs within ZIP archives are indexed by their internal cartridge header; archives remain read-only, and only chosen members are materialized in `$XDG_CACHE_HOME/starbyte/extracted-roms/`. Library cache scans run in a worker thread and refresh on launch, even when a previous snapshot exists. Manifests are updated once per completed scan rather than for every ROM, damaged ZIPs are skipped without hiding healthy games, and corrupt/truncated extracted cache files are recreated atomically. ZIP members are size-bounded (64 MiB). This is implementation behavior, not a claim that every ZIP or every SNES title loads.
 
 ## Built-in visual smoke test
 

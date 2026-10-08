@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::{Cursor, Read},
+    io::{Read, Write},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -13,6 +13,9 @@ use sha1::{Digest, Sha1};
 use tracing::{debug, info, warn};
 use urlencoding::encode;
 use zip::ZipArchive;
+
+/// Protect library scanning and extraction from oversized/hostile ZIP members.
+const MAX_ARCHIVED_ROM_BYTES: u64 = 64 * 1024 * 1024;
 
 use starbyte_core::{
     cartridge::{Cartridge, Region},
@@ -341,7 +344,13 @@ impl LibraryService {
             {
                 let cache_key = candidate.cache_key();
                 seen_keys.insert(cache_key.clone());
-                let signature = candidate.source_signature()?;
+                let signature = match candidate.source_signature() {
+                    Ok(signature) => signature,
+                    Err(error) => {
+                        warn!(candidate = %candidate.display_label(), "skipping unavailable ROM: {error}");
+                        continue;
+                    }
+                };
                 if let Some(record) = manifest.records.get(&cache_key)
                     && record.source_signature == signature
                 {
@@ -359,7 +368,6 @@ impl LibraryService {
                                 rom_info: info.clone(),
                             },
                         );
-                        write_json(manifest_path.clone(), &manifest)?;
                         discovered.entry(info.game_id.clone()).or_insert(info);
                     }
                     Err(error) => debug!(
@@ -576,7 +584,9 @@ impl LibraryService {
                     .ok_or_else(|| anyhow!("archive-backed ROM is missing its member path"))?;
                 let cache_path =
                     extracted_rom_cache_path(&self.cache_root(), &local.rom_path, member_path)?;
-                if cache_path.exists() {
+                if fs::metadata(&cache_path)
+                    .is_ok_and(|metadata| metadata.len() == local.file_size_bytes)
+                {
                     info!(
                         archive = %local.rom_path.display(),
                         member = member_path,
@@ -592,11 +602,20 @@ impl LibraryService {
                     extracted = %cache_path.display(),
                     "extracting archive-backed ROM into cache"
                 );
-                if let Some(parent) = cache_path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
+                let parent = cache_path
+                    .parent()
+                    .context("extracted ROM path has no parent")?;
+                fs::create_dir_all(parent)?;
                 let bytes = read_zip_member_bytes(&local.rom_path, member_path)?;
-                fs::write(&cache_path, bytes)?;
+                anyhow::ensure!(
+                    bytes.len() as u64 == local.file_size_bytes,
+                    "archive member changed during scan: {}::{member_path}",
+                    local.rom_path.display()
+                );
+                let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+                temporary.write_all(&bytes)?;
+                temporary.as_file().sync_all()?;
+                temporary.persist(&cache_path)?;
                 Ok(cache_path)
             }
         }
@@ -981,7 +1000,7 @@ fn extracted_rom_cache_path(
         .modified()
         .ok()
         .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
-        .map_or(0, |duration| duration.as_secs());
+        .map_or(0, |duration| duration.as_nanos());
     let mut hasher = Sha1::new();
     hasher.update(archive_path.display().to_string().as_bytes());
     hasher.update(member_path.as_bytes());
@@ -1008,7 +1027,7 @@ fn file_signature(path: &Path) -> Result<String> {
         .modified()
         .ok()
         .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
-        .map_or(0, |duration| duration.as_secs());
+        .map_or(0, |duration| duration.as_nanos());
     Ok(format!("{}:{modified}", metadata.len()))
 }
 
@@ -1074,11 +1093,12 @@ fn discover_rom_files(
             } else if is_rom_path(&path) {
                 files.push(RomCandidate::File(path));
             } else if is_zip_path(&path) {
-                files.extend(discover_zip_members(
-                    &path,
-                    archive_manifest_path,
-                    archive_manifest,
-                )?);
+                match discover_zip_members(&path, archive_manifest_path, archive_manifest) {
+                    Ok(members) => files.extend(members),
+                    Err(error) => {
+                        warn!(archive = %path.display(), "skipping unreadable ZIP: {error}");
+                    }
+                }
             }
         }
     }
@@ -1234,15 +1254,25 @@ fn inspect_zip_member(
 }
 
 fn read_zip_member_bytes(archive_path: &Path, member_path: &str) -> Result<Vec<u8>> {
-    let bytes = fs::read(archive_path)?;
-    let cursor = Cursor::new(bytes);
-    let mut archive = ZipArchive::new(cursor)
+    let file = fs::File::open(archive_path)?;
+    let mut archive = ZipArchive::new(file)
         .with_context(|| format!("failed to read zip archive {}", archive_path.display()))?;
-    let mut member = archive
+    let member = archive
         .by_name(member_path)
         .with_context(|| format!("failed to find zip member {member_path}"))?;
+    anyhow::ensure!(
+        member.size() <= MAX_ARCHIVED_ROM_BYTES,
+        "ZIP member too large ({} bytes): {member_path}",
+        member.size()
+    );
     let mut rom = Vec::with_capacity(member.size() as usize);
-    member.read_to_end(&mut rom)?;
+    member
+        .take(MAX_ARCHIVED_ROM_BYTES + 1)
+        .read_to_end(&mut rom)?;
+    anyhow::ensure!(
+        rom.len() as u64 <= MAX_ARCHIVED_ROM_BYTES,
+        "ZIP member exceeded decompression limit: {member_path}"
+    );
     Ok(rom)
 }
 
@@ -1592,6 +1622,44 @@ mod tests {
                 .join("archive-members.json")
                 .exists()
         );
+    }
+
+    #[test]
+    fn unreadable_zip_does_not_hide_other_archive_games() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("broken.zip"), b"not a ZIP").unwrap();
+        write_zip_roms(
+            &dir.path().join("healthy.zip"),
+            &[("game.sfc", synthetic_rom_bytes(b"STARBYTE ZIP LOAD    "))],
+        );
+        let mut config = RuntimeConfig::default();
+        config.library.rom_dirs.push(dir.path().to_path_buf());
+        config.library.cache_dir = Some(dir.path().join(".cache"));
+        let service = LibraryService::new(config, Default::default()).unwrap();
+        let entries = service.scan_roms().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].title.trim(), "STARBYTE ZIP LOAD");
+    }
+
+    #[test]
+    fn cached_zip_extraction_repairs_a_truncated_rom_without_touching_source() {
+        let dir = tempdir().unwrap();
+        let archive_path = dir.path().join("game.zip");
+        write_zip_roms(
+            &archive_path,
+            &[("nested/game.sfc", synthetic_rom_bytes(b"STARBYTE ZIP LOAD    "))],
+        );
+        let original_archive = fs::read(&archive_path).unwrap();
+        let mut config = RuntimeConfig::default();
+        config.library.rom_dirs.push(dir.path().to_path_buf());
+        config.library.cache_dir = Some(dir.path().join(".cache"));
+        let service = LibraryService::new(config, Default::default()).unwrap();
+        let rom = service.scan_roms().unwrap().remove(0);
+        let cached = service.materialize_rom(&rom).unwrap();
+        fs::write(&cached, b"truncated").unwrap();
+        assert_eq!(service.materialize_rom(&rom).unwrap(), cached);
+        assert_eq!(fs::metadata(&cached).unwrap().len(), rom.file_size_bytes);
+        assert_eq!(fs::read(&archive_path).unwrap(), original_archive);
     }
 
     #[test]

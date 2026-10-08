@@ -726,6 +726,41 @@ fn commercial_record_generates_fixture_report_and_trace() {
 }
 
 #[test]
+fn commercial_record_can_capture_only_a_later_frame() {
+    let dir = tempdir().unwrap();
+    let rom = dir.path().join("sample.sfc");
+    let fixture = dir.path().join("later.json");
+    let trace = dir.path().join("later-trace.json");
+    write_test_rom(&rom);
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "compliance",
+            "commercial-record",
+            rom.to_str().unwrap(),
+            "--frames",
+            "3",
+            "--fixture-out",
+            fixture.to_str().unwrap(),
+            "--trace-out",
+            trace.to_str().unwrap(),
+            "--trace-from-frame",
+            "2",
+        ])
+        .assert()
+        .success();
+
+    let fixture_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert_eq!(fixture_json[0]["trace"]["trace_start_frame"], 2);
+    let entries: Vec<serde_json::Value> =
+        serde_json::from_slice(&fs::read(&trace).unwrap()).unwrap();
+    assert!(!entries.is_empty());
+    assert!(entries.iter().all(|entry| entry["frame"] == 2));
+}
+
+#[test]
 fn commercial_summary_and_run_current_work() {
     let dir = tempdir().unwrap();
     let rom = dir.path().join("sample.sfc");

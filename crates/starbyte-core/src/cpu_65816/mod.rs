@@ -4568,6 +4568,84 @@ mod tests {
     }
 
     #[test]
+    fn native_nmi_preserves_index_width_through_stack_and_rti() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.emulation = false;
+        cpu.registers.pbr = 0x80;
+        cpu.registers.pc = 0x9456;
+        cpu.registers.p = 0xB0; // M=1, X=1: essential for 8-bit PLY.
+        cpu.registers.s = 0x01FF;
+        let mut bus = TestBus::with_bytes(&[
+            (0x00FFEA, 0x00),
+            (0x00FFEB, 0x81),
+            (0x008100, 0x40), // RTI
+        ]);
+        bus.pending_nmi = true;
+
+        cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(bus.read(0x0001FF), 0x80); // PBR
+        assert_eq!(bus.read(0x0001FE), 0x94); // PC high
+        assert_eq!(bus.read(0x0001FD), 0x56); // PC low
+        assert_eq!(bus.read(0x0001FC), 0xB0); // Native X bit preserved.
+        assert_eq!(cpu.registers.s, 0x01FB);
+        assert_eq!(cpu.registers.pc, 0x8100);
+        assert_eq!(cpu.registers.pbr, 0);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(cpu.registers.p, 0xB0);
+        assert_eq!(cpu.registers.s, 0x01FF);
+        assert_eq!(cpu.registers.pc, 0x9456);
+        assert_eq!(cpu.registers.pbr, 0x80);
+    }
+
+    #[test]
+    fn native_irq_preserves_index_width_through_stack_and_rti() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.emulation = false;
+        cpu.registers.pc = 0x8123;
+        cpu.registers.p = 0x30; // IRQ enabled, 8-bit A and XY.
+        cpu.registers.s = 0x01FF;
+        let mut bus = TestBus::with_bytes(&[
+            (0x00FFEE, 0x00),
+            (0x00FFEF, 0x82),
+            (0x008200, 0x40), // RTI
+        ]);
+        bus.pending_irq = true;
+
+        cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(bus.read(0x0001FC), 0x30);
+        assert_eq!(cpu.registers.pc, 0x8200);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(cpu.registers.p, 0x30);
+        assert_eq!(cpu.registers.pc, 0x8123);
+        assert_eq!(cpu.registers.s, 0x01FF);
+    }
+
+    #[test]
+    fn emulation_mode_nmi_pushes_break_flag_clear() {
+        let mut cpu = Cpu65816::default();
+        cpu.reset();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.p = 0x30;
+        cpu.registers.s = 0x01FF;
+        let mut bus = TestBus::with_bytes(&[
+            (0x00FFFA, 0x00),
+            (0x00FFFB, 0x81),
+            (0x008100, 0x40),
+        ]);
+        bus.pending_nmi = true;
+
+        cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(bus.read(0x0001FD), 0x20);
+        assert_eq!(cpu.registers.s, 0x01FC);
+        cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(cpu.registers.p, 0x30);
+        assert_eq!(cpu.registers.pc, 0x8000);
+        assert_eq!(cpu.registers.s, 0x01FF);
+    }
+
+    #[test]
     fn rti_restores_status_and_program_counter() {
         let mut cpu = Cpu65816::default();
         cpu.reset(); // RTI here is exercised in 65816 emulation mode.

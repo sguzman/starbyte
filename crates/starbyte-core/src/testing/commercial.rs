@@ -1182,8 +1182,8 @@ mod tests {
     use super::{
         ByteProbeExpectation, CommercialFixture, ExpectedCommercialOutcome, MmioProbeExpectation,
         PpuWriteActivityExpectation, load_suite, record_fixture, record_fixture_with_trace_start,
-        run_emulator_for_frames, run_with_current_core_detailed,
-        run_with_current_core_executed, summarize,
+        run_emulator_for_frames, run_with_current_core_detailed, run_with_current_core_executed,
+        summarize,
     };
 
     fn write_test_rom(path: &Path) {

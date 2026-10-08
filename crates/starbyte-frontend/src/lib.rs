@@ -148,13 +148,18 @@ impl FrontendSession {
     /// paths or game titles; SHA-1 is for local naming, not authentication.
     pub fn state_slot_path(&self, slot: u8) -> Result<PathBuf> {
         anyhow::ensure!((1..=3).contains(&slot), "save slot must be 1, 2, or 3");
-        let cartridge = self.emulator.cartridge().context("No ROM loaded for save slots")?;
+        let cartridge = self
+            .emulator
+            .cartridge()
+            .context("No ROM loaded for save slots")?;
         let mut hasher = Sha1::new();
         hasher.update(cartridge.rom());
         let identity = format!("{:x}", hasher.finalize());
-        Ok(self.emulator.assets().state_root().join(format!(
-            "{identity}.slot{slot}.state.json"
-        )))
+        Ok(self
+            .emulator
+            .assets()
+            .state_root()
+            .join(format!("{identity}.slot{slot}.state.json")))
     }
 
     /// Whether a game-scoped persistent slot currently exists.
@@ -172,11 +177,17 @@ impl FrontendSession {
         let parent = path.parent().context("save slot path has no parent")?;
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create state directory {}", parent.display()))?;
-        let state = self.emulator.save_state().context("could not serialize state")?;
+        let state = self
+            .emulator
+            .save_state()
+            .context("could not serialize state")?;
         let mut temp = tempfile::NamedTempFile::new_in(parent)
             .context("failed to create temporary save-state file")?;
-        temp.write_all(state.as_bytes()).context("failed writing save state")?;
-        temp.as_file().sync_all().context("failed syncing save state")?;
+        temp.write_all(state.as_bytes())
+            .context("failed writing save state")?;
+        temp.as_file()
+            .sync_all()
+            .context("failed syncing save state")?;
         temp.persist(&path)
             .with_context(|| format!("failed to persist save state to {}", path.display()))?;
         Ok(path)
@@ -189,7 +200,9 @@ impl FrontendSession {
         let path = self.state_slot_path(slot)?;
         let data = std::fs::read_to_string(&path)
             .with_context(|| format!("failed to read save state {}", path.display()))?;
-        self.emulator.load_state(&data).context("failed to load saved state")?;
+        self.emulator
+            .load_state(&data)
+            .context("failed to load saved state")?;
         self.emulator.refresh_framebuffer();
         self.apply_active_cheats();
         Ok(())

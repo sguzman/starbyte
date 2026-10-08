@@ -17,7 +17,7 @@ On 2026-10-08, the user ran the optimized Starbyte CLI against a locally supplie
 | Pixel evidence | 0 nonblack pixels, 1 distinct RGB color, identical framebuffer hash across all 60 frames |
 | Captured screenshots | 24 sampled PPM files; all identical black frames |
 | PPU state | Forced blank throughout; brightness = 0, main screen enable mask = 0, background mode = 0 |
-| CPU behavior | CPU continued executing; end-of-frame PC usually `$00:8095`–`$00:80A7`, with a temporary range around `$00:8A55`–`$00:8A61` during frames 29–33 |
+| CPU behavior | CPU continued executing; end-of-frame PC usually `$00:8095`–`$00:80A8`, with a temporary range `$00:8A53`–`$00:8A61` during frames 29–33 |
 | Audio | APU stepping occurred, but authentic audio/game playback not verified |
 | Native Wayland GUI | Not established by this headless probe |
 

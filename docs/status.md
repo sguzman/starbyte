@@ -100,6 +100,10 @@ OBJ sprite tiles now wrap tile numbers inside the 16×16 character table instead
 
 The software PPU now applies the SNES BG1–BG4 and OBJ main-screen window registers to Mode 0/1 pixel composition: per-layer W12SEL/W34SEL/WOBJSEL, horizontal WH0–WH3 bounds, WBGLOG/WOBJLOG union/intersection/XOR/XNOR, inversion, and TMW enable. Synthetic pixel tests assert masked backgrounds, foreground sprites, inclusive edges and logic modes. Subscreen windowing, color-window clipping/color math, and scanline-time changes remain unimplemented.
 
+## Selected-layer fixed-color math
+
+COLDATA now retains separately selected red/green/blue 5-bit channel writes. The Mode 0/1 compositor records the final BG/backdrop/OBJ palette source, then supports CGADSUB add/subtract/half blending with the fixed color on enabled layers. OBJ palettes 0–3 remain excluded from blending. With CGWSEL subscreen or color-window modes active, the renderer currently retains the unblended main screen instead of pretending those modes work. Synthetic pixel regressions cover the supported subset; authentic subscreen blending and window clipping are still open.
+
 ## Current functional gap
 
 The original commercial-ROM roadmap explicitly leaves SNES background/tilemap presentation, non-placeholder Super Mario World boot visuals, title/menu navigation, and first controllable gameplay incomplete. This is a **blocking playability gap**, not an optional accuracy task.

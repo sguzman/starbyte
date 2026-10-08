@@ -67,6 +67,9 @@ pub struct Ppu {
     vram: Vec<u8>,
     oam: Vec<u8>,
     cgram_address: u16,
+    /// Fixed RGB555 addend, assembled through COLDATA writes.
+    #[serde(default)]
+    fixed_color: u16,
     vram_address: u16,
     #[serde(default)]
     vram_read_buffer: u16,
@@ -90,6 +93,7 @@ impl Default for Ppu {
             vram: vec![0; VRAM_BYTES],
             oam: vec![0; OAM_BYTES],
             cgram_address: 0,
+            fixed_color: 0,
             vram_address: 0,
             vram_read_buffer: 0,
             oam_address: 0,
@@ -196,6 +200,18 @@ impl Ppu {
                 self.cgram[index] = value;
                 self.cgram_address = (self.cgram_address + 1) & 0x01FF;
             }
+            0x2132 => {
+                let level = u16::from(value & 0x1F);
+                if value & 0x20 != 0 {
+                    self.fixed_color = (self.fixed_color & !0x001F) | level;
+                }
+                if value & 0x40 != 0 {
+                    self.fixed_color = (self.fixed_color & !0x03E0) | (level << 5);
+                }
+                if value & 0x80 != 0 {
+                    self.fixed_color = (self.fixed_color & !0x7C00) | (level << 10);
+                }
+            }
             _ => {}
         }
     }
@@ -213,17 +229,22 @@ impl Ppu {
         let main_screen_enable = self.registers[0x2C];
         if main_screen_enable == 0 {
             fill_frame(framebuffer, backdrop);
+            self.apply_fixed_color_math(framebuffer, &[]);
             apply_brightness(framebuffer, brightness);
             return;
         }
 
         fill_frame(framebuffer, backdrop);
         let mut depth = vec![0_u8; framebuffer.width * framebuffer.height];
+        // 0=backdrop, 1..4=BG1..BG4, 5=OBJ palettes 4..7,
+        // 6=OBJ palettes 0..3 (color math prohibited).
+        let mut origins = vec![0_u8; framebuffer.width * framebuffer.height];
         let bgmode = self.registers[0x05] & 0x07;
         match bgmode {
             0 => self.render_background_stack(
                 framebuffer,
                 &mut depth,
+                &mut origins,
                 bgmode,
                 &[
                     BackgroundConfig::for_mode0(3),
@@ -235,6 +256,7 @@ impl Ppu {
             1 => self.render_background_stack(
                 framebuffer,
                 &mut depth,
+                &mut origins,
                 bgmode,
                 &[
                     BackgroundConfig::for_mode1(2),
@@ -246,8 +268,9 @@ impl Ppu {
         }
 
         if main_screen_enable & 0x10 != 0 {
-            self.render_objects(framebuffer, &mut depth, bgmode);
+            self.render_objects(framebuffer, &mut depth, &mut origins, bgmode);
         }
+        self.apply_fixed_color_math(framebuffer, &origins);
         apply_brightness(framebuffer, brightness);
     }
 
@@ -335,6 +358,7 @@ impl Ppu {
         &self,
         framebuffer: &mut FrameBuffer,
         depth: &mut [u8],
+        origins: &mut [u8],
         mode: u8,
         backgrounds: &[BackgroundConfig],
     ) {
@@ -344,6 +368,7 @@ impl Ppu {
                 self.render_background(
                     framebuffer,
                     depth,
+                    origins,
                     mode,
                     self.resolve_background_config(*background),
                 );
@@ -355,6 +380,7 @@ impl Ppu {
         &self,
         framebuffer: &mut FrameBuffer,
         depth: &mut [u8],
+        origins: &mut [u8],
         mode: u8,
         background: BackgroundConfig,
     ) {
@@ -369,6 +395,7 @@ impl Ppu {
                     let rank = background_priority_rank(mode, background.index, high, bg3_high);
                     if rank >= depth[index] {
                         depth[index] = rank;
+                        origins[index] = background.index as u8 + 1;
                         let offset = index * 4;
                         framebuffer.pixels[offset..offset + 4].copy_from_slice(&pixel);
                     }
@@ -534,11 +561,52 @@ impl Ppu {
         start <= x && x <= end
     }
 
+    /// Fixed-COLDATA subset of SNES color math. Color-window clipping and
+    /// subscreen color math require separate per-pixel handling; do not
+    /// approximate them by accidentally blending every layer.
+    fn apply_fixed_color_math(&self, framebuffer: &mut FrameBuffer, origins: &[u8]) {
+        let cgwsel = self.registers[0x30];
+        if cgwsel & 0xF2 != 0 {
+            // Unsupported subscreen/window-clipping configurations retain
+            // their unblended main-screen output for now.
+            return;
+        }
+        let operation = self.registers[0x31];
+        if operation & 0x3F == 0 {
+            return;
+        }
+        let fixed = bgr555_to_rgba(self.fixed_color);
+        let subtract = operation & 0x80 != 0;
+        let half = operation & 0x40 != 0;
+        for (index, rgba) in framebuffer.pixels.chunks_exact_mut(4).enumerate() {
+            let origin = origins.get(index).copied().unwrap_or(0);
+            let source_mask = match origin {
+                0 => 0x20, // Backdrop.
+                1..=4 => 1 << (origin - 1),
+                5 => 0x10, // OBJ palettes 4..7.
+                _ => 0,    // OBJ palettes 0..3 never participate.
+            };
+            if operation & source_mask == 0 {
+                continue;
+            }
+            for component in 0..3 {
+                rgba[component] =
+                    color_math_component(rgba[component], fixed[component], subtract, half);
+            }
+        }
+    }
+
     fn backdrop_color(&self) -> u16 {
         u16::from(self.cgram[0]) | (u16::from(self.cgram[1]) << 8)
     }
 
-    fn render_objects(&self, framebuffer: &mut FrameBuffer, depth: &mut [u8], mode: u8) {
+    fn render_objects(
+        &self,
+        framebuffer: &mut FrameBuffer,
+        depth: &mut [u8],
+        origins: &mut [u8],
+        mode: u8,
+    ) {
         let objsel = self.registers[0x01];
         let (small_size, large_size) = object_size_pair(objsel >> 5);
 
@@ -621,6 +689,7 @@ impl Ppu {
                     let pixel_index = screen_y * framebuffer.width + screen_x as usize;
                     if rank >= depth[pixel_index] {
                         depth[pixel_index] = rank;
+                        origins[pixel_index] = if palette >= 4 { 5 } else { 6 };
                         let offset = pixel_index * 4;
                         framebuffer.pixels[offset..offset + 4]
                             .copy_from_slice(&bgr555_to_rgba(color));
@@ -810,6 +879,14 @@ fn apply_brightness(framebuffer: &mut FrameBuffer, brightness: u8) {
             *component = (u16::from(*component) * u16::from(brightness) / 15) as u8;
         }
     }
+}
+
+fn color_math_component(main: u8, fixed: u8, subtract: bool, half: bool) -> u8 {
+    let main = i16::from(main >> 3);
+    let fixed = i16::from(fixed >> 3);
+    let result = if subtract { main - fixed } else { main + fixed };
+    let result = if half { result / 2 } else { result };
+    (result.clamp(0, 31) as u8) << 3
 }
 
 fn bgr555_to_rgba(color: u16) -> [u8; 4] {

@@ -429,3 +429,62 @@ fn object_window_masks_high_priority_sprite_pixels() {
     assert_eq!(pixel(&frame, 3, 0), [0, 248, 0, 255]);
     assert_eq!(pixel(&frame, 7, 0), [0, 0, 248, 255]);
 }
+
+#[test]
+fn fixed_color_math_add_subtract_half_and_layer_selection() {
+    let mut ppu = sample_mode1_bg1_bg2();
+    ppu.write_register(0x212C, 0x01); // Only BG1.
+    ppu.write_register(0x2132, 0x50); // Fixed green = 16/31.
+    let mut frame = FrameBuffer::default();
+
+    ppu.write_register(0x2131, 0x20); // Backdrop only: BG1 is unchanged.
+    ppu.render_frame(&mut frame);
+    assert_eq!(pixel(&frame, 0, 0), [248, 0, 0, 255]);
+    assert_eq!(pixel(&frame, 1, 0), [0, 128, 0, 255]);
+
+    ppu.write_register(0x2131, 0x01); // BG1 only.
+    ppu.render_frame(&mut frame);
+    assert_eq!(pixel(&frame, 0, 0), [248, 128, 0, 255]);
+    assert_eq!(pixel(&frame, 1, 0), [0, 0, 0, 255]);
+
+    ppu.write_register(0x2132, 0x2A); // Fixed red = 10/31, keep green.
+    ppu.write_register(0x2131, 0x81); // Subtract, BG1.
+    ppu.render_frame(&mut frame);
+    assert_eq!(pixel(&frame, 0, 0), [168, 0, 0, 255]);
+
+    ppu.write_register(0x2131, 0xC1); // Subtract + half, BG1.
+    ppu.render_frame(&mut frame);
+    assert_eq!(pixel(&frame, 0, 0), [80, 0, 0, 255]);
+
+    ppu.write_register(0x2130, 0x30); // Disable color math everywhere.
+    ppu.render_frame(&mut frame);
+    assert_eq!(pixel(&frame, 0, 0), [248, 0, 0, 255]);
+}
+
+#[test]
+fn only_sprites_using_high_palettes_receive_color_math() {
+    let mut ppu = Ppu::default();
+    let mut frame = FrameBuffer::default();
+    ppu.write_register(0x2100, 0x0F);
+    palette(&mut ppu, 129, 0x001F); // OBJ palette 0, red.
+    palette(&mut ppu, 193, 0x7C00); // OBJ palette 4, blue.
+    vram_word(&mut ppu, 0x4000, 0x0080);
+    ppu.write_register(0x2101, 0x01);
+    ppu.write_register(0x2102, 0);
+    ppu.write_register(0x2103, 0);
+    for byte in [0, 0, 0, 0x30] {
+        ppu.write_register(0x2104, byte);
+    }
+    ppu.write_register(0x212C, 0x10);
+    ppu.write_register(0x2132, 0x50); // Fixed green.
+    ppu.write_register(0x2131, 0x10); // Color math only for OBJ palettes 4..7.
+    ppu.render_frame(&mut frame);
+    assert_eq!(pixel(&frame, 0, 0), [248, 0, 0, 255]);
+
+    ppu.write_register(0x2102, 1); // OBJ 0 attributes are bytes 2-3.
+    ppu.write_register(0x2103, 0);
+    ppu.write_register(0x2104, 0);
+    ppu.write_register(0x2104, 0x38); // Palette 4, priority 3.
+    ppu.render_frame(&mut frame);
+    assert_eq!(pixel(&frame, 0, 0), [0, 128, 248, 255]);
+}

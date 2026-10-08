@@ -11,12 +11,17 @@ use crate::coprocessor::Coprocessor;
 use crate::dma::DmaController;
 use crate::input::ControllerState;
 use crate::ppu::{FrameBuffer, Ppu};
-use crate::timing::TimingState;
+use crate::timing::{DOTS_PER_SCANLINE, NTSC_SCANLINES_PER_FRAME, TimingState};
 
 const WRAM_SIZE: usize = 128 * 1024;
 const LOW_WRAM_MIRROR_SIZE: usize = 0x2000;
 const APU_IO_PORT_COUNT: usize = 4;
 const PPU_REGISTER_COUNT: usize = 0x40;
+const DEFAULT_IRQ_TIMER_COMPARE: u16 = 0x01FF;
+
+const fn default_irq_timer_compare() -> u16 {
+    DEFAULT_IRQ_TIMER_COMPARE
+}
 
 /// Compact MMIO activity gathered during commercial-ROM probing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,6 +75,12 @@ pub struct SystemBus {
     timing: TimingState,
     open_bus: u8,
     nmitimen: u8,
+    /// Approximate horizontal IRQ timer target ($4207/$4208).
+    #[serde(default = "default_irq_timer_compare")]
+    htime: u16,
+    /// Approximate vertical IRQ timer target ($4209/$420A).
+    #[serde(default = "default_irq_timer_compare")]
+    vtime: u16,
     rdnmi: bool,
     #[serde(default)]
     pending_nmi: bool,
@@ -96,6 +107,8 @@ impl Default for SystemBus {
             timing: TimingState::default(),
             open_bus: 0,
             nmitimen: 0,
+            htime: DEFAULT_IRQ_TIMER_COMPARE,
+            vtime: DEFAULT_IRQ_TIMER_COMPARE,
             rdnmi: false,
             pending_nmi: false,
             timeup: false,
@@ -136,6 +149,8 @@ impl SystemBus {
         self.timing = TimingState::default();
         self.open_bus = 0;
         self.nmitimen = 0;
+        self.htime = DEFAULT_IRQ_TIMER_COMPARE;
+        self.vtime = DEFAULT_IRQ_TIMER_COMPARE;
         self.rdnmi = false;
         self.pending_nmi = false;
         self.timeup = false;
@@ -147,6 +162,7 @@ impl SystemBus {
 
     /// Advance global timing and derive pending interrupt state from it.
     pub fn advance_master_clocks(&mut self, clocks: u64) {
+        let irq_match = self.irq_timer_crossed(clocks);
         let events = self.timing.advance_master_clocks(clocks);
         if let Some(coprocessor) = &mut self.coprocessor {
             coprocessor.step_master_cycles(clocks);
@@ -168,9 +184,48 @@ impl SystemBus {
                 self.pending_nmi = true;
             }
         }
-        if events.crossed_scanline && self.irq_enabled() {
+        if irq_match {
             self.timeup = true;
             self.pending_irq = true;
+        }
+    }
+
+    /// Approximate IRQ trigger coordinates in the current dot-based timing
+    /// model. Timer IRQs do not fire merely because a scanline changed.
+    /// H-only: each scanline at HTIME. V-only: once per frame at VTIME/0.
+    /// H+V: once per frame at VTIME/HTIME. Cycle-level offsets remain TODO.
+    fn irq_timer_crossed(&self, clocks: u64) -> bool {
+        let dots = u64::from(DOTS_PER_SCANLINE);
+        let scanlines = u64::from(NTSC_SCANLINES_PER_FRAME);
+        let frame_dots = dots * scanlines;
+        let start = u64::from(self.timing.scanline) * dots + u64::from(self.timing.dot);
+
+        match self.nmitimen & 0x30 {
+            0x10 if self.htime < DOTS_PER_SCANLINE => {
+                crosses_periodic_position(
+                    u64::from(self.timing.dot),
+                    clocks,
+                    u64::from(self.htime),
+                    dots,
+                )
+            }
+            0x20 if self.vtime < NTSC_SCANLINES_PER_FRAME => {
+                crosses_periodic_position(
+                    start,
+                    clocks,
+                    u64::from(self.vtime) * dots,
+                    frame_dots,
+                )
+            }
+            0x30 if self.htime < DOTS_PER_SCANLINE && self.vtime < NTSC_SCANLINES_PER_FRAME => {
+                crosses_periodic_position(
+                    start,
+                    clocks,
+                    u64::from(self.vtime) * dots + u64::from(self.htime),
+                    frame_dots,
+                )
+            }
+            _ => false,
         }
     }
 
@@ -598,6 +653,7 @@ impl SystemBus {
             0x4211 => {
                 let value = (self.open_bus & 0x7F) | if self.timeup { 0x80 } else { 0x00 };
                 self.timeup = false;
+                self.pending_irq = false;
                 Some(value)
             }
             0x4212 => {
@@ -664,10 +720,30 @@ impl SystemBus {
             0x4200 => {
                 let nmi_was_enabled = self.nmi_enabled();
                 self.nmitimen = value;
+                if !self.irq_enabled() {
+                    self.timeup = false;
+                    self.pending_irq = false;
+                }
                 if self.nmi_enabled() && !nmi_was_enabled && self.timing.in_vblank() {
                     self.rdnmi = true;
                     self.pending_nmi = true;
                 }
+                Some(())
+            }
+            0x4207 => {
+                self.htime = (self.htime & 0x0100) | u16::from(value);
+                Some(())
+            }
+            0x4208 => {
+                self.htime = (self.htime & 0x00FF) | (u16::from(value & 0x01) << 8);
+                Some(())
+            }
+            0x4209 => {
+                self.vtime = (self.vtime & 0x0100) | u16::from(value);
+                Some(())
+            }
+            0x420A => {
+                self.vtime = (self.vtime & 0x00FF) | (u16::from(value & 0x01) << 8);
                 Some(())
             }
             0x420B => {
@@ -725,6 +801,20 @@ impl JoypadIo {
         self.shift1 = (self.shift1 >> 1) | 0x8000;
         bit
     }
+}
+
+/// Return true when (start, start + advance] crosses a periodic timer match.
+/// The endpoints are exclusive of the current instant so one match cannot
+/// retrigger on every CPU instruction that starts exactly at its position.
+fn crosses_periodic_position(start: u64, advance: u64, target: u64, period: u64) -> bool {
+    if advance == 0 {
+        return false;
+    }
+    if advance >= period {
+        return true;
+    }
+    let delta = (target + period - (start % period)) % period;
+    advance >= if delta == 0 { period } else { delta }
 }
 
 /// CPU MMIO is only decoded in system banks $00-$3F and $80-$BF.

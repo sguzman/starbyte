@@ -1271,16 +1271,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(recorded.report.frame_counter, 3);
-        assert_eq!(recorded.fixture.trace.as_ref().unwrap().trace_start_frame, 2);
+        assert_eq!(
+            recorded.fixture.trace.as_ref().unwrap().trace_start_frame,
+            2
+        );
         let recorded_trace = recorded.trace.unwrap();
         assert!(!recorded_trace.is_empty());
         assert!(recorded_trace.iter().all(|entry| entry.frame == 2));
 
-        let executed = run_with_current_core_executed(
-            &[recorded.fixture],
-            &AssetConfig::default(),
-            true,
-        );
+        let executed =
+            run_with_current_core_executed(&[recorded.fixture], &AssetConfig::default(), true);
         let replay_trace = executed[0].trace.as_ref().unwrap();
         assert!(!replay_trace.is_empty());
         assert!(replay_trace.iter().all(|entry| entry.frame == 2));
@@ -1302,7 +1302,11 @@ mod tests {
             2,
         )
         .unwrap_err();
-        assert!(error.to_string().contains("trace start frame 2 exceeds requested 1"));
+        assert!(
+            error
+                .to_string()
+                .contains("trace start frame 2 exceeds requested 1")
+        );
     }
 
     #[test]

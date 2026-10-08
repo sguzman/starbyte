@@ -61,6 +61,7 @@ impl SessionSnapshot {
 pub struct FrontendSession {
     emulator: Emulator,
     rom_path: Option<PathBuf>,
+    cartridge_identity: Option<String>,
     active_cheat_patches: Vec<CheatPatch>,
     quick_state: Option<String>,
 }
@@ -73,6 +74,7 @@ impl FrontendSession {
         Ok(Self {
             emulator,
             rom_path: None,
+            cartridge_identity: None,
             active_cheat_patches: Vec::new(),
             quick_state: None,
         })
@@ -86,7 +88,13 @@ impl FrontendSession {
         let path = rom_path.as_ref().to_path_buf();
         let cartridge = Cartridge::load(&path)
             .with_context(|| format!("failed to load ROM at {}", path.display()))?;
+        // Hash once at load time, not every egui frame while a save-slot menu
+        // is visible. Slot identity follows ROM contents, not its filename.
+        let mut hasher = Sha1::new();
+        hasher.update(cartridge.rom());
+        let identity = format!("{:x}", hasher.finalize());
         self.emulator.load_rom(cartridge);
+        self.cartridge_identity = Some(identity);
         self.quick_state = None;
         self.rom_path = Some(path);
         self.apply_active_cheats();
@@ -148,13 +156,10 @@ impl FrontendSession {
     /// paths or game titles; SHA-1 is for local naming, not authentication.
     pub fn state_slot_path(&self, slot: u8) -> Result<PathBuf> {
         anyhow::ensure!((1..=3).contains(&slot), "save slot must be 1, 2, or 3");
-        let cartridge = self
-            .emulator
-            .cartridge()
+        let identity = self
+            .cartridge_identity
+            .as_deref()
             .context("No ROM loaded for save slots")?;
-        let mut hasher = Sha1::new();
-        hasher.update(cartridge.rom());
-        let identity = format!("{:x}", hasher.finalize());
         Ok(self
             .emulator
             .assets()

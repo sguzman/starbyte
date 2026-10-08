@@ -4389,6 +4389,82 @@ mod tests {
     }
 
     #[test]
+    fn mvn_copies_forward_from_source_bank_to_destination_bank() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.emulation = false;
+        cpu.registers.a = 1; // Copy two bytes: A = size - 1.
+        cpu.registers.x = 0x0100;
+        cpu.registers.y = 0x0200;
+        cpu.registers.p = 0x40; // Preserve V and all flags.
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x54), (0x008001, 0x7E), (0x008002, 0x7F),
+            (0x7F0100, 0x12), (0x7F0101, 0x34),
+        ]);
+        cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(bus.read(0x7E0200), 0x12);
+        assert_eq!(cpu.registers.pc, 0x8000, "repeats same opcode");
+        assert_eq!(cpu.registers.a, 0);
+        assert_eq!(cpu.registers.x, 0x0101);
+        assert_eq!(cpu.registers.y, 0x0201);
+        assert_eq!(cpu.registers.dbr, 0x7E);
+        cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(bus.read(0x7E0201), 0x34);
+        assert_eq!(cpu.registers.pc, 0x8003);
+        assert_eq!(cpu.registers.a, 0xFFFF);
+        assert_eq!(cpu.registers.x, 0x0102);
+        assert_eq!(cpu.registers.y, 0x0202);
+        assert_eq!(cpu.registers.p, 0x40);
+    }
+
+    #[test]
+    fn mvp_copies_backward_and_wraps_offsets_within_bank() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.emulation = false;
+        cpu.registers.a = 1;
+        cpu.registers.x = 0;
+        cpu.registers.y = 0;
+        cpu.registers.p = 0;
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x44), (0x008001, 0x7E), (0x008002, 0x7F),
+            (0x7F0000, 0x12), (0x7FFFFF, 0x34),
+        ]);
+        cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(bus.read(0x7E0000), 0x12);
+        assert_eq!(cpu.registers.x, 0xFFFF);
+        assert_eq!(cpu.registers.y, 0xFFFF);
+        assert_eq!(cpu.registers.pc, 0x8000);
+        cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(bus.read(0x7EFFFF), 0x34);
+        assert_eq!(cpu.registers.a, 0xFFFF);
+        assert_eq!(cpu.registers.pc, 0x8003);
+        assert_eq!(cpu.registers.dbr, 0x7E);
+        assert_eq!(cpu.registers.p, 0);
+    }
+
+    #[test]
+    fn mvn_in_eight_bit_index_mode_wraps_within_first_page() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.emulation = false;
+        cpu.registers.a = 0;
+        cpu.registers.x = 0x00FF;
+        cpu.registers.y = 0x00FF;
+        cpu.registers.p = 0x30; // Eight-bit accumulator and indices.
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x54), (0x008001, 0x7E), (0x008002, 0x7F),
+            (0x7F00FF, 0x56),
+        ]);
+        cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(bus.read(0x7E00FF), 0x56);
+        assert_eq!(cpu.registers.x, 0);
+        assert_eq!(cpu.registers.y, 0);
+        assert_eq!(cpu.registers.a, 0xFFFF);
+        assert_eq!(cpu.registers.pc, 0x8003);
+    }
+
+    #[test]
     fn jml_and_indirect_jumps_use_correct_pointer_banks() {
         // JML uses a three-byte target, changing both PBR and PC.
         let mut cpu = Cpu65816::default();

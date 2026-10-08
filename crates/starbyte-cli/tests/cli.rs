@@ -460,7 +460,13 @@ fn run_frame_log_records_each_completed_frame_as_jsonl() {
         assert_eq!(frame["framebuffer"]["height"], 224);
         assert!(frame["framebuffer"]["hash"].is_number());
         assert!(frame["cpu"]["pc"].is_number());
+        assert!(frame["cpu"]["p"].is_number());
+        assert!(frame["cpu"]["a"].is_number());
+        assert!(frame["cpu"]["emulation"].is_boolean());
         assert!(frame["ppu_display"]["background_mode"].is_number());
+        assert!(frame["ppu_write_activity"]["total_writes"].is_number());
+        assert!(frame["apu_io_activity"]["cpu_read_counts"]["$2140"].is_number());
+        assert!(frame["apu_io_activity"]["cpu_write_counts"]["$2140"].is_number());
     }
 }
 

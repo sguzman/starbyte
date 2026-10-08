@@ -338,7 +338,12 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Compliance(args) => run_compliance(args, assets),
         Command::Inspect { rom, json } => inspect_rom(rom, json),
-        Command::Cheatarium { index, title, json, limit } => cheatarium::search(&index, &title, limit, json),
+        Command::Cheatarium {
+            index,
+            title,
+            json,
+            limit,
+        } => cheatarium::search(&index, &title, limit, json),
         Command::Library(args) => run_library(args, assets),
         Command::Run(args) => run_rom(args, assets),
         Command::PrintConfig { format } => print_config(format),

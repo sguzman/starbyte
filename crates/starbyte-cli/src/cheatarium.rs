@@ -24,7 +24,10 @@ fn decode_snes_bundle(reader: impl Read) -> Result<Value> {
     );
     let bundle: Value =
         serde_json::from_slice(&decoded).context("invalid Cheatarium bundle JSON")?;
-    ensure!(bundle["schema_version"] == 1, "unsupported Cheatarium schema");
+    ensure!(
+        bundle["schema_version"] == 1,
+        "unsupported Cheatarium schema"
+    );
     ensure!(bundle["platform"] == "snes", "Starbyte requires SNES index");
     ensure!(
         bundle["records"].is_array(),
@@ -36,7 +39,10 @@ fn decode_snes_bundle(reader: impl Read) -> Result<Value> {
 /// Search only the explicitly selected local index; never enables codes.
 pub fn search(path: &Path, title: &str, limit: usize, as_json: bool) -> Result<()> {
     ensure!(!title.trim().is_empty(), "title cannot be blank");
-    ensure!((1..=100).contains(&limit), "limit must be between 1 and 100");
+    ensure!(
+        (1..=100).contains(&limit),
+        "limit must be between 1 and 100"
+    );
     let input =
         File::open(path).with_context(|| format!("failed to open index {}", path.display()))?;
     let bundle = decode_snes_bundle(input)?;
@@ -72,11 +78,16 @@ pub fn search(path: &Path, title: &str, limit: usize, as_json: bool) -> Result<(
         println!("Filename matches are not cartridge/build verification; no cheats are enabled.");
         for record in results {
             let filename = record["raw_filename"].as_str().unwrap_or("<unknown>");
-            let source = record["provenance"]["source_id"].as_str().unwrap_or("<unknown>");
+            let source = record["provenance"]["source_id"]
+                .as_str()
+                .unwrap_or("<unknown>");
             let codes = record["codes"].as_array().map_or(0, |items| {
                 items
                     .iter()
-                    .filter(|entry| entry["role"] == "code" && entry["code"].as_str().is_some_and(|v| !v.is_empty()))
+                    .filter(|entry| {
+                        entry["role"] == "code"
+                            && entry["code"].as_str().is_some_and(|v| !v.is_empty())
+                    })
                     .count()
             });
             println!("- {filename}: {codes} encoded codes ({source})");
@@ -103,8 +114,11 @@ mod tests {
                 "provenance": {"source_id": "libretro-database"}
             }]
         });
-        let mut gz = GzBuilder::new().mtime(0).write(Vec::new(), Compression::fast());
-        gz.write_all(&serde_json::to_vec(&content).unwrap()).unwrap();
+        let mut gz = GzBuilder::new()
+            .mtime(0)
+            .write(Vec::new(), Compression::fast());
+        gz.write_all(&serde_json::to_vec(&content).unwrap())
+            .unwrap();
         gz.finish().unwrap()
     }
 
@@ -112,7 +126,10 @@ mod tests {
     fn reads_read_only_candidate_source_record() {
         let record = decode_snes_bundle(example("snes").as_slice()).unwrap();
         assert_eq!(record["records"][0]["codes"][0]["code"], "1DCC-CA7A");
-        assert_eq!(record["records"][0]["provenance"]["source_id"], "libretro-database");
+        assert_eq!(
+            record["records"][0]["provenance"]["source_id"],
+            "libretro-database"
+        );
     }
 
     #[test]

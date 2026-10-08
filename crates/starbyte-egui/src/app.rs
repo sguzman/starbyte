@@ -642,6 +642,7 @@ impl StarbyteApp {
             self.status_line = format!("{} is not installed locally.", entry.display_title);
             return;
         }
+        info!(game = %entry.display_title, "queueing local game launch");
         self.queue_job(WorkerCommandKind::MaterializeRom {
             entry: entry.clone(),
         });
@@ -1545,7 +1546,8 @@ impl StarbyteApp {
                 let selected = self.selected_game_id.as_deref() == Some(entry.game_id.as_str());
                 let mut frame = egui::Frame::group(ui.style());
                 if selected {
-                    frame = frame.stroke(egui::Stroke::new(2.0, ui.visuals().selection.stroke.color));
+                    let color = ui.visuals().selection.stroke.color;
+                    frame = frame.stroke(egui::Stroke::new(2.0, color));
                 }
                 let inner = frame.show(ui, |ui| {
                     ui.set_min_size(Vec2::new(CARD_WIDTH - 12.0, CARD_HEIGHT - 12.0));

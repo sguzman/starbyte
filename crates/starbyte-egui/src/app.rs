@@ -1841,10 +1841,7 @@ mod playback_tests {
         pads.insert(1_u8, std::collections::BTreeSet::from(["South".to_owned()]));
         pads.insert(
             2_u8,
-            std::collections::BTreeSet::from([
-                "South".to_owned(),
-                "North".to_owned(),
-            ]),
+            std::collections::BTreeSet::from(["South".to_owned(), "North".to_owned()]),
         );
         assert_eq!(merged_gamepad_buttons(&pads).len(), 2);
         pads.remove(&1);

@@ -81,8 +81,12 @@ pub struct Ppu {
     vram_increment: u16,
     bg_scroll_x: [u16; BACKGROUND_COUNT],
     bg_scroll_y: [u16; BACKGROUND_COUNT],
-    bg_hofs_latch: [Option<u8>; BACKGROUND_COUNT],
-    bg_vofs_latch: [Option<u8>; BACKGROUND_COUNT],
+    /// The preceding offset write byte, shared across BG1..BG4 H/V.
+    #[serde(default)]
+    bgofs_latch: u8,
+    /// The previous horizontal byte supplying fine-scroll bits 0..2.
+    #[serde(default)]
+    bghofs_latch: u8,
 }
 
 impl Default for Ppu {
@@ -102,8 +106,8 @@ impl Default for Ppu {
             vram_increment: 1,
             bg_scroll_x: [0; BACKGROUND_COUNT],
             bg_scroll_y: [0; BACKGROUND_COUNT],
-            bg_hofs_latch: [None; BACKGROUND_COUNT],
-            bg_vofs_latch: [None; BACKGROUND_COUNT],
+            bgofs_latch: 0,
+            bghofs_latch: 0,
         }
     }
 }
@@ -290,6 +294,12 @@ impl Ppu {
     #[must_use]
     pub fn oam(&self) -> &[u8] {
         &self.oam
+    }
+
+    /// Read the effective ten-bit BG scroll offsets (0 is BG1, 3 is BG4).
+    #[must_use]
+    pub fn background_scroll(&self, index: usize) -> Option<(u16, u16)> {
+        Some((*self.bg_scroll_x.get(index)?, *self.bg_scroll_y.get(index)?))
     }
 
     fn reload_oam_byte_address(&mut self) {
@@ -734,7 +744,7 @@ impl Ppu {
     }
 
     fn write_bg_scroll(&mut self, register: u16, value: u8) {
-        let Some((background, axis_is_vertical)) = (match register {
+        let Some((background, vertical)) = (match register {
             0x210D => Some((0, false)),
             0x210E => Some((0, true)),
             0x210F => Some((1, false)),
@@ -748,21 +758,20 @@ impl Ppu {
             return;
         };
 
-        let latches = if axis_is_vertical {
-            &mut self.bg_vofs_latch
+        // Each write updates the current scroll register. The SNES uses
+        // shared latches rather than independent first/second-write pairs;
+        // DMA/HDMA may write offsets once per scanline or interleave BGs.
+        if vertical {
+            self.bg_scroll_y[background] =
+                ((u16::from(value) << 8) | u16::from(self.bgofs_latch)) & 0x03FF;
+            self.bgofs_latch = value;
         } else {
-            &mut self.bg_hofs_latch
-        };
-        let scroll_values = if axis_is_vertical {
-            &mut self.bg_scroll_y
-        } else {
-            &mut self.bg_scroll_x
-        };
-
-        if let Some(low) = latches[background].take() {
-            scroll_values[background] = u16::from(low) | (u16::from(value) << 8);
-        } else {
-            latches[background] = Some(value);
+            self.bg_scroll_x[background] = ((u16::from(value) << 8)
+                | u16::from(self.bgofs_latch & !0x07)
+                | u16::from(self.bghofs_latch & 0x07))
+                & 0x03FF;
+            self.bgofs_latch = value;
+            self.bghofs_latch = value;
         }
     }
 }

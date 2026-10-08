@@ -488,3 +488,46 @@ fn only_sprites_using_high_palettes_receive_color_math() {
     ppu.render_frame(&mut frame);
     assert_eq!(pixel(&frame, 0, 0), [0, 128, 248, 255]);
 }
+
+#[test]
+fn background_scroll_latches_are_shared_and_each_write_is_effective() {
+    let mut ppu = Ppu::default();
+    ppu.write_register(0x210D, 0x23);
+    assert_eq!(ppu.background_scroll(0), Some((0x300, 0)));
+    ppu.write_register(0x210D, 0x01);
+    assert_eq!(ppu.background_scroll(0), Some((0x123, 0)));
+    ppu.write_register(0x210E, 0x37);
+    ppu.write_register(0x210E, 0x02);
+    assert_eq!(ppu.background_scroll(0), Some((0x123, 0x237)));
+
+    ppu.write_register(0x210F, 0x05);
+    ppu.write_register(0x210F, 0x00);
+    assert_eq!(ppu.background_scroll(1), Some((5, 0)));
+    assert_eq!(ppu.background_scroll(0), Some((0x123, 0x237)));
+    assert_eq!(ppu.background_scroll(4), None);
+
+    // After BG2 HOFS updated the shared latch, one write to BG3 VOFS
+    // takes effect immediately using BG2's previous byte.
+    ppu.write_register(0x2112, 0x01);
+    assert_eq!(ppu.background_scroll(2), Some((0, 0x100)));
+}
+
+#[test]
+fn background_scroll_offsets_shift_the_rendered_scene() {
+    let mut ppu = sample_mode1_bg1_bg2();
+    ppu.write_register(0x212C, 0x01);
+    let mut frame = FrameBuffer::default();
+    ppu.render_frame(&mut frame);
+    assert_eq!(pixel(&frame, 0, 0), [248, 0, 0, 255]);
+
+    ppu.write_register(0x210D, 1); // BG1 horizontal low byte.
+    ppu.write_register(0x210D, 0); // BG1 horizontal high byte.
+    assert_eq!(ppu.background_scroll(0), Some((1, 0)));
+    ppu.render_frame(&mut frame);
+    assert_eq!(pixel(&frame, 0, 0), [0, 0, 0, 255]);
+
+    ppu.write_register(0x210D, 0);
+    ppu.write_register(0x210D, 0);
+    ppu.render_frame(&mut frame);
+    assert_eq!(pixel(&frame, 0, 0), [248, 0, 0, 255]);
+}

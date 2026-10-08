@@ -108,6 +108,10 @@ COLDATA now retains separately selected red/green/blue 5-bit channel writes. The
 
 Instead of restricting the game's framebuffer to the right-hand session sidebar, Starbyte now opens a centered, nearest-neighbor Play View when a ROM loads. F9 toggles game/library, Escape returns to the library, the in-game toolbar exposes pause/quick save/quick load/fullscreen, and integer scaling is used when the window has room. Very small Wayland tiles scale down without cropping. These are code-level changes; compositor input, fullscreen and display ergonomics still need firsthand testing.
 
+## Shared BG scroll write latches
+
+BG1–BG4 offset registers now use the PPU's shared horizontal/vertical write latches rather than independent per-register two-write buffers. Each byte write updates the effective 10-bit scroll offset, including fine horizontal scroll bits; this is important for interleaved/HDMA-driven scrolling. The core exposes a read-only `background_scroll(index)` accessor, and tests cover simple and interleaved writes plus shifted rendered pixels. Save states written by the old per-register latch model retain their effective offsets but cannot reconstruct a missing historical shared-latch byte. Raster-accurate HDMA capture and real-game visual verification remain open.
+
 ## Current functional gap
 
 The original commercial-ROM roadmap explicitly leaves SNES background/tilemap presentation, non-placeholder Super Mario World boot visuals, title/menu navigation, and first controllable gameplay incomplete. This is a **blocking playability gap**, not an optional accuracy task.

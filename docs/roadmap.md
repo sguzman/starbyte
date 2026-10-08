@@ -24,6 +24,7 @@
 - [ ] Make library covers/metadata and installed/offline status pleasant even with no network; measure large-library performance.
 - [x] Add local, bounded Recent Games menu with deduplication and safe missing-file handling (CI pending).
 - [ ] Improve gamepad/keyboard remapping, reconnection, key focus and full-screen transitions on Wayland.
+- [x] Track held buttons per connected gamepad and clear unplugged pad state without releasing other controllers (source; hardware test pending).
 - [x] Export native-resolution PNG screenshots with F12 and a Play View toolbar action (source; CI pending).
 - [ ] Explore optional shaders, rewind and session history only after the core loop is comfortable.
 

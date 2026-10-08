@@ -619,7 +619,13 @@ mod tests {
         assert!(!restored.prefer_dark_mode);
         let entries: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
         assert_eq!(entries.len(), 1);
-        assert!(entries[0].as_ref().unwrap().path().ends_with("settings.toml"));
+        assert!(
+            entries[0]
+                .as_ref()
+                .unwrap()
+                .path()
+                .ends_with("settings.toml")
+        );
     }
 
     #[test]

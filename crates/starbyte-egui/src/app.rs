@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::{Path, PathBuf},
     process::Command,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::Result;
 use eframe::egui::{self, ColorImage, RichText, TextureHandle, TextureOptions, Vec2};
-use gilrs::{EventType, Gilrs};
+use gilrs::{EventType, GamepadId, Gilrs};
 use image::ImageReader;
 use tracing::{debug, info, warn};
 
@@ -117,6 +117,7 @@ pub struct StarbyteApp {
     next_job_id: u64,
     gilrs: Option<Gilrs>,
     gamepad_buttons_down: BTreeSet<String>,
+    gamepad_buttons_by_id: HashMap<GamepadId, BTreeSet<String>>,
     pending_keyboard_bind: Option<String>,
     pending_gamepad_bind: Option<String>,
     is_playing: bool,
@@ -211,6 +212,7 @@ impl StarbyteApp {
             next_job_id: 1,
             gilrs,
             gamepad_buttons_down: BTreeSet::new(),
+            gamepad_buttons_by_id: HashMap::new(),
             pending_keyboard_bind: None,
             pending_gamepad_bind: None,
             is_playing: start_playing,
@@ -490,17 +492,28 @@ impl StarbyteApp {
             match event.event {
                 EventType::ButtonPressed(button, _) => {
                     let name = format!("{button:?}");
-                    self.gamepad_buttons_down.insert(name.clone());
+                    self.gamepad_buttons_by_id
+                        .entry(event.id)
+                        .or_default()
+                        .insert(name.clone());
                     if let Some(action) = self.pending_gamepad_bind.clone() {
                         new_binding = Some((action, name));
                     }
                 }
                 EventType::ButtonReleased(button, _) => {
-                    self.gamepad_buttons_down.remove(&format!("{button:?}"));
+                    if let Some(buttons) = self.gamepad_buttons_by_id.get_mut(&event.id) {
+                        buttons.remove(&format!("{button:?}"));
+                    }
+                }
+                EventType::Disconnected => {
+                    // A controller cannot emit release events after unplugging.
+                    // Clear only its held buttons, not those on other pads.
+                    self.gamepad_buttons_by_id.remove(&event.id);
                 }
                 _ => {}
             }
         }
+        self.gamepad_buttons_down = merged_gamepad_buttons(&self.gamepad_buttons_by_id);
         if let Some((action, name)) = new_binding {
             self.config
                 .input
@@ -1803,7 +1816,7 @@ mod playback_tests {
 
     use super::{
         FRAME_INTERVAL, FrameClock, FramePerformance, Vec2, fit_game_size, is_compact_layout,
-        record_recent_rom, write_png_screenshot,
+        merged_gamepad_buttons, record_recent_rom, write_png_screenshot,
     };
 
     #[test]
@@ -1820,6 +1833,24 @@ mod playback_tests {
 
         clock.reset(late);
         assert!(clock.take_due_frame(late));
+    }
+
+    #[test]
+    fn unplugged_gamepad_releases_only_its_own_buttons() {
+        let mut pads = std::collections::HashMap::new();
+        pads.insert(1_u8, std::collections::BTreeSet::from(["South".to_owned()]));
+        pads.insert(
+            2_u8,
+            std::collections::BTreeSet::from([
+                "South".to_owned(),
+                "North".to_owned(),
+            ]),
+        );
+        assert_eq!(merged_gamepad_buttons(&pads).len(), 2);
+        pads.remove(&1);
+        assert_eq!(merged_gamepad_buttons(&pads).len(), 2);
+        pads.remove(&2);
+        assert!(merged_gamepad_buttons(&pads).is_empty());
     }
 
     #[test]
@@ -1905,6 +1936,15 @@ mod playback_tests {
         assert!(is_compact_layout(1200.0, 500.0));
         assert!(!is_compact_layout(960.0, 650.0));
     }
+}
+
+fn merged_gamepad_buttons<K: Eq + std::hash::Hash>(
+    by_controller: &HashMap<K, BTreeSet<String>>,
+) -> BTreeSet<String> {
+    by_controller
+        .values()
+        .flat_map(|buttons| buttons.iter().cloned())
+        .collect()
 }
 
 fn record_recent_rom(recent: &mut Vec<PathBuf>, path: &Path) {

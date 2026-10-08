@@ -4389,6 +4389,119 @@ mod tests {
     }
 
     #[test]
+    fn jml_and_indirect_jumps_use_correct_pointer_banks() {
+        // JML uses a three-byte target, changing both PBR and PC.
+        let mut cpu = Cpu65816::default();
+        cpu.registers.emulation = false;
+        cpu.registers.pc = 0x8000;
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x5C), (0x008001, 0x34),
+            (0x008002, 0x12), (0x008003, 0x7E),
+        ]);
+        cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(cpu.registers.pbr, 0x7E);
+        assert_eq!(cpu.registers.pc, 0x1234);
+
+        // JMP ($1000) resolves its indirect pointer in bank zero, not PBR.
+        let mut cpu = Cpu65816::default();
+        cpu.registers.emulation = false;
+        cpu.registers.pbr = 0x80;
+        cpu.registers.pc = 0x8000;
+        let mut bus = TestBus::with_bytes(&[
+            (0x808000, 0x6C), (0x808001, 0x00), (0x808002, 0x10),
+            (0x001000, 0x78), (0x001001, 0x56),
+            (0x801000, 0x34), (0x801001, 0x12),
+        ]);
+        let trace = cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(cpu.registers.pbr, 0x80);
+        assert_eq!(cpu.registers.pc, 0x5678);
+        assert!(trace.iter().any(|event| event.address == 0x001000));
+        assert!(!trace.iter().any(|event| event.address == 0x801000));
+
+        // JMP ($1000,X) resolves from PBR, unlike unindexed JMP (abs).
+        let mut cpu = Cpu65816::default();
+        cpu.registers.emulation = false;
+        cpu.registers.pbr = 0x80;
+        cpu.registers.pc = 0x8000;
+        cpu.registers.x = 2;
+        let mut bus = TestBus::with_bytes(&[
+            (0x808000, 0x7C), (0x808001, 0x00), (0x808002, 0x10),
+            (0x801002, 0xAB), (0x801003, 0xCD),
+            (0x001002, 0x11), (0x001003, 0x22),
+        ]);
+        let trace = cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(cpu.registers.pbr, 0x80);
+        assert_eq!(cpu.registers.pc, 0xCDAB);
+        assert!(trace.iter().any(|event| event.address == 0x801002));
+        assert!(!trace.iter().any(|event| event.address == 0x001002));
+    }
+
+    #[test]
+    fn jsr_indexed_indirect_uses_program_bank_not_bank_zero() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.emulation = false;
+        cpu.registers.pbr = 0x80;
+        cpu.registers.pc = 0x8000;
+        cpu.registers.s = 0x01FF;
+        cpu.registers.x = 2;
+        let mut bus = TestBus::with_bytes(&[
+            (0x808000, 0xFC), (0x808001, 0x00), (0x808002, 0x10),
+            (0x801002, 0xAB), (0x801003, 0xCD),
+            (0x001002, 0x11), (0x001003, 0x22),
+        ]);
+        cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(cpu.registers.pc, 0xCDAB);
+        assert_eq!(cpu.registers.pbr, 0x80);
+        assert_eq!(cpu.registers.s, 0x01FD);
+        assert_eq!(bus.read(0x0001FF), 0x80);
+        assert_eq!(bus.read(0x0001FE), 0x02);
+    }
+
+    #[test]
+    fn pea_pei_per_push_effective_addresses_in_high_low_order() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.emulation = false;
+        cpu.registers.pc = 0x8000;
+        cpu.registers.s = 0x01FF;
+        cpu.registers.d = 0x0200;
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0xF4), (0x008001, 0x34), (0x008002, 0x12),
+            (0x008003, 0xD4), (0x008004, 0x10),
+            (0x008005, 0x62), (0x008006, 0x10), (0x008007, 0x00),
+            (0x000210, 0x78), (0x000211, 0x56),
+        ]);
+        cpu.step_with_bus(&mut bus).unwrap(); // PEA #$1234.
+        assert_eq!(cpu.registers.pc, 0x8003);
+        assert_eq!(bus.read(0x0001FF), 0x12);
+        assert_eq!(bus.read(0x0001FE), 0x34);
+
+        cpu.step_with_bus(&mut bus).unwrap(); // PEI ($10).
+        assert_eq!(cpu.registers.pc, 0x8005);
+        assert_eq!(bus.read(0x0001FD), 0x56);
+        assert_eq!(bus.read(0x0001FC), 0x78);
+
+        cpu.step_with_bus(&mut bus).unwrap(); // PER +$10.
+        assert_eq!(cpu.registers.pc, 0x8008);
+        assert_eq!(cpu.registers.s, 0x01F9);
+        assert_eq!(bus.read(0x0001FB), 0x80);
+        assert_eq!(bus.read(0x0001FA), 0x18);
+    }
+
+    #[test]
+    fn wdm_consumes_signature_without_changing_processor_status() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.emulation = false;
+        cpu.registers.pbr = 0x80;
+        cpu.registers.pc = 0x8000;
+        cpu.registers.p = 0xB1;
+        let mut bus = TestBus::with_bytes(&[(0x808000, 0x42), (0x808001, 0xFF)]);
+        let trace = cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(cpu.registers.pc, 0x8002);
+        assert_eq!(cpu.registers.p, 0xB1);
+        assert!(trace.iter().any(|event| event.address == 0x808001));
+    }
+
+    #[test]
     fn bit_immediate_affects_only_zero_and_preserves_n_and_v() {
         for (status, operand, expected_z) in [(0xF0, 0xF0, true), (0xF0, 0x0F, false)] {
             let mut cpu = Cpu65816::default();

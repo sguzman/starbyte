@@ -1137,6 +1137,7 @@ fn write_frame_log_entry(
     error: Option<&starbyte_core::error::Error>,
 ) -> Result<()> {
     let frame = emulator.framebuffer();
+    let cpu = emulator.cpu_registers();
     let (nonblack_pixels, distinct_rgb_colors) = framebuffer_color_metrics(frame);
     let report = json!({
         "schema": "starbyte.frame_log.v1",
@@ -1145,8 +1146,16 @@ fn write_frame_log_entry(
         "status": if error.is_some() { "error" } else { "ok" },
         "error": error.map(ToString::to_string),
         "cpu": {
-            "pc": emulator.cpu_registers().pc,
-            "pbr": emulator.cpu_registers().pbr,
+            "pc": cpu.pc,
+            "pbr": cpu.pbr,
+            "a": cpu.a,
+            "x": cpu.x,
+            "y": cpu.y,
+            "s": cpu.s,
+            "d": cpu.d,
+            "dbr": cpu.dbr,
+            "p": cpu.p,
+            "emulation": cpu.emulation,
         },
         "framebuffer": {
             "hash": framebuffer_hash(frame),
@@ -1156,6 +1165,8 @@ fn write_frame_log_entry(
             "height": frame.height(),
         },
         "ppu_display": build_ppu_display_report(emulator),
+        "ppu_write_activity": build_ppu_write_activity_report(emulator),
+        "apu_io_activity": build_apu_io_activity_report(emulator),
         "apu_steps": emulator.apu_status().spc700_steps,
     });
     serde_json::to_writer(&mut *writer, &report)?;

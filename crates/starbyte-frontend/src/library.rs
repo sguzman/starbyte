@@ -1079,13 +1079,12 @@ fn load_cached_cover(
     if !cover_dir.exists() {
         return Ok(None);
     }
-    for entry in fs::read_dir(&cover_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
-            continue;
-        };
-        if stem != game_id {
+    // Do a bounded number of direct existence checks, not a directory walk
+    // for every game. 600 covers and 600 games would otherwise mean 360k
+    // metadata lookups on every snapshot rebuild.
+    for ext in ["png", "jpg", "jpeg", "webp"] {
+        let path = cover_dir.join(format!("{game_id}.{ext}"));
+        if !path.is_file() {
             continue;
         }
         return Ok(Some(CoverAsset {
@@ -1968,6 +1967,29 @@ mod tests {
                 .iter()
                 .any(|entry| entry.game_id == missing_id
                     && entry.installed_status == InstalledStatus::Missing)
+        );
+    }
+
+    #[test]
+    fn cover_lookup_reads_only_the_matching_cache_file() {
+        let dir = tempdir().unwrap();
+        let cover_dir = dir.path().join("games").join("covers");
+        fs::create_dir_all(&cover_dir).unwrap();
+        fs::write(cover_dir.join("unrelated.png"), b"image").unwrap();
+        let game_id = game_id_for_title("EXAMPLE GAME");
+        let expected = cover_dir.join(format!("{game_id}.png"));
+        fs::write(&expected, b"image").unwrap();
+        assert_eq!(
+            super::load_cached_cover(dir.path(), &game_id, None)
+                .unwrap()
+                .unwrap()
+                .cache_path,
+            expected
+        );
+        assert!(
+            super::load_cached_cover(dir.path(), "missing", None)
+                .unwrap()
+                .is_none()
         );
     }
 

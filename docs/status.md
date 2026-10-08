@@ -1,0 +1,45 @@
+# Starbyte state of the project
+
+Snapshot: 2026-10-07. Evidence: repository inspection at `76fef8a53a9fccc7f73de891f6fc2439388826e7`, existing source layout and project documentation. **This is a source/documentation audit, not a fresh local build or game test.**
+
+## Confidence vocabulary
+
+- **Present in source**: component/files are visible, not necessarily complete or working.
+- **Previously reported**: existing project docs assert a test or behavior; not independently reproduced during this audit.
+- **Verified now**: executed and inspected during this audit. **None.**
+- **Unverified**: needs direct execution/evidence before a product claim.
+
+## Inventory
+
+| Area | Status | Evidence and caveat |
+| --- | --- | --- |
+| Rust workspace | Present in source | Four crates; edition 2024, MSRV declared 1.85, version 0.1.0 |
+| 65816 CPU, bus, DMA, timing | Present in source | Large implementation and unit/regression modules; completeness unverified |
+| SPC700, APU and audio | Present in source | Implementation and test scaffolds exist; audio quality and continuity unverified |
+| PPU rendering | Present in source | BG refactor in July; commercial roadmap still records missing title/boot visuals |
+| Cartridge mapping and enhancement chips | Present in source | DSP, SuperFX, SA-1, Cx4 and secondary chips have implementation files; game-level coverage not established |
+| Core/CLI regression harness | Present in source | Tests, benches, JSON/report harnesses and commercial fixtures exist |
+| Native desktop frontend | Present in source | `egui` app, worker, library UI, Wayland/X11 features; run/resize/fullscreen unverified |
+| Game library, metadata, covers, cheats | Present in source | Frontend services and GUI documented; actual provider availability and UX unverified |
+| Save RAM and save states | Previously reported | Original roadmap marks implemented; round-trip behavior not retested |
+| Super Mario World boot | Previously reported | Project docs report 300 headless frames and MMIO activity, **not** working title/gameplay |
+| Commercial-game playability | Unverified | No reproduced title interaction or controllable game scene |
+| Native Wayland usability | Unverified | Backend dependency enabled, no local Wayland desktop test from this audit |
+| MCP server | Not established | No MCP server identified in inspected layout; design is a future goal |
+| Packaging and release | Unverified | No Linux distribution/release pipeline established by this audit |
+
+## Current functional gap
+
+The original commercial-ROM roadmap explicitly leaves SNES background/tilemap presentation, non-placeholder Super Mario World boot visuals, title/menu navigation, and first controllable gameplay incomplete. This is a **blocking playability gap**, not an optional accuracy task.
+
+The existing `docs/roadmap.md` checked most scaffolding milestones as completed. This snapshot deliberately separates subsystem code and old checklist status from demonstrated end-user behavior.
+
+## Next validation protocol
+
+1. Establish reproducible `cargo fmt`, `cargo clippy`, `cargo test`, GUI build and CLI smoke results on Linux.
+2. Record kernel, compositor, Wayland environment, graphics driver/GPU, audio backend and gamepad inputs.
+3. Launch the GUI natively, exercise library scanning, loading, resize, tiled/fullscreen transitions, dialogs, focus and gamepad handling.
+4. With **user-supplied legally held ROMs**, capture per-game boot/title/gameplay/audio/input/save milestones and regressions.
+5. Build a compatibility table grounded in observed outcomes, not guesses. Prefer a few genuinely comfortable games over optimistic breadth.
+
+See `docs/roadmap.md` for prioritized work. Do not claim tests in this document passed unless outputs were actually observed.

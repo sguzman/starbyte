@@ -1832,10 +1832,19 @@ mod playback_tests {
             );
         }
         assert_eq!(recent.len(), 8);
-        assert_eq!(recent[0], std::path::PathBuf::from("starbyte-test-game-11.sfc"));
-        record_recent_rom(&mut recent, std::path::Path::new("starbyte-test-game-7.sfc"));
+        assert_eq!(
+            recent[0],
+            std::path::PathBuf::from("starbyte-test-game-11.sfc")
+        );
+        record_recent_rom(
+            &mut recent,
+            std::path::Path::new("starbyte-test-game-7.sfc"),
+        );
         assert_eq!(recent.len(), 8);
-        assert_eq!(recent[0], std::path::PathBuf::from("starbyte-test-game-7.sfc"));
+        assert_eq!(
+            recent[0],
+            std::path::PathBuf::from("starbyte-test-game-7.sfc")
+        );
         assert_eq!(recent.iter().filter(|path| *path == &recent[0]).count(), 1);
     }
 

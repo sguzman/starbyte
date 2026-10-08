@@ -561,7 +561,10 @@ mod tests {
         let mut config = RuntimeConfig::default();
         config.library.active_view = LibraryViewMode::Detailed;
         config.library.rom_dirs.push(temp_dir.path().join("roms"));
-        config.library.recent_roms.push(temp_dir.path().join("game.sfc"));
+        config
+            .library
+            .recent_roms
+            .push(temp_dir.path().join("game.sfc"));
         config.mode = AppMode::Prod;
         config.ui.show_log_panel = false;
         config.ui.details_panel_width = 512.0;

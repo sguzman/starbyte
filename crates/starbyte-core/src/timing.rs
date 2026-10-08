@@ -95,8 +95,7 @@ impl TimingState {
 mod tests {
     use super::{
         DOTS_PER_SCANLINE, MASTER_CLOCKS_PER_DOT, NTSC_SCANLINES_PER_FRAME, TimingEvents,
-        TimingState,
-        VBLANK_START_SCANLINE,
+        TimingState, VBLANK_START_SCANLINE,
     };
 
     #[test]
@@ -149,9 +148,8 @@ mod tests {
         assert!(!events.crossed_scanline);
         assert_eq!(timing.scanline, 0);
         assert_eq!(timing.dot, DOTS_PER_SCANLINE / 4);
-        let events = timing.advance_master_clocks(
-            u64::from(DOTS_PER_SCANLINE) * (MASTER_CLOCKS_PER_DOT - 1),
-        );
+        let events = timing
+            .advance_master_clocks(u64::from(DOTS_PER_SCANLINE) * (MASTER_CLOCKS_PER_DOT - 1));
         assert!(events.crossed_scanline);
         assert_eq!(timing.scanline, 1);
         assert_eq!(timing.dot, 0);
@@ -160,8 +158,9 @@ mod tests {
     #[test]
     fn full_frame_advance_wraps_frame_counter() {
         let mut timing = TimingState::default();
-        let clocks =
-            u64::from(DOTS_PER_SCANLINE) * u64::from(NTSC_SCANLINES_PER_FRAME) * MASTER_CLOCKS_PER_DOT;
+        let clocks = u64::from(DOTS_PER_SCANLINE)
+            * u64::from(NTSC_SCANLINES_PER_FRAME)
+            * MASTER_CLOCKS_PER_DOT;
 
         let events = timing.advance_master_clocks(clocks);
 

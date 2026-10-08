@@ -214,9 +214,12 @@ impl SystemBus {
                 u64::from(self.htime),
                 dots,
             ),
-            0x20 if self.vtime < NTSC_SCANLINES_PER_FRAME => {
-                crosses_periodic_position(start, elapsed_dots, u64::from(self.vtime) * dots, frame_dots)
-            }
+            0x20 if self.vtime < NTSC_SCANLINES_PER_FRAME => crosses_periodic_position(
+                start,
+                elapsed_dots,
+                u64::from(self.vtime) * dots,
+                frame_dots,
+            ),
             0x30 if self.htime < DOTS_PER_SCANLINE && self.vtime < NTSC_SCANLINES_PER_FRAME => {
                 crosses_periodic_position(
                     start,
@@ -1405,8 +1408,7 @@ mod tests {
         bus.write(0x004209, 2);
         bus.write(0x00420A, 0);
         bus.write(0x004200, 0x30);
-        let target =
-            (u64::from(DOTS_PER_SCANLINE) * 2 + 20) * MASTER_CLOCKS_PER_DOT;
+        let target = (u64::from(DOTS_PER_SCANLINE) * 2 + 20) * MASTER_CLOCKS_PER_DOT;
         bus.advance_master_clocks(target - 1);
         assert_eq!(bus.read(0x004211) & 0x80, 0);
         bus.advance_master_clocks(MASTER_CLOCKS_PER_DOT);

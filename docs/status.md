@@ -46,6 +46,14 @@ Retail box art is not ordinarily embedded in SNES ROM images. The library offers
 
 The Session panel's 60-frame debug step now advances one frame per UI update with a Cancel control, rather than calling all 60 frames synchronously and freezing the interface for the entire batch. Play View has an optional Timing overlay; the Session panel also displays the exponential moving average, peak, and number of emulation frames exceeding the 16.7 ms budget. These are measurements of `FrontendSession::run_frame` only, not full wall-clock input latency or GPU presentation FPS. **Each individual emulation frame still runs on the egui UI thread**, so slow frames can still stall it; background emulation remains an open step.
 
+## Early-frame compatibility failures
+
+A test of a commercial game that stops within a few frames needs the exact game's name and diagnostic log before its root cause can be determined. Starbyte now surfaces a recoverable emulation error in Play View, pauses playback, and records the error in Logs; this cannot protect against native process crashes or Rust panics. A terminal backtrace is required for those. A successful native checkerboard still does not demonstrate commercial playability.
+
+## Future Cheatarium integration
+
+Starbyte intends to consume the separate Cheatarium project once curated SNES entries and console/region identity are stable. The integration should read versioned, attributed records and never silently enable cheats. This is planned, not implemented.
+
 ## Playability acceptance gates still open
 
 1. Boot a user-provided, legally held Super Mario World ROM and capture a stable, recognizable title image, not just a nonblack frame.

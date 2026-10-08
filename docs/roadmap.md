@@ -9,6 +9,7 @@
 - [ ] Capture a recognizable Super Mario World title frame from a user-supplied ROM; rule out synthetic/nonblack placeholders.
 - [ ] Drive title/menu navigation using controller input, then reach first controllable gameplay.
 - [ ] Trace and fix the earliest observed real-game blockers in PPU, CPU, DMA/HDMA and timing; do not introduce ROM-specific hacks.
+- [x] Preserve observable early-frame emulator errors in Play View and Logs rather than silently proceeding after failed first frame (source; core panic/OS crash triage still open).
 - [ ] Replace placeholder audio with authentic sound synthesis and a responsive Linux audio output path.
 - [ ] Measure and improve frame pacing, latency, pauses and save stability during sustained play.
 - [x] Replace the 60-frame blocking UI callback with incremental, cancellable stepping; expose measured per-frame runtime and over-budget counters (source; native Wayland timing pending).
@@ -38,6 +39,7 @@
 - [x] Build focused Mode 0/1 PPU regressions, bus and ROM boot fixtures, and headless frame diagnostics; see [PPU coverage](ppu-coverage.md).
 - [x] Publish versioned JSON CLI capability discovery, platform diagnostics and cartridge inspection; no real MCP server yet.
 - [ ] Add reliable, bounded compatibility-probe commands and diagnostics that can classify evidence without claiming playability.
+- [ ] Integrate Cheatarium as an optional, read-only curated SNES cheat source after its SNES schema stabilizes; match ROM identity/region, retain source attribution, never silently apply cheats or rewrite archives.
 - [ ] Build an opt-in **read-only**, permission-scoped MCP adapter exposing version, diagnostics and local library summaries.
 - [ ] Define and test user authorization for future mutations: explicit ROM paths, no implicit upload, no arbitrary shell execution.
 - [ ] Create a deliberate Linux release/packaging process, with semver and reproducible binaries when the player experience is ready.

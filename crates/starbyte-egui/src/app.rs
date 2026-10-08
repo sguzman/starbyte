@@ -107,6 +107,7 @@ pub struct StarbyteApp {
     failed_cover_ids: BTreeSet<String>,
     held_input: ControllerState,
     status_line: String,
+    playback_error: Option<String>,
     search_query: String,
     selected_game_id: Option<String>,
     loaded_game_id: Option<String>,
@@ -203,6 +204,7 @@ impl StarbyteApp {
             failed_cover_ids: BTreeSet::new(),
             held_input: ControllerState::default(),
             status_line,
+            playback_error: None,
             search_query: String::new(),
             selected_game_id: None,
             loaded_game_id: None,
@@ -322,7 +324,15 @@ impl StarbyteApp {
                         self.loaded_game_id = Some(entry.game_id.clone());
                         let _ = self.session.set_active_cheats(&entry.cheats);
                         self.remember_recent_rom(&rom_path);
-                        let _ = self.session.run_frame();
+                        if let Err(error) = self.session.run_frame() {
+                            let error = error.to_string();
+                            self.record_playback_error(&error);
+                            self.play_view = true;
+                            self.refresh_framebuffer(ctx);
+                            self.update_job(job_id, "Load Game", "failed", &error);
+                            continue;
+                        }
+                        self.playback_error = None;
                         self.refresh_framebuffer(ctx);
                         self.is_playing = true;
                         self.play_view = true;
@@ -530,6 +540,15 @@ impl StarbyteApp {
         }
     }
 
+    fn record_playback_error(&mut self, error: &str) {
+        warn!("emulation stopped: {error}");
+        let message = format!("Emulation stopped: {error}");
+        self.status_line = message.clone();
+        self.playback_error = Some(message);
+        self.is_playing = false;
+        self.pending_step_frames = 0;
+    }
+
     fn run_frame(&mut self, ctx: &egui::Context) {
         self.session
             .set_controller1(self.effective_controller_state(ctx));
@@ -540,12 +559,7 @@ impl StarbyteApp {
                 self.refresh_framebuffer(ctx);
                 self.status_line = self.session.snapshot().status_line();
             }
-            Err(error) => {
-                warn!("{error}");
-                self.status_line = error.to_string();
-                self.is_playing = false;
-                self.pending_step_frames = 0;
-            }
+            Err(error) => self.record_playback_error(&error.to_string()),
         }
     }
 
@@ -591,10 +605,12 @@ impl StarbyteApp {
                 }
                 self.remember_recent_rom(path);
                 if let Err(error) = self.session.run_frame() {
-                    self.status_line = error.to_string();
-                    self.is_playing = false;
+                    self.record_playback_error(&error.to_string());
+                    self.play_view = true;
+                    self.refresh_framebuffer(ctx);
                     return;
                 }
+                self.playback_error = None;
                 self.refresh_framebuffer(ctx);
                 self.is_playing = true;
                 self.play_view = true;
@@ -1321,6 +1337,15 @@ impl StarbyteApp {
             ui.centered_and_justified(|ui| {
                 ui.label("The game framebuffer will appear after a frame has been rendered.");
             });
+        }
+        if let Some(error) = &self.playback_error {
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                format!("{error}\nPress Escape to return to your library.\nSee Logs for details."),
+                egui::TextStyle::Heading.resolve(ui.style()),
+                egui::Color32::LIGHT_RED,
+            );
         }
         if self.show_input_overlay {
             let label = format!(

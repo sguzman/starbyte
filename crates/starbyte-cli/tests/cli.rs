@@ -550,7 +550,12 @@ fn selected_frame_instruction_trace_survives_cpu_opcode_error() {
     assert_eq!(records[0]["opcode"], 0xEA);
     let footer = records.last().unwrap();
     assert_eq!(footer["status"], "error");
-    assert!(footer["error"].as_str().unwrap().contains("unsupported opcode"));
+    assert!(
+        footer["error"]
+            .as_str()
+            .unwrap()
+            .contains("unsupported opcode")
+    );
 }
 
 #[test]

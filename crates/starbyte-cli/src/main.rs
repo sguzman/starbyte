@@ -464,7 +464,9 @@ fn install_tracing(logging: &LoggingArgs) -> Result<()> {
         .clone()
         .unwrap_or_else(|| default_filter(logging.verbose));
 
+    // Keep command output (especially JSON) parseable even when the core logs.
     fmt()
+        .with_writer(std::io::stderr)
         .with_max_level(level_from_verbosity(logging.verbose))
         .with_env_filter(EnvFilter::new(filter))
         .with_target(true)

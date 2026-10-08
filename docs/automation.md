@@ -9,6 +9,8 @@ cargo run -p starbyte-cli -- capabilities
 cargo run -p starbyte-cli -- doctor --json
 ```
 
+The CLI reserves **stdout for command output** and sends tracing diagnostics to **stderr**, so machine-readable JSON remains parseable even while cartridge loading emits logs.
+
 The JSON responses declare `starbyte.capabilities.v1` and `starbyte.doctor.v1`. The first advertises supported command shapes and their side effects; the second inspects OS, session environment, config/cache locations and existence flags. Setting `WAYLAND_DISPLAY` is **not** proof that native Wayland rendering works.
 
 Other existing CLI actions include `inspect /path/to/game.sfc --json` (schema `starbyte.rom_inspect.v1`, no playability claim), `print-config json`, `library scan --json`, and `run /path/to/game.sfc --frames 1 --report-json /path/to/report.json`. The ROM run writes its report explicitly. Library scanning may write cache data and should not be treated as read-only. Provider-refresh commands may access the network if enabled.

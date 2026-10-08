@@ -223,6 +223,10 @@ struct RunArgs {
     /// Maximum frame snapshots per run to avoid excessive disk use.
     #[arg(long, default_value_t = 24, value_parser = clap::value_parser!(u32).range(1..))]
     max_frame_images: u32,
+
+    /// Do not load or write cartridge SRAM; useful for reproducible diagnosis.
+    #[arg(long)]
+    no_save_ram: bool,
 }
 
 #[derive(Debug, Args)]
@@ -420,6 +424,7 @@ fn capabilities_manifest() -> serde_json::Value {
                 "argv": ["run", "<user_rom_path>", "--frames", "<count>", "--report-json", "<report_path>"],
                 "optional_frame_log": "--frame-log <explicit_jsonl_path>",
                 "optional_frame_images": "--frame-images-dir <explicit_directory> [--frame-image-every N] [--max-frame-images N]",
+                "optional_no_save_ram": "--no-save-ram",
                 "side_effects": "execute_local_rom_and_write_explicit_report"
             }
         ],
@@ -908,7 +913,11 @@ fn run_compliance(args: ComplianceArgs, assets: AssetConfig) -> Result<()> {
 fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
     let cartridge = Cartridge::load(&args.rom)
         .with_context(|| format!("failed to load ROM at {}", args.rom.display()))?;
-    let save_ram_path = resolve_save_ram_path(&cartridge, assets.save_dir.as_deref())?;
+    let save_ram_path = if args.no_save_ram {
+        None
+    } else {
+        resolve_save_ram_path(&cartridge, assets.save_dir.as_deref())?
+    };
     let load_state_path = resolve_state_path(
         args.load_state.as_deref(),
         assets.state_dir.as_deref(),

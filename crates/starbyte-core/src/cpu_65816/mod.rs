@@ -4629,11 +4629,7 @@ mod tests {
         cpu.registers.pc = 0x8000;
         cpu.registers.p = 0x30;
         cpu.registers.s = 0x01FF;
-        let mut bus = TestBus::with_bytes(&[
-            (0x00FFFA, 0x00),
-            (0x00FFFB, 0x81),
-            (0x008100, 0x40),
-        ]);
+        let mut bus = TestBus::with_bytes(&[(0x00FFFA, 0x00), (0x00FFFB, 0x81), (0x008100, 0x40)]);
         bus.pending_nmi = true;
 
         cpu.step_with_bus(&mut bus).unwrap();

@@ -1145,6 +1145,7 @@ fn write_frame_log_entry(
     let frame = emulator.framebuffer();
     let cpu = emulator.cpu_registers();
     let (nonblack_pixels, distinct_rgb_colors) = framebuffer_color_metrics(frame);
+    let (nmitimen, htime, vtime) = emulator.irq_timer_configuration();
     let report = json!({
         "schema": "starbyte.frame_log.v1",
         "requested_frame": requested_frame,
@@ -1173,6 +1174,12 @@ fn write_frame_log_entry(
         "ppu_display": build_ppu_display_report(emulator),
         "ppu_write_activity": build_ppu_write_activity_report(emulator),
         "apu_io_activity": build_apu_io_activity_report(emulator),
+        "dma_transferred_bytes": emulator.dma_transferred_bytes(),
+        "irq_timer": {
+            "nmitimen": nmitimen,
+            "htime": htime,
+            "vtime": vtime,
+        },
         "apu_steps": emulator.apu_status().spc700_steps,
     });
     serde_json::to_writer(&mut *writer, &report)?;

@@ -2768,7 +2768,15 @@ impl Cpu65816 {
         }
         self.push_stack(bus, trace, (self.registers.pc >> 8) as u8)?;
         self.push_stack(bus, trace, (self.registers.pc & 0x00FF) as u8)?;
-        self.push_stack(bus, trace, self.registers.p & !0x10)?;
+        // In emulation mode, the pushed status has B=0 for hardware IRQ/NMI.
+        // In native mode that same bit is X (index width), not B: clearing it
+        // silently changes 8-bit index registers to 16-bit after RTI.
+        let stacked_status = if self.registers.emulation {
+            self.registers.p & !0x10
+        } else {
+            self.registers.p
+        };
+        self.push_stack(bus, trace, stacked_status)?;
         self.finish_interrupt_vector_load(bus, trace, kind.vector_base(self.registers.emulation));
         Ok(())
     }

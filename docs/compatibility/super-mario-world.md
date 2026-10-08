@@ -1,6 +1,6 @@
 # Super Mario World — compatibility investigation
 
-**Current result: not playable (startup blocked / black screen).** This document tracks *observed* behavior, not a promise of compatibility.
+**Current result: no verified playability; first 60 frames are black while audio data is being uploaded.** The first-frame instruction trace shows forward progress through the expected boot routine, so an initialization deadlock has **not** been demonstrated. This document tracks observations, not assumptions about compatibility.
 
 ## First reproducible headless probe
 
@@ -21,15 +21,28 @@ On 2026-10-08, the user ran the optimized Starbyte CLI against a locally supplie
 | Audio | APU stepping occurred, but authentic audio/game playback not verified |
 | Native Wayland GUI | Not established by this headless probe |
 
-**Interpretation:** The reported `frame_counter = 60` measures emulator timing progression, **not** successful game startup. Every rendered frame remained black, with forced blank still active. The CPU-PC pattern suggests repeated execution through small code regions, but does not identify why without an instruction/bus trace. In particular, an APU handshake wait is a hypothesis, not a finding; distinguish it from other CPU, MMIO, DMA or timing errors before changing emulation semantics.
+## First-frame instruction and bus trace
+
+The user also provided a one-frame `compliance commercial-record` instruction trace (5,103 instructions, 2026-10-08), enabling direct identification of the startup code:
+
+- At `$00:8000`–`$00:8018`, the ROM disables interrupts and DMA, clears APU communication ports, and writes `$80` to `$2100` (forced blank).
+- It reaches `$00:8079` (`SPC700UploadLoop`), reads **`$BBAA`** from `$2140/$2141`, sets up an ARAM destination **`$0500`**, writes transfer command **`$CC`** to `$2140`, and receives the matching acknowledgement.
+- At `$00:8095`–`$00:80A8`, the CPU repeatedly sends the next byte through `$2141` with a monotonically increasing low-byte index through `$2140`. During frame 1 it makes **304 reads** of `$2140`, **305 writes** each to `$2140` and `$2141`, and writes **only one PPU register** (`$2100` forced blank).
+- The 60-frame log later passes temporarily through `$00:8A53`–`$00:8A61` around frames 29–33, then returns to the transfer loop. This is evidence of execution *beyond* the first transfer phase, not proof of an infinite loop.
+
+The routine and transfer handshake match the documented Super Mario World startup disassembly ([SMWDisX `SPC700UploadLoop`](https://github.com/IsoFrieze/SMWDisX/blob/master/bank_00.asm)) and the [SPC700 boot protocol](https://www.sneslab.net/wiki/SPC700/Driver_Upload). **The trace does not demonstrate a stalled APU acknowledgement**, and changing the emulator's APU logic on that assumption would be unjustified.
+
+**Interpretation:** `frame_counter = 60` measures timing progression, not a successful boot. The 60-frame window ends while the game is still doing initial sound uploads, with the screen intentionally forced blank. A longer run is needed before we can decide whether this is an emulator fault, simply early boot, or both.
+
+
 
 ## Next evidence needed
 
-1. Capture the first 1–2 frames with `compliance commercial-record` and `--trace-out`, **without committing** the generated trace or ROM. Check actual opcode/PC paths and reads/writes to `$2140`–`$2143`, `$4200`–`$4212`, and `$2100`–`$213F`. Save the trace locally or share it privately for diagnosis.
-2. Re-run a short `run` probe with the expanded `--frame-log` fields (`cpu` registers, `apu_io_activity` and `ppu_write_activity`) to see whether the game writes display registers or polls audio ports.
-3. Record the ROM's local digest and precise revision **without** uploading or redistributing its bytes.
-4. Fix a demonstrated emulation issue with a small synthetic regression test, then repeat this same commercial probe.
-5. Do not upgrade status to boot/title/gameplay until a recognizable screen and responsive input are actually observed.
+1. Run a longer 360-frame headless probe with `--no-save-ram` and `--frame-log`, sampling a small number of PPM images. Check whether the APU upload completes and whether forced blank is cleared or any PPU display registers are configured. If execution fails, preserve the log through the failing frame.
+2. If the game stays in the same code region, capture an instruction trace **starting near the later frame** rather than redundantly tracing the already understood first frame. The current `commercial-record` trace captures from startup; add bounded later-frame capture before requesting a large trace.
+3. Record the ROM's exact local digest/revision **without** uploading its bytes.
+4. Fix only a demonstrated emulator issue, backed by synthetic regressions, and re-run the commercial probe.
+5. Do not upgrade status to boot/title/gameplay until a recognizable screen and responsive input are observed.
 
 ## Acceptance criteria
 

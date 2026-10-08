@@ -239,6 +239,7 @@ impl Cpu65816 {
             0xC9 => self.execute_cmp_immediate(bus, &mut trace),
             0xCC => self.execute_cpy_absolute(bus, &mut trace),
             0xCD => self.execute_cmp_absolute(bus, &mut trace),
+            0xCF => self.execute_cmp_long(bus, &mut trace),
             0xCE => self.execute_dec_absolute(bus, &mut trace),
             0xDC => self.execute_jmp_absolute_indirect_long(bus, &mut trace),
             0xDA => self.execute_phx(bus, &mut trace),
@@ -252,6 +253,7 @@ impl Cpu65816 {
             0xD9 => self.execute_cmp_absolute_y(bus, &mut trace),
             0xD8 => self.execute_cld(bus, &mut trace),
             0xDD => self.execute_cmp_absolute_x(bus, &mut trace),
+            0xDF => self.execute_cmp_long_x(bus, &mut trace),
             0xDE => self.execute_dec_absolute_x(bus, &mut trace),
             0xE0 => self.execute_cpx_immediate(bus, &mut trace),
             0xE4 => self.execute_cpx_direct_page(bus, &mut trace),
@@ -2675,6 +2677,25 @@ impl Cpu65816 {
         let address = self.absolute_address(base.wrapping_add(self.registers.x));
         self.compare_accumulator_with_address(bus, trace, address);
         self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_cmp_long<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        // 24-bit CMP addressing is independent of the data-bank register.
+        let address = self.fetch_operand_u24(bus, trace);
+        self.compare_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(4);
+        Ok(())
+    }
+
+    fn execute_cmp_long_x<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        // Long indexed addressing carries into the next bank and wraps at 24 bits.
+        let address = self
+            .fetch_operand_u24(bus, trace)
+            .wrapping_add(u32::from(self.registers.x))
+            & 0x00FF_FFFF;
+        self.compare_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(4);
         Ok(())
     }
 

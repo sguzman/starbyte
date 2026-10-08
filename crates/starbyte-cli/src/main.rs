@@ -1,5 +1,7 @@
 //! Starbyte CLI bootstrap entrypoint.
 
+mod cheatarium;
+
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -71,6 +73,21 @@ struct AssetArgs {
 enum Command {
     /// Inspect or validate external compliance corpora.
     Compliance(ComplianceArgs),
+    /// Search a local Cheatarium SNES index without activating any codes.
+    Cheatarium {
+        /// Explicit path to a local Cheatarium snes.json.gz bundle.
+        #[arg(long)]
+        index: PathBuf,
+        /// Candidate game title; not a verified cartridge match.
+        #[arg(long)]
+        title: String,
+        /// Emit versioned machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+        /// Maximum candidate source records to return.
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
     /// Inspect ROM metadata without running emulation.
     Inspect {
         /// Local ROM to inspect.
@@ -321,6 +338,7 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Compliance(args) => run_compliance(args, assets),
         Command::Inspect { rom, json } => inspect_rom(rom, json),
+        Command::Cheatarium { index, title, json, limit } => cheatarium::search(&index, &title, limit, json),
         Command::Library(args) => run_library(args, assets),
         Command::Run(args) => run_rom(args, assets),
         Command::PrintConfig { format } => print_config(format),
@@ -357,6 +375,13 @@ fn capabilities_manifest() -> serde_json::Value {
                 "name": "print_config",
                 "argv": ["print-config", "json"],
                 "side_effects": "none"
+            },
+            {
+                "name": "cheatarium_candidate_search",
+                "argv": ["cheatarium", "--index", "<local_snes_index_json_gz>", "--title", "<game_title>", "--json"],
+                "side_effects": "read_explicit_local_index_only",
+                "game_identity": "filename_candidate_not_rom_verified",
+                "activates_cheats": false
             },
             {
                 "name": "rom_inspect",

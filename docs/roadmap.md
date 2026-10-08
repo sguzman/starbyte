@@ -38,6 +38,8 @@
 - [x] Restore a green Linux/Windows CI baseline; preserve all genuine emulator regressions.
 - [x] Build focused Mode 0/1 PPU regressions, bus and ROM boot fixtures, and headless frame diagnostics; see [PPU coverage](ppu-coverage.md).
 - [x] Publish versioned JSON CLI capability discovery, platform diagnostics and cartridge inspection; no real MCP server yet.
+- [x] Add read-only local Cheatarium SNES index candidate search to CLI (exact ROM identity and cheat execution not implied).
+- [ ] Surface Cheatarium candidates in the game UI with explicit region/build matching and code-device-specific execution validation.
 - [ ] Add reliable, bounded compatibility-probe commands and diagnostics that can classify evidence without claiming playability.
 - [ ] Integrate Cheatarium as an optional, read-only curated SNES cheat source after its SNES schema stabilizes; match ROM identity/region, retain source attribution, never silently apply cheats or rewrite archives.
 - [ ] Build an opt-in **read-only**, permission-scoped MCP adapter exposing version, diagnostics and local library summaries.

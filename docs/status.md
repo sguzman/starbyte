@@ -14,7 +14,7 @@
 | APU/audio | SPC700/APU bootstrap, port traffic and placeholder sample generation | No authentic DSP audio output or working speaker backend |
 | Saves | Core state serialization and save-RAM paths, CLI state handling; frontend in-memory quick slot F5/F8 | Disk-backed slots 1–3 and XDG SRAM autosave now exist; actual game save reliability and native Wayland UX remain unverified |
 | Desktop | Library, covers, metadata, cheats, gamepads, Play View, F9/Escape navigation, responsive tiled-window layout, fullscreen and integer display scaling | Native Hyprland/Wayland play, input focus, frame pacing, resize and dialogs not firsthand tested |
-| Automation | Versioned CLI JSON introspection, diagnostics, ROM inspection and run reports; extensive CI coverage | No running MCP server; tools are CLI only |
+| Automation | Versioned CLI JSON introspection, diagnostics, ROM inspection and run reports; read-only local Cheatarium SNES candidate search | No running MCP server; cheat lookup does not identify exact cartridge builds or activate cheats |
 | Packaging | Cargo sources and test workflow | No release installer or app repository |
 
 See [PPU coverage](ppu-coverage.md) for a register-by-register account. The old [commercial ROM roadmap](commercial-rom-roadmap.md) reports **historical** 1-, 60-, and 300-frame headless Super Mario World attempts, but does not establish a working title screen. We have no user's ROM available here for a new commercial-game probe.

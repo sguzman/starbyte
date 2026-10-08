@@ -61,6 +61,8 @@ For any other library directory:
 cargo run -p starbyte-egui -- --rom-dir /path/to/your/roms
 ```
 
+Starbyte can also inspect a locally supplied [Cheatarium](https://github.com/sguzman/cheatarium) SNES index through its **read-only CLI**. This is candidate title search only; it does not match ROM hashes or enable codes. See [Cheatarium integration](docs/cheatarium.md).
+
 For CLI help:
 
 ```sh

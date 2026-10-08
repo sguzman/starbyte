@@ -3516,6 +3516,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "clap",
+ "flate2",
  "serde_json",
  "starbyte-core",
  "starbyte-frontend",

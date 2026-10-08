@@ -15,6 +15,8 @@ The JSON responses declare `starbyte.capabilities.v1` and `starbyte.doctor.v1`. 
 
 ROM execution reports (`run ROM --frames N --report-json PATH`) now include a versioned `starbyte.run_report.v1` schema. For black-screen triage, inspect `ppu_display` (brightness, forced blank, mode, layers, VRAM base registers) and `framebuffer` (nonblack pixel count, distinct RGB colors, center pixel, hash). These are deterministic **end-of-run diagnostics**, not verified gameplay measurements or proof of visual correctness.
 
+Read-only Cheatarium lookup: `starbyte cheatarium --index /path/to/snes.json.gz --title 'Donkey Kong Country' --json`. It reads an explicit local index file only, reports unverified title candidates and source provenance, and cannot write to a ROM or enable cheats. See [Cheatarium integration](cheatarium.md).
+
 Other existing CLI actions include `inspect /path/to/game.sfc --json` (schema `starbyte.rom_inspect.v1`, no playability claim), `print-config json`, `library scan --json`, and `run /path/to/game.sfc --frames 1 --report-json /path/to/report.json`. The ROM run writes its report explicitly. Library scanning may write cache data and should not be treated as read-only. Provider-refresh commands may access the network if enabled.
 
 ## Agent safety rules

@@ -395,6 +395,68 @@ fn run_succeeds_without_external_spc700_ipl_rom() {
 }
 
 #[test]
+fn run_frame_log_records_each_completed_frame_as_jsonl() {
+    let dir = tempdir().unwrap();
+    let rom = dir.path().join("sample.sfc");
+    let log_path = dir.path().join("diagnostics/frames.jsonl");
+    write_test_rom(&rom);
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "run",
+            rom.to_str().unwrap(),
+            "--frames",
+            "2",
+            "--frame-log",
+            log_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(&log_path).unwrap();
+    assert!(content.ends_with('\n'));
+    let frames = content
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(frames.len(), 2);
+    for (index, frame) in frames.iter().enumerate() {
+        assert_eq!(frame["schema"], "starbyte.frame_log.v1");
+        assert_eq!(frame["status"], "ok");
+        assert!(frame["error"].is_null());
+        assert_eq!(frame["requested_frame"], (index + 1) as u64);
+        assert_eq!(frame["completed_frame"], (index + 1) as u64);
+        assert_eq!(frame["framebuffer"]["width"], 256);
+        assert_eq!(frame["framebuffer"]["height"], 224);
+        assert!(frame["framebuffer"]["hash"].is_number());
+        assert!(frame["cpu"]["pc"].is_number());
+        assert!(frame["ppu_display"]["background_mode"].is_number());
+    }
+}
+
+#[test]
+fn zero_frame_probe_creates_an_empty_frame_log() {
+    let dir = tempdir().unwrap();
+    let rom = dir.path().join("sample.sfc");
+    let log_path = dir.path().join("frames.jsonl");
+    write_test_rom(&rom);
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "run",
+            rom.to_str().unwrap(),
+            "--frames",
+            "0",
+            "--frame-log",
+            log_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    assert_eq!(fs::read(&log_path).unwrap(), b"");
+}
+
+#[test]
 fn run_fails_for_mismatched_existing_save_ram() {
     let dir = tempdir().unwrap();
     let rom = dir.path().join("sample.sfc");

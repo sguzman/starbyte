@@ -2,8 +2,11 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Master dots per scanline in the bootstrap NTSC timing model.
+/// Approximate PPU dot cycles per NTSC scanline.
 pub const DOTS_PER_SCANLINE: u16 = 341;
+/// Approximate master clocks per PPU dot (1364 per NTSC scanline).
+/// The long-dot/short-scanline exceptions remain unsupported.
+pub const MASTER_CLOCKS_PER_DOT: u64 = 4;
 /// Scanlines per NTSC frame in the bootstrap timing model.
 pub const NTSC_SCANLINES_PER_FRAME: u16 = 262;
 /// First scanline treated as vertical blank.
@@ -12,7 +15,7 @@ pub const VBLANK_START_SCANLINE: u16 = 225;
 /// High-level timing counters shared across subsystems.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimingState {
-    /// Master clock ticks.
+    /// Master clock ticks, including the sub-dot remainder.
     pub master_clock: u64,
     /// Scanline number in the current frame.
     pub scanline: u16,
@@ -44,7 +47,12 @@ impl TimingState {
         let scanlines_per_frame = u64::from(NTSC_SCANLINES_PER_FRAME);
         let dots_per_frame = dots_per_scanline * scanlines_per_frame;
         let start_dot_index = u64::from(self.scanline) * dots_per_scanline + u64::from(self.dot);
-        let end_dot_index = start_dot_index + clocks;
+        // CPU/APU time is measured in master clocks, not PPU dots. In the
+        // approximate NTSC model one dot spans four clocks. Preserve the
+        // sub-dot remainder using the existing absolute master_clock count.
+        let sub_dot_clocks = self.master_clock % MASTER_CLOCKS_PER_DOT;
+        let elapsed_dots = (sub_dot_clocks + clocks) / MASTER_CLOCKS_PER_DOT;
+        let end_dot_index = start_dot_index + elapsed_dots;
 
         let start_frame_offset = start_dot_index / dots_per_frame;
         let end_frame_offset = end_dot_index / dots_per_frame;
@@ -86,7 +94,8 @@ impl TimingState {
 #[cfg(test)]
 mod tests {
     use super::{
-        DOTS_PER_SCANLINE, NTSC_SCANLINES_PER_FRAME, TimingEvents, TimingState,
+        DOTS_PER_SCANLINE, MASTER_CLOCKS_PER_DOT, NTSC_SCANLINES_PER_FRAME, TimingEvents,
+        TimingState,
         VBLANK_START_SCANLINE,
     };
 
@@ -107,7 +116,7 @@ mod tests {
             dot: DOTS_PER_SCANLINE - 2,
             frame: 3,
         };
-        let clocks = u64::from(DOTS_PER_SCANLINE) * 4;
+        let clocks = u64::from(DOTS_PER_SCANLINE) * 4 * MASTER_CLOCKS_PER_DOT;
 
         let events = timing.advance_master_clocks(clocks);
 
@@ -119,9 +128,40 @@ mod tests {
     }
 
     #[test]
+    fn master_clocks_accumulate_without_advancing_partial_dots() {
+        let mut timing = TimingState::default();
+        timing.advance_master_clocks(3);
+        assert_eq!(timing.master_clock, 3);
+        assert_eq!(timing.dot, 0);
+        timing.advance_master_clocks(1);
+        assert_eq!(timing.master_clock, 4);
+        assert_eq!(timing.dot, 1);
+        timing.advance_master_clocks(5);
+        assert_eq!(timing.dot, 2);
+        timing.advance_master_clocks(3);
+        assert_eq!(timing.dot, 3);
+    }
+
+    #[test]
+    fn advancing_341_master_clocks_does_not_complete_scanline() {
+        let mut timing = TimingState::default();
+        let events = timing.advance_master_clocks(u64::from(DOTS_PER_SCANLINE));
+        assert!(!events.crossed_scanline);
+        assert_eq!(timing.scanline, 0);
+        assert_eq!(timing.dot, DOTS_PER_SCANLINE / 4);
+        let events = timing.advance_master_clocks(
+            u64::from(DOTS_PER_SCANLINE) * (MASTER_CLOCKS_PER_DOT - 1),
+        );
+        assert!(events.crossed_scanline);
+        assert_eq!(timing.scanline, 1);
+        assert_eq!(timing.dot, 0);
+    }
+
+    #[test]
     fn full_frame_advance_wraps_frame_counter() {
         let mut timing = TimingState::default();
-        let clocks = u64::from(DOTS_PER_SCANLINE) * u64::from(NTSC_SCANLINES_PER_FRAME);
+        let clocks =
+            u64::from(DOTS_PER_SCANLINE) * u64::from(NTSC_SCANLINES_PER_FRAME) * MASTER_CLOCKS_PER_DOT;
 
         let events = timing.advance_master_clocks(clocks);
 

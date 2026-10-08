@@ -897,7 +897,8 @@ impl StarbyteApp {
                         self.persist_config();
                         self.queue_job(WorkerCommandKind::RefreshSnapshot);
                     } else if !value.is_empty() && !path.is_dir() {
-                        self.status_line = format!("ROM directory does not exist: {}", path.display());
+                        self.status_line =
+                            format!("ROM directory does not exist: {}", path.display());
                     }
                 }
                 if ui.button("Browse").clicked()

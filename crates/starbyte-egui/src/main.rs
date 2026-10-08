@@ -167,7 +167,10 @@ mod library_discovery_tests {
         let snes = home.path().join("Games/Roms/SNES");
         std::fs::create_dir_all(&snes).unwrap();
         let mut config = RuntimeConfig::default();
-        config.library.rom_dirs.push(home.path().join("old-library"));
+        config
+            .library
+            .rom_dirs
+            .push(home.path().join("old-library"));
         assert!(discover_snes_library(&mut config, home.path()));
         assert!(!discover_snes_library(&mut config, home.path()));
         assert_eq!(config.library.rom_dirs.len(), 2);

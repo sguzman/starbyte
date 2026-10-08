@@ -1647,7 +1647,10 @@ mod tests {
         let archive_path = dir.path().join("game.zip");
         write_zip_roms(
             &archive_path,
-            &[("nested/game.sfc", synthetic_rom_bytes(b"STARBYTE ZIP LOAD    "))],
+            &[(
+                "nested/game.sfc",
+                synthetic_rom_bytes(b"STARBYTE ZIP LOAD    "),
+            )],
         );
         let original_archive = fs::read(&archive_path).unwrap();
         let mut config = RuntimeConfig::default();

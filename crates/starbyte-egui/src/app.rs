@@ -743,7 +743,10 @@ impl StarbyteApp {
             }
             if ui.button("Open ROM...").clicked()
                 && let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Super Nintendo ROM or ZIP", &["sfc", "smc", "swc", "fig", "zip"])
+                    .add_filter(
+                        "Super Nintendo ROM or ZIP",
+                        &["sfc", "smc", "swc", "fig", "zip"],
+                    )
                     .pick_file()
             {
                 self.open_local_rom(&path, ctx);

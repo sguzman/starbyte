@@ -17,7 +17,7 @@
 | Automation | Versioned CLI JSON introspection, diagnostics, ROM inspection and run reports; read-only local Cheatarium SNES candidate search | No running MCP server; cheat lookup does not identify exact cartridge builds or activate cheats |
 | Packaging | Cargo sources and test workflow | No release installer or app repository |
 
-See [PPU coverage](ppu-coverage.md) for a register-by-register account. The old [commercial ROM roadmap](commercial-rom-roadmap.md) reports **historical** 1-, 60-, and 300-frame headless Super Mario World attempts, but does not establish a working title screen. We have no user's ROM available here for a new commercial-game probe.
+See [PPU coverage](ppu-coverage.md) for a register-by-register account. The user supplied actual headless evidence for **Super Mario World** on 2026-10-08: 60 frames advanced without error, but every frame had 0 nonblack pixels and an unchanged hash; 24 sampled screenshots were black. PPU forced blank remained enabled throughout, with zero brightness. This is a **failed playability probe**, not a boot success. The ROM bytes/revision and exact SHA-256 were not supplied. See the [game-specific compatibility investigation](compatibility/super-mario-world.md). The older [commercial ROM roadmap](commercial-rom-roadmap.md) remains historical engineering context.
 
 ## Cartridge save persistence
 
@@ -52,7 +52,7 @@ The Session panel's 60-frame debug step now advances one frame per UI update wit
 
 ## Reproducible early-frame evidence
 
-The headless `starbyte-cli run` command now supports `--frame-log PATH` (one flushed `starbyte.frame_log.v1` record per attempted frame) and optional bounded local framebuffer images (`--frame-images-dir DIR`, `--frame-image-every N`, `--max-frame-images N`). On a recoverable frame error, the JSONL log retains earlier completed frames and a final error record, whereas the end-of-run report may not exist. Frame images contain only successfully completed framebuffers and do not prove the artwork is rendered correctly. Use `--no-save-ram` to avoid reading or writing SRAM sidecars during controlled diagnosis. Implementation and CLI integration tests exist; do not treat the tools themselves as evidence that Super Mario World is playable. See [automation](automation.md) for example commands.
+The headless `starbyte-cli run` command now supports `--frame-log PATH` (one flushed `starbyte.frame_log.v1` record per attempted frame, including CPU registers, PPU-write and APU-port counters) and optional bounded local framebuffer images (`--frame-images-dir DIR`, `--frame-image-every N`, `--max-frame-images N`). On a recoverable frame error, the JSONL log retains earlier completed frames and a final error record, whereas the end-of-run report may not exist. Frame images contain only successfully completed framebuffers and do not prove the artwork is rendered correctly. Use `--no-save-ram` to avoid reading or writing SRAM sidecars during controlled diagnosis. Implementation and CLI integration tests exist; do not treat the tools themselves as evidence that Super Mario World is playable. See [automation](automation.md) for example commands.
 
 ## Early-frame compatibility failures
 

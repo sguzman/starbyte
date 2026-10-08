@@ -201,21 +201,14 @@ impl SystemBus {
         let start = u64::from(self.timing.scanline) * dots + u64::from(self.timing.dot);
 
         match self.nmitimen & 0x30 {
-            0x10 if self.htime < DOTS_PER_SCANLINE => {
-                crosses_periodic_position(
-                    u64::from(self.timing.dot),
-                    clocks,
-                    u64::from(self.htime),
-                    dots,
-                )
-            }
+            0x10 if self.htime < DOTS_PER_SCANLINE => crosses_periodic_position(
+                u64::from(self.timing.dot),
+                clocks,
+                u64::from(self.htime),
+                dots,
+            ),
             0x20 if self.vtime < NTSC_SCANLINES_PER_FRAME => {
-                crosses_periodic_position(
-                    start,
-                    clocks,
-                    u64::from(self.vtime) * dots,
-                    frame_dots,
-                )
+                crosses_periodic_position(start, clocks, u64::from(self.vtime) * dots, frame_dots)
             }
             0x30 if self.htime < DOTS_PER_SCANLINE && self.vtime < NTSC_SCANLINES_PER_FRAME => {
                 crosses_periodic_position(

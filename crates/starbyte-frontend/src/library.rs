@@ -339,9 +339,7 @@ impl LibraryService {
         let mut seen_keys = BTreeSet::new();
         let mut discovered = BTreeMap::<GameId, LocalRomInfo>::new();
         for rom_dir in &self.config.library.rom_dirs {
-            for candidate in
-                discover_rom_files(rom_dir, &mut archive_manifest)?
-            {
+            for candidate in discover_rom_files(rom_dir, &mut archive_manifest)? {
                 let cache_key = candidate.cache_key();
                 seen_keys.insert(cache_key.clone());
                 let signature = match candidate.source_signature() {

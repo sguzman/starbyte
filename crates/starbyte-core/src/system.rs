@@ -1140,6 +1140,64 @@ mod tests {
     }
 
     #[test]
+    fn reverse_dma_to_mdmaen_cannot_recursively_start_dma() {
+        let mut bus = SystemBus::default();
+        bus.install_cartridge(make_cart(Mapper::LoRom));
+        // The previous implementation wrote the B-bus value through the
+        // regular CPU bus. A reverse transfer into $420B triggered DMA
+        // recursively until the Rust host stack overflowed.
+        bus.write(0x002100, 0x01);
+        bus.write(0x004300, 0x80); // B -> A, one register.
+        bus.write(0x004301, 0x00); // B-bus $2100 contains $01.
+        bus.write(0x004302, 0x0B);
+        bus.write(0x004303, 0x42);
+        bus.write(0x004304, 0x00);
+        bus.write(0x004305, 0x01);
+        bus.write(0x004306, 0x00);
+        bus.write(0x00420B, 0x01);
+
+        assert_eq!(bus.dma.transfer_count, 1);
+        assert_eq!(bus.dma.dma_enable_mask(), 0);
+        assert_eq!(bus.ppu().read_register(0x2100), 0x01);
+    }
+
+    #[test]
+    fn dma_a_bus_cannot_read_ppu_mmio_as_a_memory_source() {
+        let mut bus = SystemBus::default();
+        bus.install_cartridge(make_cart(Mapper::LoRom));
+        bus.write(0x002100, 0x0F);
+        bus.write(0x002121, 0x00);
+        bus.write(0x004300, 0x00); // A -> B, single byte.
+        bus.write(0x004301, 0x22); // CGRAM data register.
+        bus.write(0x004302, 0x00);
+        bus.write(0x004303, 0x21); // Invalid A-bus source $002100.
+        bus.write(0x004304, 0x00);
+        bus.write(0x004305, 0x01);
+        bus.write(0x004306, 0x00);
+        bus.write(0x00420B, 0x01);
+
+        // The invalid A-bus read is open bus, not the $2100 register's $0F.
+        assert_eq!(bus.ppu().cgram()[0], 0x01);
+    }
+
+    #[test]
+    fn mmio_is_not_mirrored_into_cartridge_banks() {
+        let mut rom = make_cart(Mapper::LoRom).rom().to_vec();
+        rom[0x2100] = 0x5A;
+        let cartridge = Cartridge::from_bytes(rom, None).unwrap();
+        let mut bus = SystemBus::default();
+        bus.install_cartridge(cartridge);
+
+        bus.write(0x002100, 0x0F);
+        bus.write(0x402100, 0x80); // LoROM address, not PPU MMIO.
+        assert_eq!(bus.ppu().read_register(0x2100), 0x0F);
+        assert_eq!(bus.read(0x402100), 0x5A);
+        assert_eq!(bus.read(0x002100), 0x0F);
+        bus.write(0x40420B, 0x01); // Not the DMA enable register.
+        assert_eq!(bus.dma.transfer_count, 0);
+    }
+
+    #[test]
     fn cpu_visible_vram_ports_store_tilemap_data() {
         let mut bus = SystemBus::default();
         bus.install_cartridge(make_cart(Mapper::LoRom));

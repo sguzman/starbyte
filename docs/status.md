@@ -90,6 +90,10 @@ The PPU's BGnSC screen base and BGnNBA character base registers encode VRAM **wo
 
 OBJ sprite tiles now wrap tile numbers inside the 16×16 character table instead of allowing the horizontal tile index to run past the row. OBJ X uses signed 9-bit positions (-256 through +255) and OBJ Y positions wrap modulo 256, so sprites can be clipped at the left edge or extend from scanline 255 onto the top of the screen. A synthetic 16×16 sprite fixture covers both behaviors. More advanced sprite restrictions (per-scanline tile limits, first-object rotation, object windows) remain unverified.
 
+## Structured headless visual diagnostics
+
+`starbyte run --report-json` now includes a versioned display register snapshot and framebuffer statistics (nonblack pixels, distinct RGB colors, center pixel) alongside existing hash and MMIO activity. This makes startup-black-screen regressions auditable in headless/agent workflows without implicitly exporting ROM contents. Integration tests cover report schema and an all-black synthetic boot frame.
+
 ## Current functional gap
 
 The original commercial-ROM roadmap explicitly leaves SNES background/tilemap presentation, non-placeholder Super Mario World boot visuals, title/menu navigation, and first controllable gameplay incomplete. This is a **blocking playability gap**, not an optional accuracy task.

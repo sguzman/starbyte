@@ -1067,7 +1067,18 @@ fn maybe_write_run_report(
     };
     let ppu_write_activity = build_ppu_write_activity_report(emulator);
     let apu_io_activity = build_apu_io_activity_report(emulator);
+    let ppu_display = build_ppu_display_report(emulator);
+    let (nonblack_pixels, distinct_rgb_colors) =
+        framebuffer_color_metrics(emulator.framebuffer());
+    let center_offset =
+        (emulator.framebuffer().height() / 2 * emulator.framebuffer().width()
+            + emulator.framebuffer().width() / 2)
+            * 4;
+    let center_pixel = pixels
+        .get(center_offset..center_offset + 4)
+        .map_or_else(Vec::new, |value| value.to_vec());
     let report = json!({
+        "schema": "starbyte.run_report.v1",
         "rom": rom.display().to_string(),
         "frames": frames,
         "frame_counter": emulator.timing().frame,
@@ -1079,18 +1090,65 @@ fn maybe_write_run_report(
             "width": emulator.framebuffer().width(),
             "height": emulator.framebuffer().height(),
             "first_pixel_rgba": first_pixel,
+            "center_pixel_rgba": center_pixel,
+            "nonblack_pixels": nonblack_pixels,
+            "distinct_rgb_colors": distinct_rgb_colors,
             "hash": framebuffer_hash(emulator.framebuffer()),
         },
         "audio_sample_count": emulator.audio_samples().samples.len(),
         "apu_steps": emulator.apu_status().spc700_steps,
         "apu_io_activity": apu_io_activity,
         "ppu_write_activity": ppu_write_activity,
+        "ppu_display": ppu_display,
         "save_ram_path": save_ram_path.map(|path| path.display().to_string()),
         "save_state_path": save_state_path.map(|path| path.display().to_string()),
     });
     std::fs::write(report_path, serde_json::to_string_pretty(&report)?)
         .with_context(|| format!("failed to write run report to {}", report_path.display()))?;
     Ok(())
+}
+
+/// Snapshot the registers that most directly explain an all-black or
+/// scrambled scene without introducing side effects on VRAM/OAM read ports.
+fn build_ppu_display_report(emulator: &starbyte_core::Emulator) -> serde_json::Value {
+    let register = |address: u16| emulator.peek_ppu_register(address).unwrap_or(0);
+    let brightness = register(0x2100);
+    let mode = register(0x2105);
+    let mosaic = register(0x2106);
+    json!({
+        "forced_blank": brightness & 0x80 != 0,
+        "brightness": brightness & 0x0F,
+        "background_mode": mode & 0x07,
+        "bg3_high_priority": mode & 0x08 != 0,
+        "bg_tile_size_flags": mode >> 4,
+        "mosaic_size": (mosaic >> 4) + 1,
+        "mosaic_bg_mask": mosaic & 0x0F,
+        "main_screen_enable_mask": register(0x212C),
+        "sub_screen_enable_mask": register(0x212D),
+        "vmain": register(0x2115),
+        "bg_screen_base_registers": [
+            register(0x2107),
+            register(0x2108),
+            register(0x2109),
+            register(0x210A),
+        ],
+        "bg_character_base_registers": [register(0x210B), register(0x210C)],
+    })
+}
+
+/// Count actual visible color variety, not just a framebuffer hash, to
+/// distinguish black-screen startup from frames with useful game graphics.
+fn framebuffer_color_metrics(frame: &starbyte_core::ppu::FrameBuffer) -> (usize, usize) {
+    let mut nonblack_pixels = 0;
+    let mut distinct_colors = std::collections::BTreeSet::new();
+    for rgba in frame.pixels().chunks_exact(4) {
+        let rgb = [rgba[0], rgba[1], rgba[2]];
+        if rgb != [0, 0, 0] {
+            nonblack_pixels += 1;
+        }
+        distinct_colors.insert(rgb);
+    }
+    (nonblack_pixels, distinct_colors.len())
 }
 
 fn build_ppu_write_activity_report(emulator: &starbyte_core::Emulator) -> serde_json::Value {

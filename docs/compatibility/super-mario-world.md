@@ -1,6 +1,6 @@
 # Super Mario World — compatibility investigation
 
-**Current result: no verified playability; first 60 frames are black while audio data is being uploaded.** The first-frame instruction trace shows forward progress through the expected boot routine, so an initialization deadlock has **not** been demonstrated. This document tracks observations, not assumptions about compatibility.
+**Current result: startup graphics appear, but execution and rendering are corrupt; a 360-frame probe aborted from a host stack overflow after frame 340.** The first-frame trace confirms a real audio upload, not an initial deadlock. Playability remains unverified. This document records observations separately from suspected causes.
 
 ## First reproducible headless probe
 
@@ -36,13 +36,41 @@ The routine and transfer handshake match the documented Super Mario World startu
 
 
 
+## Second headless probe: 360 requested frames
+
+The user ran `starbyte-cli run` with `--frames 360 --no-save-ram --frame-log`, sampling PPM screenshots every 18 frames, and supplied the resulting archive and terminal log on 2026-10-08. The process **aborted with a Rust stack overflow**, rather than returning a recoverable frame error. The frame log was flushed through **frame 340**.
+
+| Frame / range | Observed outcome |
+| --- | --- |
+| 1–100 | Long SPC upload and forced-blank initialization, matching the earlier trace. |
+| 101–147 | CPU exits upload; PPU register write count rises during continued forced blank. |
+| 148 | `$2100` forced blank clears, brightness reaches 15. |
+| 149 | First nonblack framebuffer (301 nonblack pixels); CPU PC ends at `$00:0002`. |
+| 150 onward | End-of-frame CPU PC frequently `$00:FFFF`; framebuffer alternates between black and visibly corrupted scenes. |
+| 180 and 270 sampled images | Recognizable **"Nintendo Presents"** startup lettering, with distorted or missing background graphics. |
+| 252 and 306 sampled images | Large repeated/striped tile patterns instead of stable, correctly composed backgrounds. |
+| 340 | 4,443,789 cumulative PPU register writes; `$00:FFFF` end-frame PC; forced blank is clear but framebuffer black. |
+| Frame 341 attempt | Host stack overflow, process aborted (SIGABRT); no completed frame 341 record. |
+
+**Conclusions grounded in user evidence:** Starbyte reaches a recognizable part of the real startup sequence, so initial sound upload is not the overall blocker. CPU execution becomes abnormal and rendering is severely corrupt before the stack overflow. The data alone cannot identify the exact offending instruction or prove which CPU/PPU/DMA defect causes the first divergence.
+
+### Correctness defects identified from source
+
+While investigating the crash, source review identified several independent hardware-model defects:
+
+- General DMA treated its **A-bus** accesses as arbitrary CPU MMIO reads/writes. In particular, reverse DMA could write `$420B` and recursively invoke `execute_dma` until overflowing the host stack. The new regression configures that exact reverse-transfer case and verifies it finishes once.
+- PPU/CPU MMIO was inadvertently decoded in unrelated cartridge banks, rather than just SNES system banks. This can corrupt memory access and trigger unintended side effects.
+- Timer IRQs were raised on **every scanline crossing** whenever either H/V IRQ bit was enabled, without respecting the programmed `$4207`–`$420A` timer coordinates. An approximate H-only, V-only and combined comparator now replaces that unconditional behavior; precise hardware-cycle timing remains future work.
+
+These are **genuine hardware-model corrections**, but they have not yet been validated by a post-fix run of this commercial ROM. Successful synthetic tests do not demonstrate that the game is playable or that the exact cause of the observed SIGABRT is removed.
+
 ## Next evidence needed
 
-1. Run a longer 360-frame headless probe with `--no-save-ram` and `--frame-log`, sampling a small number of PPM images. Check whether the APU upload completes and whether forced blank is cleared or any PPU display registers are configured. If execution fails, preserve the log through the failing frame.
-2. If the game stays in the same code region, capture an instruction trace **starting near the later frame** rather than redundantly tracing the already understood first frame. The current `commercial-record` trace captures from startup; add bounded later-frame capture before requesting a large trace.
-3. Record the ROM's exact local digest/revision **without** uploading its bytes.
-4. Fix only a demonstrated emulator issue, backed by synthetic regressions, and re-run the commercial probe.
-5. Do not upgrade status to boot/title/gameplay until a recognizable screen and responsive input are observed.
+1. Re-run the same 360-frame probe after pulling the CPU bus/DMA/IRQ fixes. Record whether it still aborts, what frame was last completed, whether PPU writes remain excessive, and whether "Nintendo Presents" stabilizes.
+2. If corrupt graphics or abnormal CPU PC values persist, capture **one selected later frame** using `commercial-record --trace-from-frame` (for example, 148 or 149), without committing ROM bytes or proprietary traces. Compare MMIO and interrupt sequences to the known public disassembly; prioritize the *first* divergence over later cascading faults.
+3. Record the local cartridge digest and precise revision; the ZIP filename is not sufficient evidence.
+4. Fix additional demonstrated core defects with copyright-free synthetic regressions before another ROM probe.
+5. Do not mark title/gameplay verified until the startup/title screen is stable and controller input is responsive.
 
 ## Acceptance criteria
 

@@ -799,9 +799,9 @@ impl StarbyteApp {
                     }
                 }
             });
-            let selected_installed = self.selected_entry().filter(|entry| {
-                entry.installed_status == InstalledStatus::Installed
-            });
+            let selected_installed = self
+                .selected_entry()
+                .filter(|entry| entry.installed_status == InstalledStatus::Installed);
             if ui
                 .add_enabled(
                     selected_installed.is_some(),
@@ -1535,14 +1535,19 @@ impl StarbyteApp {
 
     fn draw_grid_entry(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, entry: &LibraryEntry) {
         const CARD_WIDTH: f32 = 196.0;
-        const CARD_HEIGHT: f32 = 292.0;
+        const CARD_HEIGHT: f32 = 320.0;
         const COVER_BOX: Vec2 = Vec2::new(164.0, 190.0);
 
         ui.allocate_ui_with_layout(
             Vec2::new(CARD_WIDTH, CARD_HEIGHT),
             egui::Layout::top_down(egui::Align::Min),
             |ui| {
-                let inner = egui::Frame::group(ui.style()).show(ui, |ui| {
+                let selected = self.selected_game_id.as_deref() == Some(entry.game_id.as_str());
+                let mut frame = egui::Frame::group(ui.style());
+                if selected {
+                    frame = frame.stroke(egui::Stroke::new(2.0, ui.visuals().selection.stroke.color));
+                }
+                let inner = frame.show(ui, |ui| {
                     ui.set_min_size(Vec2::new(CARD_WIDTH - 12.0, CARD_HEIGHT - 12.0));
                     ui.vertical_centered(|ui| {
                         ui.allocate_ui_with_layout(

@@ -64,12 +64,35 @@ While investigating the crash, source review identified several independent hard
 
 These are **genuine hardware-model corrections**, but they have not yet been validated by a post-fix run of this commercial ROM. Successful synthetic tests do not demonstrate that the game is playable or that the exact cause of the observed SIGABRT is removed.
 
+## Third headless probe: 360 requested frames after DMA/IRQ fixes
+
+On 2026-10-08, the user retested the same locally held archive against Starbyte after the DMA/MMIO and timer-IRQ corrections, with `--no-save-ram` and flushed JSONL. This probe **completed 150 frames and returned a structured CPU error while attempting frame 151**:
+
+```text
+unsupported opcode for 65816: 0x0B at 0xD980BC
+```
+
+There was **no host stack overflow** in this run. The frame log contains 151 records (150 successful frames plus one failed-frame record), documenting:
+
+- Frame 148: CPU PC `$00:806D`, native mode, stack `$01FF`, NMITIMEN `$81`, DMA 9,248 bytes, PPU writes 21,591.
+- Frame 149: CPU PC `$00:0002`, stack `$012A`, first 301 nonblack pixels, DMA 9,952 bytes, PPU writes 22,333.
+- Frame 150: CPU PC `$00:FFFF`, stack `$ECCA`, with 301 nonblack pixels and 22,353 PPU writes.
+- Error during frame 151: PC `$D9:80BC`, stack `$DA9E`, invalidly accessed instruction `0x0B`. Note: `0x0B` is the **legal 65816 PHD instruction** and Starbyte's decoder lacked it. Implementing PHD eliminates that specific decoder gap, but does not establish that the unexpected bank or stack corruption was repaired.
+
+**Interpretation:** The previous unbounded recursive-DMA stack overflow did not recur, but CPU control flow already diverges during the first real NMI/graphics update. Treat the late unsupported opcode as a symptom until an instruction-level trace identifies the first wrong branch, interrupt vector, stack operation, or memory access.
+
+### Independently identified timing defect
+
+The timing implementation previously treated **each CPU master clock as a whole PPU dot**, using 341 clocks rather than approximately 1,364 master clocks per NTSC scanline. Real SNES timing distinguishes 4 master clocks per dot (see [SNESdev timing](https://snes.nesdev.org/wiki/Timing)). This would advance VBlank/NMI and HDMA cadence about four times too quickly relative to the 65816 execution trace. The fix accumulates sub-dot master clocks, progresses a PPU dot per four, converts H/V timer comparisons accordingly, and raises the guarded instruction-per-frame budget. Precise long-dot variations, DRAM-refresh stalls and exact CPU bus cycle penalties are still outside the current model.
+
+The 65816 core also now implements `PHD`/`PLD`, forces interrupt vector targets to bank zero in both modes, and keeps emulation-mode stack transfers inside page `$01`. These are general hardware correctness changes; **none was validated on this user's ROM at documentation time**.
+
 ## Next evidence needed
 
-1. Re-run the same 360-frame probe after pulling the CPU bus/DMA/IRQ fixes. Record whether it still aborts, what frame was last completed, whether PPU writes remain excessive, and whether "Nintendo Presents" stabilizes.
-2. If corrupt graphics or abnormal CPU PC values persist, capture **one selected later frame** using `commercial-record --trace-from-frame` (for example, 148 or 149), without committing ROM bytes or proprietary traces. Compare MMIO and interrupt sequences to the known public disassembly; prioritize the *first* divergence over later cascading faults.
+1. Re-run a bounded 360-frame probe after pulling the 65816 and master-clock/dot corrections; report the last successfully completed frame, any error, and whether recognizable graphics advance.
+2. If control flow still leaves the expected startup/NMI routines, capture **frames 149–150** using `compliance commercial-record --frames 150 --trace-from-frame 148` (or the equivalent earlier boundary after corrected timing). Look for the first wrong interrupt, stack access, or transfer, not merely the final unsupported opcode.
 3. Record the local cartridge digest and precise revision; the ZIP filename is not sufficient evidence.
-4. Fix additional demonstrated core defects with copyright-free synthetic regressions before another ROM probe.
+4. Fix additional demonstrated core defects with copyright-free regressions before another ROM probe.
 5. Do not mark title/gameplay verified until the startup/title screen is stable and controller input is responsive.
 
 ## Acceptance criteria

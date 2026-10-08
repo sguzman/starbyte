@@ -53,7 +53,7 @@ For CLI help:
 cargo run -p starbyte-cli -- --help
 ```
 
-The desktop has a dedicated **Play View**, which makes the rendered game the main content rather than a small sidebar preview. Launching a ROM opens Play View automatically. Use **F9** to switch between the game and library, **Escape** to return to the library, **F5/F8** for temporary quick save/load, and the in-game toolbar for pause, fullscreen, and three **disk-backed save slots**. Disk slots are local JSON snapshots that include the current ROM and may be large; they are not battery-backed SRAM. The `integer_scale` setting preserves whole-pixel multiples when there is room, but scales down to fit narrow tiling windows.
+The desktop has a dedicated **Play View**, which makes the rendered game the main content rather than a small sidebar preview. Launching a ROM opens Play View automatically. Use **F9** to switch between the game and library, **Escape** to return to the library, **F5/F8** for temporary quick save/load, and the in-game toolbar for pause, fullscreen, **F12 PNG screenshots**, and three **disk-backed save slots**. Disk slots are local JSON snapshots that include the current ROM and may be large; they are not battery-backed SRAM. The `integer_scale` setting preserves whole-pixel multiples when there is room, but scales down to fit narrow tiling windows.
 
 The GUI uses `eframe` with both Wayland and X11 backends enabled. **Native Wayland behavior and dependencies still require verification on the target Linux system.** These are source-build instructions, not a claim of a working packaged release.
 
@@ -64,6 +64,7 @@ By default Starbyte uses XDG user directories, independent of the directory from
 - Config: `$XDG_CONFIG_HOME/starbyte/config.toml`, falling back to `~/.config/starbyte/config.toml`.
 - Cache: `$XDG_CACHE_HOME/starbyte/`, falling back to `~/.cache/starbyte/`.
 - Cartridge SRAM: `$XDG_DATA_HOME/starbyte/saves/`, falling back to `~/.local/share/starbyte/saves/`. Modified save RAM is written atomically on game switch, roughly every 30 seconds during desktop sessions, and when Starbyte exits.
+- Screenshots: `$XDG_DATA_HOME/starbyte/screenshots/`, falling back to `~/.local/share/starbyte/screenshots/`. F12 exports a native-resolution PNG without UI chrome.
 - Persistent slots: `$XDG_STATE_HOME/starbyte/states/`, falling back to `~/.local/state/starbyte/states/`. Disk slots are keyed to the ROM's content and can be redirected with an explicit state-directory override in host integrations.
 - An explicit `--config` or `--cache-dir` takes precedence.
 

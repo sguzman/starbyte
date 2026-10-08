@@ -22,7 +22,8 @@
 - [ ] Build a friendly save-slot browser with thumbnails, backup/export and recovery affordances.
 - [ ] Make library covers/metadata and installed/offline status pleasant even with no network; measure large-library performance.
 - [ ] Improve gamepad/keyboard remapping, reconnection, key focus and full-screen transitions on Wayland.
-- [ ] Explore optional shaders, screenshots, rewind and session history only after the core loop is comfortable.
+- [x] Export native-resolution PNG screenshots with F12 and a Play View toolbar action (source; CI pending).
+- [ ] Explore optional shaders, rewind and session history only after the core loop is comfortable.
 
 ## P2 — reproducible engineering and AI/MCP friendliness
 

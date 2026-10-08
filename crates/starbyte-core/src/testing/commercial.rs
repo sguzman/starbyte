@@ -273,8 +273,8 @@ pub struct InstructionTraceRecord {
     pub pbr: u8,
     /// Program counter at the start of the instruction.
     pub pc: u16,
-    /// Opcode fetched for the instruction.
-    pub opcode: u8,
+    /// Fetched opcode, or null for an interrupt-service step with no opcode fetch.
+    pub opcode: Option<u8>,
     /// MMIO or APU-related bus events seen during this instruction.
     pub mmio_events: Vec<BusEvent>,
 }
@@ -912,7 +912,13 @@ fn run_emulator_for_frames(
             let bus_events = emulator.step_instruction_with_trace()?;
             instructions += 1;
             if let Some(records) = &mut trace_records {
-                let opcode = bus_events.first().map_or(0, |event| event.value);
+                // Interrupt service may begin with stack writes, not an
+                // opcode fetch; never label that data as executable code.
+                let opcode = bus_events.first().and_then(|event| {
+                    let instruction_address = (u32::from(pbr) << 16) | u32::from(pc);
+                    (event.access == AccessKind::Read && event.address == instruction_address)
+                        .then_some(event.value)
+                });
                 let mmio_events = bus_events
                     .into_iter()
                     .filter(|event| is_traceworthy_event(event))

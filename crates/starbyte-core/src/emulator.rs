@@ -145,7 +145,10 @@ impl Emulator {
             }
         }
         self.refresh_framebuffer();
-        debug!(frame = self.system.timing().frame, instructions, "advanced to next frame");
+        debug!(
+            frame = self.system.timing().frame,
+            instructions, "advanced to next frame"
+        );
         Ok(())
     }
 
@@ -154,8 +157,7 @@ impl Emulator {
             frame,
             instructions,
             elapsed_ms: elapsed.as_millis(),
-            pc: (u32::from(self.cpu.registers.pbr) << 16)
-                | u32::from(self.cpu.registers.pc),
+            pc: (u32::from(self.cpu.registers.pbr) << 16) | u32::from(self.cpu.registers.pc),
         }
     }
 

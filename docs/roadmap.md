@@ -27,6 +27,7 @@ Mission: a fun-first, comfy Rust SNES emulator for Linux/Wayland, with a delight
 - [ ] Reach input-driven title/menu transition and first controllable gameplay.
 - [ ] Record audio continuity, latency and save/load behavior during real play.
 - [ ] Publish an evidence-based compatibility matrix with reproducible milestone criteria.
+- [x] Add synthetic 65816 ROM boots that write CGRAM/VRAM/BG registers and produce testable framebuffer pixels, including fixed color math (CI pending).
 - [x] Add versioned headless PPU screen-state and framebuffer metrics to CLI run reports (source; CI pending).
 
 ## P1 — make the desktop genuinely cozy

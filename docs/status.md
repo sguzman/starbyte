@@ -112,6 +112,10 @@ Instead of restricting the game's framebuffer to the right-hand session sidebar,
 
 BG1–BG4 offset registers now use the PPU's shared horizontal/vertical write latches rather than independent per-register two-write buffers. Each byte write updates the effective 10-bit scroll offset, including fine horizontal scroll bits; this is important for interleaved/HDMA-driven scrolling. The core exposes a read-only `background_scroll(index)` accessor, and tests cover simple and interleaved writes plus shifted rendered pixels. Save states written by the old per-register latch model retain their effective offsets but cannot reconstruct a missing historical shared-latch byte. Raster-accurate HDMA capture and real-game visual verification remain open.
 
+## Emulated CPU-to-picture boot fixture
+
+A self-contained, synthetic LoROM program now performs 65816 `LDA #imm / STA abs` instructions to configure CGRAM, VRAM, BG1 and the display; the emulator runs it to the first frame and asserts actual RGBA pixels. A second variant enables fixed-color math through emulated CPU instructions. This exercises CPU, memory bus, PPU registers, and frame rendering without depending on a user ROM or external assets. This proves the test program's specific picture pipeline, **not** commercial game playability.
+
 ## Current functional gap
 
 The original commercial-ROM roadmap explicitly leaves SNES background/tilemap presentation, non-placeholder Super Mario World boot visuals, title/menu navigation, and first controllable gameplay incomplete. This is a **blocking playability gap**, not an optional accuracy task.

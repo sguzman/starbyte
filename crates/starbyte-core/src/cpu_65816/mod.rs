@@ -3846,6 +3846,107 @@ mod tests {
     }
 
     #[test]
+    fn cmp_long_x_compares_eight_bit_a_without_modifying_it() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.emulation = false;
+        cpu.registers.pc = 0x8000;
+        cpu.registers.dbr = 0x40;
+        cpu.registers.a = 0xAB06;
+        cpu.registers.x = 4;
+        cpu.registers.p = 0x30; // A and X are both 8-bit.
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0xDF),
+            (0x008001, 0x60),
+            (0x008002, 0xD7),
+            (0x008003, 0x05),
+            (0x05D764, 0x06),
+            (0x40D764, 0x01),
+        ]);
+
+        let trace = cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(cpu.registers.a, 0xAB06, "CMP must not change A");
+        assert_eq!(cpu.registers.dbr, 0x40, "CMP long must not affect DBR");
+        assert_eq!(cpu.registers.pc, 0x8004);
+        assert_eq!(cpu.registers.p & 0x03, 0x03, "equal => C and Z set");
+        assert_eq!(cpu.registers.p & 0x80, 0, "equal => N clear");
+        assert!(trace.iter().any(|event| event.address == 0x05D764));
+        assert!(!trace.iter().any(|event| event.address == 0x40D764));
+    }
+
+    #[test]
+    fn cmp_long_x_carries_bank_in_sixteen_bit_accumulator_mode() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.emulation = false;
+        cpu.registers.pc = 0x8000;
+        cpu.registers.a = 0x1233;
+        cpu.registers.x = 2;
+        cpu.registers.p = 0x00;
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0xDF),
+            (0x008001, 0xFE),
+            (0x008002, 0xFF),
+            (0x008003, 0x7E),
+            (0x7F0000, 0x34),
+            (0x7F0001, 0x12),
+        ]);
+
+        let trace = cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(cpu.registers.a, 0x1233);
+        assert_eq!(cpu.registers.pc, 0x8004);
+        assert_eq!(cpu.registers.p & 0x03, 0, "less than => C,Z clear");
+        assert_ne!(cpu.registers.p & 0x80, 0, "negative result => N");
+        assert!(trace.iter().any(|event| event.address == 0x7F0000));
+        assert!(trace.iter().any(|event| event.address == 0x7F0001));
+    }
+
+    #[test]
+    fn cmp_long_wraps_memory_reads_at_twenty_four_bits() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.emulation = false;
+        cpu.registers.pc = 0x8000;
+        cpu.registers.a = 0x1234;
+        cpu.registers.p = 0x00;
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0xCF),
+            (0x008001, 0xFF),
+            (0x008002, 0xFF),
+            (0x008003, 0xFF),
+            (0xFFFFFF, 0x34),
+            (0x000000, 0x12),
+        ]);
+
+        let trace = cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(cpu.registers.a, 0x1234);
+        assert_eq!(cpu.registers.pc, 0x8004);
+        assert_eq!(cpu.registers.p & 0x03, 0x03);
+        assert!(trace.iter().any(|event| event.address == 0xFFFFFF));
+        assert!(trace.iter().any(|event| event.address == 0x000000));
+    }
+
+    #[test]
+    fn cmp_long_x_wraps_indexed_address_at_twenty_four_bits() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.emulation = false;
+        cpu.registers.pc = 0x8000;
+        cpu.registers.a = 0x0034;
+        cpu.registers.x = 2;
+        cpu.registers.p = 0x30; // M=1, X=1.
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0xDF),
+            (0x008001, 0xFF),
+            (0x008002, 0xFF),
+            (0x008003, 0xFF),
+            (0x000001, 0x34),
+        ]);
+
+        let trace = cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(cpu.registers.pc, 0x8004);
+        assert_eq!(cpu.registers.p & 0x03, 0x03);
+        assert!(trace.iter().any(|event| event.address == 0x000001));
+        assert!(!trace.iter().any(|event| event.address == 0x1000001));
+    }
+
+    #[test]
     fn lda_long_ignores_data_bank_and_preserves_b_in_eight_bit_accumulator_mode() {
         let mut cpu = Cpu65816::default();
         cpu.registers.pc = 0x8000;

@@ -10,6 +10,7 @@
 - [ ] Trace and fix the earliest observed real-game blockers in PPU, CPU, DMA/HDMA and timing; do not introduce ROM-specific hacks.
 - [ ] Replace placeholder audio with authentic sound synthesis and a responsive Linux audio output path.
 - [ ] Measure and improve frame pacing, latency, pauses and save stability during sustained play.
+- [x] Replace the 60-frame blocking UI callback with incremental, cancellable stepping; expose measured per-frame runtime and over-budget counters (source; native Wayland timing pending).
 - [x] Add content-scoped XDG cartridge SRAM persistence with safe atomic writes and timed flushes (source; CI pending).
 - [ ] Establish a reproducible compatibility matrix: exact ROM identity, title/menu/gameplay/audio/input/save acceptance and screenshots or traces.
 

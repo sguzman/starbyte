@@ -32,6 +32,33 @@ fn is_compact_layout(width: f32, height: f32) -> bool {
     width < COMPACT_LAYOUT_WIDTH || height < 640.0
 }
 
+/// Track real emulation-frame runtime, excluding texture uploads/UI rendering.
+#[derive(Debug, Default, Clone, Copy)]
+struct FramePerformance {
+    samples: u64,
+    avg_ms: f32,
+    last_ms: f32,
+    peak_ms: f32,
+    slow_frames: u64,
+}
+
+impl FramePerformance {
+    fn record(&mut self, elapsed: Duration) {
+        let ms = elapsed.as_secs_f32() * 1_000.0;
+        self.avg_ms = if self.samples == 0 {
+            ms
+        } else {
+            self.avg_ms * 0.9 + ms * 0.1
+        };
+        self.samples += 1;
+        self.last_ms = ms;
+        self.peak_ms = self.peak_ms.max(ms);
+        if elapsed > FRAME_INTERVAL {
+            self.slow_frames += 1;
+        }
+    }
+}
+
 /// Schedule no more than one frame per UI update; never pile up catch-up work.
 #[derive(Debug, Clone, Copy)]
 struct FrameClock {
@@ -95,6 +122,9 @@ pub struct StarbyteApp {
     is_playing: bool,
     play_view: bool,
     frame_clock: FrameClock,
+    frame_performance: FramePerformance,
+    show_performance_overlay: bool,
+    pending_step_frames: u32,
     last_sram_flush: Instant,
     show_compact_settings: bool,
     show_compact_session: bool,
@@ -185,6 +215,9 @@ impl StarbyteApp {
             is_playing: start_playing,
             play_view: start_playing,
             frame_clock: FrameClock::new(Instant::now()),
+            frame_performance: FramePerformance::default(),
+            show_performance_overlay: false,
+            pending_step_frames: 0,
             last_sram_flush: Instant::now(),
             show_compact_settings: false,
             show_compact_session: false,
@@ -281,6 +314,8 @@ impl StarbyteApp {
                         self.is_playing = true;
                         self.play_view = true;
                         self.frame_clock.reset(Instant::now());
+                        self.frame_performance = FramePerformance::default();
+                        self.pending_step_frames = 0;
                         self.last_sram_flush = Instant::now();
                         let detail = format!("Loaded {}", rom_path.display());
                         self.update_job(job_id, "Load Game", "done", &detail);
@@ -474,8 +509,10 @@ impl StarbyteApp {
     fn run_frame(&mut self, ctx: &egui::Context) {
         self.session
             .set_controller1(self.effective_controller_state(ctx));
+        let started = Instant::now();
         match self.session.run_frame() {
             Ok(()) => {
+                self.frame_performance.record(started.elapsed());
                 self.refresh_framebuffer(ctx);
                 self.status_line = self.session.snapshot().status_line();
             }
@@ -483,6 +520,7 @@ impl StarbyteApp {
                 warn!("{error}");
                 self.status_line = error.to_string();
                 self.is_playing = false;
+                self.pending_step_frames = 0;
             }
         }
     }
@@ -589,6 +627,12 @@ impl StarbyteApp {
                 ui.menu_button("Disk Slots", |ui| self.draw_persistent_slots(ui, ctx));
                 if ui.button("Screenshot (F12)").clicked() {
                     self.save_screenshot();
+                }
+                if ui
+                    .checkbox(&mut self.show_performance_overlay, "Timing")
+                    .changed()
+                {
+                    ctx.request_repaint();
                 }
                 if ui.button("Fullscreen").clicked() {
                     self.config.video.fullscreen = !self.config.video.fullscreen;
@@ -1136,6 +1180,20 @@ impl StarbyteApp {
                 ui.label("The game framebuffer will appear after a frame has been rendered.");
             });
         }
+        if self.show_performance_overlay && self.frame_performance.samples > 0 {
+            let stats = self.frame_performance;
+            let label = format!(
+                "Emulation {:.1} ms avg | {:.1} ms peak | {}/{} over budget",
+                stats.avg_ms, stats.peak_ms, stats.slow_frames, stats.samples,
+            );
+            ui.painter().text(
+                rect.left_bottom() + egui::vec2(12.0, -12.0),
+                egui::Align2::LEFT_BOTTOM,
+                label,
+                egui::TextStyle::Monospace.resolve(ui.style()),
+                egui::Color32::LIGHT_GREEN,
+            );
+        }
     }
 
     fn draw_session_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -1166,31 +1224,44 @@ impl StarbyteApp {
         ui.collapsing("Disk save slots (1–3)", |ui| {
             self.draw_persistent_slots(ui, ctx);
         });
-        if ui
-            .add_enabled(
-                !self.is_playing && snapshot.has_rom,
-                egui::Button::new("Step Frame"),
-            )
-            .clicked()
-        {
-            self.run_frame(ctx);
-        }
-        if ui
-            .add_enabled(
-                !self.is_playing && snapshot.has_rom,
-                egui::Button::new("Step 60 Frames"),
-            )
-            .clicked()
-        {
-            self.session
-                .set_controller1(self.effective_controller_state(ctx));
-            match self.session.run_frames(60) {
-                Ok(()) => {
-                    self.refresh_framebuffer(ctx);
-                    self.status_line = self.session.snapshot().status_line();
-                }
-                Err(error) => self.status_line = error.to_string(),
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(
+                    !self.is_playing && snapshot.has_rom && self.pending_step_frames == 0,
+                    egui::Button::new("Step Frame"),
+                )
+                .clicked()
+            {
+                self.pending_step_frames = 1;
+                ctx.request_repaint();
             }
+            if ui
+                .add_enabled(
+                    !self.is_playing && snapshot.has_rom && self.pending_step_frames == 0,
+                    egui::Button::new("Step 60 Frames"),
+                )
+                .clicked()
+            {
+                // A sixty-frame synchronous call blocks all Wayland events.
+                // One frame is instead processed per UI tick, with Cancel.
+                self.pending_step_frames = 60;
+                ctx.request_repaint();
+            }
+            if self.pending_step_frames > 0 {
+                ui.label(format!("{} frames remaining", self.pending_step_frames));
+                if ui.button("Cancel").clicked() {
+                    self.pending_step_frames = 0;
+                }
+            }
+        });
+        if self.frame_performance.samples > 0 {
+            ui.label(format!(
+                "Emulation: {:.1} ms/frame avg; {:.1} ms peak; {} of {} frames over 16.7 ms",
+                self.frame_performance.avg_ms,
+                self.frame_performance.peak_ms,
+                self.frame_performance.slow_frames,
+                self.frame_performance.samples,
+            ));
         }
         ui.separator();
         if let Some(texture) = &self.framebuffer_texture {
@@ -1615,11 +1686,23 @@ impl eframe::App for StarbyteApp {
         }
 
         if self.is_playing && self.session.snapshot().has_rom {
+            self.pending_step_frames = 0;
             if self.frame_clock.take_due_frame(Instant::now()) {
                 self.run_frame(ctx);
             }
             if self.is_playing {
                 ctx.request_repaint_after(self.frame_clock.time_until_next_frame(Instant::now()));
+            }
+        } else if self.pending_step_frames > 0 && self.session.snapshot().has_rom {
+            let previous_frame = self.session.snapshot().frame;
+            self.run_frame(ctx);
+            if self.session.snapshot().frame > previous_frame {
+                self.pending_step_frames -= 1;
+            } else {
+                self.pending_step_frames = 0;
+            }
+            if self.pending_step_frames > 0 {
+                ctx.request_repaint();
             }
         } else {
             ctx.request_repaint_after(Duration::from_millis(100));
@@ -1649,7 +1732,8 @@ mod playback_tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        FRAME_INTERVAL, FrameClock, Vec2, fit_game_size, is_compact_layout, write_png_screenshot,
+        FRAME_INTERVAL, FrameClock, FramePerformance, Vec2, fit_game_size, is_compact_layout,
+        write_png_screenshot,
     };
 
     #[test]
@@ -1666,6 +1750,20 @@ mod playback_tests {
 
         clock.reset(late);
         assert!(clock.take_due_frame(late));
+    }
+
+    #[test]
+    fn frame_performance_counts_over_budget_without_accumulating_lag() {
+        let mut stats = FramePerformance::default();
+        stats.record(Duration::from_millis(10));
+        assert_eq!(stats.samples, 1);
+        assert_eq!(stats.slow_frames, 0);
+        assert_eq!(stats.avg_ms, 10.0);
+        stats.record(Duration::from_millis(20));
+        assert_eq!(stats.samples, 2);
+        assert_eq!(stats.slow_frames, 1);
+        assert_eq!(stats.peak_ms, 20.0);
+        assert!((stats.avg_ms - 11.0).abs() < f32::EPSILON);
     }
 
     #[test]

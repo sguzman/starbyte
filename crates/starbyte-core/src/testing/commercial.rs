@@ -1173,8 +1173,8 @@ mod tests {
 
     use super::{
         ByteProbeExpectation, CommercialFixture, ExpectedCommercialOutcome, MmioProbeExpectation,
-        PpuWriteActivityExpectation, load_suite, record_fixture, run_with_current_core_detailed,
-        summarize,
+        PpuWriteActivityExpectation, load_suite, record_fixture, record_fixture_with_trace_start,
+        run_with_current_core_detailed, run_with_current_core_executed, summarize,
     };
 
     fn write_test_rom(path: &Path) {
@@ -1252,6 +1252,57 @@ mod tests {
                 .is_some_and(|trace| !trace.is_empty())
         );
         assert!(!recorded.fixture.expected.mmio_probes.is_empty());
+    }
+
+    #[test]
+    fn late_frame_trace_skips_initial_frames_and_replays_consistently() {
+        let dir = tempdir().unwrap();
+        let rom_path = dir.path().join("commercial.sfc");
+        write_test_rom(&rom_path);
+
+        let recorded = record_fixture_with_trace_start(
+            &rom_path,
+            3,
+            &AssetConfig::default(),
+            ControllerState::default(),
+            &[],
+            true,
+            2,
+        )
+        .unwrap();
+        assert_eq!(recorded.report.frame_counter, 3);
+        assert_eq!(recorded.fixture.trace.as_ref().unwrap().trace_start_frame, 2);
+        let recorded_trace = recorded.trace.unwrap();
+        assert!(!recorded_trace.is_empty());
+        assert!(recorded_trace.iter().all(|entry| entry.frame == 2));
+
+        let executed = run_with_current_core_executed(
+            &[recorded.fixture],
+            &AssetConfig::default(),
+            true,
+        );
+        let replay_trace = executed[0].trace.as_ref().unwrap();
+        assert!(!replay_trace.is_empty());
+        assert!(replay_trace.iter().all(|entry| entry.frame == 2));
+    }
+
+    #[test]
+    fn late_frame_trace_rejects_start_after_end() {
+        let dir = tempdir().unwrap();
+        let rom_path = dir.path().join("commercial.sfc");
+        write_test_rom(&rom_path);
+
+        let error = record_fixture_with_trace_start(
+            &rom_path,
+            1,
+            &AssetConfig::default(),
+            ControllerState::default(),
+            &[],
+            true,
+            2,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("trace start frame 2 exceeds requested 1"));
     }
 
     #[test]

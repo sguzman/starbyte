@@ -514,7 +514,8 @@ impl Ppu {
             } else {
                 i16::from(x_low)
             };
-            let sprite_y = i16::from(y);
+            // OBJ Y is an 8-bit counter. A sprite beginning near 255 may
+            // continue across scanline zero instead of disappearing.
             let palette = usize::from((attributes >> 1) & 0x07);
             let rank = sprite_priority_rank(mode, (attributes >> 4) & 0x03);
             let name_select = attributes & 0x01 != 0;
@@ -524,8 +525,8 @@ impl Ppu {
             let tiles_per_side = usize::from(size / 8);
 
             for local_y in 0..usize::from(size) {
-                let screen_y = sprite_y + local_y as i16;
-                if !(0..framebuffer.height as i16).contains(&screen_y) {
+                let screen_y = (usize::from(y) + local_y) & 0xFF;
+                if screen_y >= framebuffer.height {
                     continue;
                 }
 
@@ -549,13 +550,15 @@ impl Ppu {
                     let tile_y = source_y / 8;
                     let fine_x = source_x % 8;
                     let fine_y = source_y % 8;
-                    let tile_offset = tile_y * 16 + tile_x;
                     if tile_x >= tiles_per_side || tile_y >= tiles_per_side {
                         continue;
                     }
-
+                    // OBJ character indices wrap within a 16x16 tile grid:
+                    // FF + one tile right is F0, not 100.
+                    let character = ((tile_number + tile_y * 16) & 0xF0)
+                        | ((tile_number + tile_x) & 0x0F);
                     let color_index =
-                        self.tile_pixel_4bpp(tile_base, tile_number + tile_offset, fine_x, fine_y);
+                        self.tile_pixel_4bpp(tile_base, character, fine_x, fine_y);
                     if color_index == 0 {
                         continue;
                     }
@@ -566,7 +569,7 @@ impl Ppu {
                         self.cgram[cgram_index % CGRAM_BYTES],
                         self.cgram[(cgram_index + 1) % CGRAM_BYTES],
                     ]);
-                    let pixel_index = screen_y as usize * framebuffer.width + screen_x as usize;
+                    let pixel_index = screen_y * framebuffer.width + screen_x as usize;
                     if rank >= depth[pixel_index] {
                         depth[pixel_index] = rank;
                         let offset = pixel_index * 4;

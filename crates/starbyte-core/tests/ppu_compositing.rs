@@ -281,3 +281,41 @@ fn bg_mosaic_snaps_pixels_to_screen_anchored_blocks() {
     }
     assert_eq!(pixel(&frame, 2, 0), [0, 0, 0, 255]);
 }
+
+/// SNES OBJ tile numbers wrap horizontally every 16 cells; Y positions
+/// wrap modulo 256 even if the visible image is only 224 scanlines.
+#[test]
+fn large_sprite_wraps_character_row_and_vertical_position() {
+    let mut ppu = Ppu::default();
+    let mut frame = FrameBuffer::default();
+    ppu.write_register(0x2100, 0x0F);
+    palette(&mut ppu, 129, 0x001F); // sprite red, color 1
+
+    // OBJ name-base $4000 bytes, tile $F0 at $5E00. The right-hand
+    // character of a sprite beginning with $FF must wrap to $F0.
+    vram_word(&mut ppu, 0x5E00, 0x0080); // tile F0 row 0 first pixel
+    vram_word(&mut ppu, 0x5E02, 0x0080); // tile F0 row 1 first pixel
+    ppu.write_register(0x2101, 0x01);
+    ppu.write_register(0x2102, 0x00);
+    ppu.write_register(0x2103, 0x00);
+    for value in [16, 0, 0xFF, 0x30] {
+        ppu.write_register(0x2104, value);
+    }
+    // Sprite 0 uses the large 16x16 size from OBJSEL.
+    ppu.write_register(0x2102, 0x00);
+    ppu.write_register(0x2103, 0x01);
+    ppu.write_register(0x2104, 0x02);
+    ppu.write_register(0x212C, 0x10);
+
+    ppu.render_frame(&mut frame);
+    assert_eq!(pixel(&frame, 24, 0), [248, 0, 0, 255]);
+
+    // The same object at Y=255 wraps its second row to screen Y=0.
+    ppu.write_register(0x2102, 0x00);
+    ppu.write_register(0x2103, 0x00);
+    for value in [16, 255, 0xFF, 0x30] {
+        ppu.write_register(0x2104, value);
+    }
+    ppu.render_frame(&mut frame);
+    assert_eq!(pixel(&frame, 24, 0), [248, 0, 0, 255]);
+}

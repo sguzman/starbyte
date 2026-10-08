@@ -12,6 +12,7 @@ Mission: a fun-first, comfy Rust SNES emulator for Linux/Wayland, with a delight
 - [ ] Verify native Wayland startup in a real compositor and observe resize, tiling, fullscreen, focus and dialogs.
 - [x] Redirect config and cache defaults to XDG user directories while retaining legacy reading and explicit overrides (code change; local verification pending).
 - [ ] Inspect the complete PPU title-screen path, including scroll, DMA, windows, raster effects and color math.
+- [x] Implement OBJ 16×16 tile-index wrapping and Y modulo 256, with synthetic visual tests (CI pending).
 - [x] Implement screen-anchored Mode 0/1 background mosaic sampling and synthetic pixel tests (CI pending).
 - [x] Correct BG screen-map and character-data VRAM base units and add a direct regression (source; CI pending).
 - [x] Respect forced blank and whole-frame brightness register levels for startup/fade baseline (source; CI pending).

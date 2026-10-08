@@ -86,6 +86,10 @@ The PPU's BGnSC screen base and BGnNBA character base registers encode VRAM **wo
 
 `$2106` now expands each selected BG's sampled pixel into screen-aligned N×N blocks (1–16 pixels). The software renderer applies this to Mode 0/1 backgrounds before scroll lookup, without moving the mosaic grid along with the layer. This is a whole-frame approximation: mid-scanline mosaic changes remain unimplemented.
 
+## Sprite tile numbering and screen-edge wrapping
+
+OBJ sprite tiles now wrap tile numbers inside the 16×16 character table instead of allowing the horizontal tile index to run past the row. OBJ Y positions wrap modulo 256, so sprites beginning at scanline 255 can extend onto the top of the screen. A synthetic 16×16 sprite fixture covers both behaviors. More advanced sprite restrictions (per-scanline tile limits, first-object rotation, object windows) remain unverified.
+
 ## Current functional gap
 
 The original commercial-ROM roadmap explicitly leaves SNES background/tilemap presentation, non-placeholder Super Mario World boot visuals, title/menu navigation, and first controllable gameplay incomplete. This is a **blocking playability gap**, not an optional accuracy task.

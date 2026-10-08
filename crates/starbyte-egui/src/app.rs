@@ -1085,10 +1085,10 @@ impl StarbyteApp {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let path = self.assets.screenshot_root().join(format!(
-            "starbyte-{timestamp}-frame-{}.png",
-            snapshot.frame
-        ));
+        let path = self
+            .assets
+            .screenshot_root()
+            .join(format!("starbyte-{timestamp}-frame-{}.png", snapshot.frame));
         match write_png_screenshot(
             &path,
             self.session.framebuffer_rgba(),
@@ -1648,7 +1648,9 @@ impl Drop for StarbyteApp {
 mod playback_tests {
     use std::time::{Duration, Instant};
 
-    use super::{FRAME_INTERVAL, FrameClock, Vec2, fit_game_size, is_compact_layout, write_png_screenshot};
+    use super::{
+        FRAME_INTERVAL, FrameClock, Vec2, fit_game_size, is_compact_layout, write_png_screenshot,
+    };
 
     #[test]
     fn clock_limits_work_to_one_frame_per_tick_and_does_not_accumulate_lag() {

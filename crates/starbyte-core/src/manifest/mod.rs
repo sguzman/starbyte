@@ -232,6 +232,9 @@ pub struct CheatSettings {
 pub struct LibrarySettings {
     /// Directories searched recursively for ROM images.
     pub rom_dirs: Vec<PathBuf>,
+    /// Up to eight most recently opened local ROM paths, newest first.
+    #[serde(default)]
+    pub recent_roms: Vec<PathBuf>,
     /// Current library presentation mode.
     pub active_view: LibraryViewMode,
     /// Whether to filter the library down to installed entries only.
@@ -244,6 +247,7 @@ impl Default for LibrarySettings {
     fn default() -> Self {
         Self {
             rom_dirs: Vec::new(),
+            recent_roms: Vec::new(),
             active_view: LibraryViewMode::default(),
             show_installed_only: false,
             cache_dir: None,
@@ -557,6 +561,7 @@ mod tests {
         let mut config = RuntimeConfig::default();
         config.library.active_view = LibraryViewMode::Detailed;
         config.library.rom_dirs.push(temp_dir.path().join("roms"));
+        config.library.recent_roms.push(temp_dir.path().join("game.sfc"));
         config.mode = AppMode::Prod;
         config.ui.show_log_panel = false;
         config.ui.details_panel_width = 512.0;
@@ -569,6 +574,7 @@ mod tests {
         let loaded = RuntimeConfig::load_or_default(&path).unwrap();
         assert_eq!(loaded.library.active_view, LibraryViewMode::Detailed);
         assert_eq!(loaded.library.rom_dirs.len(), 1);
+        assert_eq!(loaded.library.recent_roms.len(), 1);
         assert_eq!(loaded.mode, AppMode::Prod);
         assert!(!loaded.ui.show_log_panel);
         assert_eq!(loaded.ui.details_panel_width, 512.0);
@@ -603,6 +609,7 @@ show_installed_only = false
 
         let loaded = RuntimeConfig::load_or_default(&path).unwrap();
         assert_eq!(loaded.mode, AppMode::Dev);
+        assert!(loaded.library.recent_roms.is_empty());
         assert!(loaded.ui.show_log_panel);
     }
 }

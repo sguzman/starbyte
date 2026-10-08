@@ -173,6 +173,7 @@ impl StarbyteApp {
         let mut status_line = "Waiting for library scan...".to_owned();
         if let Some(path) = rom_path {
             session.load_rom(&path)?;
+            record_recent_rom(&mut config.library.recent_roms, path.as_path());
             let _ = session.run_frame();
             status_line = format!("Loaded {}", path.display());
         }
@@ -293,7 +294,11 @@ impl StarbyteApp {
                     config,
                     status,
                 } => {
+                    // Background metadata refresh must not erase games opened
+                    // since the asynchronous refresh began.
+                    let recent_roms = self.config.library.recent_roms.clone();
                     self.config = config;
+                    self.config.library.recent_roms = recent_roms;
                     self.cache_root = resolve_cache_root(&self.config, &self.assets);
                     self.library_snapshot = snapshot;
                     self.update_snapshot_cheat_flags();
@@ -309,6 +314,7 @@ impl StarbyteApp {
                     Ok(()) => {
                         self.loaded_game_id = Some(entry.game_id.clone());
                         let _ = self.session.set_active_cheats(&entry.cheats);
+                        self.remember_recent_rom(&rom_path);
                         let _ = self.session.run_frame();
                         self.refresh_framebuffer(ctx);
                         self.is_playing = true;
@@ -525,6 +531,50 @@ impl StarbyteApp {
         }
     }
 
+    fn remember_recent_rom(&mut self, path: &Path) {
+        record_recent_rom(&mut self.config.library.recent_roms, path);
+        self.persist_config();
+    }
+
+    fn open_recent_rom(&mut self, path: &Path, ctx: &egui::Context) {
+        match self.session.load_rom(path) {
+            Ok(()) => {
+                let matching = self
+                    .library_snapshot
+                    .entries
+                    .iter()
+                    .find(|entry| {
+                        entry.local.as_ref().is_some_and(|local| {
+                            local.rom_path.as_path() == path
+                                || local.extracted_cache_path.as_deref() == Some(path)
+                        })
+                    })
+                    .cloned();
+                self.loaded_game_id = matching.as_ref().map(|entry| entry.game_id.clone());
+                if let Some(entry) = matching {
+                    let _ = self.session.set_active_cheats(&entry.cheats);
+                }
+                self.remember_recent_rom(path);
+                if let Err(error) = self.session.run_frame() {
+                    self.status_line = error.to_string();
+                    self.is_playing = false;
+                    return;
+                }
+                self.refresh_framebuffer(ctx);
+                self.is_playing = true;
+                self.play_view = true;
+                self.pending_step_frames = 0;
+                self.frame_performance = FramePerformance::default();
+                self.frame_clock.reset(Instant::now());
+                self.last_sram_flush = Instant::now();
+                self.status_line = format!("Loaded {}", path.display());
+            }
+            Err(error) => {
+                self.status_line = format!("Could not load recent game: {error}");
+            }
+        }
+    }
+
     fn queue_load_entry(&mut self, entry: &LibraryEntry) {
         if entry.installed_status == InstalledStatus::Missing {
             self.status_line = format!("{} is not installed locally.", entry.display_title);
@@ -654,6 +704,26 @@ impl StarbyteApp {
             {
                 self.play_view = true;
             }
+            ui.menu_button("Recent", |ui| {
+                let paths = self.config.library.recent_roms.clone();
+                if paths.is_empty() {
+                    ui.label("No games opened yet");
+                }
+                for path in paths {
+                    let label = path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| path.display().to_string());
+                    if ui
+                        .add_enabled(path.is_file(), egui::Button::new(label))
+                        .on_hover_text(path.display().to_string())
+                        .clicked()
+                    {
+                        self.open_recent_rom(&path, ctx);
+                        ui.close();
+                    }
+                }
+            });
             if ui
                 .add_enabled(
                     has_rom,
@@ -1733,7 +1803,7 @@ mod playback_tests {
 
     use super::{
         FRAME_INTERVAL, FrameClock, FramePerformance, Vec2, fit_game_size, is_compact_layout,
-        write_png_screenshot,
+        record_recent_rom, write_png_screenshot,
     };
 
     #[test]
@@ -1750,6 +1820,23 @@ mod playback_tests {
 
         clock.reset(late);
         assert!(clock.take_due_frame(late));
+    }
+
+    #[test]
+    fn recent_games_are_deduplicated_newest_first_and_bounded() {
+        let mut recent = Vec::new();
+        for index in 0..12 {
+            record_recent_rom(
+                &mut recent,
+                std::path::Path::new(&format!("starbyte-test-game-{index}.sfc")),
+            );
+        }
+        assert_eq!(recent.len(), 8);
+        assert_eq!(recent[0], std::path::PathBuf::from("starbyte-test-game-11.sfc"));
+        record_recent_rom(&mut recent, std::path::Path::new("starbyte-test-game-7.sfc"));
+        assert_eq!(recent.len(), 8);
+        assert_eq!(recent[0], std::path::PathBuf::from("starbyte-test-game-7.sfc"));
+        assert_eq!(recent.iter().filter(|path| *path == &recent[0]).count(), 1);
     }
 
     #[test]
@@ -1809,6 +1896,13 @@ mod playback_tests {
         assert!(is_compact_layout(1200.0, 500.0));
         assert!(!is_compact_layout(960.0, 650.0));
     }
+}
+
+fn record_recent_rom(recent: &mut Vec<PathBuf>, path: &Path) {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    recent.retain(|old| old != &path);
+    recent.insert(0, path);
+    recent.truncate(8);
 }
 
 fn empty_snapshot() -> LibrarySnapshot {

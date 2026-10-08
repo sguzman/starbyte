@@ -121,17 +121,39 @@ On 2026-10-08 the user captured **22,220 CPU steps of frame 38** with `run --fra
 3. With `X=0`, `PLY` at `$00:86E1` removes **two** bytes, incorrectly consuming return address `$9328`. The subsequent `PLA` removes the remaining bank byte `$00` **and the low byte `$74` of the outer `JSR` return**, leaving `$7400`. `STA $01` constructs pointer bank `$74`, and `JML [$00]` at instruction **20,880**, address **`$00:86F7`**, jumps to **`$74:0000`**.
 4. At `$74:0000` the CPU reads `$00` (`BRK`); the native-mode BRK vector at `$00:FFE6` is `$FFFF`. A repeating `$00:FFFF` / `$00:0002` / `$00:0004` BRK path then pushes four more bytes per iteration until the stack wraps. This **fully explains the stack and PC explosion observed in frame 38**, without implicating the PPU as the initiating fault.
 
-**Important distinction:** the trace proves **how** a cleared X flag corrupts the long-call dispatcher. It does **not yet prove where X was cleared**. The first frame-38 instruction already has P=`$22` (X=0), and the CPU returns from an NMI with that same width before calling `RunGameMode`. In the preceding 39-frame diagnostic, **frame 36 ended with P=`$10` (X=1)** while **frame 37 ended with P=`$22` (X=0)**. Thus the flag transition is definitively bounded to frame 37 (which also contains the first game-mode update). We must identify the instruction that clears this bit there, not patch the later jump. Do **not** force X=1 at this game-specific code address; find and fix the general 65816 flag or stack cause.
+**Historical interpretation before the frame-37 trace:** the frame-38 evidence demonstrated **how** a cleared X flag corrupted the long-call dispatcher but did not yet explain **where** X was cleared. The first frame-38 instruction already has P=`$22` (X=0), and the CPU returns from an NMI with that same width before calling `RunGameMode`. In the preceding 39-frame diagnostic, **frame 36 ended with P=`$10` (X=1)** while **frame 37 ended with P=`$22` (X=0)**. Thus the flag transition is definitively bounded to frame 37 (which also contains the first game-mode update). The frame-37 trace below subsequently identified the incorrect native interrupt stack push at instruction 13,604; **do not** force X=1 at any game-specific address.
 
-**Next best capture is frame 37** (one-based `--trace-frame 37`) to identify the earliest transition of processor-status bit `$10`. It can be extracted from the existing bounded per-instruction trace implementation; do not repeat frame 38 or run 360 frames unnecessarily.
+The subsequent bounded frame-37 trace (below) established the initiating defect without repeating long runs.
+
+## Sixth probe: frame-37 instruction trace — root cause confirmed and fixed in core
+
+On 2026-10-08 the user captured the entire **14,135-step frame 37** (`run --frames 37 --no-save-ram --trace-frame 37`). The trace completed successfully; it provides a direct explanation of why frame 38 enters the `$74:0000` jump/BRK spiral:
+
+| Step (zero-based) | Instruction | 65816 processor state | Finding |
+| --- | --- | --- | --- |
+| 13,602–13,603 | `LDA #$81; STA $4200` (`$00:93F7`–`$00:93F9`) | P = `$B0`, native mode, X = 1 | Super Mario World enables NMI and automatic joypad polling as expected. |
+| **13,604** | **Hardware NMI entry** at `$00:93FC` | **P = `$B0`; stacked status = `$A0` at `$01FA`** | **First demonstrably incorrect event:** CPU implementation removed bit `$10` from the stacked processor status in native mode. |
+| 13,605–13,695 | `$00:816A`–`$00:82C2` | Normal NMI prologue, PPU updates, epilogue | Handler reads status and restores A/X/Y/DBR. The NMI code's temporary `REP`/`SEP` changes are intentional. |
+| **13,696** | **`RTI`** at `$00:82C3` | **restores P = `$A0`**, returns to `$00:93FC` | X width has silently changed from 8-bit to 16-bit. |
+| 13,697–13,700 | `RTS`; `STZ $10`; game-loop poll | Status becomes `$22` following a legitimate load | Main thread inherits the incorrect 16-bit index width; this makes next frame's `ExecutePtr` use an incorrect stack width. |
+
+The error was in the general `Cpu65816::service_interrupt` implementation:
+
+```rust
+self.push_stack(bus, trace, self.registers.p & !0x10)?;
+```
+
+Bit `$10` is an emulation-mode B marker in the pushed processor status, **but the native-mode X width flag**. Clearing it during NMI/IRQ stack push was wrong. The implementation now constructs status according to CPU mode: clear the emulation-mode B marker on hardware interrupts, but **preserve the entire native P register**. Regression tests exercise native NMI, native IRQ and emulation NMI with stack bytes and `RTI`; a full-frame native NMI test also asserts preservation of M/X width. The fix is general-purpose, not game-specific.
+
+**Post-fix Super Mario World gameplay has not yet been verified.** The proof here establishes the specific cause of frame-37 index-width loss and the resulting frame-38 wrong-bank jump. It does not prove other CPU, PPU, DMA or audio correctness.
 
 ## Next evidence needed
 
-1. Capture **frame 37**, not 38, using `run --frames 37 --no-save-ram --trace-frame 37 --trace-out /tmp/starbyte-frame37.jsonl`. Find the *first* unexpected clearing of CPU P bit `$10` before the second game-mode dispatch. Trace the responsible instruction and its stack/register input.
-2. Validate any proposed 65816 flag or memory fix with copyright-free synthetic tests; compare resulting behavior with the public SMW initialization/disassembly (no ROM-specific hacks).
-3. Re-run a bounded 60-frame commercial probe after the fix; confirm the ExecutePtr indirect jump uses a valid bank/target, no cascading BRK sequence, and steady native stack before attempting graphics work.
-4. Record the exact local cartridge digest and region/revision without uploading ROM bytes.
-5. Mark game playable only after a stable title scene and controller navigation are observed.
+1. Re-run a bounded **120-frame** `run --no-save-ram --frame-log` after pulling the native-interrupt-status fix. Verify that execution gets beyond 38 frames, the frame-38 `$74:0000` jump/BRK chain is absent, and stack registers remain plausible.
+2. If CPU execution advances but video is corrupt, inspect PPU/DMA activity and capture selectively, using a single later instruction frame only when necessary. Avoid inferring graphics correctness from frame counts alone.
+3. Record the exact local cartridge digest and region/revision without uploading ROM bytes.
+4. Validate any further demonstrated emulator defect with copyright-free synthetic regressions before another commercial probe.
+5. Mark the game playable only after a stable title scene and responsive controller navigation are observed.
 
 ## Acceptance criteria
 

@@ -367,6 +367,36 @@ fn run_persists_save_ram_to_configured_directory() {
 }
 
 #[test]
+fn diagnostic_run_can_skip_loading_and_writing_save_ram() {
+    let dir = tempdir().unwrap();
+    let rom = dir.path().join("sample.sfc");
+    let existing_save = dir.path().join("sample.srm");
+    let report = dir.path().join("report.json");
+    write_test_rom(&rom);
+    // A deliberately invalid SRAM sidecar would normally reject the run.
+    fs::write(&existing_save, [0xAB]).unwrap();
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "run",
+            rom.to_str().unwrap(),
+            "--frames",
+            "0",
+            "--no-save-ram",
+            "--report-json",
+            report.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(fs::read(&existing_save).unwrap(), [0xAB]);
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
+    assert!(report["save_ram_path"].is_null());
+}
+
+#[test]
 fn run_succeeds_without_external_spc700_ipl_rom() {
     let dir = tempdir().unwrap();
     let rom = dir.path().join("sample.sfc");

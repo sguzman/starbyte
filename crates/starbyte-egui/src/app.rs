@@ -699,10 +699,7 @@ impl StarbyteApp {
                 {
                     ctx.request_repaint();
                 }
-                if ui
-                    .checkbox(&mut self.show_input_overlay, "Input")
-                    .changed()
-                {
+                if ui.checkbox(&mut self.show_input_overlay, "Input").changed() {
                     ctx.request_repaint();
                 }
                 if ui.button("Fullscreen").clicked() {

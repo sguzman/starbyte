@@ -34,6 +34,10 @@ The GUI now has a 520×360 minimum, a Play/Pause frame scheduler, compact-width 
 
 **Important:** the audio sample synthesis in `starbyte-core/src/emulator.rs` is a placeholder, and `starbyte-egui` has no sound-device output backend. The audio configuration UI does not mean that live game sound currently works.
 
+## Responsive desktop layout
+
+For windows narrower than 960 logical pixels, or shorter than 640 logical pixels, the library remains central. Settings, Session and Logs become on-demand pop-up windows, rather than consuming minimum-width docked columns. Library details are also suppressed when the remaining space cannot fit them. Refresh commands now live in a menu to reduce top-bar crowding. This is an implementation claim, **not** a native compositor acceptance result.
+
 ## Linux state directories
 
 Configuration and cache defaults now follow XDG paths with a HOME fallback, rather than writing into the current checkout. Existing worktree/cached configuration is read as a fallback on matching working directories; explicit path overrides are respected. This change has not yet been smoke-tested on the user's Wayland machine.

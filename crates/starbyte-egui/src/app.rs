@@ -28,8 +28,8 @@ use starbyte_frontend::{
 const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
 const COMPACT_LAYOUT_WIDTH: f32 = 960.0;
 
-fn is_compact_layout(width: f32) -> bool {
-    width < COMPACT_LAYOUT_WIDTH
+fn is_compact_layout(width: f32, height: f32) -> bool {
+    width < COMPACT_LAYOUT_WIDTH || height < 640.0
 }
 
 /// Schedule no more than one frame per UI update; never pile up catch-up work.
@@ -96,6 +96,7 @@ pub struct StarbyteApp {
     frame_clock: FrameClock,
     show_compact_settings: bool,
     show_compact_session: bool,
+    show_compact_logs: bool,
 }
 
 impl StarbyteApp {
@@ -183,6 +184,7 @@ impl StarbyteApp {
             frame_clock: FrameClock::new(Instant::now()),
             show_compact_settings: false,
             show_compact_session: false,
+            show_compact_logs: false,
         };
         app.persist_config();
         if app.config.advanced.refresh_on_startup {
@@ -611,22 +613,28 @@ impl StarbyteApp {
                 self.persist_config();
             }
 
-            if ui.button("Refresh Metadata").clicked() {
-                self.queue_job(WorkerCommandKind::RefreshMetadata);
-            }
-            if ui.button("Refresh Covers").clicked() {
-                self.queue_job(WorkerCommandKind::RefreshCovers {
-                    target: LibraryTarget::default(),
-                });
-            }
-            if ui.button("Refresh Cheats").clicked() {
-                self.queue_job(WorkerCommandKind::RefreshCheats {
-                    target: LibraryTarget::default(),
-                });
-            }
-            if ui.button("Refresh All").clicked() {
-                self.queue_job(WorkerCommandKind::RefreshAll);
-            }
+            ui.menu_button("Refresh", |ui| {
+                if ui.button("Metadata").clicked() {
+                    self.queue_job(WorkerCommandKind::RefreshMetadata);
+                    ui.close();
+                }
+                if ui.button("Covers").clicked() {
+                    self.queue_job(WorkerCommandKind::RefreshCovers {
+                        target: LibraryTarget::default(),
+                    });
+                    ui.close();
+                }
+                if ui.button("Cheats").clicked() {
+                    self.queue_job(WorkerCommandKind::RefreshCheats {
+                        target: LibraryTarget::default(),
+                    });
+                    ui.close();
+                }
+                if ui.button("Everything").clicked() {
+                    self.queue_job(WorkerCommandKind::RefreshAll);
+                    ui.close();
+                }
+            });
             if ui
                 .checkbox(&mut self.config.prefer_dark_mode, "Night Mode")
                 .changed()
@@ -643,6 +651,9 @@ impl StarbyteApp {
                 if ui.button("Session").clicked() {
                     self.show_compact_session = !self.show_compact_session;
                 }
+                if ui.button("Logs").clicked() {
+                    self.show_compact_logs = !self.show_compact_logs;
+                }
             } else {
                 ui.checkbox(&mut self.config.ui.show_left_panel, "Left");
                 ui.add_enabled_ui(
@@ -652,8 +663,8 @@ impl StarbyteApp {
                     },
                 );
                 ui.checkbox(&mut self.config.ui.show_right_panel, "Session");
+                ui.checkbox(&mut self.config.ui.show_log_panel, "Logs");
             }
-            ui.checkbox(&mut self.config.ui.show_log_panel, "Logs");
             if ui.button("Save Layout").clicked() {
                 self.persist_config();
             }
@@ -1272,49 +1283,49 @@ impl StarbyteApp {
         self.show_properties = open;
     }
 
+    fn draw_logs_contents(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.horizontal_wrapped(|ui| {
+            ui.heading("Logs");
+            if ui.button("Open Log Folder").clicked() {
+                let _ = open_path(&self.cache_root.join("logs"));
+            }
+            if ui.button("Copy All").clicked() {
+                ctx.copy_text(snapshot_logs(&self.logs).join("\n"));
+            }
+            if ui.button("Clear View").clicked()
+                && let Ok(mut lines) = self.logs.lock()
+            {
+                lines.clear();
+            }
+            ui.checkbox(&mut self.config.ui.log_auto_scroll, "Auto-scroll");
+        });
+        ui.separator();
+        let lines = snapshot_logs(&self.logs);
+        egui::ScrollArea::vertical()
+            .stick_to_bottom(self.config.ui.log_auto_scroll)
+            .show(ui, |ui| {
+                for line in lines {
+                    let color = if line.contains(" ERROR ") || line.contains(" error ") {
+                        egui::Color32::LIGHT_RED
+                    } else if line.contains(" WARN ") || line.contains(" warn ") {
+                        egui::Color32::YELLOW
+                    } else {
+                        egui::Color32::LIGHT_GRAY
+                    };
+                    ui.label(RichText::new(line).monospace().color(color));
+                }
+            });
+    }
+
     fn draw_log_panel(&mut self, ctx: &egui::Context) {
         if !self.config.ui.show_log_panel {
             return;
         }
-
         let response = egui::TopBottomPanel::bottom("logs")
             .resizable(true)
             .default_height(self.config.ui.log_panel_height)
             .min_height(120.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.heading("Logs");
-                    if ui.button("Open Log Folder").clicked() {
-                        let _ = open_path(&self.cache_root.join("logs"));
-                    }
-                    if ui.button("Copy All").clicked() {
-                        let text = snapshot_logs(&self.logs).join("\n");
-                        ctx.copy_text(text);
-                    }
-                    if ui.button("Clear View").clicked()
-                        && let Ok(mut lines) = self.logs.lock()
-                    {
-                        lines.clear();
-                    }
-                    ui.checkbox(&mut self.config.ui.log_auto_scroll, "Auto-scroll");
-                });
-                ui.separator();
-                let lines = snapshot_logs(&self.logs);
-                egui::ScrollArea::vertical()
-                    .stick_to_bottom(self.config.ui.log_auto_scroll)
-                    .show(ui, |ui| {
-                        for line in lines {
-                            let color = if line.contains(" ERROR ") || line.contains(" error ") {
-                                egui::Color32::LIGHT_RED
-                            } else if line.contains(" WARN ") || line.contains(" warn ") {
-                                egui::Color32::YELLOW
-                            } else {
-                                egui::Color32::LIGHT_GRAY
-                            };
-                            ui.label(RichText::new(line).monospace().color(color));
-                        }
-                    });
-            });
+            .show(ctx, |ui| self.draw_logs_contents(ui, ctx));
         self.config.ui.log_panel_height = response.response.rect.height();
     }
 }
@@ -1326,9 +1337,12 @@ impl eframe::App for StarbyteApp {
         self.poll_gamepad_events();
         self.poll_worker_events(ctx);
 
-        let compact = is_compact_layout(ctx.available_rect().width());
+        let available = ctx.available_rect();
+        let compact = is_compact_layout(available.width(), available.height());
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| self.draw_top_bar(ui, ctx, compact));
-        self.draw_log_panel(ctx);
+        if !compact {
+            self.draw_log_panel(ctx);
+        }
 
         if !compact && self.config.ui.show_left_panel {
             let response = egui::SidePanel::left("settings")
@@ -1352,6 +1366,7 @@ impl eframe::App for StarbyteApp {
             if !compact
                 && self.config.library.active_view == LibraryViewMode::List
                 && self.config.ui.show_details_panel
+                && ui.available_width() >= 620.0
             {
                 let response = egui::SidePanel::right("details")
                     .resizable(true)
@@ -1381,6 +1396,17 @@ impl eframe::App for StarbyteApp {
                 .resizable(true)
                 .show(ctx, |ui| self.draw_session_panel(ui, ctx));
             self.show_compact_session = open;
+        }
+
+        if compact && self.show_compact_logs {
+            let mut open = self.show_compact_logs;
+            egui::Window::new("Logs")
+                .open(&mut open)
+                .default_width(420.0)
+                .default_height(230.0)
+                .resizable(true)
+                .show(ctx, |ui| self.draw_logs_contents(ui, ctx));
+            self.show_compact_logs = open;
         }
 
         if self.show_properties {
@@ -1424,9 +1450,10 @@ mod playback_tests {
 
     #[test]
     fn small_tiled_windows_use_popup_panels() {
-        assert!(is_compact_layout(520.0));
-        assert!(is_compact_layout(959.0));
-        assert!(!is_compact_layout(960.0));
+        assert!(is_compact_layout(520.0, 900.0));
+        assert!(is_compact_layout(959.0, 900.0));
+        assert!(is_compact_layout(1200.0, 500.0));
+        assert!(!is_compact_layout(960.0, 650.0));
     }
 }
 

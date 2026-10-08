@@ -333,6 +333,18 @@ impl SystemBus {
         &self.apu_to_cpu_io
     }
 
+    /// Number of bytes transferred through the DMA and HDMA engines.
+    #[must_use]
+    pub const fn dma_transferred_bytes(&self) -> u64 {
+        self.dma.transfer_count
+    }
+
+    /// Current CPU interrupt-enable bits and H/V IRQ match coordinates.
+    #[must_use]
+    pub const fn irq_timer_configuration(&self) -> (u8, u16, u16) {
+        (self.nmitimen, self.htime, self.vtime)
+    }
+
     /// Borrow compact MMIO observability counters collected during execution.
     #[must_use]
     pub const fn observability(&self) -> &SystemBusObservability {

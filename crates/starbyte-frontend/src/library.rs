@@ -340,7 +340,7 @@ impl LibraryService {
         let mut discovered = BTreeMap::<GameId, LocalRomInfo>::new();
         for rom_dir in &self.config.library.rom_dirs {
             for candidate in
-                discover_rom_files(rom_dir, &archive_manifest_path, &mut archive_manifest)?
+                discover_rom_files(rom_dir, &mut archive_manifest)?
             {
                 let cache_key = candidate.cache_key();
                 seen_keys.insert(cache_key.clone());
@@ -1076,7 +1076,6 @@ where
 
 fn discover_rom_files(
     root: &Path,
-    archive_manifest_path: &Path,
     archive_manifest: &mut ArchiveListingManifest,
 ) -> Result<Vec<RomCandidate>> {
     if !root.exists() {
@@ -1093,7 +1092,7 @@ fn discover_rom_files(
             } else if is_rom_path(&path) {
                 files.push(RomCandidate::File(path));
             } else if is_zip_path(&path) {
-                match discover_zip_members(&path, archive_manifest_path, archive_manifest) {
+                match discover_zip_members(&path, archive_manifest) {
                     Ok(members) => files.extend(members),
                     Err(error) => {
                         warn!(archive = %path.display(), "skipping unreadable ZIP: {error}");
@@ -1121,7 +1120,6 @@ fn is_zip_path(path: &Path) -> bool {
 
 fn discover_zip_members(
     path: &Path,
-    archive_manifest_path: &Path,
     archive_manifest: &mut ArchiveListingManifest,
 ) -> Result<Vec<RomCandidate>> {
     let cache_key = format!("zip::{}", path.display());
@@ -1170,7 +1168,8 @@ fn discover_zip_members(
                 .collect(),
         },
     );
-    write_json(archive_manifest_path.to_path_buf(), archive_manifest)?;
+    // One atomic manifest flush at the end of the library scan; rewriting
+    // this growing map for every ZIP turns large collections into O(N²) I/O.
     Ok(members)
 }
 

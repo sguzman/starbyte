@@ -509,8 +509,11 @@ impl Ppu {
             let large = (high_entry >> (bit_shift + 1)) & 0x01 != 0;
             let size = if large { large_size } else { small_size };
 
+            // OBJ X is a signed nine-bit coordinate. $100 is -256,
+            // while $1FF is -1. Adding the ninth bit then subtracting
+            // 512 incorrectly places every negative-X sprite offscreen.
             let sprite_x = if x_high {
-                i16::from(x_low) - 512
+                i16::from(x_low) - 256
             } else {
                 i16::from(x_low)
             };

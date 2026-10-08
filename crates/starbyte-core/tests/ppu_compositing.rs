@@ -310,12 +310,28 @@ fn large_sprite_wraps_character_row_and_vertical_position() {
     ppu.render_frame(&mut frame);
     assert_eq!(pixel(&frame, 24, 0), [248, 0, 0, 255]);
 
+    // X high bit means negative X. An OBJ at -8 with the same FF tile
+    // must expose its right-hand tile F0 at screen pixel 0.
+    ppu.write_register(0x2102, 0x00);
+    ppu.write_register(0x2103, 0x00);
+    for value in [248, 0, 0xFF, 0x30] {
+        ppu.write_register(0x2104, value);
+    }
+    ppu.write_register(0x2102, 0x00);
+    ppu.write_register(0x2103, 0x01);
+    ppu.write_register(0x2104, 0x03); // 9-bit negative X and large-size bit.
+    ppu.render_frame(&mut frame);
+    assert_eq!(pixel(&frame, 0, 0), [248, 0, 0, 255]);
+
     // The same object at Y=255 wraps its second row to screen Y=0.
     ppu.write_register(0x2102, 0x00);
     ppu.write_register(0x2103, 0x00);
     for value in [16, 255, 0xFF, 0x30] {
         ppu.write_register(0x2104, value);
     }
+    ppu.write_register(0x2102, 0x00);
+    ppu.write_register(0x2103, 0x01);
+    ppu.write_register(0x2104, 0x02); // Restore nonnegative X while keeping large sprite.
     ppu.render_frame(&mut frame);
     assert_eq!(pixel(&frame, 24, 0), [248, 0, 0, 255]);
 }

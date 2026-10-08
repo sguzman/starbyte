@@ -88,7 +88,7 @@ The PPU's BGnSC screen base and BGnNBA character base registers encode VRAM **wo
 
 ## Sprite tile numbering and screen-edge wrapping
 
-OBJ sprite tiles now wrap tile numbers inside the 16×16 character table instead of allowing the horizontal tile index to run past the row. OBJ Y positions wrap modulo 256, so sprites beginning at scanline 255 can extend onto the top of the screen. A synthetic 16×16 sprite fixture covers both behaviors. More advanced sprite restrictions (per-scanline tile limits, first-object rotation, object windows) remain unverified.
+OBJ sprite tiles now wrap tile numbers inside the 16×16 character table instead of allowing the horizontal tile index to run past the row. OBJ X uses signed 9-bit positions (-256 through +255) and OBJ Y positions wrap modulo 256, so sprites can be clipped at the left edge or extend from scanline 255 onto the top of the screen. A synthetic 16×16 sprite fixture covers both behaviors. More advanced sprite restrictions (per-scanline tile limits, first-object rotation, object windows) remain unverified.
 
 ## Current functional gap
 

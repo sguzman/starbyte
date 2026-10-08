@@ -1467,69 +1467,69 @@ impl eframe::App for StarbyteApp {
             }
 
             if !compact && self.config.ui.show_left_panel {
-            let response = egui::SidePanel::left("settings")
-                .resizable(true)
-                .default_width(self.config.ui.left_panel_width)
-                .min_width(240.0)
-                .show(ctx, |ui| self.draw_settings_panel(ui));
-            self.config.ui.left_panel_width = response.response.rect.width();
-        }
-
-        if !compact && self.config.ui.show_right_panel {
-            let response = egui::SidePanel::right("session")
-                .resizable(true)
-                .default_width(self.config.ui.right_panel_width)
-                .min_width(280.0)
-                .show(ctx, |ui| self.draw_session_panel(ui, ctx));
-            self.config.ui.right_panel_width = response.response.rect.width();
-        }
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            if !compact
-                && self.config.library.active_view == LibraryViewMode::List
-                && self.config.ui.show_details_panel
-                && ui.available_width() >= 620.0
-            {
-                let response = egui::SidePanel::right("details")
+                let response = egui::SidePanel::left("settings")
                     .resizable(true)
-                    .default_width(self.config.ui.details_panel_width)
-                    .min_width(260.0)
-                    .show_inside(ui, |ui| self.draw_details_panel(ui, ctx));
-                self.config.ui.details_panel_width = response.response.rect.width();
+                    .default_width(self.config.ui.left_panel_width)
+                    .min_width(240.0)
+                    .show(ctx, |ui| self.draw_settings_panel(ui));
+                self.config.ui.left_panel_width = response.response.rect.width();
             }
 
-            self.draw_library_browser(ui, ctx);
-        });
+            if !compact && self.config.ui.show_right_panel {
+                let response = egui::SidePanel::right("session")
+                    .resizable(true)
+                    .default_width(self.config.ui.right_panel_width)
+                    .min_width(280.0)
+                    .show(ctx, |ui| self.draw_session_panel(ui, ctx));
+                self.config.ui.right_panel_width = response.response.rect.width();
+            }
 
-        if compact && self.show_compact_settings {
-            let mut open = self.show_compact_settings;
-            egui::Window::new("Settings")
-                .open(&mut open)
-                .default_width(340.0)
-                .resizable(true)
-                .show(ctx, |ui| self.draw_settings_panel(ui));
-            self.show_compact_settings = open;
-        }
-        if compact && self.show_compact_session {
-            let mut open = self.show_compact_session;
-            egui::Window::new("Session")
-                .open(&mut open)
-                .default_width(340.0)
-                .resizable(true)
-                .show(ctx, |ui| self.draw_session_panel(ui, ctx));
-            self.show_compact_session = open;
-        }
+            egui::CentralPanel::default().show(ctx, |ui| {
+                if !compact
+                    && self.config.library.active_view == LibraryViewMode::List
+                    && self.config.ui.show_details_panel
+                    && ui.available_width() >= 620.0
+                {
+                    let response = egui::SidePanel::right("details")
+                        .resizable(true)
+                        .default_width(self.config.ui.details_panel_width)
+                        .min_width(260.0)
+                        .show_inside(ui, |ui| self.draw_details_panel(ui, ctx));
+                    self.config.ui.details_panel_width = response.response.rect.width();
+                }
 
-        if compact && self.show_compact_logs {
-            let mut open = self.show_compact_logs;
-            egui::Window::new("Logs")
-                .open(&mut open)
-                .default_width(420.0)
-                .default_height(230.0)
-                .resizable(true)
-                .show(ctx, |ui| self.draw_logs_contents(ui, ctx));
-            self.show_compact_logs = open;
-        }
+                self.draw_library_browser(ui, ctx);
+            });
+
+            if compact && self.show_compact_settings {
+                let mut open = self.show_compact_settings;
+                egui::Window::new("Settings")
+                    .open(&mut open)
+                    .default_width(340.0)
+                    .resizable(true)
+                    .show(ctx, |ui| self.draw_settings_panel(ui));
+                self.show_compact_settings = open;
+            }
+            if compact && self.show_compact_session {
+                let mut open = self.show_compact_session;
+                egui::Window::new("Session")
+                    .open(&mut open)
+                    .default_width(340.0)
+                    .resizable(true)
+                    .show(ctx, |ui| self.draw_session_panel(ui, ctx));
+                self.show_compact_session = open;
+            }
+
+            if compact && self.show_compact_logs {
+                let mut open = self.show_compact_logs;
+                egui::Window::new("Logs")
+                    .open(&mut open)
+                    .default_width(420.0)
+                    .default_height(230.0)
+                    .resizable(true)
+                    .show(ctx, |ui| self.draw_logs_contents(ui, ctx));
+                self.show_compact_logs = open;
+            }
 
             if self.show_properties {
                 self.draw_properties_window(ctx);

@@ -21,15 +21,15 @@ This document tracks the library-first `egui` frontend work that sits on top of 
 
 - [x] Add pluggable provider traits for metadata and cover retrieval.
 - [x] Implement one concrete public metadata/cover provider.
-- [x] Cache metadata under `.cache/starbyte/games/metadata/`.
-- [x] Cache cover images under `.cache/starbyte/games/covers/`.
+- [x] Cache metadata under the XDG Starbyte cache's `games/metadata/`.
+- [x] Cache cover images under the XDG Starbyte cache's `games/covers/`.
 - [x] Expose multiple library presentation modes: list, grid, and detailed.
 
 ## Phase 4: Cheats Integration And Per-Game Toggles
 
 - [x] Add a pluggable cheat-provider trait.
 - [x] Implement one concrete public cheat provider.
-- [x] Cache cheats under `.cache/starbyte/games/cheats/`.
+- [x] Cache cheats under the XDG Starbyte cache's `games/cheats/`.
 - [x] Persist enabled cheat selections per game in runtime config.
 - [x] Expose per-game cheat toggles in the properties UI.
 - [x] Apply enabled cheats to the live emulator runtime.
@@ -65,3 +65,13 @@ This document tracks the library-first `egui` frontend work that sits on top of 
 - [x] ROM downloading is intentionally unsupported in v1.
 - [x] Provider architecture leaves a future hook for ROM-download support without promising it now.
 - [x] The current implementation is intended as a usable desktop library shell, not a final frontend polish pass.
+
+## Current player-facing acceptance
+
+- [x] Provide a dedicated Play View with F9/Escape library navigation and nearest-neighbor scaling.
+- [x] Support simple Play/Pause and memory-only F5/F8 quick save/load.
+- [ ] Verify all game-view controls on Linux/Wayland and fix keyboard/gamepad focus defects.
+- [ ] Offer persistent, user-friendly save slots and real sound output.
+- [ ] Validate a recognizably playable user-supplied game rather than relying on a frontend smoke check.
+
+The older checked items above document delivered UI scaffolding; they do not establish native Wayland stability or commercial playability. For current readiness see [status](status.md).

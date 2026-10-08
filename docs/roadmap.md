@@ -1,80 +1,39 @@
 # Starbyte product roadmap
 
-Mission: a fun-first, comfy Rust SNES emulator for Linux/Wayland, with a delightful game library and useful player features. Hardware accuracy is justified by visible compatibility, stability or fun; it is not the overriding metric.
+**North star:** a comfy, feature-rich Rust SNES emulator for Linux/Wayland. Real gameplay, responsiveness, accessibility and pleasant player features outrank hardware accuracy for its own sake.
 
-**Status is not completion.** This roadmap lists future acceptance gates; the old checklist was a scaffold inventory, not proof of commercial playability. See [status](status.md) for evidence.
+## P0 — reach a genuinely playable game
 
-## P0 — establish a truthful playable baseline
+- [ ] Validate native Wayland launch, tiled-window behavior, fullscreen, focus and gamepad use on the target Linux desktop.
+- [ ] Capture a recognizable Super Mario World title frame from a user-supplied ROM; rule out synthetic/nonblack placeholders.
+- [ ] Drive title/menu navigation using controller input, then reach first controllable gameplay.
+- [ ] Trace and fix the earliest observed real-game blockers in PPU, CPU, DMA/HDMA and timing; do not introduce ROM-specific hacks.
+- [ ] Replace placeholder audio with authentic sound synthesis and a responsive Linux audio output path.
+- [ ] Measure and improve frame pacing, latency, pauses and save stability during sustained play.
+- [ ] Establish a reproducible compatibility matrix: exact ROM identity, title/menu/gameplay/audio/input/save acceptance and screenshots or traces.
 
-- [x] Return GitHub Actions to green without masking emulator failures (verified on 9b4b8bda).
+## P1 — make the desktop comfortable
 
-- [ ] Run and record Linux `fmt`, `clippy`, `test`, GUI build, and headless smoke checks.
-- [ ] Verify native Wayland startup in a real compositor and observe resize, tiling, fullscreen, focus and dialogs.
-- [x] Redirect config and cache defaults to XDG user directories while retaining legacy reading and explicit overrides (code change; local verification pending).
-- [ ] Inspect the complete PPU title-screen path, including DMA, full subscreen/color-window math and raster effects.
-- [x] Replace per-register paired scroll bytes with hardware-shared BG H/V write latches, 10-bit offsets, and synthetic scrolling tests (CI pending).
-- [x] Add fixed-color per-layer add/subtract/half math with OBJ palette exclusions and synthetic regressions (CI pending).
-- [x] Implement main-screen BG/OBJ window masking with two windows, inversion, inclusive bounds and logical combinations; add synthetic pixel tests (CI pending).
-- [x] Implement OBJ 16×16 tile-index wrapping and Y modulo 256, with synthetic visual tests (CI pending).
-- [x] Implement screen-anchored Mode 0/1 background mosaic sampling and synthetic pixel tests (CI pending).
-- [x] Correct BG screen-map and character-data VRAM base units and add a direct regression (source; CI pending).
-- [x] Respect forced blank and whole-frame brightness register levels for startup/fade baseline (source; CI pending).
-- [x] Implement VMAIN writing port selection/stride/remapping with synthetic tests (CI pending).
-- [x] Implement VRAM read-port buffering, address prefetch, and read-side increments, plus streaming OAM/CGRAM reads (source; CI pending).
-- [ ] Validate VRAM read/write timing restrictions, open-bus behavior and DMA interactions on commercial titles.
-- [x] Add Mode 0/1 BG/OBJ priority composition and 16x16 background characters with synthetic regression fixtures (source; CI pending).
-- [ ] Reach a verified, non-placeholder Super Mario World title scene with a user-supplied ROM.
-- [ ] Reach input-driven title/menu transition and first controllable gameplay.
-- [ ] Record audio continuity, latency and save/load behavior during real play.
-- [ ] Publish an evidence-based compatibility matrix with reproducible milestone criteria.
-- [x] Add synthetic 65816 ROM boots that write CGRAM/VRAM/BG registers and produce testable framebuffer pixels, including fixed color math (CI pending).
-- [x] Add versioned headless PPU screen-state and framebuffer metrics to CLI run reports (source; CI pending).
+- [x] Provide a Play View rather than confining the framebuffer to the session sidebar (code and hosted CI; native usability unverified).
+- [x] Provide Play/Pause, F9/Escape library navigation, F5/F8 volatile quick saves, pixel scaling and fullscreen commands (native usability unverified).
+- [x] Replace oversized window minimums with small-tile-friendly settings/session/log popups (native usability unverified).
+- [ ] Build a friendly persistent save-slot browser with thumbnails, backups and clear cartridge identity.
+- [ ] Make library covers/metadata and installed/offline status pleasant even with no network; measure large-library performance.
+- [ ] Improve gamepad/keyboard remapping, reconnection, key focus and full-screen transitions on Wayland.
+- [ ] Explore optional shaders, screenshots, rewind and session history only after the core loop is comfortable.
 
-## P1 — make the desktop genuinely cozy
+## P2 — reproducible engineering and AI/MCP friendliness
 
-- [x] Lower the forced window minimum and add compact-width/short-height pop-up panels, including logs (source change; native Wayland UX still unverified).
-- [ ] Make the library fast, readable and keyboard/gamepad friendly; improve cover/metadata fallback and offline behavior.
-- [x] Add a dedicated centered Play View with automatic ROM focus, F9/Escape library toggle, pause/save/fullscreen controls and integer pixel scaling (source; native Wayland test pending).
-- [x] Implement Play/Pause and memory-only quick-save/load controls with F5/F8, clearing slot on ROM change (source; CI verification pending).
-- [ ] Add persistent save-slot browsing, recent games, and per-game controls.
-- [ ] Test remapping, controller reconnect, Wayland focus and hot-plug across realistic play sessions.
-- [ ] Improve scaling, aspect-ratio handling, crisp pixel rendering, fullscreen transitions and frame pacing.
-- [ ] Replace the new bounded GUI frame scheduler with a measured, responsive gameplay loop once real-game frame costs are known.
-- [ ] Connect a real audio output backend; current core samples are synthetic and not played by the GUI.
-- [ ] Measure audio/video responsiveness and solve real stutter before adding expensive visual effects.
+- [x] Restore a green Linux/Windows CI baseline; preserve all genuine emulator regressions.
+- [x] Build focused Mode 0/1 PPU regressions, bus and ROM boot fixtures, and headless frame diagnostics; see [PPU coverage](ppu-coverage.md).
+- [x] Publish versioned JSON CLI capability discovery, platform diagnostics and cartridge inspection; no real MCP server yet.
+- [ ] Add reliable, bounded compatibility-probe commands and diagnostics that can classify evidence without claiming playability.
+- [ ] Build an opt-in **read-only**, permission-scoped MCP adapter exposing version, diagnostics and local library summaries.
+- [ ] Define and test user authorization for future mutations: explicit ROM paths, no implicit upload, no arbitrary shell execution.
+- [ ] Create a deliberate Linux release/packaging process, with semver and reproducible binaries when the player experience is ready.
 
-## P2 — convenience and personality
+## Engineering principles
 
-- [ ] Rewind and a visible timeline, with explicit memory/performance budgets.
-- [ ] Save-slot browser, thumbnails, automatic safe checkpoints and straightforward backup/export.
-- [ ] Optional visual filters/shaders and accessible scaling choices.
-- [ ] Screenshot/clip capture and tasteful overlays.
-- [ ] Per-game profiles and a low-friction cozy session launcher.
+Use [status](status.md) for verified readiness and [PPU coverage](ppu-coverage.md) for supported register behavior. The older [commercial ROM](commercial-rom-roadmap.md), [GUI](gui-roadmap.md), and [coprocessor](coprocessor-roadmap.md) worklists are useful technical inventories but do **not** override actual playability criteria. Preserve fun-first priorities, natural Rust module boundaries, CI-backed tests, and direct documentation of what remains unverified.
 
-## P3 — AI and MCP integration
-
-- [x] Publish initial `capabilities` and `doctor --json` discovery/diagnostic entry points (source implementation; CI confirmation pending).
-- [x] Add versioned JSON ROM inspection (source implementation; CI confirmation pending).
-- [ ] Stabilize JSON CLI surfaces: sessions, compatibility probes and library status.
-- [ ] Document a versioned machine-readable introspection schema for emulator and library state.
-- [ ] Prototype an opt-in **read-only** MCP adapter with bounded resources/tools and tests.
-- [ ] Add explicit, user-authorized mutations only where safe (e.g. local library refresh); constrain file access and networking.
-- [ ] Build agent-friendly regression reports with reproducible local fixtures; never transmit ROM content implicitly.
-
-## Ongoing engineering
-
-- Fix general emulator issues demonstrated by selected game regressions; no ROM-specific hacks.
-- Keep the core/platform/frontend boundaries intact.
-- Preserve reproducible tests and native Linux performance.
-- Maintain dependency/security hygiene and a release process with deliberate semver once user-facing behavior is established.
-- Treat X11 and Windows as secondary, not equal-priority targets.
-
-## Explicit non-goals
-
-- Cycle-perfect accuracy as an end in itself.
-- Every enhancement chip or commercial title before the core play experience works.
-- Shipping commercial ROMs or proprietary firmware.
-- Unrestricted agent control of local files or the emulator.
-- Building a full debugger before it directly aids gameplay compatibility.
-
-Deep technical worklists remain in [commercial ROM](commercial-rom-roadmap.md), [coprocessors](coprocessor-roadmap.md), and [GUI](gui-roadmap.md); their historical checked boxes do not supersede observed product readiness.
+**Non-goals:** cycle-perfect emulation as an independent objective; shipping copyrighted ROMs or firmware; unrestricted agent access to local files; polishing every enhancement chip before a single comfortable game works.

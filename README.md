@@ -75,12 +75,13 @@ cargo clippy --workspace --all-targets
 cargo test --workspace
 ```
 
-Run core benchmarks with `cargo bench -p starbyte-core --bench core_bootstrap`. Tests and builds were **not rerun** as part of the documentation inheritance pass. The workspace currently defaults to the CLI crate; run `--workspace` for complete checks.
+Run core benchmarks with `cargo bench -p starbyte-core --bench core_bootstrap`. Hosted GitHub Actions runs Linux formatting/Clippy and Linux/Windows workspace tests. See the [latest runs](https://github.com/sguzman/starbyte/actions); a passing build is not proof of native Wayland or commercial-game playability. The workspace defaults to the CLI crate, so use `--workspace` for complete checks.
 
 ## Where to go next
 
 - [Current state and evidence](docs/status.md): implemented versus verified, known gaps and confidence levels.
 - [Product roadmap](docs/roadmap.md): next milestones in fun-first priority order.
+- [PPU implementation coverage](docs/ppu-coverage.md): precisely supported graphics features and outstanding compatibility gaps.
 - [Frontend architecture](docs/frontend-architecture.md) and [GUI backlog](docs/gui-roadmap.md).
 - [Commercial-game bring-up](docs/commercial-rom-roadmap.md) and [enhancement chips](docs/coprocessor-roadmap.md): historical engineering detail, **not** proof of broad playability.
 - [Agent/contributor guide](AGENTS.md): conventions for Rust, testing, Wayland, automation and MCP integration.

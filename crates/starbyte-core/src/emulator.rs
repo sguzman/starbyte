@@ -366,6 +366,7 @@ impl Emulator {
 mod tests {
     use crate::cartridge::{Cartridge, Mapper};
     use crate::input::ControllerState;
+    use crate::timing::{DOTS_PER_SCANLINE, MASTER_CLOCKS_PER_DOT, NTSC_SCANLINES_PER_FRAME};
 
     use super::Emulator;
 
@@ -474,6 +475,34 @@ mod tests {
         assert_eq!(emulator.timing().frame, 0);
         emulator.run_until_frame().unwrap();
         assert_eq!(emulator.timing().frame, 1);
+    }
+
+    #[test]
+    fn a_game_program_receives_one_nmi_at_ntsc_vblank_per_frame() {
+        let mut rom = rom_bytes();
+        rom[0x7FFC] = 0x00;
+        rom[0x7FFD] = 0x80;
+        // Emulation-mode NMI vector points to the handler at $8010.
+        rom[0x7FFA] = 0x10;
+        rom[0x7FFB] = 0x80;
+        // LDA #$80 / STA $4200 / BRA * (wait forever for NMI).
+        rom[..7].copy_from_slice(&[0xA9, 0x80, 0x8D, 0x00, 0x42, 0x80, 0xFE]);
+        // INC $00 / RTI: record one NMI without modifying any ROM state.
+        rom[0x10..0x13].copy_from_slice(&[0xE6, 0x00, 0x40]);
+
+        let mut emulator = Emulator::default();
+        emulator.load_rom(Cartridge::from_bytes(rom, None).unwrap());
+
+        emulator.run_until_frame().unwrap();
+        assert_eq!(emulator.host_read_u8(0x000000), 1);
+        let clocks_per_frame = u64::from(DOTS_PER_SCANLINE)
+            * u64::from(NTSC_SCANLINES_PER_FRAME)
+            * MASTER_CLOCKS_PER_DOT;
+        assert!(emulator.timing().master_clock >= clocks_per_frame);
+        assert!(emulator.timing().master_clock < clocks_per_frame + 128);
+
+        emulator.run_until_frame().unwrap();
+        assert_eq!(emulator.host_read_u8(0x000000), 2);
     }
 
     #[test]

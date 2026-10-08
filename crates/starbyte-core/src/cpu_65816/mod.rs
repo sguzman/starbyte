@@ -14,6 +14,12 @@ pub struct Cpu65816 {
     /// Architectural register file.
     pub registers: registers::Registers,
     cycles: u64,
+    /// WAI suspends instruction fetch until NMI or IRQ activity.
+    #[serde(default)]
+    waiting_for_interrupt: bool,
+    /// STP suspends instruction fetch until CPU reset.
+    #[serde(default)]
+    stopped: bool,
 }
 
 impl Cpu65816 {
@@ -32,12 +38,16 @@ impl Cpu65816 {
             emulation: true,
         };
         self.cycles = 0;
+        self.waiting_for_interrupt = false;
+        self.stopped = false;
     }
 
     /// Load a register snapshot and reset cycle accounting for compliance work.
     pub fn load_registers(&mut self, registers: registers::Registers) {
         self.registers = registers;
         self.cycles = 0;
+        self.waiting_for_interrupt = false;
+        self.stopped = false;
     }
 
     /// Execute one placeholder instruction step.
@@ -53,11 +63,35 @@ impl Cpu65816 {
 
     /// Execute one instruction against a bus and return the captured bus trace.
     pub fn step_with_bus<B: Bus>(&mut self, bus: &mut B) -> Result<Vec<BusEvent>> {
+        // A stopped processor remains stopped even when interrupts occur.
+        // Empty event lists represent one internal idle CPU bus cycle.
+        if self.stopped {
+            self.cycles = 1;
+            return Ok(Vec::new());
+        }
+
         if bus.poll_nmi() {
+            self.waiting_for_interrupt = false;
             let mut trace = Vec::new();
             self.service_interrupt(bus, &mut trace, InterruptKind::Nmi)?;
             self.cycles = trace.len() as u64;
             return Ok(trace);
+        }
+
+        if self.waiting_for_interrupt {
+            // IRQ wakes WAI even if I masks interrupt servicing. In that
+            // case the CPU resumes on the *next* step without vectoring.
+            if bus.poll_irq() {
+                self.waiting_for_interrupt = false;
+                if self.irq_enabled() {
+                    let mut trace = Vec::new();
+                    self.service_interrupt(bus, &mut trace, InterruptKind::Irq)?;
+                    self.cycles = trace.len() as u64;
+                    return Ok(trace);
+                }
+            }
+            self.cycles = 1;
+            return Ok(Vec::new());
         }
 
         if self.irq_enabled() && bus.poll_irq() {
@@ -284,6 +318,8 @@ impl Cpu65816 {
             0x34 => self.execute_bit_direct_page_x(bus, &mut trace),
             0x3C => self.execute_bit_absolute_x(bus, &mut trace),
             0x42 => self.execute_wdm(bus, &mut trace),
+            0xCB => self.execute_wai(bus, &mut trace),
+            0xDB => self.execute_stp(bus, &mut trace),
             0x44 => self.execute_block_move(bus, &mut trace, true),
             0x54 => self.execute_block_move(bus, &mut trace, false),
             0x5C => self.execute_jmp_long(bus, &mut trace),
@@ -3675,6 +3711,18 @@ impl Cpu65816 {
             self.registers.pc = self.registers.pc.wrapping_add(3);
         }
         // BIT #imm affects Z only; N/V come from memory forms exclusively.
+        Ok(())
+    }
+
+    fn execute_wai<B: Bus>(&mut self, _bus: &mut B, _trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        self.waiting_for_interrupt = true;
+        Ok(())
+    }
+
+    fn execute_stp<B: Bus>(&mut self, _bus: &mut B, _trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        self.stopped = true;
         Ok(())
     }
 

@@ -122,11 +122,18 @@ fn handle_command(
     let mut service = LibraryService::new(config, assets.clone())?;
 
     let event = match kind {
-        WorkerCommandKind::RefreshSnapshot => WorkerEvent::SnapshotReady {
-            job_id,
-            snapshot: service.snapshot(filter)?,
-            config: service.config().clone(),
-            status: "Library scan complete.".to_owned(),
+        WorkerCommandKind::RefreshSnapshot => {
+            let snapshot = service.snapshot(filter)?;
+            let report = service.scan_report()?;
+            WorkerEvent::SnapshotReady {
+                job_id,
+                snapshot,
+                config: service.config().clone(),
+                status: format!(
+                    "Library: {} indexed from {} ROM candidates; {} skipped. See Scan Report in Settings.",
+                    report.discovered, report.candidates, report.skipped.len()
+                ),
+            }
         },
         WorkerCommandKind::RefreshMetadata => {
             let count = service.refresh_metadata_index()?;

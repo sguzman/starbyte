@@ -898,6 +898,12 @@ impl StarbyteApp {
                 self.library_snapshot.total_count
             ));
             ui.label(self.status_line.as_str());
+            if ui.button("Open Scan Report").clicked() {
+                let report = self.cache_root.join("manifests").join("rom-scan-report.json");
+                if let Err(error) = open_path(&report) {
+                    self.status_line = format!("Could not open report {}: {error}", report.display());
+                }
+            }
             ui.separator();
 
             ui.label("ROM Directories");

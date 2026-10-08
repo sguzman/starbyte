@@ -25,6 +25,23 @@ use starbyte_core::{
 /// Stable library identifier derived from a normalized game title.
 pub type GameId = String;
 
+/// Persisted diagnostics for the most recent completed local ROM scan.
+/// Entries remain local; no ROM paths are uploaded to network providers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RomScanReport {
+    pub candidates: usize,
+    pub discovered: usize,
+    pub duplicate_source_ids: usize,
+    pub skipped: Vec<RomScanIssue>,
+}
+
+/// One unreadable or rejected archive or ROM member.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RomScanIssue {
+    pub source: String,
+    pub reason: String,
+}
+
 /// Local ROM source provenance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -337,17 +354,23 @@ impl LibraryService {
         let mut archive_manifest: ArchiveListingManifest =
             read_json_or_default(archive_manifest_path.clone())?;
         let mut seen_keys = BTreeSet::new();
+        let mut report = RomScanReport::default();
         // Key by actual source, not header title: multiple commercial games
         // can carry the same abbreviated title or matching archive member.
         let mut discovered = BTreeMap::<String, LocalRomInfo>::new();
         for rom_dir in &self.config.library.rom_dirs {
-            for candidate in discover_rom_files(rom_dir, &mut archive_manifest)? {
+            for candidate in discover_rom_files(rom_dir, &mut archive_manifest, &mut report.skipped)? {
+                report.candidates += 1;
                 let cache_key = candidate.cache_key();
                 seen_keys.insert(cache_key.clone());
                 let signature = match candidate.source_signature() {
                     Ok(signature) => signature,
                     Err(error) => {
                         warn!(candidate = %candidate.display_label(), "skipping unavailable ROM: {error}");
+                        report.skipped.push(RomScanIssue {
+                            source: candidate.display_label(),
+                            reason: error.to_string(),
+                        });
                         continue;
                     }
                 };
@@ -370,10 +393,13 @@ impl LibraryService {
                         );
                         discovered.entry(candidate.cache_key()).or_insert(info);
                     }
-                    Err(error) => debug!(
-                        "skipping ROM candidate {}: {error}",
-                        candidate.display_label()
-                    ),
+                    Err(error) => {
+                        warn!("skipping ROM candidate {}: {error}", candidate.display_label());
+                        report.skipped.push(RomScanIssue {
+                            source: candidate.display_label(),
+                            reason: error.to_string(),
+                        });
+                    }
                 }
             }
         }
@@ -398,9 +424,14 @@ impl LibraryService {
             }
             roms.push(info);
         }
+        report.discovered = roms.len();
+        report.duplicate_source_ids = duplicate_sources;
+        write_json(self.scan_report_path(), &report)?;
         info!(
             discovered = roms.len(),
-            duplicate_sources, "completed ROM scan"
+            duplicate_sources,
+            skipped = report.skipped.len(),
+            "completed ROM scan"
         );
         Ok(roms)
     }
@@ -562,6 +593,17 @@ impl LibraryService {
 
     fn load_cached_metadata_index(&self) -> Result<Vec<GameMetadata>> {
         read_json_or_default(self.metadata_index_path())
+    }
+
+    /// Read the last completed scan's source-level diagnostics.
+    pub fn scan_report(&self) -> Result<RomScanReport> {
+        read_json_or_default(self.scan_report_path())
+    }
+
+    fn scan_report_path(&self) -> PathBuf {
+        self.cache_root()
+            .join("manifests")
+            .join("rom-scan-report.json")
     }
 
     fn scan_manifest_path(&self) -> PathBuf {
@@ -1165,6 +1207,7 @@ where
 fn discover_rom_files(
     root: &Path,
     archive_manifest: &mut ArchiveListingManifest,
+    errors: &mut Vec<RomScanIssue>,
 ) -> Result<Vec<RomCandidate>> {
     if !root.exists() {
         return Ok(Vec::new());
@@ -1184,6 +1227,10 @@ fn discover_rom_files(
                     Ok(members) => files.extend(members),
                     Err(error) => {
                         warn!(archive = %path.display(), "skipping unreadable ZIP: {error}");
+                        errors.push(RomScanIssue {
+                            source: path.display().to_string(),
+                            reason: error.to_string(),
+                        });
                     }
                 }
             }
@@ -1769,6 +1816,11 @@ mod tests {
         let entries = service.scan_roms().unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].title.trim(), "STARBYTE ZIP LOAD");
+        let report = service.scan_report().unwrap();
+        assert_eq!(report.candidates, 1);
+        assert_eq!(report.discovered, 1);
+        assert_eq!(report.skipped.len(), 1);
+        assert!(report.skipped[0].source.ends_with("broken.zip"));
     }
 
     #[test]

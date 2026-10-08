@@ -3825,6 +3825,83 @@ mod tests {
     }
 
     #[test]
+    fn lda_long_ignores_data_bank_and_preserves_b_in_eight_bit_accumulator_mode() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.dbr = 0x40;
+        cpu.registers.a = 0xCD00;
+        cpu.registers.p = 0x20; // M=1, eight-bit accumulator.
+        cpu.registers.emulation = false;
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0xAF),
+            (0x008001, 0x34),
+            (0x008002, 0x12),
+            (0x008003, 0x7E),
+            (0x7E1234, 0xE7),
+            (0x401234, 0x01),
+        ]);
+
+        let trace = cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(cpu.registers.a, 0xCDE7);
+        assert_eq!(cpu.registers.pc, 0x8004);
+        assert_ne!(cpu.registers.p & 0x80, 0);
+        assert_eq!(cpu.registers.p & 0x02, 0);
+        assert!(trace.iter().any(|event| event.address == 0x7E1234));
+        assert!(!trace.iter().any(|event| event.address == 0x401234));
+    }
+
+    #[test]
+    fn lda_long_x_carries_into_next_bank_for_sixteen_bit_accumulator() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.dbr = 0x24;
+        cpu.registers.x = 1;
+        cpu.registers.p = 0x00; // Native 16-bit accumulator and index.
+        cpu.registers.emulation = false;
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0xBF),
+            (0x008001, 0xFF),
+            (0x008002, 0xFF),
+            (0x008003, 0x7E),
+            (0x7F0000, 0x34),
+            (0x7F0001, 0x12),
+            (0x240000, 0xFF),
+        ]);
+
+        let trace = cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(cpu.registers.a, 0x1234);
+        assert_eq!(cpu.registers.pc, 0x8004);
+        assert_eq!(cpu.registers.dbr, 0x24);
+        assert_eq!(cpu.registers.p & 0x82, 0);
+        assert!(trace.iter().any(|event| event.address == 0x7F0000));
+        assert!(trace.iter().any(|event| event.address == 0x7F0001));
+    }
+
+    #[test]
+    fn lda_long_x_wraps_at_twenty_four_bits_in_eight_bit_mode() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.a = 0xAB00;
+        cpu.registers.x = 3;
+        cpu.registers.p = 0x30; // 8-bit A and X.
+        cpu.registers.emulation = false;
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0xBF),
+            (0x008001, 0xFE),
+            (0x008002, 0xFF),
+            (0x008003, 0xFF),
+            (0x000001, 0),
+        ]);
+
+        let trace = cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(cpu.registers.a, 0xAB00);
+        assert_eq!(cpu.registers.pc, 0x8004);
+        assert_eq!(cpu.registers.p & 0x02, 0x02);
+        assert!(trace.iter().any(|event| event.address == 0x000001));
+        assert!(!trace.iter().any(|event| event.address == 0x1000001));
+    }
+
+    #[test]
     fn lda_direct_page_indirect_loads_accumulator_from_pointer() {
         let mut cpu = Cpu65816::default();
         cpu.registers.pc = 0x8000;

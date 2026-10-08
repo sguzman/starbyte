@@ -50,7 +50,15 @@ When black frames persist, the frame counters alone cannot reveal what the CPU i
 cargo run --release -p starbyte-cli -- compliance commercial-record /path/to/game.zip --frames 1 --fixture-out /tmp/starbyte-boot-fixture.json --trace-out /tmp/starbyte-boot-trace.json
 ```
 
-The command writes the fixture, a sibling `.report.json` file and the instruction trace only to the requested local paths. It does not save cartridge SRAM. One frame is normally sufficient to inspect the first busy loop; the captured trace can still be large. Use the trace's `frame`, `pbr`, `pc`, `opcode` and `mmio_events` to identify repeated reads and unmet handshakes. This captures *emulator behavior*, not proof of ROM correctness or commercial playability. Never commit private game traces or proprietary ROM bytes to the source repository.
+The command writes the fixture, a sibling `.report.json` file and the instruction trace only to the requested local paths. It does not save cartridge SRAM. One frame is normally sufficient to inspect the first busy loop; the captured trace can still be large. Use the trace's `frame`, `pbr`, `pc`, `opcode` and `mmio_events` to identify repeated reads and unmet handshakes.
+
+To inspect one frame **later** in a long boot without storing all preceding instructions:
+
+```sh
+cargo run --release -p starbyte-cli -- compliance commercial-record /path/to/game.zip --frames 181 --trace-from-frame 180 --fixture-out /tmp/starbyte-late.json --trace-out /tmp/starbyte-late-trace.json
+```
+
+`--trace-from-frame N` skips the first **N completed frames**, then starts instruction recording. The selected trace start is persisted in the fixture for reproducible replay. For example, `--frames 181 --trace-from-frame 180` runs 181 frames but records only frame 181 (zero-based trace field `frame: 180`). The usual core instruction-per-frame guard still applies. Do not request needlessly large trace windows; frame logs are lighter for long scans. This captures *emulator behavior*, not proof of ROM correctness or commercial playability. Never commit private game traces or proprietary ROM bytes to the source repository.
 
 ## Agent safety rules
 

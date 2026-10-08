@@ -58,6 +58,14 @@ The CLI now exposes `starbyte capabilities` as a versioned JSON command manifest
 
 The tracked `.config/starbyte/config.toml` sample has been reset to portable defaults (no machine-specific ROM path, no old cache timestamps). It remains at its historical path to avoid deleting the file during a normal pull and to support one-time migration into XDG user settings. Git history is intentionally not rewritten.
 
+## Mode 0/1 PPU compositing, source implementation
+
+The renderer now uses the Mode 0/1 priority tables for BG and sprite overlap instead of treating all objects as always front-most. The Mode 1 BG3 high-priority switch is respected; mode 1 BG3 2bpp palette indexing is corrected. 16×16 background characters address four 8×8 tile cells with whole-character flipping. A synthetic public-register regression suite covers competing BG priorities, sprite priority, BG3 HUD order, and 16×16 quadrant selection. This does **not** implement raster-accurate per-scanline priority, window masks, all BG modes, blend math, or verified commercial game output.
+
+## CI restoration
+
+Commit `9b4b8bda` completed all three CI jobs successfully: format/Clippy, Ubuntu tests, Windows tests. The PPU extension must pass its own CI before its results can be called verified.
+
 ## Current functional gap
 
 The original commercial-ROM roadmap explicitly leaves SNES background/tilemap presentation, non-placeholder Super Mario World boot visuals, title/menu navigation, and first controllable gameplay incomplete. This is a **blocking playability gap**, not an optional accuracy task.

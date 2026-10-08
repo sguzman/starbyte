@@ -176,10 +176,13 @@ impl Ppu {
         }
 
         fill_frame(framebuffer, backdrop);
+        let mut depth = vec![0_u8; framebuffer.width * framebuffer.height];
         let bgmode = self.registers[0x05] & 0x07;
         match bgmode {
             0 => self.render_background_stack(
                 framebuffer,
+                &mut depth,
+                bgmode,
                 &[
                     BackgroundConfig::for_mode0(3),
                     BackgroundConfig::for_mode0(2),
@@ -189,6 +192,8 @@ impl Ppu {
             ),
             1 => self.render_background_stack(
                 framebuffer,
+                &mut depth,
+                bgmode,
                 &[
                     BackgroundConfig::for_mode1(2),
                     BackgroundConfig::for_mode1(1),
@@ -199,7 +204,7 @@ impl Ppu {
         }
 
         if main_screen_enable & 0x10 != 0 {
-            self.render_objects(framebuffer);
+            self.render_objects(framebuffer, &mut depth, bgmode);
         }
     }
 
@@ -271,54 +276,82 @@ impl Ppu {
     fn render_background_stack(
         &self,
         framebuffer: &mut FrameBuffer,
+        depth: &mut [u8],
+        mode: u8,
         backgrounds: &[BackgroundConfig],
     ) {
-        let main_screen_enable = self.registers[0x2C] & 0x0F;
+        let enabled = self.registers[0x2C] & 0x0F;
         for background in backgrounds {
-            if main_screen_enable & (1 << background.index) == 0 {
-                continue;
+            if enabled & (1 << background.index) != 0 {
+                self.render_background(
+                    framebuffer,
+                    depth,
+                    mode,
+                    self.resolve_background_config(*background),
+                );
             }
-            self.render_background(framebuffer, self.resolve_background_config(*background));
         }
     }
 
-    fn render_background(&self, framebuffer: &mut FrameBuffer, background: BackgroundConfig) {
+    fn render_background(
+        &self,
+        framebuffer: &mut FrameBuffer,
+        depth: &mut [u8],
+        mode: u8,
+        background: BackgroundConfig,
+    ) {
+        let bg3_high = self.registers[0x05] & 0x08 != 0;
         for y in 0..framebuffer.height {
             for x in 0..framebuffer.width {
-                if let Some(pixel) = self.background_pixel(background, x as u16, y as u16) {
-                    let offset = (y * framebuffer.width + x) * 4;
-                    framebuffer.pixels[offset..offset + 4].copy_from_slice(&pixel);
+                if let Some((pixel, high)) =
+                    self.background_pixel(background, x as u16, y as u16)
+                {
+                    let index = y * framebuffer.width + x;
+                    let rank = background_priority_rank(mode, background.index, high, bg3_high);
+                    if rank >= depth[index] {
+                        depth[index] = rank;
+                        let offset = index * 4;
+                        framebuffer.pixels[offset..offset + 4].copy_from_slice(&pixel);
+                    }
                 }
             }
         }
     }
 
-    fn background_pixel(&self, background: BackgroundConfig, x: u16, y: u16) -> Option<[u8; 4]> {
+    fn background_pixel(
+        &self,
+        background: BackgroundConfig,
+        x: u16,
+        y: u16,
+    ) -> Option<([u8; 4], bool)> {
         let world_x = usize::from(x.wrapping_add(self.bg_scroll_x[background.index]));
         let world_y = usize::from(y.wrapping_add(self.bg_scroll_y[background.index]));
-        let tile_x = world_x / 8;
-        let tile_y = world_y / 8;
-        let entry_index = self.tilemap_entry_index(background, tile_x, tile_y);
+        let size = background.tile_size;
+        let entry_index = self.tilemap_entry_index(background, world_x / size, world_y / size);
         let entry = u16::from_le_bytes([
             self.vram[entry_index],
             self.vram[(entry_index + 1) % VRAM_BYTES],
         ]);
         let tile_number = usize::from(entry & 0x03FF);
         let palette = usize::from((entry >> 10) & 0x07);
+        let high = entry & 0x2000 != 0;
         let hflip = entry & 0x4000 != 0;
         let vflip = entry & 0x8000 != 0;
 
-        let fine_x = world_x % 8;
-        let fine_y = world_y % 8;
-        let tile_x = if hflip { 7 - fine_x } else { fine_x };
-        let tile_y = if vflip { 7 - fine_y } else { fine_y };
+        // 16x16 BG tiles use four adjacent 8x8 characters in the tile set;
+        // the lower row begins 16 characters after the upper row.
+        let fine_x = world_x % size;
+        let fine_y = world_y % size;
+        let source_x = if hflip { size - 1 - fine_x } else { fine_x };
+        let source_y = if vflip { size - 1 - fine_y } else { fine_y };
+        let character = (tile_number + (source_y / 8) * 16 + source_x / 8) & 0x03FF;
         let color_index = match background.bits_per_pixel {
-            BitsPerPixel::Two => {
-                self.tile_pixel_2bpp(background.tiledata_base, tile_number, tile_x, tile_y)
-            }
-            BitsPerPixel::Four => {
-                self.tile_pixel_4bpp(background.tiledata_base, tile_number, tile_x, tile_y)
-            }
+            BitsPerPixel::Two => self.tile_pixel_2bpp(
+                background.tiledata_base, character, source_x % 8, source_y % 8,
+            ),
+            BitsPerPixel::Four => self.tile_pixel_4bpp(
+                background.tiledata_base, character, source_x % 8, source_y % 8,
+            ),
         };
         if color_index == 0 {
             return None;
@@ -333,7 +366,7 @@ impl Ppu {
             self.cgram[cgram_index % CGRAM_BYTES],
             self.cgram[(cgram_index + 1) % CGRAM_BYTES],
         ]);
-        Some(bgr555_to_rgba(color))
+        Some((bgr555_to_rgba(color), high))
     }
 
     fn tilemap_entry_index(
@@ -389,7 +422,12 @@ impl Ppu {
         u16::from(self.cgram[0]) | (u16::from(self.cgram[1]) << 8)
     }
 
-    fn render_objects(&self, framebuffer: &mut FrameBuffer) {
+    fn render_objects(
+        &self,
+        framebuffer: &mut FrameBuffer,
+        depth: &mut [u8],
+        mode: u8,
+    ) {
         let objsel = self.registers[0x01];
         let (small_size, large_size) = object_size_pair(objsel >> 5);
 
@@ -412,6 +450,7 @@ impl Ppu {
             };
             let sprite_y = i16::from(y);
             let palette = usize::from((attributes >> 1) & 0x07);
+            let rank = sprite_priority_rank(mode, (attributes >> 4) & 0x03);
             let name_select = attributes & 0x01 != 0;
             let hflip = attributes & 0x40 != 0;
             let vflip = attributes & 0x80 != 0;
@@ -461,8 +500,13 @@ impl Ppu {
                         self.cgram[cgram_index % CGRAM_BYTES],
                         self.cgram[(cgram_index + 1) % CGRAM_BYTES],
                     ]);
-                    let offset = (screen_y as usize * framebuffer.width + screen_x as usize) * 4;
-                    framebuffer.pixels[offset..offset + 4].copy_from_slice(&bgr555_to_rgba(color));
+                    let pixel_index = screen_y as usize * framebuffer.width + screen_x as usize;
+                    if rank >= depth[pixel_index] {
+                        depth[pixel_index] = rank;
+                        let offset = pixel_index * 4;
+                        framebuffer.pixels[offset..offset + 4]
+                            .copy_from_slice(&bgr555_to_rgba(color));
+                    }
                 }
             }
         }
@@ -493,6 +537,11 @@ impl Ppu {
             tilemap_base: usize::from(tilemap_register & 0xFC) << 8,
             size_code: tilemap_register & 0x03,
             tiledata_base,
+            tile_size: if self.registers[0x05] & (0x10 << background.index) != 0 {
+                16
+            } else {
+                8
+            },
             ..background
         }
     }
@@ -544,6 +593,7 @@ struct BackgroundConfig {
     tilemap_base: usize,
     tiledata_base: usize,
     size_code: u8,
+    tile_size: usize,
     palette_base: usize,
 }
 
@@ -569,6 +619,7 @@ impl BackgroundConfig {
             tilemap_base: 0,
             tiledata_base: 0,
             size_code: 0,
+            tile_size: 8,
             palette_base: index * 32,
         }
     }
@@ -584,8 +635,37 @@ impl BackgroundConfig {
             tilemap_base: 0,
             tiledata_base: 0,
             size_code: 0,
-            palette_base: index * 32,
+            tile_size: 8,
+            palette_base: 0, // BG3 shares the first eight 2bpp palettes in Mode 1.
         }
+    }
+}
+
+/// Rank the BG tile against other layers according to the Mode 0/1 priority table.
+fn background_priority_rank(mode: u8, index: usize, high: bool, bg3_high: bool) -> u8 {
+    match (mode, index, high) {
+        (0, 0, true) => 11,
+        (0, 1, true) => 10,
+        (0, 0, false) => 8,
+        (0, 1, false) => 7,
+        (0, 2, true) => 5,
+        (0, 3, true) => 4,
+        (0, 2, false) => 2,
+        (0, 3, false) => 1,
+        (1, 0, true) => 9,
+        (1, 1, true) => 8,
+        (1, 0, false) => 6,
+        (1, 1, false) => 5,
+        (1, 2, true) => if bg3_high { 11 } else { 3 },
+        (1, 2, false) => 1,
+        _ => 0,
+    }
+}
+
+fn sprite_priority_rank(mode: u8, priority: u8) -> u8 {
+    match mode {
+        0 => [3, 6, 9, 12][usize::from(priority & 3)],
+        _ => [2, 4, 7, 10][usize::from(priority & 3)],
     }
 }
 

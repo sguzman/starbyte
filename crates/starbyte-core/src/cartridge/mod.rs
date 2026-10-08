@@ -447,6 +447,31 @@ mod tests {
     }
 
     #[test]
+    fn load_skips_invalid_rom_member_and_uses_next_valid_member() {
+        let dir = tempdir().unwrap();
+        let zip_path = dir.path().join("mixed.zip");
+        write_zip_roms(
+            &zip_path,
+            &[
+                ("broken.smc", vec![0_u8; 0x10000]),
+                ("valid.sfc", make_header(Mapper::LoRom)),
+            ],
+        );
+        let cart = Cartridge::load(&zip_path).unwrap();
+        assert_eq!(cart.header().title.trim(), "STARBYTE TEST");
+        assert_eq!(cart.source(), Some(zip_path.as_path()));
+    }
+
+    #[test]
+    fn load_explains_invalid_rom_members_in_zip() {
+        let dir = tempdir().unwrap();
+        let zip_path = dir.path().join("invalid.zip");
+        write_zip_roms(&zip_path, &[("broken.sfc", vec![0_u8; 0x10000])]);
+        let error = Cartridge::load(&zip_path).unwrap_err().to_string();
+        assert!(error.contains("broken.sfc: invalid SNES cartridge header"));
+    }
+
+    #[test]
     fn load_rejects_zip_without_supported_rom_member() {
         let dir = tempdir().unwrap();
         let zip_path = dir.path().join("bundle.zip");

@@ -391,8 +391,7 @@ fn diagnostic_run_can_skip_loading_and_writing_save_ram() {
         .success();
 
     assert_eq!(fs::read(&existing_save).unwrap(), [0xAB]);
-    let report: serde_json::Value =
-        serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
     assert!(report["save_ram_path"].is_null());
 }
 

@@ -545,7 +545,7 @@ mod tests {
         let mut emulator = Emulator::default();
         emulator.load_rom(Cartridge::from_bytes(rom, None).unwrap());
         emulator.cpu.registers.emulation = false;
-        emulator.cpu.registers.p = 0;
+        emulator.cpu.registers.p = 0x30; // M and X must survive hardware NMI.
         emulator.cpu.registers.pc = 0x8000;
         emulator.cpu.registers.pbr = 0x80;
         emulator.cpu.registers.dbr = 0x14;
@@ -559,6 +559,7 @@ mod tests {
             emulator.run_until_frame().unwrap();
             let regs = &emulator.cpu.registers;
             assert_eq!(regs.pbr, 0x80, "NMI failed to restore program bank");
+            assert_eq!(regs.p & 0x30, 0x30, "NMI erased accumulator/index width");
             assert_eq!(regs.s, 0x01FF, "NMI failed to restore stack pointer");
             assert_eq!(regs.a, 0xBEEF, "NMI failed to restore accumulator");
             assert_eq!(regs.x, 0x1234, "NMI failed to restore X");

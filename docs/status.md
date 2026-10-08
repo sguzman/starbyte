@@ -66,6 +66,10 @@ The renderer now uses the Mode 0/1 priority tables for BG and sprite overlap ins
 
 Commit `9b4b8bda` completed all three CI jobs successfully: format/Clippy, Ubuntu tests, Windows tests. The PPU extension must pass its own CI before its results can be called verified.
 
+## VRAM data-port addressing
+
+VMAIN now controls low-versus-high data-port address increments, 1/32/128-word strides, and 8/9/10-bit remapping during direct VRAM transfers. Synthetic tests cover all three remapping modes and both increment selectors. Existing sequential word-writing tests explicitly set VMAIN to 0x80, as SNES software should. **Read-port buffering and auto-increment on reads are not yet implemented**; DMA and real-game verification remain separate acceptance gates.
+
 ## Current functional gap
 
 The original commercial-ROM roadmap explicitly leaves SNES background/tilemap presentation, non-placeholder Super Mario World boot visuals, title/menu navigation, and first controllable gameplay incomplete. This is a **blocking playability gap**, not an optional accuracy task.

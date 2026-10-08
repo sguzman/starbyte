@@ -259,7 +259,8 @@ impl Ppu {
     fn write_vram_data(&mut self, value: u8, high_byte: bool) {
         let index = self.vram_byte_index(self.vram_address, high_byte);
         self.vram[index] = value;
-        if high_byte {
+        // Bit 7 of VMAIN selects which VRAM data port advances VMADD.
+        if high_byte == (self.registers[0x15] & 0x80 != 0) {
             self.vram_address = self.vram_address.wrapping_add(self.vram_increment);
         }
     }
@@ -269,8 +270,15 @@ impl Ppu {
     }
 
     fn vram_byte_index(&self, address: u16, high_byte: bool) -> usize {
-        let word_index = usize::from(address) * 2;
-        (word_index + usize::from(high_byte)) % VRAM_BYTES
+        // VMAIN bits 2-3 rotate the low 8/9/10 VMADD bits for planar
+        // streaming. The address is still in 16-bit words, not bytes.
+        let remapped = match (self.registers[0x15] >> 2) & 0x03 {
+            1 => (address & 0xFF00) | ((address & 0x001F) << 3) | ((address & 0x00E0) >> 5),
+            2 => (address & 0xFE00) | ((address & 0x003F) << 3) | ((address & 0x01C0) >> 6),
+            3 => (address & 0xFC00) | ((address & 0x007F) << 3) | ((address & 0x0380) >> 7),
+            _ => address,
+        };
+        (usize::from(remapped) * 2 + usize::from(high_byte)) % VRAM_BYTES
     }
 
     fn render_background_stack(
@@ -712,6 +720,7 @@ mod tests {
     #[test]
     fn vram_data_ports_store_words_and_advance_address() {
         let mut ppu = Ppu::default();
+        ppu.write_register(0x2115, 0x80); // Sequential low/high word stores.
         ppu.write_register(0x2116, 0x00);
         ppu.write_register(0x2117, 0x00);
         ppu.write_register(0x2118, 0x34);
@@ -740,6 +749,7 @@ mod tests {
     #[test]
     fn bg1_tilemap_render_uses_vram_tiles_and_cgram_palette() {
         let mut ppu = Ppu::default();
+        ppu.write_register(0x2115, 0x80); // Sequential low/high word stores.
         let mut frame = FrameBuffer::default();
 
         write_color(&mut ppu, 0x00, 0x0000);
@@ -822,6 +832,7 @@ mod tests {
     #[test]
     fn obj_render_draws_sprite_pixels_when_enabled() {
         let mut ppu = Ppu::default();
+        ppu.write_register(0x2115, 0x80); // Sequential low/high word stores.
         let mut frame = FrameBuffer::default();
 
         write_color(&mut ppu, 0x00, 0x0000);

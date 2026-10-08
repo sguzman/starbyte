@@ -137,3 +137,50 @@ fn sixteen_pixel_characters_select_four_tiles_and_flip_as_a_unit() {
     assert_eq!(pixel(&frame, 15, 0), [248, 0, 0, 255]);
     assert_eq!(pixel(&frame, 7, 0), [0, 248, 0, 255]);
 }
+
+#[test]
+fn vmain_increment_port_and_step_size_follow_register_bits() {
+    let mut ppu = Ppu::default();
+    // Reset VMAIN = 0: auto-increment on low-byte writes.
+    ppu.write_register(0x2118, 0xAA);
+    ppu.write_register(0x2118, 0xBB);
+    assert_eq!(ppu.vram()[0], 0xAA);
+    assert_eq!(ppu.vram()[2], 0xBB);
+
+    ppu.write_register(0x2115, 0x81); // Low-byte access, increment by 32 words.
+    ppu.write_register(0x2116, 0x00);
+    ppu.write_register(0x2117, 0x00);
+    ppu.write_register(0x2118, 0xCC);
+    ppu.write_register(0x2118, 0xDD);
+    assert_eq!(ppu.vram()[0], 0xCC);
+    assert_eq!(ppu.vram()[64], 0xDD);
+
+    ppu.write_register(0x2115, 0x80); // High-byte access increments by one word.
+    ppu.write_register(0x2116, 0x00);
+    ppu.write_register(0x2117, 0x00);
+    ppu.write_register(0x2118, 0x01);
+    ppu.write_register(0x2119, 0x02);
+    ppu.write_register(0x2118, 0x03);
+    ppu.write_register(0x2119, 0x04);
+    assert_eq!(&ppu.vram()[..4], &[1, 2, 3, 4]);
+}
+
+#[test]
+fn vmain_rearranges_low_address_bits_for_planar_vram_streaming() {
+    let mut ppu = Ppu::default();
+    let cases = [
+        (0x84, 0x0003_u16, 0x0018_usize), // 8-bit rearrangement.
+        (0x88, 0x0040_u16, 0x0001_usize), // 9-bit rearrangement.
+        (0x8C, 0x0080_u16, 0x0001_usize), // 10-bit rearrangement.
+    ];
+    for (vmain, raw_word, translated_word) in cases {
+        let [low, high] = raw_word.to_le_bytes();
+        ppu.write_register(0x2115, vmain);
+        ppu.write_register(0x2116, low);
+        ppu.write_register(0x2117, high);
+        ppu.write_register(0x2118, 0x5E);
+        ppu.write_register(0x2119, 0x6F);
+        let address = translated_word * 2;
+        assert_eq!(&ppu.vram()[address..address + 2], &[0x5E, 0x6F]);
+    }
+}

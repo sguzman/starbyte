@@ -170,13 +170,43 @@ At `$00:B8B0`, the `LDA.L ...,X` instruction uses the **legal opcode `$BF`** (65
 
 **Evidence-bound conclusion:** The first major CPU corruption is fixed, and real startup rendering is stable through frame 100. The new failure is a specific missing instruction in an otherwise legitimate game graphics routine. The new opcode implementations still require a **post-fix ROM retest** before title/gameplay compatibility can be assessed.
 
+## Eighth probe: $BF support clears graphics decompression; next missing $DF at frame 166
+
+On 2026-10-08, with the `LDA long`/`LDA long,X` changes integrated, the user ran the same local ZIP through `run --frames 180 --no-save-ram --frame-log` with 18 bounded screenshot samples. **Frames 1–165 completed normally**; frame 166 failed cleanly on a different missing 65816 instruction:
+
+```text
+emulation failed at requested frame 166
+unsupported opcode for 65816: 0xDF at 0x05DA2C
+```
+
+The user-supplied JSONL contains 165 successful frame records followed by the failed frame. The frame-166 CPU registers remain plausible for native subroutine execution: `PBR=$05`, `DBR=$05`, `PC=$DA2C`, `S=$01F9`, `P=$32`, `X=4`, `Y=4`. The CPU did not enter the previous BRK stack-corruption spiral; the resulting pointer is a **real code address** in [SMWDisX `bank_05.asm`](https://github.com/IsoFrieze/SMWDisX/blob/master/bank_05.asm):
+
+```asm
+CODE_05DA24:
+    LDX.B #$04
+    LDY.B #$04
+    LDA.B [Layer1DataPtr],Y
+    AND.B #$0F
+CODE_05DA2C:
+    CMP.L DATA_05D760,X
+    BEQ CODE_05DA38
+    DEX
+    BPL CODE_05DA2C
+```
+
+`$DF` is the valid **CMP absolute-long,X** opcode. Starbyte lacked it. A general implementation of both `CMP long` (`$CF`) and `CMP long,X` (`$DF`) now uses the existing accumulator-width-sensitive comparison semantics, including 24-bit bank carry/wrap and flags, and carries synthetic regressions. A corresponding full-address-space word-access wrap fix was also committed.
+
+The sampled startup frames remain visually coherent: the white "Nintendo Presents" logo is stable through about frame 130, fades from brightness 15 to 1 over frames 132–160, and becomes black at frame 161. A black frame after the fade **does not by itself mean another rendering failure**; the CPU moves into sound and then level-entry initialization. No title screen, first level, input or audio fidelity has been verified.
+
+**Compatibility remains "startup progressing, not playable-verified."** Passing 165 frames and encountering a legitimate opcode is meaningful evidence of progress but does not constitute a playable game.
+
 ## Next evidence needed
 
-1. Once the `$AF`/`$BF` opcode fix passes CI, rerun **180 frames** with `--no-save-ram`, `--frame-log` and bounded screenshots. Verify frame 109 now completes and whether the Nintendo Presents animation advances to title-screen loading; stop and capture the first new instruction error if one arises.
-2. If the game completes more initialization but remains visually wrong, compare selected screenshots and PPU/DMA counters; use a bounded per-instruction trace only when an exact CPU divergence is suspected.
-3. Record the local cartridge digest/region/revision (the archive filename is not sufficient identity), without committing or distributing ROM bytes.
-4. Fix any new legitimate missing opcode or demonstrated hardware fault with copyright-free synthetic regressions. Do not silently claim all 65816 opcodes are implemented.
-5. Do not mark title/gameplay compatibility verified until the title scene is stable and controller input reaches actual gameplay.
+1. Once the `$CF`/`$DF` compare instructions and 24-bit word-access fix pass CI, retry **240 frames** with bounded frame logs and screenshots. Confirm frame 166 completes and capture any next *real* missing opcode or first divergent game state.
+2. Prioritize completing the remaining valid 65816 addressing modes using synthetic regressions, rather than repeatedly requiring the user to run one ROM probe for each missing opcode.
+3. If the CPU advances but graphics remain incorrect, compare framebuffer snapshots and PPU/DMA counters; collect instruction traces only around the earliest demonstrated divergence.
+4. Record the local ROM digest/region/revision without committing or redistributing the bytes.
+5. Do not upgrade game compatibility to title/playable until the actual title screen, controller input, gameplay and audio are verified.
 
 ## Acceptance criteria
 

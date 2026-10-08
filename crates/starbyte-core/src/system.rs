@@ -1097,6 +1097,7 @@ mod tests {
     fn cpu_visible_vram_ports_store_tilemap_data() {
         let mut bus = SystemBus::default();
         bus.install_cartridge(make_cart(Mapper::LoRom));
+        bus.write(0x002115, 0x80); // Increment after the high VRAM data port.
         bus.write(0x002116, 0x00);
         bus.write(0x002117, 0x00);
         bus.write(0x002118, 0x34);

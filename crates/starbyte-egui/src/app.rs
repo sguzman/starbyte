@@ -551,7 +551,7 @@ impl StarbyteApp {
         self.persist_config();
     }
 
-    fn open_recent_rom(&mut self, path: &Path, ctx: &egui::Context) {
+    fn open_local_rom(&mut self, path: &Path, ctx: &egui::Context) {
         match self.session.load_rom(path) {
             Ok(()) => {
                 let matching = self
@@ -585,7 +585,7 @@ impl StarbyteApp {
                 self.status_line = format!("Loaded {}", path.display());
             }
             Err(error) => {
-                self.status_line = format!("Could not load recent game: {error}");
+                self.status_line = format!("Could not load ROM: {error}");
             }
         }
     }
@@ -725,6 +725,13 @@ impl StarbyteApp {
             {
                 self.play_view = true;
             }
+            if ui.button("Open ROM...").clicked()
+                && let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Super Nintendo ROM", &["sfc", "smc", "swc", "fig"])
+                    .pick_file()
+            {
+                self.open_local_rom(&path, ctx);
+            }
             ui.menu_button("Recent", |ui| {
                 let paths = self.config.library.recent_roms.clone();
                 if paths.is_empty() {
@@ -740,7 +747,7 @@ impl StarbyteApp {
                         .on_hover_text(path.display().to_string())
                         .clicked()
                     {
-                        self.open_recent_rom(&path, ctx);
+                        self.open_local_rom(&path, ctx);
                         ui.close();
                     }
                 }
@@ -1683,6 +1690,20 @@ impl eframe::App for StarbyteApp {
         self.capture_keyboard_binding(ctx);
         self.poll_gamepad_events();
         self.poll_worker_events(ctx);
+
+        // Drop a local ROM from the file manager to open it immediately.
+        // Untrusted formats are validated by the normal cartridge loader;
+        // ignored non-file drops cannot smuggle raw ROM data into cache.
+        if let Some(path) = ctx.input(|input| {
+            input
+                .raw
+                .dropped_files
+                .iter()
+                .find_map(|file| file.path.clone())
+        }) {
+            self.open_local_rom(&path, ctx);
+        }
+
         // Hotkeys should never fire while editing controls or recording a new binding.
         if !ctx.wants_keyboard_input() && self.pending_keyboard_bind.is_none() {
             if ctx.input(|input| input.key_pressed(egui::Key::F5))

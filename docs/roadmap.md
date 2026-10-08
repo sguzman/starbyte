@@ -23,7 +23,8 @@
 - [x] Add three ROM-content-scoped persistent disk slots with atomic writes and a safe cartridge match check (source; CI pending).
 - [ ] Build a friendly save-slot browser with thumbnails, backup/export and recovery affordances.
 - [ ] Make library covers/metadata and installed/offline status pleasant even with no network; measure large-library performance.
-- [x] Add local, bounded Recent Games menu with deduplication and safe missing-file handling (CI pending).
+- [x] Add local, bounded Recent Games menu with deduplication and safe missing-file handling (source; native verification pending).
+- [x] Allow a single local ROM to be opened through a native file picker or drag-and-drop without preconfiguring a library directory (CI pending).
 - [ ] Improve gamepad/keyboard remapping, reconnection, key focus and full-screen transitions on Wayland.
 - [x] Track held buttons per connected gamepad and clear unplugged pad state without releasing other controllers (source; hardware test pending).
 - [x] Export native-resolution PNG screenshots with F12 and a Play View toolbar action (source; CI pending).

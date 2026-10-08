@@ -3790,7 +3790,9 @@ impl Cpu65816 {
         bus: &mut B,
         trace: &mut Vec<BusEvent>,
     ) -> Result<()> {
-        let pointer = self.fetch_operand_u16(bus, trace).wrapping_add(self.registers.x);
+        let pointer = self
+            .fetch_operand_u16(bus, trace)
+            .wrapping_add(self.registers.x);
         let base = (u32::from(self.registers.pbr) << 16) | u32::from(pointer);
         let low = self.read_u8_trace(bus, trace, base);
         let high = self.read_u8_trace(
@@ -3804,7 +3806,11 @@ impl Cpu65816 {
 
     fn execute_per<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
         let displacement = self.fetch_operand_u16(bus, trace) as i16;
-        let relative = self.registers.pc.wrapping_add(3).wrapping_add_signed(displacement);
+        let relative = self
+            .registers
+            .pc
+            .wrapping_add(3)
+            .wrapping_add_signed(displacement);
         let [low, high] = relative.to_le_bytes();
         self.push_stack(bus, trace, high)?;
         self.push_stack(bus, trace, low)?;
@@ -4522,8 +4528,11 @@ mod tests {
         cpu.registers.y = 0x0200;
         cpu.registers.p = 0x40; // Preserve V and all flags.
         let mut bus = TestBus::with_bytes(&[
-            (0x008000, 0x54), (0x008001, 0x7E), (0x008002, 0x7F),
-            (0x7F0100, 0x12), (0x7F0101, 0x34),
+            (0x008000, 0x54),
+            (0x008001, 0x7E),
+            (0x008002, 0x7F),
+            (0x7F0100, 0x12),
+            (0x7F0101, 0x34),
         ]);
         cpu.step_with_bus(&mut bus).unwrap();
         assert_eq!(bus.read(0x7E0200), 0x12);
@@ -4551,8 +4560,11 @@ mod tests {
         cpu.registers.y = 0;
         cpu.registers.p = 0;
         let mut bus = TestBus::with_bytes(&[
-            (0x008000, 0x44), (0x008001, 0x7E), (0x008002, 0x7F),
-            (0x7F0000, 0x12), (0x7FFFFF, 0x34),
+            (0x008000, 0x44),
+            (0x008001, 0x7E),
+            (0x008002, 0x7F),
+            (0x7F0000, 0x12),
+            (0x7FFFFF, 0x34),
         ]);
         cpu.step_with_bus(&mut bus).unwrap();
         assert_eq!(bus.read(0x7E0000), 0x12);
@@ -4577,7 +4589,9 @@ mod tests {
         cpu.registers.y = 0x00FF;
         cpu.registers.p = 0x30; // Eight-bit accumulator and indices.
         let mut bus = TestBus::with_bytes(&[
-            (0x008000, 0x54), (0x008001, 0x7E), (0x008002, 0x7F),
+            (0x008000, 0x54),
+            (0x008001, 0x7E),
+            (0x008002, 0x7F),
             (0x7F00FF, 0x56),
         ]);
         cpu.step_with_bus(&mut bus).unwrap();
@@ -4595,8 +4609,10 @@ mod tests {
         cpu.registers.emulation = false;
         cpu.registers.pc = 0x8000;
         let mut bus = TestBus::with_bytes(&[
-            (0x008000, 0x5C), (0x008001, 0x34),
-            (0x008002, 0x12), (0x008003, 0x7E),
+            (0x008000, 0x5C),
+            (0x008001, 0x34),
+            (0x008002, 0x12),
+            (0x008003, 0x7E),
         ]);
         cpu.step_with_bus(&mut bus).unwrap();
         assert_eq!(cpu.registers.pbr, 0x7E);
@@ -4608,9 +4624,13 @@ mod tests {
         cpu.registers.pbr = 0x80;
         cpu.registers.pc = 0x8000;
         let mut bus = TestBus::with_bytes(&[
-            (0x808000, 0x6C), (0x808001, 0x00), (0x808002, 0x10),
-            (0x001000, 0x78), (0x001001, 0x56),
-            (0x801000, 0x34), (0x801001, 0x12),
+            (0x808000, 0x6C),
+            (0x808001, 0x00),
+            (0x808002, 0x10),
+            (0x001000, 0x78),
+            (0x001001, 0x56),
+            (0x801000, 0x34),
+            (0x801001, 0x12),
         ]);
         let trace = cpu.step_with_bus(&mut bus).unwrap();
         assert_eq!(cpu.registers.pbr, 0x80);
@@ -4625,9 +4645,13 @@ mod tests {
         cpu.registers.pc = 0x8000;
         cpu.registers.x = 2;
         let mut bus = TestBus::with_bytes(&[
-            (0x808000, 0x7C), (0x808001, 0x00), (0x808002, 0x10),
-            (0x801002, 0xAB), (0x801003, 0xCD),
-            (0x001002, 0x11), (0x001003, 0x22),
+            (0x808000, 0x7C),
+            (0x808001, 0x00),
+            (0x808002, 0x10),
+            (0x801002, 0xAB),
+            (0x801003, 0xCD),
+            (0x001002, 0x11),
+            (0x001003, 0x22),
         ]);
         let trace = cpu.step_with_bus(&mut bus).unwrap();
         assert_eq!(cpu.registers.pbr, 0x80);
@@ -4645,9 +4669,13 @@ mod tests {
         cpu.registers.s = 0x01FF;
         cpu.registers.x = 2;
         let mut bus = TestBus::with_bytes(&[
-            (0x808000, 0xFC), (0x808001, 0x00), (0x808002, 0x10),
-            (0x801002, 0xAB), (0x801003, 0xCD),
-            (0x001002, 0x11), (0x001003, 0x22),
+            (0x808000, 0xFC),
+            (0x808001, 0x00),
+            (0x808002, 0x10),
+            (0x801002, 0xAB),
+            (0x801003, 0xCD),
+            (0x001002, 0x11),
+            (0x001003, 0x22),
         ]);
         cpu.step_with_bus(&mut bus).unwrap();
         assert_eq!(cpu.registers.pc, 0xCDAB);
@@ -4665,10 +4693,16 @@ mod tests {
         cpu.registers.s = 0x01FF;
         cpu.registers.d = 0x0200;
         let mut bus = TestBus::with_bytes(&[
-            (0x008000, 0xF4), (0x008001, 0x34), (0x008002, 0x12),
-            (0x008003, 0xD4), (0x008004, 0x10),
-            (0x008005, 0x62), (0x008006, 0x10), (0x008007, 0x00),
-            (0x000210, 0x78), (0x000211, 0x56),
+            (0x008000, 0xF4),
+            (0x008001, 0x34),
+            (0x008002, 0x12),
+            (0x008003, 0xD4),
+            (0x008004, 0x10),
+            (0x008005, 0x62),
+            (0x008006, 0x10),
+            (0x008007, 0x00),
+            (0x000210, 0x78),
+            (0x000211, 0x56),
         ]);
         cpu.step_with_bus(&mut bus).unwrap(); // PEA #$1234.
         assert_eq!(cpu.registers.pc, 0x8003);
@@ -4755,9 +4789,13 @@ mod tests {
         cpu.registers.a = 0x000F;
         cpu.registers.p = 0x30;
         let mut bus = TestBus::with_bytes(&[
-            (0x008000, 0x0C), (0x008001, 0x00), (0x008002, 0x40),
-            (0x008003, 0x14), (0x008004, 0x10),
-            (0x7E4000, 0x50), (0x000010, 0xFF),
+            (0x008000, 0x0C),
+            (0x008001, 0x00),
+            (0x008002, 0x40),
+            (0x008003, 0x14),
+            (0x008004, 0x10),
+            (0x7E4000, 0x50),
+            (0x000010, 0xFF),
         ]);
         cpu.step_with_bus(&mut bus).unwrap();
         assert_eq!(bus.read(0x7E4000), 0x5F);
@@ -4774,8 +4812,11 @@ mod tests {
         cpu16.registers.a = 0x0FF0;
         cpu16.registers.p = 0x00;
         let mut bus16 = TestBus::with_bytes(&[
-            (0x009000, 0x1C), (0x009001, 0x00), (0x009002, 0x40),
-            (0x7E4000, 0xF0), (0x7E4001, 0xF0),
+            (0x009000, 0x1C),
+            (0x009001, 0x00),
+            (0x009002, 0x40),
+            (0x7E4000, 0xF0),
+            (0x7E4001, 0xF0),
         ]);
         cpu16.step_with_bus(&mut bus16).unwrap();
         assert_eq!(bus16.read(0x7E4000), 0x00);

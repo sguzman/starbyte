@@ -4122,6 +4122,141 @@ mod tests {
     }
 
     #[test]
+    fn all_new_accumulator_alu_modes_use_the_documented_effective_address() {
+        // A compact synthetic bus fixture exercises all 38 newly supported
+        // LDA/AND/EOR/ADC/SBC addressing forms without commercial ROM data.
+        const OPCODES: &[u8] = &[
+            0xA3, 0xB3, 0x23, 0x2F, 0x33, 0x61, 0x67, 0x71, 0x72, 0x75, 0x77,
+            0x41, 0x43, 0x45, 0x47, 0x4F, 0x51, 0x52, 0x53, 0x55, 0x57, 0x59, 0x5D, 0x5F,
+            0xE1, 0xE3, 0xE5, 0xE7, 0xED, 0xEF, 0xF1, 0xF2, 0xF3, 0xF5, 0xF7, 0xF9, 0xFD, 0xFF,
+        ];
+
+        for &opcode in OPCODES {
+            let mut cpu = Cpu65816::default();
+            cpu.registers.pc = 0x8000;
+            cpu.registers.emulation = false;
+            cpu.registers.d = 0x0200;
+            cpu.registers.dbr = 0x7E;
+            cpu.registers.s = 0x01F0;
+            cpu.registers.x = 2;
+            cpu.registers.y = 3;
+            let family = opcode & 0xE0;
+            let (initial, expected) = match family {
+                0xA0 => (0x00, 0x04), // LDA
+                0x20 => (0x07, 0x04), // AND
+                0x40 => (0x06, 0x02), // EOR
+                0x60 => (0x02, 0x06), // ADC
+                0xE0 => (0x06, 0x02), // SBC, with carry set below.
+                _ => unreachable!(),
+            };
+            cpu.registers.a = 0xAB00 | initial;
+            cpu.registers.p = 0x30 | if family == 0xE0 { 0x01 } else { 0 };
+
+            let mode = opcode & 0x1F;
+            let mut bytes: Vec<(u32, u8)> = vec![(0x008000, opcode), (0x008001, 0x10)];
+            let (target, instruction_len) = match mode {
+                0x01 => {
+                    bytes.extend([(0x000212, 0x00), (0x000213, 0x40)]);
+                    (0x7E4000, 2)
+                }
+                0x03 => (0x000200, 2),
+                0x05 => (0x000210, 2),
+                0x07 => {
+                    bytes.extend([
+                        (0x000210, 0x00),
+                        (0x000211, 0x40),
+                        (0x000212, 0x7F),
+                    ]);
+                    (0x7F4000, 2)
+                }
+                0x0D => {
+                    bytes.push((0x008002, 0x40));
+                    (0x7E4010, 3)
+                }
+                0x0F => {
+                    bytes.extend([(0x008002, 0x40), (0x008003, 0x7F)]);
+                    (0x7F4010, 4)
+                }
+                0x11 => {
+                    bytes.extend([(0x000210, 0x00), (0x000211, 0x40)]);
+                    (0x7E4003, 2)
+                }
+                0x12 => {
+                    bytes.extend([(0x000210, 0x00), (0x000211, 0x40)]);
+                    (0x7E4000, 2)
+                }
+                0x13 => {
+                    bytes.extend([(0x000200, 0x00), (0x000201, 0x40)]);
+                    (0x7E4003, 2)
+                }
+                0x15 => (0x000212, 2),
+                0x17 => {
+                    bytes.extend([
+                        (0x000210, 0x00),
+                        (0x000211, 0x40),
+                        (0x000212, 0x7F),
+                    ]);
+                    (0x7F4003, 2)
+                }
+                0x19 => {
+                    bytes.push((0x008002, 0x40));
+                    (0x7E4013, 3)
+                }
+                0x1D => {
+                    bytes.push((0x008002, 0x40));
+                    (0x7E4012, 3)
+                }
+                0x1F => {
+                    bytes.extend([(0x008002, 0x40), (0x008003, 0x7F)]);
+                    (0x7F4012, 4)
+                }
+                _ => unreachable!("unrecognized effective-address mode"),
+            };
+            bytes.push((target, 0x04));
+            let mut bus = TestBus::with_bytes(&bytes);
+            let trace = cpu.step_with_bus(&mut bus).unwrap();
+            assert_eq!(cpu.registers.a, 0xAB00 | expected, "opcode {opcode:02X}");
+            assert_eq!(
+                cpu.registers.pc,
+                0x8000 + instruction_len,
+                "opcode {opcode:02X}"
+            );
+            assert_eq!(cpu.registers.s, 0x01F0, "opcode {opcode:02X}");
+            assert!(
+                trace.iter().any(|event| event.address == target),
+                "opcode {opcode:02X} did not access {target:06X}"
+            );
+        }
+    }
+
+    #[test]
+    fn eor_and_sbc_long_indexed_work_with_sixteen_bit_a() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.emulation = false;
+        cpu.registers.p = 0x00;
+        cpu.registers.x = 1;
+        cpu.registers.a = 0x1234;
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0x5F), (0x008001, 0xFF), (0x008002, 0xFF), (0x008003, 0x7E),
+            (0x008004, 0xFF), (0x008005, 0xFF), (0x008006, 0xFF), (0x008007, 0x7E),
+            (0x7F0000, 0x34), (0x7F0001, 0x12),
+        ]);
+        cpu.step_with_bus(&mut bus).unwrap(); // EOR $7EFFFF,X
+        assert_eq!(cpu.registers.a, 0);
+        assert_eq!(cpu.registers.p & 0x02, 0x02);
+        assert_eq!(cpu.registers.pc, 0x8004);
+
+        cpu.registers.a = 0x1233;
+        cpu.registers.p = 0x01; // Binary SBC, incoming carry is set.
+        cpu.step_with_bus(&mut bus).unwrap(); // SBC $7EFFFF,X
+        assert_eq!(cpu.registers.a, 0xFFFF);
+        assert_eq!(cpu.registers.p & 0x01, 0);
+        assert_eq!(cpu.registers.p & 0x80, 0x80);
+        assert_eq!(cpu.registers.pc, 0x8008);
+    }
+
+    #[test]
     fn all_indirect_cmp_modes_read_correct_effective_address() {
         // All seven remaining documented 65816 CMP modes in native 8-bit
         // accumulator/index mode. Use contrasting bank data where relevant.

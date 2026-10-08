@@ -337,7 +337,9 @@ impl LibraryService {
         let mut archive_manifest: ArchiveListingManifest =
             read_json_or_default(archive_manifest_path.clone())?;
         let mut seen_keys = BTreeSet::new();
-        let mut discovered = BTreeMap::<GameId, LocalRomInfo>::new();
+        // Key by actual source, not header title: multiple commercial games
+        // can carry the same abbreviated title or matching archive member.
+        let mut discovered = BTreeMap::<String, LocalRomInfo>::new();
         for rom_dir in &self.config.library.rom_dirs {
             for candidate in discover_rom_files(rom_dir, &mut archive_manifest)? {
                 let cache_key = candidate.cache_key();
@@ -353,7 +355,7 @@ impl LibraryService {
                     && record.source_signature == signature
                 {
                     discovered
-                        .entry(record.rom_info.game_id.clone())
+                        .entry(cache_key)
                         .or_insert_with(|| record.rom_info.clone());
                     continue;
                 }
@@ -366,7 +368,7 @@ impl LibraryService {
                                 rom_info: info.clone(),
                             },
                         );
-                        discovered.entry(info.game_id.clone()).or_insert(info);
+                        discovered.entry(candidate.cache_key()).or_insert(info);
                     }
                     Err(error) => debug!(
                         "skipping ROM candidate {}: {error}",
@@ -378,8 +380,23 @@ impl LibraryService {
         manifest.records.retain(|key, _| seen_keys.contains(key));
         write_json(manifest_path, &manifest)?;
         write_json(archive_manifest_path, &archive_manifest)?;
-        info!(discovered = discovered.len(), "completed ROM scan");
-        Ok(discovered.into_values().collect())
+        // Disambiguate only colliding legacy IDs. Normal existing IDs and
+        // cheat enablement remain unchanged. Collision suffixes use source
+        // provenance so scan-order changes cannot reshuffle game identities.
+        let mut counts = BTreeMap::<GameId, usize>::new();
+        for info in discovered.values() {
+            *counts.entry(info.game_id.clone()).or_default() += 1;
+        }
+        let duplicate_sources = counts.values().map(|&count| count.saturating_sub(1)).sum::<usize>();
+        let mut roms = Vec::with_capacity(discovered.len());
+        for (source, mut info) in discovered {
+            if counts.get(&info.game_id).copied().unwrap_or_default() > 1 {
+                info.game_id = game_id_for_title(&format!("{}::{source}", info.game_id));
+            }
+            roms.push(info);
+        }
+        info!(discovered = roms.len(), duplicate_sources, "completed ROM scan");
+        Ok(roms)
     }
 
     /// Load a merged library snapshot using cached metadata, covers, and cheats.
@@ -880,40 +897,70 @@ fn merge_library_entries(
     cache_root: PathBuf,
     enabled_by_game: &BTreeMap<String, Vec<String>>,
 ) -> Result<Vec<LibraryEntry>> {
-    let mut local_by_id = BTreeMap::new();
+    let metadata_by_id = metadata_records
+        .iter()
+        .map(|metadata| (metadata.game_id.clone(), metadata))
+        .collect::<BTreeMap<_, _>>();
+    let mut matched_metadata = BTreeSet::new();
+    let mut installed_ids = BTreeSet::new();
+    let mut entries = Vec::with_capacity(local_roms.len() + metadata_records.len());
+
     for local in local_roms {
-        let key = metadata_records
-            .iter()
+        let metadata = metadata_by_id
+            .values()
             .filter_map(|metadata| {
-                title_match_score(local, metadata).map(|score| (score, metadata.game_id.clone()))
+                title_match_score(local, metadata).map(|score| (score, *metadata))
             })
-            .max_by_key(|(score, _)| *score)
+            .max_by(|(left_score, left_metadata), (right_score, right_metadata)| {
+                left_score
+                    .cmp(right_score)
+                    .then_with(|| right_metadata.game_id.cmp(&left_metadata.game_id))
+            })
             .filter(|(score, _)| *score >= 80)
-            .map(|(_, game_id)| game_id)
-            .unwrap_or_else(|| local.game_id.clone());
-        local_by_id.insert(key, local.clone());
-    }
-    let mut metadata_by_id = BTreeMap::new();
-    for metadata in metadata_records {
-        metadata_by_id.insert(metadata.game_id.clone(), metadata.clone());
-    }
+            .map(|(_, metadata)| metadata.clone());
+        if let Some(metadata) = &metadata {
+            matched_metadata.insert(metadata.game_id.clone());
+        }
 
-    let keys = local_by_id
-        .keys()
-        .chain(metadata_by_id.keys())
-        .cloned()
-        .collect::<BTreeSet<_>>();
-
-    let mut entries = Vec::new();
-    for game_id in keys {
-        let local = local_by_id.get(&game_id).cloned();
-        let metadata = metadata_by_id.get(&game_id).cloned();
+        // Artwork providers own their own IDs; game identity must remain
+        // local-source-specific. In particular, never replace two installed
+        // games with one entry just because both matched the same artwork.
+        let game_id = local.game_id.clone();
+        installed_ids.insert(game_id.clone());
+        let cover_id = metadata.as_ref().map_or(game_id.as_str(), |item| item.game_id.as_str());
+        let cover = load_cached_cover(&cache_root, cover_id, metadata.as_ref())?;
+        let cheats = load_cached_cheats(
+            &cache_root,
+            &game_id,
+            enabled_by_game.get(&game_id).cloned().unwrap_or_default(),
+        )?;
         let display_title = metadata
             .as_ref()
             .map(|record| record.title.clone())
-            .or_else(|| local.as_ref().map(|record| record.title.clone()))
-            .unwrap_or_else(|| game_id.clone());
-        let cover = load_cached_cover(&cache_root, &game_id, metadata.as_ref())?;
+            .or_else(|| {
+                matches!(local.source_kind, LocalRomSourceKind::ZipArchiveMember)
+                    .then(|| title_file_stem(&local.rom_path))
+                    .flatten()
+            })
+            .unwrap_or_else(|| local.title.clone());
+        entries.push(LibraryEntry {
+            game_id,
+            display_title,
+            installed_status: InstalledStatus::Installed,
+            local: Some(local.clone()),
+            metadata,
+            cover,
+            cheats,
+        });
+    }
+
+    // Show metadata-only catalog entries separately, but not extra ghost
+    // entries for titles already represented by one or more local ROMs.
+    for (game_id, metadata) in metadata_by_id {
+        if matched_metadata.contains(&game_id) || installed_ids.contains(&game_id) {
+            continue;
+        }
+        let cover = load_cached_cover(&cache_root, &game_id, Some(metadata))?;
         let cheats = load_cached_cheats(
             &cache_root,
             &game_id,
@@ -921,14 +968,10 @@ fn merge_library_entries(
         )?;
         entries.push(LibraryEntry {
             game_id,
-            display_title,
-            installed_status: if local.is_some() {
-                InstalledStatus::Installed
-            } else {
-                InstalledStatus::Missing
-            },
-            local,
-            metadata,
+            display_title: metadata.title.clone(),
+            installed_status: InstalledStatus::Missing,
+            local: None,
+            metadata: Some(metadata.clone()),
             cover,
             cheats,
         });
@@ -1446,7 +1489,10 @@ fn local_match_titles(local: &LocalRomInfo) -> Vec<String> {
         if let Some(stem) = title_file_stem(Path::new(member_path)) {
             titles.push(normalize_title(&stem));
         }
-    } else if let Some(stem) = title_file_stem(&local.rom_path) {
+    }
+    // The ZIP filename often contains a far better full title than the
+    // SNES cartridge header, which is limited to 21 characters.
+    if let Some(stem) = title_file_stem(&local.rom_path) {
         titles.push(normalize_title(&stem));
     }
     titles.retain(|title| !title.is_empty());
@@ -1747,6 +1793,40 @@ mod tests {
         assert!(path.exists());
         let cart = Cartridge::load(&path).unwrap();
         assert_eq!(cart.header().title.trim(), "STARBYTE ZIP LOAD");
+    }
+
+    #[test]
+    fn multiple_archives_with_the_same_cartridge_title_stay_distinct() {
+        let dir = tempdir().unwrap();
+        let rom = synthetic_rom_bytes(b"STARBYTE ZIP GAME 01 ");
+        for name in ["Game A.zip", "Game B.zip"] {
+            write_zip_roms(&dir.path().join(name), &[("game.sfc", rom.clone())]);
+        }
+        let mut config = RuntimeConfig::default();
+        config.library.rom_dirs.push(dir.path().to_path_buf());
+        config.library.cache_dir = Some(dir.path().join(".cache"));
+        let service = LibraryService::new(config, Default::default()).unwrap();
+        let local = service.scan_roms().unwrap();
+        assert_eq!(local.len(), 2);
+        assert_ne!(local[0].game_id, local[1].game_id);
+        let metadata = GameMetadata {
+            game_id: game_id_for_title("STARBYTE ZIP GAME"),
+            title: "STARBYTE ZIP GAME".to_owned(),
+            normalized_title: normalize_title("STARBYTE ZIP GAME"),
+            source: "test".to_owned(),
+            cover_url: None,
+            has_cheat_files: false,
+            fetched_at_unix: 0,
+        };
+        let entries = merge_library_entries(
+            &local,
+            &[metadata],
+            service.cache_root(),
+            &std::collections::BTreeMap::new(),
+        ).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().all(|entry| entry.installed_status == InstalledStatus::Installed));
+        assert_ne!(entries[0].game_id, entries[1].game_id);
     }
 
     #[test]

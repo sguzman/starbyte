@@ -1,5 +1,7 @@
+# Legacy checkout sample. Live user settings are stored in XDG config directories.
+# Edit the user config, not this tracked example.
 mode = "dev"
-log_filter = "info,starbyte_core=debug,starbyte_cli=debug"
+log_filter = "info"
 prefer_dark_mode = true
 
 [audio]
@@ -18,32 +20,32 @@ vsync = true
 active_device = "keyboard"
 
 [input.keyboard_bindings]
-a = "Space"
-b = "J"
-down = "D"
-l = "A"
-left = "S"
-r = "Semicolon"
-right = "F"
-select = "G"
-start = "H"
-up = "E"
-x = "K"
-y = "L"
+up = "ArrowUp"
+down = "ArrowDown"
+left = "ArrowLeft"
+right = "ArrowRight"
+start = "Enter"
+select = "Space"
+a = "X"
+b = "Z"
+x = "S"
+y = "A"
+l = "Q"
+r = "W"
 
 [input.gamepad_bindings]
-a = "South"
-b = "East"
-down = "DPadDown"
-l = "LeftTrigger2"
-left = "DPadLeft"
-r = "RightTrigger2"
-right = "DPadRight"
-select = "Select"
-start = "Start"
 up = "DPadUp"
-x = "West"
-y = "North"
+down = "DPadDown"
+left = "DPadLeft"
+right = "DPadRight"
+start = "Start"
+select = "Select"
+a = "East"
+b = "South"
+x = "North"
+y = "West"
+l = "LeftTrigger"
+r = "RightTrigger"
 
 [cheats]
 show_cheat_badges = false
@@ -51,9 +53,9 @@ show_cheat_badges = false
 [cheats.enabled_by_game]
 
 [library]
-rom_dirs = ['Y:\torrents\data\emu\Super Nintendo']
+rom_dirs = []
 active_view = "grid"
-show_installed_only = true
+show_installed_only = false
 
 [advanced]
 show_missing_games = true
@@ -64,8 +66,6 @@ enable_network = true
 metadata_index_url = "https://api.github.com/repos/libretro-thumbnails/Nintendo_-_Super_Nintendo_Entertainment_System/git/trees/master?recursive=1"
 cover_index_url = "https://raw.githubusercontent.com/libretro-thumbnails/Nintendo_-_Super_Nintendo_Entertainment_System/master"
 cheat_index_url = "https://api.github.com/repos/libretro/libretro-database/git/trees/master?recursive=1"
-last_metadata_refresh_unix = 1782410943
-last_cover_refresh_unix = 1782425546
 
 [ui]
 show_left_panel = true
@@ -73,8 +73,8 @@ show_right_panel = true
 show_details_panel = true
 show_log_panel = true
 log_auto_scroll = true
-left_panel_width = 400.9375
+left_panel_width = 280.0
 library_panel_width = 420.0
-details_panel_width = 260.0
-right_panel_width = 328.0
-log_panel_height = 157.5625
+details_panel_width = 340.0
+right_panel_width = 320.0
+log_panel_height = 180.0

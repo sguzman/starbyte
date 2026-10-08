@@ -50,6 +50,10 @@ A pre-inheritance CI review found a large rustfmt backlog, a missing `libudev-de
 
 The CLI now exposes `starbyte capabilities` as a versioned JSON command manifest and `starbyte doctor --json` for opt-in local platform/path diagnostics. These require no ROM or network and report Wayland/audio verification as false. A real MCP server and permission-bounded tools remain future work.
 
+## Repository sample config hygiene
+
+The tracked `.config/starbyte/config.toml` sample has been reset to portable defaults (no machine-specific ROM path, no old cache timestamps). It remains at its historical path to avoid deleting the file during a normal pull and to support one-time migration into XDG user settings. Git history is intentionally not rewritten.
+
 ## Current functional gap
 
 The original commercial-ROM roadmap explicitly leaves SNES background/tilemap presentation, non-placeholder Super Mario World boot visuals, title/menu navigation, and first controllable gameplay incomplete. This is a **blocking playability gap**, not an optional accuracy task.

@@ -42,6 +42,16 @@ Read-only Cheatarium lookup: `starbyte cheatarium --index /path/to/snes.json.gz 
 
 Other existing CLI actions include `inspect /path/to/game.sfc --json` (schema `starbyte.rom_inspect.v1`, no playability claim), `print-config json`, `library scan --json`, and `run /path/to/game.sfc --frames 1 --report-json /path/to/report.json`. The ROM run writes its report explicitly. Library scanning may write cache data and should not be treated as read-only. Provider-refresh commands may access the network if enabled.
 
+### Targeted instruction tracing inside a normal ROM run
+
+When a frame log identifies a suspicious **one-based frame number**, use the standard `run` command's optional `--trace-frame N --trace-out PATH` pair. For example:
+
+```sh
+cargo run --release -p starbyte-cli -- run /path/to/game.zip --frames 38 --no-save-ram --trace-frame 38 --trace-out /tmp/starbyte-frame38.jsonl
+```
+
+Only the selected frame is instrumented; preceding frames run through the normal guard. Each successfully executed instruction is recorded with CPU register snapshots before and after, its opcode (null for interrupt service), and all observed bus events. The final record includes the CPU state and an error field even if the traced frame fails on an unsupported opcode. The 100,000-instruction-per-frame safety guard limits trace size but **this remains an extensive diagnostic** (often tens of thousands of JSONL lines), so capture only one frame at a time and compress before sharing. The command never uploads anything and does not copy proprietary ROM bytes into the repository.
+
 ### Instruction-level startup investigation
 
 When black frames persist, the frame counters alone cannot reveal what the CPU is waiting for. For a single-ROM local ZIP, record one frame of instruction/bus evidence using:

@@ -1662,7 +1662,12 @@ mod tests {
         assert_eq!(record["requested_frame"], 1);
         assert_eq!(record["completed_frame"], 0);
         assert_eq!(record["status"], "error");
-        assert!(record["error"].as_str().unwrap().contains("CPU PC 0x008000"));
+        assert!(
+            record["error"]
+                .as_str()
+                .unwrap()
+                .contains("CPU PC 0x008000")
+        );
         assert!(record["framebuffer"]["hash"].is_number());
     }
 

@@ -886,7 +886,7 @@ fn run_emulator_for_frames(
 ) -> Result<Option<Vec<InstructionTraceRecord>>> {
     // Match the core's deterministic frame guard so a broken commercial ROM
     // cannot hang evidence recording (including instruction-trace capture).
-    const MAX_FRAME_INSTRUCTIONS: usize = 20_000;
+    const MAX_FRAME_INSTRUCTIONS: usize = 100_000;
     let mut trace_records = capture_trace.then(Vec::new);
     for frame_index in 0..frames {
         let _ = emulator.audio_samples();

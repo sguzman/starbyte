@@ -2973,7 +2973,7 @@ impl Cpu65816 {
         address: Address,
     ) -> u16 {
         let low = self.read_u8_trace(bus, trace, address);
-        let high = self.read_u8_trace(bus, trace, address.wrapping_add(1));
+        let high = self.read_u8_trace(bus, trace, address.wrapping_add(1) & 0x00FF_FFFF);
         u16::from_le_bytes([low, high])
     }
 
@@ -3002,7 +3002,7 @@ impl Cpu65816 {
     ) {
         let [low, high] = value.to_le_bytes();
         self.write_u8_trace(bus, trace, address, low);
-        self.write_u8_trace(bus, trace, address.wrapping_add(1), high);
+        self.write_u8_trace(bus, trace, address.wrapping_add(1) & 0x00FF_FFFF, high);
     }
 
     fn load_accumulator_from_address<B: Bus>(

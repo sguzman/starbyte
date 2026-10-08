@@ -1182,8 +1182,8 @@ mod tests {
         let mut bus = SystemBus::default();
         let mut frame = FrameBuffer::default();
         bus.write(0x002121, 0x00);
+        bus.write(0x002122, 0x1F);
         bus.write(0x002122, 0x00);
-        bus.write(0x002122, 0x7C);
         bus.write(0x00212C, 0x01);
         bus.render_frame(&mut frame);
 

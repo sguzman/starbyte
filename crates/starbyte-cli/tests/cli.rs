@@ -72,7 +72,7 @@ fn write_regression_suite(dir: &Path) {
           "name":"ppu regression",
           "rom":"regression.sfc",
           "frames":1,
-          "setup_writes":[[8481,0],[8482,0],[8482,124],[8492,1]],
+          "setup_writes":[[8481,0],[8482,31],[8482,0],[8492,1]],
           "expected_reads":[],
           "expected":{
             "frame":1,

@@ -70,6 +70,10 @@ Commit `9b4b8bda` completed all three CI jobs successfully: format/Clippy, Ubunt
 
 VMAIN now controls low-versus-high data-port address increments, 1/32/128-word strides, and 8/9/10-bit remapping during direct VRAM transfers. Synthetic tests cover all three remapping modes and both increment selectors. Existing sequential word-writing tests explicitly set VMAIN to 0x80, as SNES software should. **Read-port buffering and auto-increment on reads are not yet implemented**; DMA and real-game verification remain separate acceptance gates.
 
+## Correct SNES CGRAM color channel order
+
+CGRAM stores red in bits 0–4, green in 5–9, and blue in 10–14. The previous software renderer interpreted the red and blue channels backwards. The conversion and affected synthetic test palettes are corrected; a direct framebuffer regression explicitly checks red and blue extremes. This is a cross-game visual correctness fix, not a claim of accurate brightness/fades or true commercial playability.
+
 ## Current functional gap
 
 The original commercial-ROM roadmap explicitly leaves SNES background/tilemap presentation, non-placeholder Super Mario World boot visuals, title/menu navigation, and first controllable gameplay incomplete. This is a **blocking playability gap**, not an optional accuracy task.

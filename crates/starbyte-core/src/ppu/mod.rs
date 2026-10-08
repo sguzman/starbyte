@@ -689,9 +689,10 @@ fn fill_frame(framebuffer: &mut FrameBuffer, rgba: [u8; 4]) {
 }
 
 fn bgr555_to_rgba(color: u16) -> [u8; 4] {
-    let blue = ((color & 0x1F) as u8) << 3;
+    // SNES CGRAM words encode BBBBBGGGGGRRRRR, red in bits 0..4.
+    let red = ((color & 0x1F) as u8) << 3;
     let green = (((color >> 5) & 0x1F) as u8) << 3;
-    let red = (((color >> 10) & 0x1F) as u8) << 3;
+    let blue = (((color >> 10) & 0x1F) as u8) << 3;
     [red, green, blue, 0xFF]
 }
 
@@ -704,6 +705,18 @@ mod tests {
         ppu.write_register(0x2121, slot);
         ppu.write_register(0x2122, low);
         ppu.write_register(0x2122, high);
+    }
+
+    #[test]
+    fn cgram_channel_mapping_uses_red_low_bits_and_blue_high_bits() {
+        let mut ppu = Ppu::default();
+        let mut frame = FrameBuffer::default();
+        write_color(&mut ppu, 0, 0x001F);
+        ppu.render_frame(&mut frame);
+        assert_eq!(&frame.pixels()[..4], &[248, 0, 0, 255]);
+        write_color(&mut ppu, 0, 0x7C00);
+        ppu.render_frame(&mut frame);
+        assert_eq!(&frame.pixels()[..4], &[0, 0, 248, 255]);
     }
 
     #[test]
@@ -753,7 +766,7 @@ mod tests {
         let mut frame = FrameBuffer::default();
 
         write_color(&mut ppu, 0x00, 0x0000);
-        write_color(&mut ppu, 0x01, 0x7C00);
+        write_color(&mut ppu, 0x01, 0x001F);
 
         ppu.write_register(0x2116, 0x00);
         ppu.write_register(0x2117, 0x00);
@@ -785,7 +798,7 @@ mod tests {
     fn screen_disable_falls_back_to_backdrop() {
         let mut ppu = Ppu::default();
         let mut frame = FrameBuffer::default();
-        write_color(&mut ppu, 0x00, 0x7C00);
+        write_color(&mut ppu, 0x00, 0x001F);
         ppu.render_frame(&mut frame);
 
         assert!(
@@ -836,7 +849,7 @@ mod tests {
         let mut frame = FrameBuffer::default();
 
         write_color(&mut ppu, 0x00, 0x0000);
-        write_color(&mut ppu, 0x81, 0x7C00);
+        write_color(&mut ppu, 0x81, 0x001F);
 
         ppu.write_register(0x2116, 0x00);
         ppu.write_register(0x2117, 0x00);

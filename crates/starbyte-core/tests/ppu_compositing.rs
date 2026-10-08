@@ -30,7 +30,7 @@ fn pixel(frame: &FrameBuffer, x: usize, y: usize) -> [u8; 4] {
 fn sample_mode1_bg1_bg2() -> Ppu {
     let mut ppu = Ppu::default();
     palette(&mut ppu, 0, 0);
-    palette(&mut ppu, 1, 0x7C00); // Red BG1 palette 0, color 1.
+    palette(&mut ppu, 1, 0x001F); // Red BG1 palette 0, color 1.
     palette(&mut ppu, 17, 0x03E0); // Green BG2 palette 1, color 1.
     vram_word(&mut ppu, 0x0000, 0); // BG1 map -> tile 0, palette 0, low priority.
     vram_word(&mut ppu, 0x0800, 0x2400); // BG2 -> palette 1, high priority.
@@ -65,7 +65,7 @@ fn mode1_tile_priority_overrides_fixed_layer_order() {
 #[test]
 fn sprite_priority_places_objects_behind_and_in_front_of_bg_tiles() {
     let mut ppu = sample_mode1_bg1_bg2();
-    palette(&mut ppu, 129, 0x001F); // Sprite palette 0, color 1 = blue.
+    palette(&mut ppu, 129, 0x7C00); // Sprite palette 0, color 1 = blue.
     vram_word(&mut ppu, 0x4000, 0x0080);
     ppu.write_register(0x2101, 0x01); // Sprite tiles at byte 0x4000.
     ppu.write_register(0x2102, 0);
@@ -90,8 +90,8 @@ fn sprite_priority_places_objects_behind_and_in_front_of_bg_tiles() {
 #[test]
 fn mode1_bg3_high_priority_switches_foreground_hud_order() {
     let mut ppu = Ppu::default();
-    palette(&mut ppu, 1, 0x7C00); // BG1 red.
-    palette(&mut ppu, 5, 0x001F); // BG3 2bpp palette 1 blue.
+    palette(&mut ppu, 1, 0x001F); // BG1 red.
+    palette(&mut ppu, 5, 0x7C00); // BG3 2bpp palette 1 blue.
     vram_word(&mut ppu, 0x0000, 0x0000);
     vram_word(&mut ppu, 0x1000, 0x2400); // BG3 high tile, palette 1.
     vram_word(&mut ppu, 0x2000, 0x0080); // BG1 4bpp character.
@@ -113,10 +113,10 @@ fn mode1_bg3_high_priority_switches_foreground_hud_order() {
 #[test]
 fn sixteen_pixel_characters_select_four_tiles_and_flip_as_a_unit() {
     let mut ppu = Ppu::default();
-    palette(&mut ppu, 1, 0x7C00); // red
+    palette(&mut ppu, 1, 0x001F); // red
     palette(&mut ppu, 2, 0x03E0); // green
-    palette(&mut ppu, 3, 0x001F); // blue
-    palette(&mut ppu, 4, 0x7FE0); // yellow
+    palette(&mut ppu, 3, 0x7C00); // blue
+    palette(&mut ppu, 4, 0x03FF); // yellow
     vram_word(&mut ppu, 0x0000, 0x0000);
     vram_word(&mut ppu, 0x2000, 0x0080); // tile 0, color 1
     vram_word(&mut ppu, 0x2020, 0x8000); // tile 1, color 2

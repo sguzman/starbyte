@@ -41,6 +41,14 @@ To open a local game:
 cargo run -p starbyte-egui -- --rom /path/to/your/game.sfc
 ```
 
+To test the native window and graphics path **without downloading or supplying a ROM**, run the source-generated red/cyan checkerboard demo:
+
+```sh
+cargo run -p starbyte-egui -- --demo
+```
+
+This exercises the emulator and Wayland windowing but is **not** evidence that any commercial game is playable.
+
 For a library directory:
 
 ```sh

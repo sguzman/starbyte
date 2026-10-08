@@ -5,6 +5,7 @@
 ## P0 — reach a genuinely playable game
 
 - [ ] Validate native Wayland launch, tiled-window behavior, fullscreen, focus and gamepad use on the target Linux desktop.
+- [x] Provide a copyright-free, built-in visual demo for local Wayland smoke testing and generated CPU-to-PPU pixel regression (CI pending).
 - [ ] Capture a recognizable Super Mario World title frame from a user-supplied ROM; rule out synthetic/nonblack placeholders.
 - [ ] Drive title/menu navigation using controller input, then reach first controllable gameplay.
 - [ ] Trace and fix the earliest observed real-game blockers in PPU, CPU, DMA/HDMA and timing; do not introduce ROM-specific hacks.

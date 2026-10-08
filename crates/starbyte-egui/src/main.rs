@@ -22,8 +22,12 @@ use starbyte_core::manifest::{AssetConfig, RuntimeConfig};
 )]
 struct Args {
     /// Optional ROM to load at startup.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "demo")]
     rom: Option<PathBuf>,
+
+    /// Start a built-in copyright-free graphics demo without a game ROM.
+    #[arg(long)]
+    demo: bool,
 
     /// Optional library ROM directory to add on startup. May be provided multiple times.
     #[arg(long = "rom-dir")]
@@ -87,7 +91,15 @@ fn main() -> Result<()> {
         ..Default::default()
     };
 
-    let rom = args.rom.clone();
+    let rom = if args.demo {
+        let demo_dir = cache_root.join("built-in");
+        std::fs::create_dir_all(&demo_dir)?;
+        let path = demo_dir.join("starbyte-display-demo.sfc");
+        std::fs::write(&path, starbyte_core::testing::demo::demo_rom_bytes())?;
+        Some(path)
+    } else {
+        args.rom.clone()
+    };
     let rom_dirs = args.rom_dirs.clone();
 
     eframe::run_native(

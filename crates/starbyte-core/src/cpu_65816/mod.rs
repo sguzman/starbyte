@@ -277,6 +277,22 @@ impl Cpu65816 {
             0xFC => self.execute_jsr_absolute_indexed_indirect_x(bus, &mut trace),
             0xFE => self.execute_inc_absolute_x(bus, &mut trace),
             0xF8 => self.execute_sed(bus, &mut trace),
+            0x0C => self.execute_tsb_absolute(bus, &mut trace),
+            0x14 => self.execute_trb_direct_page(bus, &mut trace),
+            0x1C => self.execute_trb_absolute(bus, &mut trace),
+            0x24 => self.execute_bit_direct_page(bus, &mut trace),
+            0x34 => self.execute_bit_direct_page_x(bus, &mut trace),
+            0x3C => self.execute_bit_absolute_x(bus, &mut trace),
+            0x42 => self.execute_wdm(bus, &mut trace),
+            0x44 => self.execute_block_move(bus, &mut trace, true),
+            0x54 => self.execute_block_move(bus, &mut trace, false),
+            0x5C => self.execute_jmp_long(bus, &mut trace),
+            0x62 => self.execute_per(bus, &mut trace),
+            0x6C => self.execute_jmp_absolute_indirect(bus, &mut trace),
+            0x7C => self.execute_jmp_absolute_indexed_indirect(bus, &mut trace),
+            0x89 => self.execute_bit_immediate(bus, &mut trace),
+            0xD4 => self.execute_pei(bus, &mut trace),
+            0xF4 => self.execute_pea(bus, &mut trace),
             // Remaining legal accumulator ALU memory addressing forms.
             0xA3 | 0xB3 => self.execute_lda_addressed(bus, &mut trace, opcode),
             0x23 | 0x2F | 0x33 => self.execute_and_addressed(bus, &mut trace, opcode),
@@ -965,8 +981,9 @@ impl Cpu65816 {
         let pointer = self
             .fetch_operand_u16(bus, trace)
             .wrapping_add(self.registers.x);
-        let low = self.read_u8_trace(bus, trace, u32::from(pointer));
-        let high = self.read_u8_trace(bus, trace, u32::from(pointer.wrapping_add(1)));
+        let bank = u32::from(self.registers.pbr) << 16;
+        let low = self.read_u8_trace(bus, trace, bank | u32::from(pointer));
+        let high = self.read_u8_trace(bus, trace, bank | u32::from(pointer.wrapping_add(1)));
         let target = u16::from_le_bytes([low, high]);
         let return_pc = self.registers.pc.wrapping_add(2);
         self.push_stack(bus, trace, (return_pc >> 8) as u8)?;
@@ -3521,6 +3538,250 @@ impl Cpu65816 {
             self.write_u16_trace(bus, trace, address, value);
             self.update_nz_16(value);
         }
+    }
+
+    fn execute_tsb_absolute<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let address = self.absolute_address(self.fetch_operand_u16(bus, trace));
+        self.test_and_set_bits(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_trb_direct_page<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_address(operand);
+        self.test_and_reset_bits(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_trb_absolute<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let address = self.absolute_address(self.fetch_operand_u16(bus, trace));
+        self.test_and_reset_bits(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn test_and_set_bits<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        address: Address,
+    ) {
+        if self.accumulator_is_8_bit() {
+            let value = self.read_u8_trace(bus, trace, address);
+            let mask = self.registers.a as u8;
+            self.set_zero(value & mask == 0);
+            self.write_u8_trace(bus, trace, address, value | mask);
+        } else {
+            let value = self.read_u16_trace(bus, trace, address);
+            let mask = self.registers.a;
+            self.set_zero(value & mask == 0);
+            self.write_u16_trace(bus, trace, address, value | mask);
+        }
+    }
+
+    fn test_and_reset_bits<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        address: Address,
+    ) {
+        if self.accumulator_is_8_bit() {
+            let value = self.read_u8_trace(bus, trace, address);
+            let mask = self.registers.a as u8;
+            self.set_zero(value & mask == 0);
+            self.write_u8_trace(bus, trace, address, value & !mask);
+        } else {
+            let value = self.read_u16_trace(bus, trace, address);
+            let mask = self.registers.a;
+            self.set_zero(value & mask == 0);
+            self.write_u16_trace(bus, trace, address, value & !mask);
+        }
+    }
+
+    fn execute_bit_direct_page<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        self.bit_memory(bus, trace, self.direct_page_address(operand));
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_bit_direct_page_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        self.bit_memory(bus, trace, self.direct_page_indexed_x_address(operand));
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_bit_absolute_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let base = self.fetch_operand_u16(bus, trace);
+        let address = self.absolute_address(base.wrapping_add(self.registers.x));
+        self.bit_memory(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn bit_memory<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>, address: Address) {
+        if self.accumulator_is_8_bit() {
+            let value = self.read_u8_trace(bus, trace, address);
+            self.set_zero((value & self.registers.a as u8) == 0);
+            self.set_negative(value & 0x80 != 0);
+            self.set_overflow(value & 0x40 != 0);
+        } else {
+            let value = self.read_u16_trace(bus, trace, address);
+            self.set_zero((value & self.registers.a) == 0);
+            self.set_negative(value & 0x8000 != 0);
+            self.set_overflow(value & 0x4000 != 0);
+        }
+    }
+
+    fn execute_bit_immediate<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        if self.accumulator_is_8_bit() {
+            let mask = self.push_read_trace(bus, trace, self.fetch_address(1));
+            self.set_zero((self.registers.a as u8 & mask) == 0);
+            self.registers.pc = self.registers.pc.wrapping_add(2);
+        } else {
+            let mask = self.fetch_operand_u16(bus, trace);
+            self.set_zero((self.registers.a & mask) == 0);
+            self.registers.pc = self.registers.pc.wrapping_add(3);
+        }
+        // BIT #imm affects Z only; N/V come from memory forms exclusively.
+        Ok(())
+    }
+
+    fn execute_wdm<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        // WDM is a two-byte reserved extension; the SNES treats it as NOP.
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_block_move<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+        decrement: bool,
+    ) -> Result<()> {
+        // Machine-code operands are destination bank, then source bank.
+        // A is always the 16-bit byte count minus one, independent of M.
+        let destination_bank = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let source_bank = self.push_read_trace(bus, trace, self.fetch_address(2));
+        let source = (u32::from(source_bank) << 16) | u32::from(self.registers.x);
+        let destination = (u32::from(destination_bank) << 16) | u32::from(self.registers.y);
+        let value = self.read_u8_trace(bus, trace, source);
+        self.write_u8_trace(bus, trace, destination, value);
+        self.registers.dbr = destination_bank;
+        if decrement {
+            self.registers.x = self.registers.x.wrapping_sub(1);
+            self.registers.y = self.registers.y.wrapping_sub(1);
+        } else {
+            self.registers.x = self.registers.x.wrapping_add(1);
+            self.registers.y = self.registers.y.wrapping_add(1);
+        }
+        if self.index_registers_are_8_bit() {
+            self.registers.x &= 0x00FF;
+            self.registers.y &= 0x00FF;
+        }
+        self.registers.a = self.registers.a.wrapping_sub(1);
+        if self.registers.a == 0xFFFF {
+            self.registers.pc = self.registers.pc.wrapping_add(3);
+        }
+        Ok(())
+    }
+
+    fn execute_jmp_long<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        let target = self.fetch_operand_u24(bus, trace);
+        self.registers.pc = target as u16;
+        self.registers.pbr = (target >> 16) as u8;
+        Ok(())
+    }
+
+    fn execute_jmp_absolute_indirect<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let pointer = self.fetch_operand_u16(bus, trace);
+        let low = self.read_u8_trace(bus, trace, u32::from(pointer));
+        let high = self.read_u8_trace(bus, trace, u32::from(pointer.wrapping_add(1)));
+        self.registers.pc = u16::from_le_bytes([low, high]);
+        Ok(())
+    }
+
+    fn execute_jmp_absolute_indexed_indirect<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let pointer = self.fetch_operand_u16(bus, trace).wrapping_add(self.registers.x);
+        let base = (u32::from(self.registers.pbr) << 16) | u32::from(pointer);
+        let low = self.read_u8_trace(bus, trace, base);
+        let high = self.read_u8_trace(
+            bus,
+            trace,
+            (u32::from(self.registers.pbr) << 16) | u32::from(pointer.wrapping_add(1)),
+        );
+        self.registers.pc = u16::from_le_bytes([low, high]);
+        Ok(())
+    }
+
+    fn execute_per<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        let displacement = self.fetch_operand_u16(bus, trace) as i16;
+        let relative = self.registers.pc.wrapping_add(3).wrapping_add_signed(displacement);
+        let [low, high] = relative.to_le_bytes();
+        self.push_stack(bus, trace, high)?;
+        self.push_stack(bus, trace, low)?;
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_pea<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        let operand = self.fetch_operand_u16(bus, trace);
+        let [low, high] = operand.to_le_bytes();
+        self.push_stack(bus, trace, high)?;
+        self.push_stack(bus, trace, low)?;
+        self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_pei<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let pointer = self.direct_page_address(operand);
+        let low = self.read_u8_trace(bus, trace, pointer);
+        let high = self.read_u8_trace(bus, trace, pointer.wrapping_add(1));
+        self.push_stack(bus, trace, high)?;
+        self.push_stack(bus, trace, low)?;
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
     }
 
     /// Resolve one of the standard memory addressing modes shared by the

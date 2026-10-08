@@ -585,13 +585,13 @@ impl Ppu {
             self.registers[0x0C]
         };
         let tiledata_base = if background.index % 2 == 0 {
-            usize::from(tiledata_nibbles & 0x0F) << 12
+            usize::from(tiledata_nibbles & 0x0F) << 13
         } else {
-            usize::from((tiledata_nibbles >> 4) & 0x0F) << 12
+            usize::from((tiledata_nibbles >> 4) & 0x0F) << 13
         };
 
         BackgroundConfig {
-            tilemap_base: usize::from(tilemap_register & 0xFC) << 8,
+            tilemap_base: usize::from(tilemap_register & 0xFC) << 9,
             size_code: tilemap_register & 0x03,
             tiledata_base,
             tile_size: if self.registers[0x05] & (0x10 << background.index) != 0 {
@@ -854,7 +854,7 @@ mod tests {
         ppu.write_register(0x2119, 0x00);
 
         ppu.write_register(0x2116, 0x00);
-        ppu.write_register(0x2117, 0x08);
+        ppu.write_register(0x2117, 0x10);
         for row in 0..8 {
             let low = if row == 0 { 0x80 } else { 0x00 };
             ppu.write_register(0x2118, low);

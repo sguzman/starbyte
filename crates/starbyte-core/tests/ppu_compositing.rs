@@ -35,11 +35,11 @@ fn sample_mode1_bg1_bg2() -> Ppu {
     palette(&mut ppu, 17, 0x03E0); // Green BG2 palette 1, color 1.
     vram_word(&mut ppu, 0x0000, 0); // BG1 map -> tile 0, palette 0, low priority.
     vram_word(&mut ppu, 0x0800, 0x2400); // BG2 -> palette 1, high priority.
-    vram_word(&mut ppu, 0x1000, 0x0080); // BG1 character pixel 0,0 = 1.
-    vram_word(&mut ppu, 0x2000, 0x0080); // BG2 character pixel 0,0 = 1.
+    vram_word(&mut ppu, 0x2000, 0x0080); // BG1 character pixel 0,0 = 1.
+    vram_word(&mut ppu, 0x4000, 0x0080); // BG2 character pixel 0,0 = 1.
     ppu.write_register(0x2105, 0x01);
-    ppu.write_register(0x2108, 0x08); // BG2 map starts at byte 0x0800.
-    ppu.write_register(0x210B, 0x21); // BG1 chars 0x1000, BG2 chars 0x2000.
+    ppu.write_register(0x2108, 0x04); // BG2 map starts at byte 0x0800.
+    ppu.write_register(0x210B, 0x21); // BG1 chars 0x2000, BG2 chars 0x4000.
     ppu.write_register(0x212C, 0x03);
     ppu
 }
@@ -97,9 +97,9 @@ fn mode1_bg3_high_priority_switches_foreground_hud_order() {
     vram_word(&mut ppu, 0x0000, 0x0000);
     vram_word(&mut ppu, 0x1000, 0x2400); // BG3 high tile, palette 1.
     vram_word(&mut ppu, 0x2000, 0x0080); // BG1 4bpp character.
-    vram_word(&mut ppu, 0x3000, 0x0080); // BG3 2bpp character.
-    ppu.write_register(0x2109, 0x10);
-    ppu.write_register(0x210B, 0x02);
+    vram_word(&mut ppu, 0x6000, 0x0080); // BG3 2bpp character.
+    ppu.write_register(0x2109, 0x08);
+    ppu.write_register(0x210B, 0x01);
     ppu.write_register(0x210C, 0x03);
     ppu.write_register(0x212C, 0x05);
     ppu.write_register(0x2105, 0x01);
@@ -126,7 +126,7 @@ fn sixteen_pixel_characters_select_four_tiles_and_flip_as_a_unit() {
     vram_word(&mut ppu, 0x2200, 0x8080); // tile 16, color 3
     vram_word(&mut ppu, 0x2230, 0x0080); // tile 17, plane2, color 4
     ppu.write_register(0x2105, 0x11); // Mode 1 BG1 uses 16x16 characters.
-    ppu.write_register(0x210B, 0x02);
+    ppu.write_register(0x210B, 0x01);
     ppu.write_register(0x212C, 0x01);
     let mut frame = FrameBuffer::default();
     ppu.render_frame(&mut frame);
@@ -246,4 +246,20 @@ fn bus_vram_reads_observe_incrementing_latch_semantics() {
     assert_eq!(bus.read(0x002139), 0xAB);
     assert_eq!(bus.read(0x00213A), 0xCD);
     assert_eq!(bus.read(0x002139), 0xAB);
+}
+
+#[test]
+fn bg_screen_and_tile_bases_use_vram_word_units() {
+    let mut ppu = Ppu::default();
+    ppu.write_register(0x2100, 0x0F);
+    palette(&mut ppu, 1, 0x001F);
+    vram_word(&mut ppu, 0x0800, 0x0000); // Tilemap at 0x400 VRAM words.
+    vram_word(&mut ppu, 0x4000, 0x0080); // Tiles at 0x2000 VRAM words.
+    ppu.write_register(0x2105, 0x01);
+    ppu.write_register(0x2107, 0x04); // BG1 map base = byte 0x0800.
+    ppu.write_register(0x210B, 0x02); // BG1 character base = byte 0x4000.
+    ppu.write_register(0x212C, 0x01);
+    let mut frame = FrameBuffer::default();
+    ppu.render_frame(&mut frame);
+    assert_eq!(pixel(&frame, 0, 0), [248, 0, 0, 255]);
 }

@@ -78,6 +78,10 @@ CGRAM stores red in bits 0–4, green in 5–9, and blue in 10–14. The previou
 
 The PPU now interprets the `$2100` brightness nibble: 0 renders black, 15 renders the full palette, and intermediate levels scale the composited frame. The existing synthetic color tests now explicitly request full brightness rather than relying on the prior always-bright default. This is whole-frame scaling only, not raster-accurate per-scanline brightness or color math.
 
+## Corrected BG map and CHR base addresses
+
+The PPU's BGnSC screen base and BGnNBA character base registers encode VRAM **word** addresses. The previous renderer used byte offsets half as large as it should have. These now convert as `(BGnSC & 0xFC) << 9` and `BGnNBA nibble << 13` in bytes. Synthetic tile/priority fixtures were relocated to matching VRAM locations and a dedicated register-address regression was added. The expected effect is improved title/background rendering; commercial-game results still require measured evidence.
+
 ## Current functional gap
 
 The original commercial-ROM roadmap explicitly leaves SNES background/tilemap presentation, non-placeholder Super Mario World boot visuals, title/menu navigation, and first controllable gameplay incomplete. This is a **blocking playability gap**, not an optional accuracy task.

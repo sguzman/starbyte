@@ -475,6 +475,108 @@ fn run_frame_log_records_each_completed_frame_as_jsonl() {
 }
 
 #[test]
+fn selected_frame_instruction_trace_has_cpu_snapshots_and_bus_events() {
+    let dir = tempdir().unwrap();
+    let rom = dir.path().join("sample.sfc");
+    let trace_path = dir.path().join("nested/instructions.jsonl");
+    write_test_rom(&rom);
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "run",
+            rom.to_str().unwrap(),
+            "--frames",
+            "2",
+            "--no-save-ram",
+            "--trace-frame",
+            "2",
+            "--trace-out",
+            trace_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let text = fs::read_to_string(trace_path).unwrap();
+    let records: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(records.len() > 2);
+    for record in &records[..records.len() - 1] {
+        assert_eq!(record["schema"], "starbyte.instruction_trace.v1");
+        assert_eq!(record["frame"], 2);
+        assert!(record["before"]["pc"].is_number());
+        assert!(record["before"]["s"].is_number());
+        assert!(record["after"]["s"].is_number());
+        assert!(record["bus_events"].is_array());
+    }
+    let footer = records.last().unwrap();
+    assert_eq!(footer["schema"], "starbyte.instruction_trace_end.v1");
+    assert_eq!(footer["status"], "ok");
+}
+
+#[test]
+fn selected_frame_instruction_trace_survives_cpu_opcode_error() {
+    let dir = tempdir().unwrap();
+    let rom = dir.path().join("bad.sfc");
+    let trace_path = dir.path().join("failed.jsonl");
+    write_test_rom(&rom);
+    let mut bytes = fs::read(&rom).unwrap();
+    bytes[1] = 0xFF; // NOP succeeds, unsupported opcode then stops the frame.
+    fs::write(&rom, bytes).unwrap();
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "run",
+            rom.to_str().unwrap(),
+            "--frames",
+            "1",
+            "--trace-frame",
+            "1",
+            "--trace-out",
+            trace_path.to_str().unwrap(),
+            "--no-save-ram",
+        ])
+        .assert()
+        .failure();
+
+    let text = fs::read_to_string(trace_path).unwrap();
+    let records: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(records[0]["opcode"], 0xEA);
+    let footer = records.last().unwrap();
+    assert_eq!(footer["status"], "error");
+    assert!(footer["error"].as_str().unwrap().contains("unsupported opcode"));
+}
+
+#[test]
+fn instruction_trace_rejects_frame_beyond_run() {
+    let dir = tempdir().unwrap();
+    let rom = dir.path().join("sample.sfc");
+    let trace_path = dir.path().join("trace.jsonl");
+    write_test_rom(&rom);
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "run",
+            rom.to_str().unwrap(),
+            "--frames",
+            "1",
+            "--trace-frame",
+            "2",
+            "--trace-out",
+            trace_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+    assert!(!trace_path.exists());
+}
+
+#[test]
 fn run_captures_bounded_frame_images_without_interactive_screenshots() {
     let dir = tempdir().unwrap();
     let rom = dir.path().join("sample.sfc");

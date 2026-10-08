@@ -1020,7 +1020,10 @@ impl StarbyteApp {
                 self.quick_save();
             }
             if ui
-                .add_enabled(self.session.has_quick_save(), egui::Button::new("Quick Load (F8)"))
+                .add_enabled(
+                    self.session.has_quick_save(),
+                    egui::Button::new("Quick Load (F8)"),
+                )
                 .clicked()
             {
                 self.quick_load(ctx);
@@ -1375,8 +1378,7 @@ impl eframe::App for StarbyteApp {
             {
                 self.quick_save();
             }
-            if ctx.input(|input| input.key_pressed(egui::Key::F8))
-                && self.session.has_quick_save()
+            if ctx.input(|input| input.key_pressed(egui::Key::F8)) && self.session.has_quick_save()
             {
                 self.quick_load(ctx);
             }

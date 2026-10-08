@@ -128,8 +128,13 @@ impl FrontendSession {
 
     /// Load the quick slot and refresh the restored framebuffer.
     pub fn quick_load(&mut self) -> Result<()> {
-        let state = self.quick_state.as_deref().context("No quick save in this session")?;
-        self.emulator.load_state(state).context("quick load failed")?;
+        let state = self
+            .quick_state
+            .as_deref()
+            .context("No quick save in this session")?;
+        self.emulator
+            .load_state(state)
+            .context("quick load failed")?;
         self.emulator.refresh_framebuffer();
         self.apply_active_cheats();
         Ok(())

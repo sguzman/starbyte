@@ -303,9 +303,7 @@ impl Ppu {
         let bg3_high = self.registers[0x05] & 0x08 != 0;
         for y in 0..framebuffer.height {
             for x in 0..framebuffer.width {
-                if let Some((pixel, high)) =
-                    self.background_pixel(background, x as u16, y as u16)
-                {
+                if let Some((pixel, high)) = self.background_pixel(background, x as u16, y as u16) {
                     let index = y * framebuffer.width + x;
                     let rank = background_priority_rank(mode, background.index, high, bg3_high);
                     if rank >= depth[index] {
@@ -347,10 +345,16 @@ impl Ppu {
         let character = (tile_number + (source_y / 8) * 16 + source_x / 8) & 0x03FF;
         let color_index = match background.bits_per_pixel {
             BitsPerPixel::Two => self.tile_pixel_2bpp(
-                background.tiledata_base, character, source_x % 8, source_y % 8,
+                background.tiledata_base,
+                character,
+                source_x % 8,
+                source_y % 8,
             ),
             BitsPerPixel::Four => self.tile_pixel_4bpp(
-                background.tiledata_base, character, source_x % 8, source_y % 8,
+                background.tiledata_base,
+                character,
+                source_x % 8,
+                source_y % 8,
             ),
         };
         if color_index == 0 {
@@ -422,12 +426,7 @@ impl Ppu {
         u16::from(self.cgram[0]) | (u16::from(self.cgram[1]) << 8)
     }
 
-    fn render_objects(
-        &self,
-        framebuffer: &mut FrameBuffer,
-        depth: &mut [u8],
-        mode: u8,
-    ) {
+    fn render_objects(&self, framebuffer: &mut FrameBuffer, depth: &mut [u8], mode: u8) {
         let objsel = self.registers[0x01];
         let (small_size, large_size) = object_size_pair(objsel >> 5);
 
@@ -656,7 +655,13 @@ fn background_priority_rank(mode: u8, index: usize, high: bool, bg3_high: bool) 
         (1, 1, true) => 8,
         (1, 0, false) => 6,
         (1, 1, false) => 5,
-        (1, 2, true) => if bg3_high { 11 } else { 3 },
+        (1, 2, true) => {
+            if bg3_high {
+                11
+            } else {
+                3
+            }
+        }
         (1, 2, false) => 1,
         _ => 0,
     }

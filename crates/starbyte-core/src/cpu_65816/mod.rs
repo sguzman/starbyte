@@ -234,7 +234,10 @@ impl Cpu65816 {
             0xBB => self.execute_tyx(bus, &mut trace),
             0xC8 => self.execute_iny(bus, &mut trace),
             0xCA => self.execute_dex(bus, &mut trace),
+            0xC1 => self.execute_cmp_direct_page_indexed_indirect_x(bus, &mut trace),
+            0xC3 => self.execute_cmp_stack_relative(bus, &mut trace),
             0xC5 => self.execute_cmp_direct_page(bus, &mut trace),
+            0xC7 => self.execute_cmp_direct_page_indirect_long(bus, &mut trace),
             0xC6 => self.execute_dec_direct_page(bus, &mut trace),
             0xC9 => self.execute_cmp_immediate(bus, &mut trace),
             0xCC => self.execute_cpy_absolute(bus, &mut trace),
@@ -248,7 +251,11 @@ impl Cpu65816 {
             0xC0 => self.execute_cpy_immediate(bus, &mut trace),
             0xC4 => self.execute_cpy_direct_page(bus, &mut trace),
             0xD0 => self.execute_bne(bus, &mut trace),
+            0xD1 => self.execute_cmp_direct_page_indirect_y(bus, &mut trace),
+            0xD2 => self.execute_cmp_direct_page_indirect(bus, &mut trace),
+            0xD3 => self.execute_cmp_stack_relative_indirect_y(bus, &mut trace),
             0xD5 => self.execute_cmp_direct_page_x(bus, &mut trace),
+            0xD7 => self.execute_cmp_direct_page_indirect_long_y(bus, &mut trace),
             0xD6 => self.execute_dec_direct_page_x(bus, &mut trace),
             0xD9 => self.execute_cmp_absolute_y(bus, &mut trace),
             0xD8 => self.execute_cld(bus, &mut trace),
@@ -2677,6 +2684,103 @@ impl Cpu65816 {
         let address = self.absolute_address(base.wrapping_add(self.registers.x));
         self.compare_accumulator_with_address(bus, trace, address);
         self.registers.pc = self.registers.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_cmp_direct_page_indexed_indirect_x<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let pointer = self.direct_page_indexed_x_address(operand);
+        let low = self.read_u8_trace(bus, trace, pointer);
+        let high = self.read_u8_trace(bus, trace, pointer.wrapping_add(1));
+        let address = self.absolute_address(u16::from_le_bytes([low, high]));
+        self.compare_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_cmp_stack_relative<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.stack_relative_address(operand);
+        self.compare_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_cmp_direct_page_indirect_long<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.direct_page_indirect_long_address(bus, trace, operand);
+        self.compare_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_cmp_direct_page_indirect_y<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let pointer = self.direct_page_address(operand);
+        let low = self.read_u8_trace(bus, trace, pointer);
+        let high = self.read_u8_trace(bus, trace, pointer.wrapping_add(1));
+        let base = u16::from_le_bytes([low, high]);
+        let address = self.absolute_address(base.wrapping_add(self.registers.y));
+        self.compare_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_cmp_direct_page_indirect<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let pointer = self.direct_page_address(operand);
+        let low = self.read_u8_trace(bus, trace, pointer);
+        let high = self.read_u8_trace(bus, trace, pointer.wrapping_add(1));
+        let address = self.absolute_address(u16::from_le_bytes([low, high]));
+        self.compare_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_cmp_stack_relative_indirect_y<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self.stack_relative_indirect_y_address(bus, trace, operand);
+        self.compare_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_cmp_direct_page_indirect_long_y<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
+        let operand = self.push_read_trace(bus, trace, self.fetch_address(1));
+        let address = self
+            .direct_page_indirect_long_address(bus, trace, operand)
+            .wrapping_add(u32::from(self.registers.y))
+            & 0x00FF_FFFF;
+        self.compare_accumulator_with_address(bus, trace, address);
+        self.registers.pc = self.registers.pc.wrapping_add(2);
         Ok(())
     }
 

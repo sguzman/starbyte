@@ -4583,6 +4583,81 @@ mod tests {
     }
 
     #[test]
+    fn phd_and_pld_roundtrip_full_direct_page_in_eight_bit_accumulator_mode() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.p = 0x20; // M=1; PHD/PLD still operate on sixteen bits.
+        cpu.registers.emulation = false;
+        cpu.registers.s = 0x01FF;
+        cpu.registers.d = 0xBEEF;
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0x0B), (0x008001, 0x2B)]);
+
+        cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(bus.read(0x0001FF), 0xBE);
+        assert_eq!(bus.read(0x0001FE), 0xEF);
+        assert_eq!(cpu.registers.s, 0x01FD);
+        assert_eq!(cpu.registers.pc, 0x8001);
+
+        cpu.registers.d = 0;
+        cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(cpu.registers.d, 0xBEEF);
+        assert_eq!(cpu.registers.s, 0x01FF);
+        assert_eq!(cpu.registers.pc, 0x8002);
+        assert_ne!(cpu.registers.p & 0x80, 0);
+        assert_eq!(cpu.registers.p & 0x02, 0);
+    }
+
+    #[test]
+    fn emulation_mode_stack_push_and_pull_wrap_within_page_one() {
+        let mut cpu = Cpu65816::default();
+        cpu.reset();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.s = 0x0100;
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0x08), (0x008001, 0x28)]);
+
+        cpu.step_with_bus(&mut bus).unwrap(); // PHP
+        assert_eq!(cpu.registers.s, 0x01FF);
+        assert_eq!(bus.read(0x000100), 0x34);
+        cpu.step_with_bus(&mut bus).unwrap(); // PLP
+        assert_eq!(cpu.registers.s, 0x0100);
+        assert_eq!(cpu.registers.pc, 0x8002);
+    }
+
+    #[test]
+    fn emulation_mode_stack_transfers_keep_page_one_high_byte() {
+        let mut cpu = Cpu65816::default();
+        cpu.reset();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.a = 0xABCD;
+        cpu.registers.x = 0x007E;
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0x1B), (0x008001, 0x9A)]);
+
+        cpu.step_with_bus(&mut bus).unwrap(); // TCS
+        assert_eq!(cpu.registers.s, 0x01CD);
+        cpu.step_with_bus(&mut bus).unwrap(); // TXS
+        assert_eq!(cpu.registers.s, 0x017E);
+    }
+
+    #[test]
+    fn emulation_mode_nmi_from_nonzero_program_bank_enters_bank_zero() {
+        let mut cpu = Cpu65816::default();
+        cpu.reset();
+        cpu.registers.pbr = 0x82;
+        cpu.registers.pc = 0x9456;
+        cpu.registers.s = 0x01FF;
+        let mut bus = TestBus::with_bytes(&[(0x00FFFA, 0xCD), (0x00FFFB, 0xAB)]);
+        bus.pending_nmi = true;
+
+        cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(cpu.registers.pc, 0xABCD);
+        assert_eq!(cpu.registers.pbr, 0x00);
+        assert_eq!(cpu.registers.s, 0x01FC);
+        assert_eq!(bus.read(0x0001FF), 0x94);
+        assert_eq!(bus.read(0x0001FE), 0x56);
+        assert_ne!(cpu.registers.p & 0x04, 0);
+    }
+
+    #[test]
     fn cop_uses_cop_vector() {
         let mut cpu = Cpu65816::default();
         cpu.reset(); // The $FFF4 COP vector is the emulation-mode vector.

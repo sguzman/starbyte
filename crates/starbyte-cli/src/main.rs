@@ -322,7 +322,12 @@ fn load_runtime_config(assets: &AssetConfig) -> Result<RuntimeConfig> {
         let worktree_path = assets.legacy_worktree_config_path();
         if worktree_path.exists() {
             return RuntimeConfig::load_or_default(&worktree_path)
-                .with_context(|| format!("failed to load legacy config from {}", worktree_path.display()))
+                .with_context(|| {
+                    format!(
+                        "failed to load legacy config from {}",
+                        worktree_path.display()
+                    )
+                })
                 .map_err(anyhow::Error::from);
         }
     }
@@ -691,13 +696,16 @@ fn run_compliance(args: ComplianceArgs, assets: AssetConfig) -> Result<()> {
             })?;
 
             let report_path = args.fixture_out.with_extension("report.json");
-            std::fs::write(&report_path, serde_json::to_string_pretty(&recorded.report)?)
-                .with_context(|| {
-                    format!(
-                        "failed to write commercial record report to {}",
-                        report_path.display()
-                    )
-                })?;
+            std::fs::write(
+                &report_path,
+                serde_json::to_string_pretty(&recorded.report)?,
+            )
+            .with_context(|| {
+                format!(
+                    "failed to write commercial record report to {}",
+                    report_path.display()
+                )
+            })?;
 
             if let Some(trace_path) = args.trace_out.as_deref() {
                 if let Some(trace) = recorded.trace.take() {
@@ -973,7 +981,8 @@ fn build_ppu_write_activity_report(emulator: &starbyte_core::Emulator) -> serde_
         touched_registers.push(label.clone());
 
         if register <= 0x212C {
-            visible_display_write_count = visible_display_write_count.saturating_add(u64::from(count));
+            visible_display_write_count =
+                visible_display_write_count.saturating_add(u64::from(count));
             visible_touched_registers.push(label.clone());
             if let Some(value) = emulator.peek_ppu_register(register) {
                 final_register_values.insert(label, json!(value));
@@ -1093,21 +1102,19 @@ fn maybe_write_commercial_artifacts(
                 "reasons": failure.reasons,
             })).collect::<Vec<_>>(),
         });
-        std::fs::write(&summary_path, serde_json::to_string_pretty(&report)?).with_context(|| {
-            format!(
-                "failed to write commercial regression summary to {}",
-                summary_path.display()
-            )
-        })?;
+        std::fs::write(&summary_path, serde_json::to_string_pretty(&report)?).with_context(
+            || {
+                format!(
+                    "failed to write commercial regression summary to {}",
+                    summary_path.display()
+                )
+            },
+        )?;
     }
 
     if let Some(trace_dir) = trace_out {
-        std::fs::create_dir_all(trace_dir).with_context(|| {
-            format!(
-                "failed to create trace directory {}",
-                trace_dir.display()
-            )
-        })?;
+        std::fs::create_dir_all(trace_dir)
+            .with_context(|| format!("failed to create trace directory {}", trace_dir.display()))?;
     }
 
     for executed_fixture in executed {

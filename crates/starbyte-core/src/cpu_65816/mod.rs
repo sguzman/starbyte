@@ -914,7 +914,9 @@ impl Cpu65816 {
         bus: &mut B,
         trace: &mut Vec<BusEvent>,
     ) -> Result<()> {
-        let pointer = self.fetch_operand_u16(bus, trace).wrapping_add(self.registers.x);
+        let pointer = self
+            .fetch_operand_u16(bus, trace)
+            .wrapping_add(self.registers.x);
         let low = self.read_u8_trace(bus, trace, u32::from(pointer));
         let high = self.read_u8_trace(bus, trace, u32::from(pointer.wrapping_add(1)));
         let target = u16::from_le_bytes([low, high]);
@@ -925,7 +927,11 @@ impl Cpu65816 {
         Ok(())
     }
 
-    fn execute_jmp_absolute<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+    fn execute_jmp_absolute<B: Bus>(
+        &mut self,
+        bus: &mut B,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()> {
         self.registers.pc = self.fetch_operand_u16(bus, trace);
         Ok(())
     }
@@ -1749,22 +1755,14 @@ impl Cpu65816 {
         Ok(())
     }
 
-    fn execute_ora_long<B: Bus>(
-        &mut self,
-        bus: &mut B,
-        trace: &mut Vec<BusEvent>,
-    ) -> Result<()> {
+    fn execute_ora_long<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
         let address = self.fetch_operand_u24(bus, trace);
         self.or_accumulator_with_address(bus, trace, address);
         self.registers.pc = self.registers.pc.wrapping_add(4);
         Ok(())
     }
 
-    fn execute_ora_long_x<B: Bus>(
-        &mut self,
-        bus: &mut B,
-        trace: &mut Vec<BusEvent>,
-    ) -> Result<()> {
+    fn execute_ora_long_x<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
         let address = self
             .fetch_operand_u24(bus, trace)
             .wrapping_add(u32::from(self.registers.x));
@@ -1910,11 +1908,7 @@ impl Cpu65816 {
         Ok(())
     }
 
-    fn execute_and_long_x<B: Bus>(
-        &mut self,
-        bus: &mut B,
-        trace: &mut Vec<BusEvent>,
-    ) -> Result<()> {
+    fn execute_and_long_x<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
         let address = self
             .fetch_operand_u24(bus, trace)
             .wrapping_add(u32::from(self.registers.x));
@@ -2161,11 +2155,7 @@ impl Cpu65816 {
         Ok(())
     }
 
-    fn execute_adc_long_x<B: Bus>(
-        &mut self,
-        bus: &mut B,
-        trace: &mut Vec<BusEvent>,
-    ) -> Result<()> {
+    fn execute_adc_long_x<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
         let base = self.fetch_operand_u24(bus, trace);
         let address = base.wrapping_add(u32::from(self.registers.x));
         self.add_accumulator_with_address(bus, trace, address);
@@ -3483,11 +3473,7 @@ mod tests {
         cpu.registers.p = 0x20;
         cpu.registers.emulation = false;
 
-        let mut bus = TestBus::with_bytes(&[
-            (0x008000, 0x64),
-            (0x008001, 0x22),
-            (0x000032, 0xFE),
-        ]);
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0x64), (0x008001, 0x22), (0x000032, 0xFE)]);
 
         cpu.step_with_bus(&mut bus).unwrap();
 
@@ -3525,11 +3511,7 @@ mod tests {
         cpu.registers.p = 0x00;
         cpu.registers.emulation = false;
 
-        let mut bus = TestBus::with_bytes(&[
-            (0x008000, 0x8C),
-            (0x008001, 0x78),
-            (0x008002, 0x56),
-        ]);
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0x8C), (0x008001, 0x78), (0x008002, 0x56)]);
 
         cpu.step_with_bus(&mut bus).unwrap();
 
@@ -3546,11 +3528,7 @@ mod tests {
         cpu.registers.p = 0x20;
         cpu.registers.emulation = false;
 
-        let mut bus = TestBus::with_bytes(&[
-            (0x008000, 0xE6),
-            (0x008001, 0x10),
-            (0x000030, 0x7F),
-        ]);
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0xE6), (0x008001, 0x10), (0x000030, 0x7F)]);
 
         cpu.step_with_bus(&mut bus).unwrap();
 
@@ -3568,11 +3546,7 @@ mod tests {
         cpu.registers.p = 0x00;
         cpu.registers.emulation = false;
 
-        let mut bus = TestBus::with_bytes(&[
-            (0x008000, 0x7A),
-            (0x0001FE, 0x34),
-            (0x0001FF, 0x12),
-        ]);
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0x7A), (0x0001FE, 0x34), (0x0001FF, 0x12)]);
 
         cpu.step_with_bus(&mut bus).unwrap();
 
@@ -3608,11 +3582,7 @@ mod tests {
         cpu.registers.p = 0x00;
         cpu.registers.emulation = false;
 
-        let mut bus = TestBus::with_bytes(&[
-            (0x008000, 0xFA),
-            (0x0001FE, 0x78),
-            (0x0001FF, 0x56),
-        ]);
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0xFA), (0x0001FE, 0x78), (0x0001FF, 0x56)]);
 
         cpu.step_with_bus(&mut bus).unwrap();
 
@@ -3691,11 +3661,7 @@ mod tests {
         cpu.registers.p = 0x20;
         cpu.registers.emulation = false;
 
-        let mut bus = TestBus::with_bytes(&[
-            (0x008000, 0xB6),
-            (0x008001, 0x20),
-            (0x000033, 0xA5),
-        ]);
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0xB6), (0x008001, 0x20), (0x000033, 0xA5)]);
 
         cpu.step_with_bus(&mut bus).unwrap();
 
@@ -3870,11 +3836,7 @@ mod tests {
         let mut cpu = Cpu65816::default();
         cpu.registers.pc = 0x8000;
 
-        let mut bus = TestBus::with_bytes(&[
-            (0x008000, 0x4C),
-            (0x008001, 0x56),
-            (0x008002, 0x34),
-        ]);
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0x4C), (0x008001, 0x56), (0x008002, 0x34)]);
 
         cpu.step_with_bus(&mut bus).unwrap();
 
@@ -3930,11 +3892,7 @@ mod tests {
         cpu.registers.p = 0x20;
         cpu.registers.emulation = false;
 
-        let mut bus = TestBus::with_bytes(&[
-            (0x008000, 0x25),
-            (0x008001, 0x10),
-            (0x000030, 0xAA),
-        ]);
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0x25), (0x008001, 0x10), (0x000030, 0xAA)]);
 
         cpu.step_with_bus(&mut bus).unwrap();
 
@@ -4034,11 +3992,7 @@ mod tests {
         cpu.registers.p = 0x20;
         cpu.registers.emulation = false;
 
-        let mut bus = TestBus::with_bytes(&[
-            (0x008000, 0xE4),
-            (0x008001, 0x10),
-            (0x000030, 0x40),
-        ]);
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0xE4), (0x008001, 0x10), (0x000030, 0x40)]);
 
         cpu.step_with_bus(&mut bus).unwrap();
 
@@ -4052,11 +4006,7 @@ mod tests {
         let mut cpu = Cpu65816::default();
         cpu.registers.pc = 0x8000;
 
-        let mut bus = TestBus::with_bytes(&[
-            (0x008000, 0x82),
-            (0x008001, 0xFC),
-            (0x008002, 0xFF),
-        ]);
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0x82), (0x008001, 0xFC), (0x008002, 0xFF)]);
 
         cpu.step_with_bus(&mut bus).unwrap();
 
@@ -4252,11 +4202,7 @@ mod tests {
         cpu.registers.p = 0x20;
         cpu.registers.emulation = false;
 
-        let mut bus = TestBus::with_bytes(&[
-            (0x008000, 0x03),
-            (0x008001, 0x10),
-            (0x000200, 0xF0),
-        ]);
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0x03), (0x008001, 0x10), (0x000200, 0xF0)]);
 
         cpu.step_with_bus(&mut bus).unwrap();
 
@@ -4295,11 +4241,7 @@ mod tests {
         cpu.registers.p = 0x20;
         cpu.registers.emulation = false;
 
-        let mut bus = TestBus::with_bytes(&[
-            (0x008000, 0x06),
-            (0x008001, 0x10),
-            (0x000030, 0x81),
-        ]);
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0x06), (0x008001, 0x10), (0x000030, 0x81)]);
 
         cpu.step_with_bus(&mut bus).unwrap();
 
@@ -4356,11 +4298,7 @@ mod tests {
         cpu.registers.p = 0x21;
         cpu.registers.emulation = false;
 
-        let mut bus = TestBus::with_bytes(&[
-            (0x008000, 0x76),
-            (0x008001, 0x10),
-            (0x000034, 0x02),
-        ]);
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0x76), (0x008001, 0x10), (0x000034, 0x02)]);
 
         cpu.step_with_bus(&mut bus).unwrap();
 
@@ -4376,11 +4314,7 @@ mod tests {
         cpu.registers.p = 0x20;
         cpu.registers.emulation = false;
 
-        let mut bus = TestBus::with_bytes(&[
-            (0x008000, 0xC6),
-            (0x008001, 0x10),
-            (0x000030, 0x01),
-        ]);
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0xC6), (0x008001, 0x10), (0x000030, 0x01)]);
 
         cpu.step_with_bus(&mut bus).unwrap();
 
@@ -4475,11 +4409,7 @@ mod tests {
         cpu.registers.p = 0x20;
         cpu.registers.emulation = false;
 
-        let mut bus = TestBus::with_bytes(&[
-            (0x008000, 0x63),
-            (0x008001, 0x10),
-            (0x000200, 0x07),
-        ]);
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0x63), (0x008001, 0x10), (0x000200, 0x07)]);
 
         cpu.step_with_bus(&mut bus).unwrap();
 
@@ -4600,6 +4530,7 @@ mod tests {
     #[test]
     fn rti_restores_status_and_program_counter() {
         let mut cpu = Cpu65816::default();
+        cpu.reset(); // RTI here is exercised in 65816 emulation mode.
         cpu.registers.pc = 0x1234;
         cpu.registers.p = 0x04;
         cpu.registers.s = 0x01FB;
@@ -4622,6 +4553,7 @@ mod tests {
     #[test]
     fn cop_uses_cop_vector() {
         let mut cpu = Cpu65816::default();
+        cpu.reset(); // The $FFF4 COP vector is the emulation-mode vector.
         cpu.registers.pc = 0x8000;
         cpu.registers.s = 0x01FF;
 

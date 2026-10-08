@@ -6,6 +6,8 @@ Mission: a fun-first, comfy Rust SNES emulator for Linux/Wayland, with a delight
 
 ## P0 — establish a truthful playable baseline
 
+- [ ] Return the existing GitHub Actions matrix to green; don't mask emulator regression failures.
+
 - [ ] Run and record Linux `fmt`, `clippy`, `test`, GUI build, and headless smoke checks.
 - [ ] Verify native Wayland startup in a real compositor and observe resize, tiling, fullscreen, focus and dialogs.
 - [x] Redirect config and cache defaults to XDG user directories while retaining legacy reading and explicit overrides (code change; local verification pending).

@@ -293,12 +293,7 @@ impl Ppu {
         }
     }
 
-    fn background_pixel(
-        &self,
-        background: BackgroundConfig,
-        x: u16,
-        y: u16,
-    ) -> Option<[u8; 4]> {
+    fn background_pixel(&self, background: BackgroundConfig, x: u16, y: u16) -> Option<[u8; 4]> {
         let world_x = usize::from(x.wrapping_add(self.bg_scroll_x[background.index]));
         let world_y = usize::from(y.wrapping_add(self.bg_scroll_y[background.index]));
         let tile_x = world_x / 8;
@@ -318,8 +313,12 @@ impl Ppu {
         let tile_x = if hflip { 7 - fine_x } else { fine_x };
         let tile_y = if vflip { 7 - fine_y } else { fine_y };
         let color_index = match background.bits_per_pixel {
-            BitsPerPixel::Two => self.tile_pixel_2bpp(background.tiledata_base, tile_number, tile_x, tile_y),
-            BitsPerPixel::Four => self.tile_pixel_4bpp(background.tiledata_base, tile_number, tile_x, tile_y),
+            BitsPerPixel::Two => {
+                self.tile_pixel_2bpp(background.tiledata_base, tile_number, tile_x, tile_y)
+            }
+            BitsPerPixel::Four => {
+                self.tile_pixel_4bpp(background.tiledata_base, tile_number, tile_x, tile_y)
+            }
         };
         if color_index == 0 {
             return None;
@@ -343,8 +342,16 @@ impl Ppu {
         tile_x: usize,
         tile_y: usize,
     ) -> usize {
-        let screens_wide = if background.size_code & 0x01 != 0 { 2 } else { 1 };
-        let screens_high = if background.size_code & 0x02 != 0 { 2 } else { 1 };
+        let screens_wide = if background.size_code & 0x01 != 0 {
+            2
+        } else {
+            1
+        };
+        let screens_high = if background.size_code & 0x02 != 0 {
+            2
+        } else {
+            1
+        };
         let wrapped_tile_x = tile_x % (screens_wide * 32);
         let wrapped_tile_y = tile_y % (screens_high * 32);
         let screen_x = wrapped_tile_x / 32;

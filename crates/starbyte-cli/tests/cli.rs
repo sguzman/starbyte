@@ -582,8 +582,7 @@ fn commercial_record_generates_fixture_report_and_trace() {
     assert_eq!(report_json["frame_counter"], 1);
     assert!(report_json["ppu_write_activity"]["total_writes"].is_number());
 
-    let trace_json: serde_json::Value =
-        serde_json::from_slice(&fs::read(&trace).unwrap()).unwrap();
+    let trace_json: serde_json::Value = serde_json::from_slice(&fs::read(&trace).unwrap()).unwrap();
     assert!(trace_json.is_array());
 }
 
@@ -640,9 +639,10 @@ fn commercial_summary_and_run_current_work() {
     assert_eq!(summary["failed"], 0);
     assert_eq!(summary["passed"], 1);
 
-    let fixture_report: serde_json::Value =
-        serde_json::from_slice(&fs::read(artifact_dir.join("STARBYTE_CLI_TEST_commercial_boot.json")).unwrap())
-            .unwrap();
+    let fixture_report: serde_json::Value = serde_json::from_slice(
+        &fs::read(artifact_dir.join("STARBYTE_CLI_TEST_commercial_boot.json")).unwrap(),
+    )
+    .unwrap();
     assert_eq!(fixture_report["report"]["frame_counter"], 1);
     assert!(fixture_report["report"]["apu_io_activity"]["cpu_read_counts"].is_array());
 

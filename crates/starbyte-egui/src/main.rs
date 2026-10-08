@@ -16,7 +16,10 @@ use crate::{app::StarbyteApp, logging::install_tracing};
 use starbyte_core::manifest::{AssetConfig, RuntimeConfig};
 
 #[derive(Debug, Parser)]
-#[command(name = "starbyte-egui", about = "Rust-native SNES library and desktop frontend")]
+#[command(
+    name = "starbyte-egui",
+    about = "Rust-native SNES library and desktop frontend"
+)]
 struct Args {
     /// Optional ROM to load at startup.
     #[arg(long)]
@@ -116,8 +119,7 @@ fn load_runtime_config(assets: &AssetConfig) -> Result<RuntimeConfig> {
     if assets.config_path.is_none() {
         let worktree_path = assets.legacy_worktree_config_path();
         if worktree_path.exists() {
-            return RuntimeConfig::load_or_default(&worktree_path)
-                .map_err(anyhow::Error::from);
+            return RuntimeConfig::load_or_default(&worktree_path).map_err(anyhow::Error::from);
         }
     }
 

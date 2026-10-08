@@ -489,7 +489,11 @@ mod tests {
             xdg
         );
         assert_eq!(
-            choose_user_directory(Some(PathBuf::from("relative")), Some(home.clone()), ".config"),
+            choose_user_directory(
+                Some(PathBuf::from("relative")),
+                Some(home.clone()),
+                ".config"
+            ),
             home.join(".config")
         );
         assert_eq!(

@@ -984,7 +984,10 @@ impl StarbyteApp {
             ui.label("No ROM selected");
         }
         if ui
-            .add_enabled(!self.is_playing && snapshot.has_rom, egui::Button::new("Step Frame"))
+            .add_enabled(
+                !self.is_playing && snapshot.has_rom,
+                egui::Button::new("Step Frame"),
+            )
             .clicked()
         {
             self.run_frame(ctx);
@@ -1324,8 +1327,7 @@ impl eframe::App for StarbyteApp {
         self.poll_worker_events(ctx);
 
         let compact = is_compact_layout(ctx.available_rect().width());
-        egui::TopBottomPanel::top("top_bar")
-            .show(ctx, |ui| self.draw_top_bar(ui, ctx, compact));
+        egui::TopBottomPanel::top("top_bar").show(ctx, |ui| self.draw_top_bar(ui, ctx, compact));
         self.draw_log_panel(ctx);
 
         if !compact && self.config.ui.show_left_panel {

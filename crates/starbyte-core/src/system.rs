@@ -556,9 +556,8 @@ impl SystemBus {
             0x2100..=0x213F => Some(self.ppu.read_register(register)),
             0x2140..=0x2143 => {
                 let port = usize::from(register - 0x2140);
-                self.observability.apu_port_read_counts[port] = self.observability
-                    .apu_port_read_counts[port]
-                    .saturating_add(1);
+                self.observability.apu_port_read_counts[port] =
+                    self.observability.apu_port_read_counts[port].saturating_add(1);
                 Some(self.apu_to_cpu_io[port])
             }
             0x2180 => {
@@ -608,9 +607,8 @@ impl SystemBus {
             }
             0x2140..=0x2143 => {
                 let port = usize::from(register - 0x2140);
-                self.observability.apu_port_write_counts[port] = self.observability
-                    .apu_port_write_counts[port]
-                    .saturating_add(1);
+                self.observability.apu_port_write_counts[port] =
+                    self.observability.apu_port_write_counts[port].saturating_add(1);
                 self.cpu_to_apu_io[port] = value;
                 Some(())
             }

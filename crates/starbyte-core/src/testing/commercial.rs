@@ -355,7 +355,10 @@ pub fn discover_suite_files(dir: impl AsRef<Path>) -> Vec<PathBuf> {
                 path.extension().and_then(std::ffi::OsStr::to_str),
                 Some("json")
             );
-            let stem = path.file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("");
+            let stem = path
+                .file_stem()
+                .and_then(std::ffi::OsStr::to_str)
+                .unwrap_or("");
             is_json && !stem.ends_with(".report") && !stem.ends_with(".trace")
         })
         .collect::<Vec<_>>();
@@ -655,7 +658,10 @@ fn evaluate_report_against_expectations(
         if actual_probe.value != expected_probe.expected {
             reasons.push(format!(
                 "WRAM probe `{}` mismatch at 0x{:06X}: expected 0x{:02X}, got 0x{:02X}",
-                expected_probe.name, expected_probe.address, expected_probe.expected, actual_probe.value
+                expected_probe.name,
+                expected_probe.address,
+                expected_probe.expected,
+                actual_probe.value
             ));
         }
     }
@@ -664,7 +670,10 @@ fn evaluate_report_against_expectations(
         if actual_probe.value != expected_probe.expected {
             reasons.push(format!(
                 "MMIO probe `{}` mismatch at ${:04X}: expected 0x{:02X}, got 0x{:02X}",
-                expected_probe.name, expected_probe.register, expected_probe.expected, actual_probe.value
+                expected_probe.name,
+                expected_probe.register,
+                expected_probe.expected,
+                actual_probe.value
             ));
         }
     }
@@ -931,10 +940,7 @@ fn collect_ppu_write_activity(emulator: &Emulator) -> ObservedPpuWriteActivity {
     }
 }
 
-fn select_default_wram_probes(
-    emulator: &mut Emulator,
-    limit: usize,
-) -> Vec<ByteProbeExpectation> {
+fn select_default_wram_probes(emulator: &mut Emulator, limit: usize) -> Vec<ByteProbeExpectation> {
     let mut probes = Vec::new();
     for offset in 0..0x20_000_u32 {
         let address = if offset < 0x10000 {
@@ -963,11 +969,13 @@ fn default_mmio_probe_expectations(emulator: &Emulator) -> Vec<MmioProbeExpectat
     DEFAULT_MMIO_PROBES
         .iter()
         .filter_map(|(name, register)| {
-            emulator.peek_ppu_register(*register).map(|value| MmioProbeExpectation {
-                name: (*name).to_owned(),
-                register: *register,
-                expected: value,
-            })
+            emulator
+                .peek_ppu_register(*register)
+                .map(|value| MmioProbeExpectation {
+                    name: (*name).to_owned(),
+                    register: *register,
+                    expected: value,
+                })
         })
         .collect()
 }
@@ -1105,9 +1113,9 @@ mod tests {
     use crate::manifest::AssetConfig;
 
     use super::{
-        CommercialFixture, ExpectedCommercialOutcome, MmioProbeExpectation,
-        PpuWriteActivityExpectation, ByteProbeExpectation, summarize, load_suite,
-        record_fixture, run_with_current_core_detailed,
+        ByteProbeExpectation, CommercialFixture, ExpectedCommercialOutcome, MmioProbeExpectation,
+        PpuWriteActivityExpectation, load_suite, record_fixture, run_with_current_core_detailed,
+        summarize,
     };
 
     fn write_test_rom(path: &Path) {
@@ -1178,7 +1186,12 @@ mod tests {
 
         assert_eq!(recorded.fixture.expected.frame, Some(1));
         assert_eq!(recorded.report.frame_counter, 1);
-        assert!(recorded.trace.as_ref().is_some_and(|trace| !trace.is_empty()));
+        assert!(
+            recorded
+                .trace
+                .as_ref()
+                .is_some_and(|trace| !trace.is_empty())
+        );
         assert!(!recorded.fixture.expected.mmio_probes.is_empty());
     }
 

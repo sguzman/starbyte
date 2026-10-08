@@ -161,7 +161,13 @@ fn handle_command(
             service.save_config()?;
             WorkerEvent::SnapshotReady {
                 job_id,
-                snapshot: service.snapshot(filter)?,
+                // Artwork refresh is about the user's owned/local collection.
+                // Do not suddenly populate the player grid with thousands of
+                // metadata-only online catalog entries after fetching images.
+                snapshot: service.snapshot(LibraryFilter {
+                    installed_only: true,
+                    ..filter
+                })?,
                 config: service.config().clone(),
                 status: format!(
                     "Artwork: indexed {metadata_count} reference titles; downloaded {written} new covers."

@@ -227,6 +227,14 @@ struct RunArgs {
     /// Do not load or write cartridge SRAM; useful for reproducible diagnosis.
     #[arg(long)]
     no_save_ram: bool,
+
+    /// One-based frame to record every CPU instruction and its bus events.
+    #[arg(long, requires = "trace_out", value_parser = clap::value_parser!(u32).range(1..))]
+    trace_frame: Option<u32>,
+
+    /// Output JSONL path for the selected instruction-trace frame.
+    #[arg(long, requires = "trace_frame")]
+    trace_out: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -917,6 +925,13 @@ fn run_compliance(args: ComplianceArgs, assets: AssetConfig) -> Result<()> {
 }
 
 fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
+    if let Some(trace_frame) = args.trace_frame {
+        anyhow::ensure!(
+            trace_frame <= args.frames,
+            "trace frame {trace_frame} exceeds requested frame count {}",
+            args.frames
+        );
+    }
     let cartridge = Cartridge::load(&args.rom)
         .with_context(|| format!("failed to load ROM at {}", args.rom.display()))?;
     let save_ram_path = if args.no_save_ram {
@@ -956,9 +971,40 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
         .transpose()?;
     let mut saved_frame_images = 0_u32;
     for index in 0..args.frames {
-        let step = emulator.run_until_frame();
+        let mut instruction_records = Vec::new();
+        let step = if args.trace_frame == Some(index + 1) {
+            emulator.run_until_frame_observed(&mut |before, after, bus_events| {
+                let address = (u32::from(before.pbr) << 16) | u32::from(before.pc);
+                let opcode = bus_events
+                    .first()
+                    .filter(|event| {
+                        event.access == starbyte_core::bus::AccessKind::Read
+                            && event.address == address
+                    })
+                    .map(|event| event.value);
+                instruction_records.push(json!({
+                    "schema": "starbyte.instruction_trace.v1",
+                    "frame": index + 1,
+                    "instruction": instruction_records.len(),
+                    "opcode": opcode,
+                    "before": before,
+                    "after": after,
+                    "bus_events": bus_events,
+                }));
+            })
+        } else {
+            emulator.run_until_frame()
+        };
         if let Some(file) = frame_log.as_mut() {
             write_frame_log_entry(file, &emulator, index + 1, step.as_ref().err())?;
+        }
+        if args.trace_frame == Some(index + 1) {
+            write_selected_frame_trace(
+                args.trace_out.as_deref(),
+                &instruction_records,
+                &emulator,
+                step.as_ref().err(),
+            )?;
         }
         step.with_context(|| format!("emulation failed at requested frame {}", index + 1))?;
         if let Some(dir) = args.frame_images_dir.as_deref()
@@ -1131,6 +1177,41 @@ fn maybe_write_screenshot(
     }
     std::fs::write(path, bytes)
         .with_context(|| format!("failed to write screenshot to {}", path.display()))?;
+    Ok(())
+}
+
+/// Persist a bounded single-frame instruction trace, even when execution
+/// returns an emulator error. The regular frame loop is never traced.
+fn write_selected_frame_trace(
+    path: Option<&Path>,
+    records: &[serde_json::Value],
+    emulator: &starbyte_core::Emulator,
+    error: Option<&starbyte_core::error::Error>,
+) -> Result<()> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    ensure_parent_dir(path)?;
+    let file = std::fs::File::create(path)
+        .with_context(|| format!("failed to create instruction trace at {}", path.display()))?;
+    let mut writer = std::io::BufWriter::new(file);
+    for record in records {
+        serde_json::to_writer(&mut writer, record)?;
+        writer.write_all(b"\n")?;
+    }
+    // The final failing instruction does not yield bus events. Retain its
+    // CPU register state and error separately instead of dropping the trace.
+    let footer = json!({
+        "schema": "starbyte.instruction_trace_end.v1",
+        "recorded_instructions": records.len(),
+        "completed_frame": emulator.timing().frame,
+        "cpu": emulator.cpu_registers(),
+        "status": if error.is_some() { "error" } else { "ok" },
+        "error": error.map(ToString::to_string),
+    });
+    serde_json::to_writer(&mut writer, &footer)?;
+    writer.write_all(b"\n")?;
+    writer.flush()?;
     Ok(())
 }
 

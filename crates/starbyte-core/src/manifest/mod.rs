@@ -3,6 +3,7 @@
 use std::{
     collections::BTreeMap,
     fs,
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -422,11 +423,23 @@ impl RuntimeConfig {
     /// Serialize this config to the provided path, creating parent directories first.
     pub fn save_to_path(&self, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|source| crate::Error::io(parent, source))?;
-        }
-        fs::write(path, toml::to_string_pretty(self)?)
+        // Serialize before touching the existing config. A crash while writing
+        // a replacement must not truncate the last known-good settings.
+        let serialized = toml::to_string_pretty(self)?;
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent).map_err(|source| crate::Error::io(parent, source))?;
+        let mut temp = tempfile::NamedTempFile::new_in(parent)
+            .map_err(|source| crate::Error::io(parent, source))?;
+        temp.write_all(serialized.as_bytes())
             .map_err(|source| crate::Error::io(path, source))?;
+        temp.as_file()
+            .sync_all()
+            .map_err(|source| crate::Error::io(path, source))?;
+        temp.persist(path)
+            .map_err(|failure| crate::Error::io(path, failure.error))?;
         Ok(())
     }
 }
@@ -590,6 +603,23 @@ mod tests {
                 .unwrap_or_default(),
             vec!["infinite-lives".to_owned()]
         );
+    }
+
+    #[test]
+    fn config_overwrites_atomically_without_leaving_temp_files() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        let mut config = RuntimeConfig::default();
+        config.prefer_dark_mode = true;
+        config.save_to_path(&path).unwrap();
+        config.prefer_dark_mode = false;
+        config.save_to_path(&path).unwrap();
+
+        let restored = RuntimeConfig::load_or_default(&path).unwrap();
+        assert!(!restored.prefer_dark_mode);
+        let entries: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].as_ref().unwrap().path().ends_with("settings.toml"));
     }
 
     #[test]

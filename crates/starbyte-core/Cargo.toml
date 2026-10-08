@@ -11,6 +11,7 @@ name = "starbyte_core"
 path = "src/lib.rs"
 
 [dependencies]
+tempfile = "3.23.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 thiserror = "2.0.18"
@@ -20,7 +21,6 @@ zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 criterion = "0.7.0"
-tempfile = "3.23.0"
 
 [[bench]]
 name = "core_bootstrap"

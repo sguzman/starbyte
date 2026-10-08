@@ -1622,9 +1622,10 @@ fn print_run_summary(summary: &testing::RunSummary) {
 mod tests {
     use std::path::PathBuf;
 
-    use starbyte_core::cartridge::Cartridge;
+    use starbyte_core::{Emulator, Error, cartridge::Cartridge};
+    use tempfile::tempdir;
 
-    use super::{resolve_state_path, sanitize_file_stem};
+    use super::{resolve_state_path, sanitize_file_stem, write_frame_log_entry};
 
     fn test_cartridge() -> Cartridge {
         let mut rom = vec![0_u8; 0x10000];
@@ -1640,6 +1641,29 @@ mod tests {
         rom[base + 0x1E] = 0xFF;
         rom[base + 0x1F] = 0x00;
         Cartridge::from_bytes(rom, Some(PathBuf::from("C:/ROMs/test game.sfc"))).unwrap()
+    }
+
+    #[test]
+    fn frame_log_error_is_written_with_last_completed_frame() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("frames.jsonl");
+        let mut writer = std::fs::File::create(&path).unwrap();
+        let emulator = Emulator::default();
+        let stall = Error::FrameStalled {
+            frame: 0,
+            instructions: 20_000,
+            elapsed_ms: 0,
+            pc: 0x008000,
+        };
+        write_frame_log_entry(&mut writer, &emulator, 1, Some(&stall)).unwrap();
+        let record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(record["schema"], "starbyte.frame_log.v1");
+        assert_eq!(record["requested_frame"], 1);
+        assert_eq!(record["completed_frame"], 0);
+        assert_eq!(record["status"], "error");
+        assert!(record["error"].as_str().unwrap().contains("CPU PC 0x008000"));
+        assert!(record["framebuffer"]["hash"].is_number());
     }
 
     #[test]

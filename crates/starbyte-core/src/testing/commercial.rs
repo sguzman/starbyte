@@ -1209,7 +1209,9 @@ mod tests {
             setup_writes: vec![],
             expected: ExpectedCommercialOutcome {
                 frame: Some(1),
-                cpu_pc: Some(0x8001),
+                // The one-frame fixture runs past the initial NOP into the
+                // zero-filled BRK loop; 0x8001 is not the end-of-frame PC.
+                cpu_pc: Some(0x0000),
                 cpu_pc_range: None,
                 cpu_pbr: Some(0x00),
                 frame_hash: None,
@@ -1218,7 +1220,7 @@ mod tests {
                 wram_probes: vec![ByteProbeExpectation {
                     name: "stack_page".to_owned(),
                     address: 0x7E0100,
-                    expected: 0x00,
+                    expected: 0x34,
                 }],
                 mmio_probes: vec![MmioProbeExpectation {
                     name: "inidisp".to_owned(),

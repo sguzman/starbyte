@@ -558,10 +558,9 @@ impl Ppu {
                     }
                     // OBJ character indices wrap within a 16x16 tile grid:
                     // FF + one tile right is F0, not 100.
-                    let character = ((tile_number + tile_y * 16) & 0xF0)
-                        | ((tile_number + tile_x) & 0x0F);
-                    let color_index =
-                        self.tile_pixel_4bpp(tile_base, character, fine_x, fine_y);
+                    let character =
+                        ((tile_number + tile_y * 16) & 0xF0) | ((tile_number + tile_x) & 0x0F);
+                    let color_index = self.tile_pixel_4bpp(tile_base, character, fine_x, fine_y);
                     if color_index == 0 {
                         continue;
                     }

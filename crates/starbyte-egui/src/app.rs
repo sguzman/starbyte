@@ -231,7 +231,9 @@ impl StarbyteApp {
         app.persist_config();
         if app.config.advanced.refresh_on_startup {
             app.queue_job(WorkerCommandKind::RefreshMetadata);
-        } else if app.library_snapshot.total_count == 0 && app.library_snapshot.entries.is_empty() {
+        } else {
+            // Cached snapshots provide instant startup, but they must not
+            // prevent a fresh, asynchronous scan of newly added ZIP games.
             app.queue_job(WorkerCommandKind::RefreshSnapshot);
         }
         Ok(app)
@@ -878,14 +880,24 @@ impl StarbyteApp {
             ui.horizontal(|ui| {
                 ui.text_edit_singleline(&mut self.rom_dir_input);
                 if ui.button("Add").clicked() {
-                    let path = PathBuf::from(self.rom_dir_input.trim());
-                    if !self.rom_dir_input.trim().is_empty()
+                    let value = self.rom_dir_input.trim();
+                    let path = if let Some(suffix) = value.strip_prefix("~/") {
+                        std::env::var_os("HOME")
+                            .map(|home| PathBuf::from(home).join(suffix))
+                            .unwrap_or_else(|| PathBuf::from(value))
+                    } else {
+                        PathBuf::from(value)
+                    };
+                    if !value.is_empty()
+                        && path.is_dir()
                         && !self.config.library.rom_dirs.contains(&path)
                     {
                         self.config.library.rom_dirs.push(path);
                         self.rom_dir_input.clear();
                         self.persist_config();
                         self.queue_job(WorkerCommandKind::RefreshSnapshot);
+                    } else if !value.is_empty() && !path.is_dir() {
+                        self.status_line = format!("ROM directory does not exist: {}", path.display());
                     }
                 }
                 if ui.button("Browse").clicked()

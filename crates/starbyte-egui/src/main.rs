@@ -61,6 +61,11 @@ fn main() -> Result<()> {
     };
     let config_path = assets.config_path();
     let mut config = load_runtime_config(&assets)?;
+    // Adopt an existing, conventional per-user SNES directory as a removable
+    // library source. Persisted by StarbyteApp alongside user-added folders.
+    if let Some(home) = env::var_os("HOME") {
+        discover_snes_library(&mut config, &PathBuf::from(home));
+    }
     let cache_root = config
         .library
         .cache_dir
@@ -141,4 +146,44 @@ fn load_runtime_config(assets: &AssetConfig) -> Result<RuntimeConfig> {
     }
 
     Ok(RuntimeConfig::default())
+}
+
+fn discover_snes_library(config: &mut RuntimeConfig, home: &std::path::Path) -> bool {
+    let path = home.join("Games").join("Roms").join("SNES");
+    if !path.is_dir() || config.library.rom_dirs.contains(&path) {
+        return false;
+    }
+    config.library.rom_dirs.push(path);
+    true
+}
+
+#[cfg(test)]
+mod library_discovery_tests {
+    use super::{RuntimeConfig, discover_snes_library};
+
+    #[test]
+    fn existing_home_collection_is_added_once_and_persists_in_config() {
+        let home = tempfile::tempdir().unwrap();
+        let snes = home.path().join("Games/Roms/SNES");
+        std::fs::create_dir_all(&snes).unwrap();
+        let mut config = RuntimeConfig::default();
+        config.library.rom_dirs.push(home.path().join("old-library"));
+        assert!(discover_snes_library(&mut config, home.path()));
+        assert!(!discover_snes_library(&mut config, home.path()));
+        assert_eq!(config.library.rom_dirs.len(), 2);
+        assert_eq!(config.library.rom_dirs[1], snes);
+        let path = home.path().join("settings.toml");
+        config.save_to_path(&path).unwrap();
+        let loaded = RuntimeConfig::load_or_default(path).unwrap();
+        assert_eq!(loaded.library.rom_dirs, config.library.rom_dirs);
+    }
+
+    #[test]
+    fn nonexistent_home_collection_is_not_created() {
+        let home = tempfile::tempdir().unwrap();
+        let mut config = RuntimeConfig::default();
+        assert!(!discover_snes_library(&mut config, home.path()));
+        assert!(config.library.rom_dirs.is_empty());
+        assert!(!home.path().join("Games").exists());
+    }
 }

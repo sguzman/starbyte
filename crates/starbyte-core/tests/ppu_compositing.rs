@@ -147,7 +147,7 @@ fn vmain_increment_port_and_step_size_follow_register_bits() {
     assert_eq!(ppu.vram()[0], 0xAA);
     assert_eq!(ppu.vram()[2], 0xBB);
 
-    ppu.write_register(0x2115, 0x81); // Low-byte access, increment by 32 words.
+    ppu.write_register(0x2115, 0x01); // Low-byte access, increment by 32 words.
     ppu.write_register(0x2116, 0x00);
     ppu.write_register(0x2117, 0x00);
     ppu.write_register(0x2118, 0xCC);

@@ -196,7 +196,12 @@ impl Emulator {
         self.system.sync_apu_ports_from_runtime(&self.apu);
         let trace = self.cpu.step_with_bus(&mut self.system)?;
         self.system.sync_apu_ports_to_runtime(&mut self.apu);
-        let master_cycles = (trace.len() as u64).saturating_mul(CPU_BUS_CYCLE_MASTER_CYCLES);
+        // WAI and STP produce no CPU bus accesses while idling, but the
+        // console's PPU/APU clocks must continue advancing. Count one
+        // internal CPU cycle for each empty instruction-step trace.
+        let master_cycles = (trace.len() as u64)
+            .max(1)
+            .saturating_mul(CPU_BUS_CYCLE_MASTER_CYCLES);
         self.apu.step_master_cycles(master_cycles);
         self.system.sync_apu_ports_from_runtime(&self.apu);
         self.system.advance_master_clocks(master_cycles);

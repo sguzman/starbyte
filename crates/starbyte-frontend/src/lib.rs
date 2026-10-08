@@ -99,7 +99,11 @@ impl FrontendSession {
         // Read the new game's save before mutating the active session. A
         // corrupt existing file must not eject the currently loaded game.
         let expected_save_len = cartridge.header().ram_size_bytes();
-        let new_save_path = self.emulator.assets().save_root().join(format!("{identity}.srm"));
+        let new_save_path = self
+            .emulator
+            .assets()
+            .save_root()
+            .join(format!("{identity}.srm"));
         let stored_save = if expected_save_len > 0 && new_save_path.exists() {
             let data = std::fs::read(&new_save_path)
                 .with_context(|| format!("failed reading SRAM {}", new_save_path.display()))?;
@@ -123,7 +127,9 @@ impl FrontendSession {
         // Never replay the previous game's cheat patches into the new game.
         self.active_cheat_patches.clear();
         if let Some(ref bytes) = stored_save {
-            self.emulator.load_save_ram(bytes).context("could not restore SRAM")?;
+            self.emulator
+                .load_save_ram(bytes)
+                .context("could not restore SRAM")?;
         }
         self.last_saved_ram = self.emulator.save_ram();
         Ok(())
@@ -325,10 +331,13 @@ fn write_atomic(path: &Path, content: &[u8]) -> Result<()> {
     let parent = path.parent().context("save path has no parent")?;
     std::fs::create_dir_all(parent)
         .with_context(|| format!("failed to create save directory {}", parent.display()))?;
-    let mut temp = tempfile::NamedTempFile::new_in(parent)
-        .context("failed to create temporary save file")?;
-    temp.write_all(content).context("failed to write temporary save")?;
-    temp.as_file().sync_all().context("failed to sync temporary save")?;
+    let mut temp =
+        tempfile::NamedTempFile::new_in(parent).context("failed to create temporary save file")?;
+    temp.write_all(content)
+        .context("failed to write temporary save")?;
+    temp.as_file()
+        .sync_all()
+        .context("failed to sync temporary save")?;
     temp.persist(path)
         .with_context(|| format!("failed to commit save to {}", path.display()))?;
     Ok(())
@@ -583,7 +592,7 @@ mod tests {
         fs::write(&second_path, [0xFF]).unwrap();
         assert!(reopened.load_rom(&second_rom).is_err());
         assert_eq!(reopened.loaded_rom_path(), Some(rom.as_path()));
-     }
+    }
 
     #[test]
     fn cheat_parser_supports_raw_ram_patch_formats() {

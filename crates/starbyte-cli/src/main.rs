@@ -211,6 +211,18 @@ struct RunArgs {
     /// Write one flushed JSON object per attempted frame, including failures.
     #[arg(long)]
     frame_log: Option<PathBuf>,
+
+    /// Optionally save bounded PPM snapshots of completed frames to this directory.
+    #[arg(long)]
+    frame_images_dir: Option<PathBuf>,
+
+    /// Snapshot the first frame and then every Nth completed frame.
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
+    frame_image_every: u32,
+
+    /// Maximum frame snapshots per run to avoid excessive disk use.
+    #[arg(long, default_value_t = 24, value_parser = clap::value_parser!(u32).range(1..))]
+    max_frame_images: u32,
 }
 
 #[derive(Debug, Args)]
@@ -407,6 +419,7 @@ fn capabilities_manifest() -> serde_json::Value {
                 "name": "run_probe",
                 "argv": ["run", "<user_rom_path>", "--frames", "<count>", "--report-json", "<report_path>"],
                 "optional_frame_log": "--frame-log <explicit_jsonl_path>",
+                "optional_frame_images": "--frame-images-dir <explicit_directory> [--frame-image-every N] [--max-frame-images N]",
                 "side_effects": "execute_local_rom_and_write_explicit_report"
             }
         ],
@@ -926,12 +939,21 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
                 .with_context(|| format!("failed to create frame log at {}", path.display()))
         })
         .transpose()?;
+    let mut saved_frame_images = 0_u32;
     for index in 0..args.frames {
         let step = emulator.run_until_frame();
         if let Some(file) = frame_log.as_mut() {
             write_frame_log_entry(file, &emulator, index + 1, step.as_ref().err())?;
         }
         step.with_context(|| format!("emulation failed at requested frame {}", index + 1))?;
+        if let Some(dir) = args.frame_images_dir.as_deref()
+            && saved_frame_images < args.max_frame_images
+            && (index == 0 || (index + 1) % args.frame_image_every == 0)
+        {
+            let image = dir.join(format!("frame-{:06}.ppm", emulator.timing().frame));
+            maybe_write_screenshot(emulator.framebuffer(), Some(&image))?;
+            saved_frame_images += 1;
+        }
     }
 
     maybe_write_save_ram(&emulator, save_ram_path.as_deref())?;

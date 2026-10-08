@@ -19,7 +19,7 @@ use crate::timing::TimingState;
 const CPU_BUS_CYCLE_MASTER_CYCLES: u64 = 6;
 const SAVE_STATE_VERSION: u32 = 1;
 /// More than the maximum number of one-bus-access CPU steps in a frame.
-const MAX_INSTRUCTIONS_PER_FRAME: usize = 20_000;
+const MAX_INSTRUCTIONS_PER_FRAME: usize = 100_000;
 
 /// Serializable emulator state snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]

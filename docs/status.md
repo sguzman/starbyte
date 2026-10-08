@@ -68,7 +68,7 @@ Commit `9b4b8bda` completed all three CI jobs successfully: format/Clippy, Ubunt
 
 ## VRAM data-port addressing
 
-VMAIN now controls low-versus-high data-port address increments, 1/32/128-word strides, and 8/9/10-bit remapping during direct VRAM transfers. Synthetic tests cover all three remapping modes and both increment selectors. Existing sequential word-writing tests explicitly set VMAIN to 0x80, as SNES software should. **Read-port buffering and auto-increment on reads are not yet implemented**; DMA and real-game verification remain separate acceptance gates.
+VMAIN now controls low-versus-high data-port address increments, 1/32/128-word strides, and 8/9/10-bit remapping during direct VRAM transfers. Synthetic tests cover all three remapping modes and both increment selectors. Existing sequential word-writing tests explicitly set VMAIN to 0x80, as SNES software should. The CPU bus now implements OAM/CGRAM sequential reads and VRAM read-latch prefetch with VMADD increment on the VMAIN-selected read port. The read buffer refetches before advancing, reproducing the documented duplicated initial word. Passive diagnostic register reads remain side-effect-free. VRAM access timing restrictions (active display versus VBlank), open-bus edge cases, and real-game behavior are not verified.
 
 ## Correct SNES CGRAM color channel order
 

@@ -553,7 +553,7 @@ impl SystemBus {
         let register = (address & 0xFFFF) as u16;
 
         match register {
-            0x2100..=0x213F => Some(self.ppu.read_register(register)),
+            0x2100..=0x213F => Some(self.ppu.read_data_register(register)),
             0x2140..=0x2143 => {
                 let port = usize::from(register - 0x2140);
                 self.observability.apu_port_read_counts[port] =

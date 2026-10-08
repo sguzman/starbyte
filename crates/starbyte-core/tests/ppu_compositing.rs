@@ -184,3 +184,63 @@ fn vmain_rearranges_low_address_bits_for_planar_vram_streaming() {
         assert_eq!(&ppu.vram()[address..address + 2], &[0x5E, 0x6F]);
     }
 }
+
+#[test]
+fn vram_read_latch_prefetches_on_vmadd_and_refetches_before_increment() {
+    let mut ppu = Ppu::default();
+    vram_word(&mut ppu, 0x0000, 0x1234);
+    vram_word(&mut ppu, 0x0002, 0x5678);
+    ppu.write_register(0x2115, 0x80); // High-byte read increments VMADD.
+    ppu.write_register(0x2116, 0x00);
+    ppu.write_register(0x2117, 0x00);
+    assert_eq!(ppu.read_data_register(0x2139), 0x34);
+    assert_eq!(ppu.read_data_register(0x213A), 0x12);
+    // On the incrementing read, the old address refills the latch.
+    assert_eq!(ppu.read_data_register(0x2139), 0x34);
+    assert_eq!(ppu.read_data_register(0x213A), 0x12);
+    assert_eq!(ppu.read_data_register(0x2139), 0x78);
+    assert_eq!(ppu.read_data_register(0x213A), 0x56);
+
+    ppu.write_register(0x2115, 0x00); // Low-byte read increments instead.
+    ppu.write_register(0x2116, 0x00);
+    ppu.write_register(0x2117, 0x00);
+    assert_eq!(ppu.read_data_register(0x2139), 0x34);
+    assert_eq!(ppu.read_data_register(0x2139), 0x34);
+    assert_eq!(ppu.read_data_register(0x2139), 0x78);
+}
+
+#[test]
+fn ppu_cpu_stream_reads_advance_oam_and_cgram() {
+    let mut ppu = Ppu::default();
+    ppu.write_register(0x2102, 0);
+    ppu.write_register(0x2103, 0);
+    ppu.write_register(0x2104, 0x12);
+    ppu.write_register(0x2104, 0x34);
+    ppu.write_register(0x2102, 0);
+    ppu.write_register(0x2103, 0);
+    assert_eq!(ppu.read_data_register(0x2138), 0x12);
+    assert_eq!(ppu.read_data_register(0x2138), 0x34);
+
+    palette(&mut ppu, 0, 0x1234);
+    ppu.write_register(0x2121, 0);
+    assert_eq!(ppu.read_data_register(0x213B), 0x34);
+    assert_eq!(ppu.read_data_register(0x213B), 0x12);
+}
+
+#[test]
+fn bus_vram_reads_observe_incrementing_latch_semantics() {
+    use starbyte_core::bus::Bus;
+    use starbyte_core::system::SystemBus;
+
+    let mut bus = SystemBus::default();
+    bus.write(0x002115, 0x80);
+    bus.write(0x002116, 0);
+    bus.write(0x002117, 0);
+    bus.write(0x002118, 0xAB);
+    bus.write(0x002119, 0xCD);
+    bus.write(0x002116, 0);
+    bus.write(0x002117, 0);
+    assert_eq!(bus.read(0x002139), 0xAB);
+    assert_eq!(bus.read(0x00213A), 0xCD);
+    assert_eq!(bus.read(0x002139), 0xAB);
+}

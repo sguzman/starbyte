@@ -68,6 +68,8 @@ pub struct Ppu {
     oam: Vec<u8>,
     cgram_address: u16,
     vram_address: u16,
+    #[serde(default)]
+    vram_read_buffer: u16,
     oam_address: u16,
     #[serde(default)]
     oam_byte_address: u16,
@@ -89,6 +91,7 @@ impl Default for Ppu {
             oam: vec![0; OAM_BYTES],
             cgram_address: 0,
             vram_address: 0,
+            vram_read_buffer: 0,
             oam_address: 0,
             oam_byte_address: 0,
             oam_write_latch: 0,
@@ -107,11 +110,46 @@ impl Ppu {
     pub fn read_register(&self, register: u16) -> u8 {
         match register {
             0x2138 => self.read_oam_data(),
-            0x2139 => self.vram_word_byte(self.vram_address, false),
-            0x213A => self.vram_word_byte(self.vram_address, true),
+            0x2139 => self.vram_read_buffer as u8,
+            0x213A => (self.vram_read_buffer >> 8) as u8,
             0x213B => self.cgram[self.cgram_address as usize % CGRAM_BYTES],
             0x2100..=0x213F => self.registers[usize::from(register - 0x2100)],
             _ => 0,
+        }
+    }
+
+    /// Execute a CPU-visible PPU read with its address/latch side effects.
+    ///
+    /// Unlike read_register (a passive diagnostic peek), this is used by
+    /// the CPU bus for OAM, VRAM and CGRAM streaming reads.
+    pub fn read_data_register(&mut self, register: u16) -> u8 {
+        match register {
+            0x2138 => {
+                let value = self.read_oam_data();
+                self.oam_byte_address = (self.oam_byte_address + 1) % OAM_BYTES as u16;
+                value
+            }
+            0x2139 | 0x213A => {
+                let high = register == 0x213A;
+                let value = if high {
+                    (self.vram_read_buffer >> 8) as u8
+                } else {
+                    self.vram_read_buffer as u8
+                };
+                // The hardware loads the word at the *old* VMADD just
+                // before incrementing, so the first word is returned twice.
+                if high == (self.registers[0x15] & 0x80 != 0) {
+                    self.prefetch_vram_word();
+                    self.vram_address = self.vram_address.wrapping_add(self.vram_increment);
+                }
+                value
+            }
+            0x213B => {
+                let value = self.cgram[usize::from(self.cgram_address) % CGRAM_BYTES];
+                self.cgram_address = (self.cgram_address + 1) & 0x01FF;
+                value
+            }
+            _ => self.read_register(register),
         }
     }
 
@@ -142,9 +180,11 @@ impl Ppu {
             }
             0x2116 => {
                 self.vram_address = (self.vram_address & 0xFF00) | u16::from(value);
+                self.prefetch_vram_word();
             }
             0x2117 => {
                 self.vram_address = (self.vram_address & 0x00FF) | (u16::from(value) << 8);
+                self.prefetch_vram_word();
             }
             0x2118 => self.write_vram_data(value, false),
             0x2119 => self.write_vram_data(value, true),
@@ -254,6 +294,13 @@ impl Ppu {
         }
 
         self.oam_byte_address = (self.oam_byte_address + 1) % OAM_BYTES as u16;
+    }
+
+    fn prefetch_vram_word(&mut self) {
+        self.vram_read_buffer = u16::from_le_bytes([
+            self.vram_word_byte(self.vram_address, false),
+            self.vram_word_byte(self.vram_address, true),
+        ]);
     }
 
     fn write_vram_data(&mut self, value: u8, high_byte: bool) {

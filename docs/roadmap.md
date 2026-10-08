@@ -13,7 +13,8 @@ Mission: a fun-first, comfy Rust SNES emulator for Linux/Wayland, with a delight
 - [x] Redirect config and cache defaults to XDG user directories while retaining legacy reading and explicit overrides (code change; local verification pending).
 - [ ] Inspect the complete PPU title-screen path, including scroll, DMA, windows, raster effects and color math.
 - [x] Implement VMAIN writing port selection/stride/remapping with synthetic tests (CI pending).
-- [ ] Add correct VRAM read-port buffering, address prefetch and read-side increments.
+- [x] Implement VRAM read-port buffering, address prefetch, and read-side increments, plus streaming OAM/CGRAM reads (source; CI pending).
+- [ ] Validate VRAM read/write timing restrictions, open-bus behavior and DMA interactions on commercial titles.
 - [x] Add Mode 0/1 BG/OBJ priority composition and 16x16 background characters with synthetic regression fixtures (source; CI pending).
 - [ ] Reach a verified, non-placeholder Super Mario World title scene with a user-supplied ROM.
 - [ ] Reach input-driven title/menu transition and first controllable gameplay.

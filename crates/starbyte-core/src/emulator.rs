@@ -1,5 +1,7 @@
 //! Emulator facade exposed to CLI and future frontends.
 
+use std::time::{Duration, Instant};
+
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument};
 
@@ -16,6 +18,8 @@ use crate::timing::TimingState;
 
 const CPU_BUS_CYCLE_MASTER_CYCLES: u64 = 6;
 const SAVE_STATE_VERSION: u32 = 1;
+/// More than the maximum number of one-bus-access CPU steps in a frame.
+const MAX_INSTRUCTIONS_PER_FRAME: usize = 20_000;
 
 /// Serializable emulator state snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,20 +107,56 @@ impl Emulator {
         self.frame_buffer = FrameBuffer::default();
     }
 
-    /// Execute placeholder work until one frame boundary.
+    /// Advance one frame with a deterministic progress guard. Headless
+    /// clients are not subject to a host wall-clock deadline.
     pub fn run_until_frame(&mut self) -> Result<()> {
+        self.run_until_frame_guarded(None)
+    }
+
+    /// Advance one frame with an additional wall-clock budget for synchronous
+    /// desktop UIs. A stalled commercial ROM returns a diagnostic error
+    /// rather than holding the event loop indefinitely.
+    pub fn run_until_frame_with_timeout(&mut self, timeout: Duration) -> Result<()> {
+        self.run_until_frame_guarded(Some(timeout))
+    }
+
+    fn run_until_frame_guarded(&mut self, timeout: Option<Duration>) -> Result<()> {
         if self.system.cartridge().is_none() {
             return Err(Error::InvalidRom("no ROM loaded".to_owned()));
         }
 
         self.pending_audio.samples.clear();
         let start_frame = self.system.timing().frame;
+        let started = Instant::now();
+        let mut instructions = 0_usize;
         while self.system.timing().frame == start_frame {
+            if instructions >= MAX_INSTRUCTIONS_PER_FRAME
+                || timeout.is_some_and(|budget| started.elapsed() >= budget)
+            {
+                return Err(self.frame_stalled(start_frame, instructions, started.elapsed()));
+            }
+            let before_clock = self.system.timing().master_clock;
             self.step_instruction()?;
+            instructions += 1;
+            if self.system.timing().master_clock == before_clock
+                || timeout.is_some_and(|budget| started.elapsed() >= budget)
+            {
+                return Err(self.frame_stalled(start_frame, instructions, started.elapsed()));
+            }
         }
         self.refresh_framebuffer();
-        debug!(frame = self.system.timing().frame, "advanced to next frame");
+        debug!(frame = self.system.timing().frame, instructions, "advanced to next frame");
         Ok(())
+    }
+
+    fn frame_stalled(&self, frame: u64, instructions: usize, elapsed: Duration) -> Error {
+        Error::FrameStalled {
+            frame,
+            instructions,
+            elapsed_ms: elapsed.as_millis(),
+            pc: (u32::from(self.cpu.registers.pbr) << 16)
+                | u32::from(self.cpu.registers.pc),
+        }
     }
 
     /// Step one instruction in the placeholder model.
@@ -394,6 +434,32 @@ mod tests {
 
         assert_eq!(emulator.cpu.registers.pc, 0x8001);
         assert_eq!(emulator.system.timing().master_clock, 12);
+    }
+
+    #[test]
+    fn bounded_frame_reports_diagnostic_without_hanging_or_advancing() {
+        let mut rom = rom_bytes();
+        rom[0x7FFC] = 0;
+        rom[0x7FFD] = 0x80;
+        rom[0] = 0xEA;
+        let mut emulator = Emulator::default();
+        emulator.load_rom(Cartridge::from_bytes(rom, None).unwrap());
+
+        let error = emulator
+            .run_until_frame_with_timeout(std::time::Duration::ZERO)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::error::Error::FrameStalled {
+                frame: 0,
+                instructions: 0,
+                pc: 0x008000,
+                ..
+            }
+        ));
+        assert_eq!(emulator.timing().frame, 0);
+        emulator.run_until_frame().unwrap();
+        assert_eq!(emulator.timing().frame, 1);
     }
 
     #[test]

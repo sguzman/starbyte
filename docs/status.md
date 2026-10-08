@@ -44,7 +44,7 @@ Retail box art is not ordinarily embedded in SNES ROM images. The library offers
 
 ## Desktop responsiveness instrumentation
 
-The Session panel's 60-frame debug step now advances one frame per UI update with a Cancel control, rather than calling all 60 frames synchronously and freezing the interface for the entire batch. Play View has an optional Timing overlay; the Session panel also displays the exponential moving average, peak, and number of emulation frames exceeding the 16.7 ms budget. These are measurements of `FrontendSession::run_frame` only, not full wall-clock input latency or GPU presentation FPS. **Each individual emulation frame still runs on the egui UI thread**, so slow frames can still stall it; background emulation remains an open step.
+The Session panel's 60-frame debug step now advances one frame per UI update with a Cancel control, rather than calling all 60 frames synchronously and freezing the interface for the entire batch. Play View has an optional Timing overlay; the Session panel also displays the exponential moving average, peak, and number of emulation frames exceeding the 16.7 ms budget. These are measurements of `FrontendSession::run_frame` only, not full wall-clock input latency or GPU presentation FPS. **Each individual emulation frame still runs on the egui UI thread**, so it can stall briefly; a new 1.5-second per-frame deadline and instruction-progress guard now pause playback and report the frame/PC rather than allowing an unbounded loop. This is a safety net, not improved rendering correctness or background emulation.
 
 ## Early-frame compatibility failures
 

@@ -26,6 +26,9 @@ use starbyte_frontend::{
 };
 
 const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
+// A bad game frame can run on the egui thread: return control to Wayland
+// with a diagnostic rather than freezing until the process is killed.
+const GUI_FRAME_TIMEOUT: Duration = Duration::from_millis(1_500);
 const COMPACT_LAYOUT_WIDTH: f32 = 960.0;
 
 fn is_compact_layout(width: f32, height: f32) -> bool {
@@ -174,14 +177,22 @@ impl StarbyteApp {
 
         let mut session = FrontendSession::new(assets.clone())?;
         let mut status_line = "Waiting for library scan...".to_owned();
+        let mut startup_error = None;
         if let Some(path) = rom_path {
             session.load_rom(&path)?;
             record_recent_rom(&mut config.library.recent_roms, path.as_path());
-            let _ = session.run_frame();
-            status_line = format!("Loaded {}", path.display());
+            match session.run_frame_with_timeout(GUI_FRAME_TIMEOUT) {
+                Ok(()) => status_line = format!("Loaded {}", path.display()),
+                Err(error) => {
+                    let message = format!("Emulation stopped: {error}");
+                    status_line = message.clone();
+                    startup_error = Some(message);
+                }
+            }
         }
 
-        let start_playing = session.snapshot().has_rom;
+        let has_loaded_rom = session.snapshot().has_rom;
+        let start_playing = has_loaded_rom && startup_error.is_none();
         let worker = AppWorker::spawn(assets.clone());
         let gilrs = Gilrs::new().ok();
         let cached_snapshot = LibraryService::new(config.clone(), assets.clone())
@@ -204,7 +215,7 @@ impl StarbyteApp {
             failed_cover_ids: BTreeSet::new(),
             held_input: ControllerState::default(),
             status_line,
-            playback_error: None,
+            playback_error: startup_error,
             search_query: String::new(),
             selected_game_id: None,
             loaded_game_id: None,
@@ -219,7 +230,7 @@ impl StarbyteApp {
             pending_keyboard_bind: None,
             pending_gamepad_bind: None,
             is_playing: start_playing,
-            play_view: start_playing,
+            play_view: has_loaded_rom,
             frame_clock: FrameClock::new(Instant::now()),
             frame_performance: FramePerformance::default(),
             show_performance_overlay: false,
@@ -324,7 +335,7 @@ impl StarbyteApp {
                         self.loaded_game_id = Some(entry.game_id.clone());
                         let _ = self.session.set_active_cheats(&entry.cheats);
                         self.remember_recent_rom(&rom_path);
-                        if let Err(error) = self.session.run_frame() {
+                        if let Err(error) = self.session.run_frame_with_timeout(GUI_FRAME_TIMEOUT) {
                             let error = error.to_string();
                             self.record_playback_error(&error);
                             self.play_view = true;
@@ -553,7 +564,7 @@ impl StarbyteApp {
         self.session
             .set_controller1(self.effective_controller_state(ctx));
         let started = Instant::now();
-        match self.session.run_frame() {
+        match self.session.run_frame_with_timeout(GUI_FRAME_TIMEOUT) {
             Ok(()) => {
                 self.frame_performance.record(started.elapsed());
                 self.refresh_framebuffer(ctx);
@@ -604,7 +615,7 @@ impl StarbyteApp {
                     let _ = self.session.set_active_cheats(&entry.cheats);
                 }
                 self.remember_recent_rom(path);
-                if let Err(error) = self.session.run_frame() {
+                if let Err(error) = self.session.run_frame_with_timeout(GUI_FRAME_TIMEOUT) {
                     self.record_playback_error(&error.to_string());
                     self.play_view = true;
                     self.refresh_framebuffer(ctx);

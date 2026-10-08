@@ -5,6 +5,7 @@ mod library;
 use std::{
     io::Write,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -146,6 +147,14 @@ impl FrontendSession {
         self.apply_active_cheats();
         self.emulator
             .run_until_frame()
+            .context("failed to run frame")
+    }
+
+    /// Execute a guarded frame in a synchronous graphical frontend.
+    pub fn run_frame_with_timeout(&mut self, timeout: Duration) -> Result<()> {
+        self.apply_active_cheats();
+        self.emulator
+            .run_until_frame_with_timeout(timeout)
             .context("failed to run frame")
     }
 

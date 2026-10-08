@@ -44,6 +44,20 @@ pub enum Error {
         /// Actual supplied save RAM byte count.
         actual: usize,
     },
+    /// Frame time or instruction progress exceeded a safety budget.
+    #[error(
+        "frame {frame} stalled after {instructions} instructions ({elapsed_ms} ms), CPU PC 0x{pc:06X}; playback paused"
+    )]
+    FrameStalled {
+        /// Frame that did not finish within the budget.
+        frame: u64,
+        /// Number of emulated CPU instructions attempted.
+        instructions: usize,
+        /// Elapsed host time in milliseconds.
+        elapsed_ms: u128,
+        /// Twenty-four-bit 65816 CPU program address.
+        pc: u32,
+    },
     /// Requested functionality is intentionally deferred.
     #[error("feature not implemented yet: {0}")]
     Unimplemented(&'static str),

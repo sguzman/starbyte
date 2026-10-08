@@ -1070,10 +1070,17 @@ fn ensure_cache_layout(cache_root: &Path) -> Result<()> {
 }
 
 fn write_json<T: Serialize>(path: PathBuf, value: &T) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(&path, serde_json::to_string_pretty(value)?)?;
+    let payload = serde_json::to_vec_pretty(value)?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    // Keep the previous complete manifest if power is lost during a scan.
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(&payload)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(&path)?;
     Ok(())
 }
 
@@ -1560,6 +1567,17 @@ mod tests {
             zip.write_all(bytes).unwrap();
         }
         zip.finish().unwrap();
+    }
+
+    #[test]
+    fn large_library_manifest_replacements_are_atomic_and_clean() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("manifest.json");
+        write_json(path.clone(), &vec!["first"]).unwrap();
+        write_json(path.clone(), &vec!["second", "third"]).unwrap();
+        let loaded: Vec<String> = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(loaded, vec!["second", "third"]);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     #[test]

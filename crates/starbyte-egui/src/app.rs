@@ -125,6 +125,7 @@ pub struct StarbyteApp {
     frame_clock: FrameClock,
     frame_performance: FramePerformance,
     show_performance_overlay: bool,
+    show_input_overlay: bool,
     pending_step_frames: u32,
     last_sram_flush: Instant,
     show_compact_settings: bool,
@@ -220,6 +221,7 @@ impl StarbyteApp {
             frame_clock: FrameClock::new(Instant::now()),
             frame_performance: FramePerformance::default(),
             show_performance_overlay: false,
+            show_input_overlay: false,
             pending_step_frames: 0,
             last_sram_flush: Instant::now(),
             show_compact_settings: false,
@@ -693,6 +695,12 @@ impl StarbyteApp {
                 }
                 if ui
                     .checkbox(&mut self.show_performance_overlay, "Timing")
+                    .changed()
+                {
+                    ctx.request_repaint();
+                }
+                if ui
+                    .checkbox(&mut self.show_input_overlay, "Input")
                     .changed()
                 {
                     ctx.request_repaint();
@@ -1263,6 +1271,19 @@ impl StarbyteApp {
                 ui.label("The game framebuffer will appear after a frame has been rendered.");
             });
         }
+        if self.show_input_overlay {
+            let label = format!(
+                "Controller 1: {}",
+                pressed_button_labels(self.effective_controller_state(ui.ctx()))
+            );
+            ui.painter().text(
+                rect.left_top() + egui::vec2(12.0, 12.0),
+                egui::Align2::LEFT_TOP,
+                label,
+                egui::TextStyle::Monospace.resolve(ui.style()),
+                egui::Color32::LIGHT_YELLOW,
+            );
+        }
         if self.show_performance_overlay && self.frame_performance.samples > 0 {
             let stats = self.frame_performance;
             let label = format!(
@@ -1816,7 +1837,7 @@ mod playback_tests {
 
     use super::{
         FRAME_INTERVAL, FrameClock, FramePerformance, Vec2, fit_game_size, is_compact_layout,
-        merged_gamepad_buttons, record_recent_rom, write_png_screenshot,
+        merged_gamepad_buttons, pressed_button_labels, record_recent_rom, write_png_screenshot,
     };
 
     #[test]
@@ -1833,6 +1854,18 @@ mod playback_tests {
 
         clock.reset(late);
         assert!(clock.take_due_frame(late));
+    }
+
+    #[test]
+    fn input_overlay_reports_effective_snes_button_names() {
+        assert_eq!(pressed_button_labels(Default::default()), "None");
+        let state = starbyte_core::input::ControllerState {
+            start: true,
+            up: true,
+            a: true,
+            ..Default::default()
+        };
+        assert_eq!(pressed_button_labels(state), "Start Up A");
     }
 
     #[test]
@@ -1932,6 +1965,32 @@ mod playback_tests {
         assert!(is_compact_layout(959.0, 900.0));
         assert!(is_compact_layout(1200.0, 500.0));
         assert!(!is_compact_layout(960.0, 650.0));
+    }
+}
+
+fn pressed_button_labels(state: ControllerState) -> String {
+    let buttons = [
+        ("B", state.b),
+        ("Y", state.y),
+        ("Select", state.select),
+        ("Start", state.start),
+        ("Up", state.up),
+        ("Down", state.down),
+        ("Left", state.left),
+        ("Right", state.right),
+        ("A", state.a),
+        ("X", state.x),
+        ("L", state.l),
+        ("R", state.r),
+    ];
+    let held = buttons
+        .into_iter()
+        .filter_map(|(name, pressed)| pressed.then_some(name))
+        .collect::<Vec<_>>();
+    if held.is_empty() {
+        "None".to_owned()
+    } else {
+        held.join(" ")
     }
 }
 

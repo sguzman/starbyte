@@ -47,7 +47,7 @@ To test the native window and graphics path **without downloading or supplying a
 cargo run -p starbyte-egui -- --demo
 ```
 
-This exercises the emulator and Wayland windowing but is **not** evidence that any commercial game is playable.
+The game toolbar's **Input** toggle displays currently held SNES controller buttons, so you can test keyboard/gamepad mapping with the demo even though its checkerboard does not respond to input. This exercises the emulator and windowing, but is **not** evidence that any commercial game is playable.
 
 For a library directory:
 

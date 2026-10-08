@@ -1,8 +1,8 @@
 //! Compliance and regression harness scaffolding.
 
 pub mod commercial;
-pub mod demo;
 pub mod cpu_65816;
+pub mod demo;
 pub mod rom;
 pub mod spc700;
 

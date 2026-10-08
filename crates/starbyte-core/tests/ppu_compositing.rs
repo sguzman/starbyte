@@ -263,3 +263,21 @@ fn bg_screen_and_tile_bases_use_vram_word_units() {
     ppu.render_frame(&mut frame);
     assert_eq!(pixel(&frame, 0, 0), [248, 0, 0, 255]);
 }
+
+#[test]
+fn bg_mosaic_snaps_pixels_to_screen_anchored_blocks() {
+    let mut ppu = sample_mode1_bg1_bg2();
+    ppu.write_register(0x212C, 0x01); // Show BG1 only.
+    let mut frame = FrameBuffer::default();
+    ppu.render_frame(&mut frame);
+    assert_eq!(pixel(&frame, 0, 0), [248, 0, 0, 255]);
+    assert_eq!(pixel(&frame, 1, 0), [0, 0, 0, 255]);
+    assert_eq!(pixel(&frame, 0, 1), [0, 0, 0, 255]);
+
+    ppu.write_register(0x2106, 0x11); // BG1 only, 2x2 mosaic blocks.
+    ppu.render_frame(&mut frame);
+    for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+        assert_eq!(pixel(&frame, x, y), [248, 0, 0, 255]);
+    }
+    assert_eq!(pixel(&frame, 2, 0), [0, 0, 0, 255]);
+}

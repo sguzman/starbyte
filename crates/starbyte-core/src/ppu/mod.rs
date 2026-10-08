@@ -380,8 +380,17 @@ impl Ppu {
         x: u16,
         y: u16,
     ) -> Option<([u8; 4], bool)> {
-        let world_x = usize::from(x.wrapping_add(self.bg_scroll_x[background.index]));
-        let world_y = usize::from(y.wrapping_add(self.bg_scroll_y[background.index]));
+        // Mosaic blocks are anchored to screen coordinates; BG scrolling
+        // shifts the sampled source, but never shifts the mosaic grid.
+        let mosaic = self.registers[0x06];
+        let size = usize::from((mosaic >> 4) + 1);
+        let (screen_x, screen_y) = if mosaic & (1 << background.index) != 0 {
+            (usize::from(x) / size * size, usize::from(y) / size * size)
+        } else {
+            (usize::from(x), usize::from(y))
+        };
+        let world_x = screen_x + usize::from(self.bg_scroll_x[background.index]);
+        let world_y = screen_y + usize::from(self.bg_scroll_y[background.index]);
         let size = background.tile_size;
         let entry_index = self.tilemap_entry_index(background, world_x / size, world_y / size);
         let entry = u16::from_le_bytes([

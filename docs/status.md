@@ -82,6 +82,10 @@ The PPU now interprets the `$2100` brightness nibble: 0 renders black, 15 render
 
 The PPU's BGnSC screen base and BGnNBA character base registers encode VRAM **word** addresses. The previous renderer used byte offsets half as large as it should have. These now convert as `(BGnSC & 0xFC) << 9` and `BGnNBA nibble << 13` in bytes. Synthetic tile/priority fixtures were relocated to matching VRAM locations and a dedicated register-address regression was added. The expected effect is improved title/background rendering; commercial-game results still require measured evidence.
 
+## Per-background mosaic rendering
+
+`$2106` now expands each selected BG's sampled pixel into screen-aligned N×N blocks (1–16 pixels). The software renderer applies this to Mode 0/1 backgrounds before scroll lookup, without moving the mosaic grid along with the layer. This is a whole-frame approximation: mid-scanline mosaic changes remain unimplemented.
+
 ## Current functional gap
 
 The original commercial-ROM roadmap explicitly leaves SNES background/tilemap presentation, non-placeholder Super Mario World boot visuals, title/menu navigation, and first controllable gameplay incomplete. This is a **blocking playability gap**, not an optional accuracy task.

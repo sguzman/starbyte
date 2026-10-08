@@ -86,6 +86,7 @@ impl Cpu65816 {
             0x07 => self.execute_ora_direct_page_indirect_long(bus, &mut trace),
             0x08 => self.execute_php(bus, &mut trace),
             0x0A => self.execute_asl_a(bus, &mut trace),
+            0x0B => self.execute_phd(bus, &mut trace),
             0x09 => self.execute_ora_immediate(bus, &mut trace),
             0x0D => self.execute_ora_absolute(bus, &mut trace),
             0x0E => self.execute_asl_absolute(bus, &mut trace),
@@ -113,6 +114,7 @@ impl Cpu65816 {
             0x28 => self.execute_plp(bus, &mut trace),
             0x29 => self.execute_and_immediate(bus, &mut trace),
             0x2A => self.execute_rol_a(bus, &mut trace),
+            0x2B => self.execute_pld(bus, &mut trace),
             0x25 => self.execute_and_direct_page(bus, &mut trace),
             0x26 => self.execute_rol_direct_page(bus, &mut trace),
             0x27 => self.execute_and_direct_page_indirect_long(bus, &mut trace),
@@ -588,8 +590,8 @@ impl Cpu65816 {
 
     fn execute_txs<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
         self.push_read_trace(bus, trace, self.fetch_address(1));
-        self.registers.s = if self.index_registers_are_8_bit() {
-            self.registers.x & 0x00FF
+        self.registers.s = if self.registers.emulation {
+            0x0100 | (self.registers.x & 0x00FF)
         } else {
             self.registers.x
         };
@@ -599,7 +601,11 @@ impl Cpu65816 {
 
     fn execute_tcs<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
         self.push_read_trace(bus, trace, self.fetch_address(1));
-        self.registers.s = self.registers.a;
+        self.registers.s = if self.registers.emulation {
+            0x0100 | (self.registers.a & 0x00FF)
+        } else {
+            self.registers.a
+        };
         self.registers.pc = self.registers.pc.wrapping_add(1);
         Ok(())
     }
@@ -869,6 +875,27 @@ impl Cpu65816 {
     fn execute_php<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
         self.push_read_trace(bus, trace, self.fetch_address(1));
         self.push_stack(bus, trace, self.registers.p)?;
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    // PHD and PLD operate on the full 16-bit direct-page register,
+    // independently of the accumulator's M flag.
+    fn execute_phd<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        let [low, high] = self.registers.d.to_le_bytes();
+        self.push_stack(bus, trace, high)?;
+        self.push_stack(bus, trace, low)?;
+        self.registers.pc = self.registers.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_pld<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> Result<()> {
+        self.push_read_trace(bus, trace, self.fetch_address(1));
+        let low = self.pull_stack(bus, trace);
+        let high = self.pull_stack(bus, trace);
+        self.registers.d = u16::from_le_bytes([low, high]);
+        self.update_nz_16(self.registers.d);
         self.registers.pc = self.registers.pc.wrapping_add(1);
         Ok(())
     }
@@ -2768,9 +2795,8 @@ impl Cpu65816 {
         });
 
         self.registers.pc = u16::from_le_bytes([vector_low, vector_high]);
-        if !self.registers.emulation {
-            self.registers.pbr = 0;
-        }
+        // Interrupt vectors always target bank zero in either CPU mode.
+        self.registers.pbr = 0;
         self.registers.p = (self.registers.p | 0x04) & !0x08;
     }
 
@@ -2789,11 +2815,17 @@ impl Cpu65816 {
             cycle: trace.len() as u64,
         });
         self.registers.s = self.registers.s.wrapping_sub(1);
+        if self.registers.emulation {
+            self.registers.s = 0x0100 | (self.registers.s & 0x00FF);
+        }
         Ok(())
     }
 
     fn pull_stack<B: Bus>(&mut self, bus: &mut B, trace: &mut Vec<BusEvent>) -> u8 {
         self.registers.s = self.registers.s.wrapping_add(1);
+        if self.registers.emulation {
+            self.registers.s = 0x0100 | (self.registers.s & 0x00FF);
+        }
         let address = u32::from(self.stack_address());
         let value = bus.read(address);
         trace.push(BusEvent {

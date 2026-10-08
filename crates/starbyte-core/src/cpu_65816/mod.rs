@@ -3950,6 +3950,107 @@ mod tests {
     }
 
     #[test]
+    fn all_indirect_cmp_modes_read_correct_effective_address() {
+        // All seven remaining documented 65816 CMP modes in native 8-bit
+        // accumulator/index mode. Use contrasting bank data where relevant.
+        for opcode in [0xC1, 0xC3, 0xC7, 0xD1, 0xD2, 0xD3, 0xD7] {
+            let mut cpu = Cpu65816::default();
+            cpu.registers.pc = 0x8000;
+            cpu.registers.emulation = false;
+            cpu.registers.p = 0x30;
+            cpu.registers.a = 0xAB06;
+            cpu.registers.d = 0x0200;
+            cpu.registers.dbr = 0x7E;
+            cpu.registers.s = 0x01F0;
+            cpu.registers.x = 2;
+            cpu.registers.y = 3;
+
+            let mut bytes: Vec<(u32, u8)> = vec![(0x008000, opcode), (0x008001, 0x10)];
+            let expected_address = match opcode {
+                0xC1 => {
+                    // ($10,X) reads pointer from DP+$10+X, uses DBR.
+                    bytes.extend([(0x000212, 0x00), (0x000213, 0x40)]);
+                    0x7E4000
+                }
+                0xC3 => {
+                    // $10,S accesses stack-relative data at $0200.
+                    0x000200
+                }
+                0xC7 => {
+                    // [$10] reads all three bytes, ignoring DBR.
+                    bytes.extend([
+                        (0x000210, 0x00),
+                        (0x000211, 0x40),
+                        (0x000212, 0x7F),
+                    ]);
+                    0x7F4000
+                }
+                0xD1 => {
+                    // ($10),Y adds index within DBR bank.
+                    bytes.extend([(0x000210, 0x00), (0x000211, 0x40)]);
+                    0x7E4003
+                }
+                0xD2 => {
+                    // ($10) reads the DP pointer without indexing.
+                    bytes.extend([(0x000210, 0x00), (0x000211, 0x40)]);
+                    0x7E4000
+                }
+                0xD3 => {
+                    // ($10,S),Y reads a pointer from the stack page.
+                    bytes.extend([(0x000200, 0x00), (0x000201, 0x40)]);
+                    0x7E4003
+                }
+                0xD7 => {
+                    // [$10],Y carries across the 24-bit long pointer.
+                    bytes.extend([
+                        (0x000210, 0x00),
+                        (0x000211, 0x40),
+                        (0x000212, 0x7F),
+                    ]);
+                    0x7F4003
+                }
+                _ => unreachable!(),
+            };
+            bytes.push((expected_address, 0x06));
+            let mut bus = TestBus::with_bytes(&bytes);
+            let trace = cpu.step_with_bus(&mut bus).unwrap();
+            assert_eq!(cpu.registers.pc, 0x8002, "opcode {opcode:02X}");
+            assert_eq!(cpu.registers.a, 0xAB06, "opcode {opcode:02X}");
+            assert_eq!(cpu.registers.s, 0x01F0, "opcode {opcode:02X}");
+            assert_eq!(cpu.registers.p & 0x03, 0x03, "opcode {opcode:02X}");
+            assert!(
+                trace.iter().any(|event| event.address == expected_address),
+                "opcode {opcode:02X} did not access {expected_address:06X}"
+            );
+        }
+    }
+
+    #[test]
+    fn cmp_direct_page_indirect_uses_sixteen_bit_accumulator_when_m_clear() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.emulation = false;
+        cpu.registers.p = 0x00;
+        cpu.registers.a = 0x1234;
+        cpu.registers.d = 0x0200;
+        cpu.registers.dbr = 0x7E;
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0xD2),
+            (0x008001, 0x10),
+            (0x000210, 0x00),
+            (0x000211, 0x40),
+            (0x7E4000, 0x34),
+            (0x7E4001, 0x12),
+        ]);
+
+        let trace = cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(cpu.registers.pc, 0x8002);
+        assert_eq!(cpu.registers.a, 0x1234);
+        assert_eq!(cpu.registers.p & 0x03, 0x03);
+        assert!(trace.iter().any(|event| event.address == 0x7E4001));
+    }
+
+    #[test]
     fn cmp_long_x_compares_eight_bit_a_without_modifying_it() {
         let mut cpu = Cpu65816::default();
         cpu.registers.emulation = false;

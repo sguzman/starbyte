@@ -1,6 +1,6 @@
 # Super Mario World — compatibility investigation
 
-**Current result: startup graphics appear, but execution and rendering are corrupt; a 360-frame probe aborted from a host stack overflow after frame 340.** The first-frame trace confirms a real audio upload, not an initial deadlock. Playability remains unverified. This document records observations separately from suspected causes.
+**Current result: a stable "Nintendo Presents" opening is verified; the latest real-ROM probe completed 165 frames before stopping on a missing 65816 instruction at frame 166.** Earlier host-stack corruption was traced to, and fixed in, native NMI status saving. All 256 opcode values are now decoded in source and are under synthetic CI verification, but this has **not yet been re-tested** on the user's ROM. Title screen, input and gameplay remain unverified. This document separates observed outcomes from planned fixes.
 
 ## First reproducible headless probe
 
@@ -200,13 +200,24 @@ The sampled startup frames remain visually coherent: the white "Nintendo Present
 
 **Compatibility remains "startup progressing, not playable-verified."** Passing 165 frames and encountering a legitimate opcode is meaningful evidence of progress but does not constitute a playable game.
 
+## Ninth probe response: close the opcode decoder gap systematically
+
+The frame-166 error `$DF` is a valid indexed long comparison (`CMP.L`). Instead of asking the user to run their private ROM for each missing opcode, the CPU core's missing legal instruction entries were closed in synthetic batches:
+
+- `CMP long` and `CMP long,X`, plus all previously missing CMP indirect and stack-relative forms; tests verify 8- and 16-bit comparison flags, bank carry, and 24-bit address wrap.
+- Shared accumulator addressing logic fills the remaining `LDA`, `AND`, `ADC`, `EOR`, and `SBC` memory modes, with a table-driven synthetic test across 38 added cases and 16-bit arithmetic tests.
+- Remaining `BIT`, `TSB`, `TRB`, `WDM`, `JML`, indirect `JMP`, `PEA`, `PEI`, `PER`, `MVN` and `MVP` modes are implemented. Indexed indirect `JSR` also now reads its pointer from the program bank, not bank zero.
+- `WAI` and `STP` now have CPU idle-state handling, with PPU/APU master clocks continuing to advance even when no CPU bus instruction events occur.
+
+All **256 opcode values** are handled by the dispatch table after these changes; tests and CI must establish correctness. Opcode coverage is **not** a claim of complete hardware emulation: cycle timing, decimal arithmetic, dummy reads, interrupt edge cases, and full video/audio accuracy still require work. No SNES ROM bytes were used as test fixtures or committed.
+
 ## Next evidence needed
 
-1. Once the `$CF`/`$DF` compare instructions and 24-bit word-access fix pass CI, retry **240 frames** with bounded frame logs and screenshots. Confirm frame 166 completes and capture any next *real* missing opcode or first divergent game state.
-2. Prioritize completing the remaining valid 65816 addressing modes using synthetic regressions, rather than repeatedly requiring the user to run one ROM probe for each missing opcode.
-3. If the CPU advances but graphics remain incorrect, compare framebuffer snapshots and PPU/DMA counters; collect instruction traces only around the earliest demonstrated divergence.
-4. Record the local ROM digest/region/revision without committing or redistributing the bytes.
-5. Do not upgrade game compatibility to title/playable until the actual title screen, controller input, gameplay and audio are verified.
+1. Once the combined opcode completion and idle-state changes pass Linux/Windows CI, run a bounded **300-frame** commercial probe with JSONL frame logs and periodic PPM images. Confirm that frame 166 is no longer blocked and examine whether title-screen or actual level graphics appear.
+2. If the CPU fails, capture the earliest divergent frame's instruction/bus trace; if it continues but rendering is wrong, prioritize PPU/HDMA evidence rather than arbitrary CPU changes. Never equate 256 decoded opcode values with fully accurate execution.
+3. Record local cartridge SHA-256/region/revision without distributing ROM bytes.
+4. Add copyright-free synthetic regressions for any new demonstrated correctness defect.
+5. Verify title scene, input, gameplay and sound separately before upgrading the compatibility grade.
 
 ## Acceptance criteria
 

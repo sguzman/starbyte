@@ -843,15 +843,33 @@ fn run_emulator_for_frames(
     frames: u32,
     capture_trace: bool,
 ) -> Result<Option<Vec<InstructionTraceRecord>>> {
+    // Match the core's deterministic frame guard so a broken commercial ROM
+    // cannot hang evidence recording (including instruction-trace capture).
+    const MAX_FRAME_INSTRUCTIONS: usize = 20_000;
     let mut trace_records = capture_trace.then(Vec::new);
     for _ in 0..frames {
         let _ = emulator.audio_samples();
+        if !capture_trace {
+            emulator.run_until_frame()?;
+            continue;
+        }
         let start_frame = emulator.timing().frame;
+        let mut instructions = 0_usize;
         while emulator.timing().frame == start_frame {
+            if instructions >= MAX_FRAME_INSTRUCTIONS {
+                let registers = emulator.cpu_registers();
+                return Err(Error::FrameStalled {
+                    frame: start_frame,
+                    instructions,
+                    elapsed_ms: 0,
+                    pc: (u32::from(registers.pbr) << 16) | u32::from(registers.pc),
+                });
+            }
             let frame = emulator.timing().frame;
             let pbr = emulator.cpu_registers().pbr;
             let pc = emulator.cpu_registers().pc;
             let bus_events = emulator.step_instruction_with_trace()?;
+            instructions += 1;
             if let Some(records) = &mut trace_records {
                 let opcode = bus_events.first().map_or(0, |event| event.value);
                 let mmio_events = bus_events

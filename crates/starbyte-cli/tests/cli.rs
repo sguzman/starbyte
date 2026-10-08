@@ -436,6 +436,42 @@ fn run_frame_log_records_each_completed_frame_as_jsonl() {
 }
 
 #[test]
+fn run_captures_bounded_frame_images_without_interactive_screenshots() {
+    let dir = tempdir().unwrap();
+    let rom = dir.path().join("sample.sfc");
+    let frames_dir = dir.path().join("captures/frames");
+    write_test_rom(&rom);
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "run",
+            rom.to_str().unwrap(),
+            "--frames",
+            "5",
+            "--frame-images-dir",
+            frames_dir.to_str().unwrap(),
+            "--frame-image-every",
+            "2",
+            "--max-frame-images",
+            "2",
+        ])
+        .assert()
+        .success();
+
+    let mut paths = fs::read_dir(&frames_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    paths.sort();
+    assert_eq!(paths, vec!["frame-000001.ppm", "frame-000002.ppm"]);
+    for file in &paths {
+        let bytes = fs::read(frames_dir.join(file)).unwrap();
+        assert!(bytes.starts_with(b"P6\\n256 224\\n255\\n"));
+    }
+}
+
+#[test]
 fn zero_frame_probe_creates_an_empty_frame_log() {
     let dir = tempdir().unwrap();
     let rom = dir.path().join("sample.sfc");

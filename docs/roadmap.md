@@ -12,6 +12,7 @@
 - [x] Preserve observable early-frame emulator errors in Play View and Logs rather than silently proceeding after failed first frame (source; core panic/OS crash triage still open).
 - [ ] Replace placeholder audio with authentic sound synthesis and a responsive Linux audio output path.
 - [ ] Measure and improve frame pacing, latency, pauses and save stability during sustained play.
+- [x] Isolate ROM materialization from the cover-download worker and expose an explicit Play Selected action and visible job feedback (CI pending).
 - [x] Add core frame instruction-progress guard and GUI 1.5-second wall-clock budget with frame/PC diagnostics to prevent indefinite synchronous stalls (native test pending).
 - [x] Replace the 60-frame blocking UI callback with incremental, cancellable stepping; expose measured per-frame runtime and over-budget counters (source; native Wayland timing pending).
 - [x] Add content-scoped XDG cartridge SRAM persistence with safe atomic writes and timed flushes (implemented; real-game verification remains open).

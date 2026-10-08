@@ -56,25 +56,43 @@ pub enum WorkerEvent {
 #[derive(Debug)]
 pub struct AppWorker {
     command_tx: Sender<WorkerCommand>,
+    rom_tx: Sender<WorkerCommand>,
     event_rx: Receiver<WorkerEvent>,
 }
 
 impl AppWorker {
     pub fn spawn(assets: AssetConfig) -> Self {
         let (command_tx, command_rx) = mpsc::channel::<WorkerCommand>();
+        let (rom_tx, rom_rx) = mpsc::channel::<WorkerCommand>();
         let (event_tx, event_rx) = mpsc::channel::<WorkerEvent>();
+        let rom_assets = assets.clone();
+        let rom_events = event_tx.clone();
+        // ROM extraction is local and should not wait for a potentially
+        // minutes-long cover-download job on the library/network worker.
+        thread::Builder::new()
+            .name("starbyte-rom-worker".to_owned())
+            .spawn(move || worker_loop(rom_assets, rom_rx, rom_events))
+            .expect("failed to spawn starbyte ROM worker");
         thread::Builder::new()
             .name("starbyte-library-worker".to_owned())
             .spawn(move || worker_loop(assets, command_rx, event_tx))
             .expect("failed to spawn starbyte library worker");
         Self {
             command_tx,
+            rom_tx,
             event_rx,
         }
     }
 
     pub fn submit(&self, command: WorkerCommand) {
-        let _ = self.command_tx.send(command);
+        // Separate background queues keep gameplay loading responsive while
+        // Libretro artwork or other network refreshes are in progress.
+        let tx = if matches!(command.kind, WorkerCommandKind::MaterializeRom { .. }) {
+            &self.rom_tx
+        } else {
+            &self.command_tx
+        };
+        let _ = tx.send(command);
     }
 
     pub fn try_recv(&self) -> Option<WorkerEvent> {
@@ -233,5 +251,55 @@ fn label_for_kind(kind: &WorkerCommandKind) -> &'static str {
         WorkerCommandKind::RefreshCheats { .. } => "Refresh Cheats",
         WorkerCommandKind::RefreshAll => "Refresh All",
         WorkerCommandKind::MaterializeRom { .. } => "Load Game",
+    }
+}
+
+/// Route-level regression: the local ROM queue must remain independent of
+/// network metadata and box-art work.
+#[cfg(test)]
+mod routing_tests {
+    use super::{AppWorker, WorkerCommand, WorkerCommandKind};
+    use starbyte_core::manifest::RuntimeConfig;
+    use starbyte_frontend::{
+        InstalledStatus, LibraryEntry, LibraryFilter,
+    };
+    use std::sync::mpsc;
+
+    #[test]
+    fn game_launch_bypasses_blocked_artwork_queue() {
+        let (library_tx, library_rx) = mpsc::channel();
+        let (rom_tx, rom_rx) = mpsc::channel();
+        let (_events_tx, events_rx) = mpsc::channel();
+        let worker = AppWorker {
+            command_tx: library_tx,
+            rom_tx,
+            event_rx: events_rx,
+        };
+        let config = RuntimeConfig::default();
+        let filter = LibraryFilter::default();
+        worker.submit(WorkerCommand {
+            job_id: 1,
+            config: config.clone(),
+            filter: filter.clone(),
+            kind: WorkerCommandKind::RefreshArtwork,
+        });
+        worker.submit(WorkerCommand {
+            job_id: 2,
+            config,
+            filter,
+            kind: WorkerCommandKind::MaterializeRom {
+                entry: LibraryEntry {
+                    game_id: "sample".to_owned(),
+                    display_title: "Sample".to_owned(),
+                    installed_status: InstalledStatus::Installed,
+                    local: None,
+                    metadata: None,
+                    cover: None,
+                    cheats: Vec::new(),
+                },
+            },
+        });
+        assert_eq!(library_rx.try_recv().unwrap().job_id, 1);
+        assert_eq!(rom_rx.try_recv().unwrap().job_id, 2);
     }
 }

@@ -31,6 +31,10 @@ Starbyte discovers the existing `~/Games/Roms/SNES` collection when that directo
 
 Retail box art is not ordinarily embedded in SNES ROM images. The library offers **Get Covers** to explicitly index Libretro's thumbnail catalog and download artwork for installed games to XDG cache. It leaves game ZIPs unchanged, reuses existing images instead of repeatedly downloading them, and shows a placeholder where a game lacks a match. The operation uses the network and may be lengthy for large collections; commercial game artwork is not bundled in Starbyte.
 
+## Launch and background-work isolation
+
+The library's **Play Selected** toolbar action and each installed grid card's **Play game** button now queue an explicit ROM launch. Resume/Pause applies only to a previously loaded game. ROM materialization has a separate worker queue from network artwork/metadata, so slow artwork downloads cannot block the start of a selected local game. A persistent bottom status strip displays launch/worker feedback. This removes a startup scheduling problem; it does **not** prove that Super Mario World renders or plays correctly.
+
 ## Built-in visual smoke test
 
 `cargo run -p starbyte-egui -- --demo` creates a copyright-free 65816 LoROM in the XDG cache and opens its alternating red/cyan checkerboard through the normal emulator frontend. This permits testing tiling, focus, fullscreen, screenshot export and scaling without a commercial cartridge. The Play View's Input overlay reports the effective keyboard/gamepad SNES button state for local input smoke tests; the generated checkerboard itself remains static. A core unit test checks exact screen pixels, but **the native Wayland window must still be tested by a user with that compositor**.

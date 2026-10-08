@@ -799,10 +799,25 @@ impl StarbyteApp {
                     }
                 }
             });
+            let selected_installed = self.selected_entry().filter(|entry| {
+                entry.installed_status == InstalledStatus::Installed
+            });
+            if ui
+                .add_enabled(
+                    selected_installed.is_some(),
+                    egui::Button::new("Play Selected"),
+                )
+                .on_hover_text("Select an installed game from the library to launch it")
+                .clicked()
+            {
+                if let Some(entry) = selected_installed {
+                    self.queue_load_entry(&entry);
+                }
+            }
             if ui
                 .add_enabled(
                     has_rom,
-                    egui::Button::new(if self.is_playing { "Pause" } else { "Play" }),
+                    egui::Button::new(if self.is_playing { "Pause" } else { "Resume" }),
                 )
                 .clicked()
             {
@@ -1560,6 +1575,12 @@ impl StarbyteApp {
                         .size(12.0),
                     );
                     ui.label(RichText::new(format!("Cheats {}", entry.cheats.len())).size(11.0));
+                    if entry.installed_status == InstalledStatus::Installed
+                        && ui.small_button("Play game").clicked()
+                    {
+                        self.selected_game_id = Some(entry.game_id.clone());
+                        self.queue_load_entry(entry);
+                    }
 
                     if title_response.clicked() {
                         self.selected_game_id = Some(entry.game_id.clone());
@@ -1813,6 +1834,20 @@ impl eframe::App for StarbyteApp {
         let available = ctx.available_rect();
         let compact = is_compact_layout(available.width(), available.height());
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| self.draw_top_bar(ui, ctx, compact));
+        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(self.status_line.as_str());
+                let active = self
+                    .jobs
+                    .iter()
+                    .filter(|job| job.state == "running" || job.state == "queued")
+                    .count();
+                if active > 0 {
+                    ui.separator();
+                    ui.label(format!("{active} background job(s)"));
+                }
+            });
+        });
         if self.play_view {
             egui::CentralPanel::default().show(ctx, |ui| self.draw_play_view(ui));
         } else {

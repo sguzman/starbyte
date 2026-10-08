@@ -255,6 +255,11 @@ struct CommercialRecordArgs {
     /// Optional instruction-trace output path.
     #[arg(long)]
     trace_out: Option<PathBuf>,
+
+    /// Skip this many initial completed frames before instruction tracing.
+    /// A 360-frame run with --trace-from-frame 359 traces only the final frame.
+    #[arg(long, requires = "trace_out")]
+    trace_from_frame: Option<u32>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -858,13 +863,14 @@ fn run_compliance(args: ComplianceArgs, assets: AssetConfig) -> Result<()> {
                 .map(parse_controller_state)
                 .transpose()?
                 .unwrap_or_default();
-            let mut recorded = testing::commercial::record_fixture(
+            let mut recorded = testing::commercial::record_fixture_with_trace_start(
                 &args.rom,
                 args.frames,
                 &assets,
                 controller1,
                 &[],
                 args.trace_out.is_some(),
+                args.trace_from_frame.unwrap_or(0),
             )?;
             let fixture_dir = args.fixture_out.parent().unwrap_or_else(|| Path::new("."));
             recorded.fixture.rom = make_relative_path(fixture_dir, &args.rom);

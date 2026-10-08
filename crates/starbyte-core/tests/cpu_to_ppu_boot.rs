@@ -1,5 +1,5 @@
 //! End-to-end synthetic ROM boot: 65816 instructions -> bus -> PPU -> RGBA.
- //! No commercial assets, downloaded firmware, or external ROM required.
+//! No commercial assets, downloaded firmware, or external ROM required.
 
 use starbyte_core::{Emulator, cartridge::Cartridge};
 

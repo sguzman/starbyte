@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use flate2::read::GzDecoder;
 use serde_json::{Value, json};
 

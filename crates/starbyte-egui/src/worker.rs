@@ -14,6 +14,7 @@ use tracing::{error, info};
 pub enum WorkerCommandKind {
     RefreshSnapshot,
     RefreshMetadata,
+    RefreshArtwork,
     RefreshCovers { target: LibraryTarget },
     RefreshCheats { target: LibraryTarget },
     RefreshAll,
@@ -137,6 +138,27 @@ fn handle_command(
                 status: format!("Refreshed metadata index ({count} records)."),
             }
         }
+        WorkerCommandKind::RefreshArtwork => {
+            anyhow::ensure!(
+                service.config().advanced.providers.enable_network,
+                "Network artwork is disabled. Enable network providers in Settings first."
+            );
+            let metadata_count = service.refresh_metadata_index()?;
+            // Do not download covers for catalog titles the user does not own.
+            let written = service.refresh_covers(&LibraryTarget {
+                installed_only: true,
+                ..LibraryTarget::default()
+            })?;
+            service.save_config()?;
+            WorkerEvent::SnapshotReady {
+                job_id,
+                snapshot: service.snapshot(filter)?,
+                config: service.config().clone(),
+                status: format!(
+                    "Artwork: indexed {metadata_count} reference titles; downloaded {written} new covers."
+                ),
+            }
+        }
         WorkerCommandKind::RefreshCovers { target } => {
             let count = service.refresh_covers(&target)?;
             service.save_config()?;
@@ -191,6 +213,7 @@ fn label_for_kind(kind: &WorkerCommandKind) -> &'static str {
     match kind {
         WorkerCommandKind::RefreshSnapshot => "Scan Library",
         WorkerCommandKind::RefreshMetadata => "Refresh Metadata",
+        WorkerCommandKind::RefreshArtwork => "Get Artwork",
         WorkerCommandKind::RefreshCovers { .. } => "Refresh Covers",
         WorkerCommandKind::RefreshCheats { .. } => "Refresh Cheats",
         WorkerCommandKind::RefreshAll => "Refresh All",

@@ -51,6 +51,8 @@ The game toolbar's **Input** toggle displays currently held SNES controller butt
 
 On first launch with that folder available, Starbyte automatically discovers `~/Games/Roms/SNES` and remembers it in the local config. Removing the directory later is respected: automatic discovery does not repeatedly re-add it. This is a convenience, not a fixed requirement: use **Settings → Library → ROM Directories** to add/remove other folders. Entering `~/...` is supported there.
 
+SNES game ROMs do not normally contain retail box-art imagery. To fetch covers from Libretro's external thumbnail catalog, press **Get Covers** in the library toolbar. This is a network operation performed in the background, only for installed games; it can take time on a large collection. Cached artwork is reused on subsequent launches. Games without a matching catalog title retain a neutral placeholder.
+
 ZIP collections are supported natively. The scanner indexes valid `.sfc`, `.smc`, `.swc`, and `.fig` ROM files *inside* `.zip` archives. It keeps source ZIPs unchanged and only extracts a game into the XDG cache when selected. You do **not** need to unzip your library.
 
 For any other library directory:

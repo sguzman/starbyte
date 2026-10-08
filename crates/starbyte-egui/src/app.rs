@@ -307,6 +307,7 @@ impl StarbyteApp {
                     self.config.library.recent_roms = recent_roms;
                     self.cache_root = resolve_cache_root(&self.config, &self.assets);
                     self.library_snapshot = snapshot;
+                    self.failed_cover_ids.clear();
                     self.update_snapshot_cheat_flags();
                     self.sync_loaded_game_cheats();
                     self.update_job(job_id, "Library", "done", &status);
@@ -827,6 +828,9 @@ impl StarbyteApp {
                 self.persist_config();
             }
 
+            if ui.button("Get Covers").clicked() {
+                self.queue_job(WorkerCommandKind::RefreshArtwork);
+            }
             ui.menu_button("Refresh", |ui| {
                 if ui.button("Metadata").clicked() {
                     self.queue_job(WorkerCommandKind::RefreshMetadata);
@@ -2192,6 +2196,7 @@ fn job_label(kind: &WorkerCommandKind) -> &'static str {
     match kind {
         WorkerCommandKind::RefreshSnapshot => "Scan Library",
         WorkerCommandKind::RefreshMetadata => "Refresh Metadata",
+        WorkerCommandKind::RefreshArtwork => "Get Artwork",
         WorkerCommandKind::RefreshCovers { .. } => "Refresh Covers",
         WorkerCommandKind::RefreshCheats { .. } => "Refresh Cheats",
         WorkerCommandKind::RefreshAll => "Refresh All",

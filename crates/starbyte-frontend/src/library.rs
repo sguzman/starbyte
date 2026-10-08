@@ -387,7 +387,10 @@ impl LibraryService {
         for info in discovered.values() {
             *counts.entry(info.game_id.clone()).or_default() += 1;
         }
-        let duplicate_sources = counts.values().map(|&count| count.saturating_sub(1)).sum::<usize>();
+        let duplicate_sources = counts
+            .values()
+            .map(|&count| count.saturating_sub(1))
+            .sum::<usize>();
         let mut roms = Vec::with_capacity(discovered.len());
         for (source, mut info) in discovered {
             if counts.get(&info.game_id).copied().unwrap_or_default() > 1 {
@@ -395,7 +398,10 @@ impl LibraryService {
             }
             roms.push(info);
         }
-        info!(discovered = roms.len(), duplicate_sources, "completed ROM scan");
+        info!(
+            discovered = roms.len(),
+            duplicate_sources, "completed ROM scan"
+        );
         Ok(roms)
     }
 
@@ -688,7 +694,14 @@ impl GameMetadataProvider for LibretroMetadataProvider {
             if normalized_title.is_empty() {
                 continue;
             }
-            let encoded_path = encode(&node.path);
+            // Preserve path separators in GitHub raw URLs; escape only
+            // individual filename components (spaces, #, punctuation).
+            let encoded_path = node
+                .path
+                .split('/')
+                .map(|part| encode(part).into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
             metadata.push(GameMetadata {
                 game_id: game_id_for_title(title),
                 title: title.to_owned(),
@@ -723,6 +736,9 @@ impl CoverProvider for LibretroCoverProvider {
             .join("games")
             .join("covers")
             .join(format!("{}.{}", metadata.game_id, extension));
+        if cache_path.metadata().is_ok_and(|file| file.len() > 0) {
+            return Ok(None);
+        }
         if let Some(parent) = cache_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -735,7 +751,11 @@ impl CoverProvider for LibretroCoverProvider {
             .with_context(|| format!("cover request returned an error status for {source_url}"))?
             .bytes()
             .context("failed to read cover response bytes")?;
-        fs::write(&cache_path, &bytes)?;
+        let mut temp = tempfile::NamedTempFile::new_in(
+            cache_path.parent().context("cover cache path has no parent")?,
+        )?;
+        temp.write_all(&bytes)?;
+        temp.persist(&cache_path)?;
         debug!(game_id = %metadata.game_id, path = %cache_path.display(), bytes = bytes.len(), "cached cover image");
         Ok(Some(CoverAsset {
             game_id: metadata.game_id.clone(),
@@ -911,11 +931,13 @@ fn merge_library_entries(
             .filter_map(|metadata| {
                 title_match_score(local, metadata).map(|score| (score, *metadata))
             })
-            .max_by(|(left_score, left_metadata), (right_score, right_metadata)| {
-                left_score
-                    .cmp(right_score)
-                    .then_with(|| right_metadata.game_id.cmp(&left_metadata.game_id))
-            })
+            .max_by(
+                |(left_score, left_metadata), (right_score, right_metadata)| {
+                    left_score
+                        .cmp(right_score)
+                        .then_with(|| right_metadata.game_id.cmp(&left_metadata.game_id))
+                },
+            )
             .filter(|(score, _)| *score >= 80)
             .map(|(_, metadata)| metadata.clone());
         if let Some(metadata) = &metadata {
@@ -927,7 +949,9 @@ fn merge_library_entries(
         // games with one entry just because both matched the same artwork.
         let game_id = local.game_id.clone();
         installed_ids.insert(game_id.clone());
-        let cover_id = metadata.as_ref().map_or(game_id.as_str(), |item| item.game_id.as_str());
+        let cover_id = metadata
+            .as_ref()
+            .map_or(game_id.as_str(), |item| item.game_id.as_str());
         let cover = load_cached_cover(&cache_root, cover_id, metadata.as_ref())?;
         let cheats = load_cached_cheats(
             &cache_root,
@@ -1823,9 +1847,14 @@ mod tests {
             &[metadata],
             service.cache_root(),
             &std::collections::BTreeMap::new(),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(entries.len(), 2);
-        assert!(entries.iter().all(|entry| entry.installed_status == InstalledStatus::Installed));
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.installed_status == InstalledStatus::Installed)
+        );
         assert_ne!(entries[0].game_id, entries[1].game_id);
     }
 

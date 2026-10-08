@@ -369,6 +369,26 @@ impl Bus for SystemBus {
 }
 
 impl SystemBus {
+    // The SNES DMA source/destination is connected to the A bus. CPU/PPU
+    // MMIO lives on a separate bus and cannot be accessed through A-bus DMA.
+    // In particular, an invalid reverse-DMA write to $420B must never start
+    // another DMA transfer recursively and overflow the host stack.
+    fn dma_a_bus_read(&mut self, address: Address) -> u8 {
+        if dma_a_bus_mmio_forbidden(address) {
+            self.open_bus
+        } else {
+            self.read(address)
+        }
+    }
+
+    fn dma_a_bus_write(&mut self, address: Address, value: u8) {
+        if dma_a_bus_mmio_forbidden(address) {
+            self.open_bus = value;
+        } else {
+            self.write(address, value);
+        }
+    }
+
     fn read_coprocessor(&mut self, address: Address) -> Option<u8> {
         let mapper = self.cartridge.as_ref()?.mapper();
         self.coprocessor.as_mut()?.read(mapper, address)
@@ -414,9 +434,9 @@ impl SystemBus {
 
                 if channel.reverse_transfer() {
                     let value = self.read(b_full);
-                    self.write(a_full, value);
+                    self.dma_a_bus_write(a_full, value);
                 } else {
-                    let value = self.read(a_full);
+                    let value = self.dma_a_bus_read(a_full);
                     self.write(b_full, value);
                 }
 
@@ -494,7 +514,7 @@ impl SystemBus {
     fn reload_hdma_block(&mut self, channel_index: usize, channel: &mut crate::dma::DmaChannel) {
         let table_full =
             (u32::from(channel.a_bus_bank) << 16) | u32::from(channel.hdma_table_address);
-        let line_descriptor = self.read(table_full);
+        let line_descriptor = self.dma_a_bus_read(table_full);
         channel.hdma_table_address = channel.hdma_table_address.wrapping_add(1);
 
         if line_descriptor == 0 {
@@ -509,11 +529,11 @@ impl SystemBus {
         channel.hdma_repeat = line_descriptor & 0x80 != 0;
 
         if channel.hdma_indirect() {
-            let low = self.read(
+            let low = self.dma_a_bus_read(
                 (u32::from(channel.a_bus_bank) << 16) | u32::from(channel.hdma_table_address),
             );
             channel.hdma_table_address = channel.hdma_table_address.wrapping_add(1);
-            let high = self.read(
+            let high = self.dma_a_bus_read(
                 (u32::from(channel.a_bus_bank) << 16) | u32::from(channel.hdma_table_address),
             );
             channel.hdma_table_address = channel.hdma_table_address.wrapping_add(1);
@@ -538,7 +558,7 @@ impl SystemBus {
                 (u32::from(source_bank) << 16) | u32::from(channel.hdma_data_address);
             let target_address =
                 0x002100_u32 + u32::from(channel.b_bus_address) + u32::from(*pattern_offset);
-            let value = self.read(source_address);
+            let value = self.dma_a_bus_read(source_address);
             self.write(target_address, value);
             channel.hdma_data_address = channel.hdma_data_address.wrapping_add(1);
             self.dma.transfer_count = self.dma.transfer_count.saturating_add(1);
@@ -550,6 +570,9 @@ impl SystemBus {
     }
 
     fn read_mmio(&mut self, address: Address) -> Option<u8> {
+        if !is_cpu_io_bank(address) {
+            return None;
+        }
         let register = (address & 0xFFFF) as u16;
 
         match register {
@@ -595,6 +618,9 @@ impl SystemBus {
     }
 
     fn write_mmio(&mut self, address: Address, value: u8) -> Option<()> {
+        if !is_cpu_io_bank(address) {
+            return None;
+        }
         let register = (address & 0xFFFF) as u16;
 
         match register {
@@ -699,6 +725,26 @@ impl JoypadIo {
         self.shift1 = (self.shift1 >> 1) | 0x8000;
         bit
     }
+}
+
+/// CPU MMIO is only decoded in system banks $00-$3F and $80-$BF.
+fn is_cpu_io_bank(address: Address) -> bool {
+    let bank = ((address >> 16) & 0xFF) as u8;
+    matches!(bank, 0x00..=0x3F | 0x80..=0xBF)
+}
+
+/// Hardware bus-A DMA cannot reach B-bus PPU/APU ports or internal CPU MMIO.
+/// This includes the DMA trigger ($420B): treating it as an ordinary CPU
+/// write would recurse into execute_dma indefinitely.
+fn dma_a_bus_mmio_forbidden(address: Address) -> bool {
+    if !is_cpu_io_bank(address) {
+        return false;
+    }
+    let register = (address & 0xFFFF) as u16;
+    matches!(
+        register,
+        0x2100..=0x21FF | 0x4000..=0x41FF | 0x4200..=0x421F | 0x4300..=0x437F
+    )
 }
 
 fn low_wram_mirror_index(address: Address) -> Option<usize> {

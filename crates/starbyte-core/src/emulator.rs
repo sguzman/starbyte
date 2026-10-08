@@ -311,6 +311,18 @@ impl Emulator {
         self.system.set_controller1(state);
     }
 
+    /// Number of bytes transferred by DMA and HDMA in this session.
+    #[must_use]
+    pub const fn dma_transferred_bytes(&self) -> u64 {
+        self.system.dma_transferred_bytes()
+    }
+
+    /// Return current NMITIMEN and H/V IRQ timer compare coordinates.
+    #[must_use]
+    pub const fn irq_timer_configuration(&self) -> (u8, u16, u16) {
+        self.system.irq_timer_configuration()
+    }
+
     /// Borrow compact bus activity counters for CLI reporting and regressions.
     #[must_use]
     pub fn system_observability(&self) -> &SystemBusObservability {

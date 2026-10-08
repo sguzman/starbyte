@@ -104,6 +104,10 @@ The software PPU now applies the SNES BG1–BG4 and OBJ main-screen window regis
 
 COLDATA now retains separately selected red/green/blue 5-bit channel writes. The Mode 0/1 compositor records the final BG/backdrop/OBJ palette source, then supports CGADSUB add/subtract/half blending with the fixed color on enabled layers. OBJ palettes 0–3 remain excluded from blending. With CGWSEL subscreen or color-window modes active, the renderer currently retains the unblended main screen instead of pretending those modes work. Synthetic pixel regressions cover the supported subset; authentic subscreen blending and window clipping are still open.
 
+## Dedicated gameplay screen
+
+Instead of restricting the game's framebuffer to the right-hand session sidebar, Starbyte now opens a centered, nearest-neighbor Play View when a ROM loads. F9 toggles game/library, Escape returns to the library, the in-game toolbar exposes pause/quick save/quick load/fullscreen, and integer scaling is used when the window has room. Very small Wayland tiles scale down without cropping. These are code-level changes; compositor input, fullscreen and display ergonomics still need firsthand testing.
+
 ## Current functional gap
 
 The original commercial-ROM roadmap explicitly leaves SNES background/tilemap presentation, non-placeholder Super Mario World boot visuals, title/menu navigation, and first controllable gameplay incomplete. This is a **blocking playability gap**, not an optional accuracy task.

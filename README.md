@@ -53,6 +53,8 @@ For CLI help:
 cargo run -p starbyte-cli -- --help
 ```
 
+The desktop has a dedicated **Play View**, which makes the rendered game the main content rather than a small sidebar preview. Launching a ROM opens Play View automatically. Use **F9** to switch between the game and library, **Escape** to return to the library, **F5/F8** for temporary quick save/load, and the in-game toolbar for pause and fullscreen. The `integer_scale` setting preserves whole-pixel multiples when there is room, but scales down to fit narrow tiling windows.
+
 The GUI uses `eframe` with both Wayland and X11 backends enabled. **Native Wayland behavior and dependencies still require verification on the target Linux system.** These are source-build instructions, not a claim of a working packaged release.
 
 ## Linux configuration and cache

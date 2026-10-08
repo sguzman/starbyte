@@ -93,6 +93,7 @@ pub struct StarbyteApp {
     pending_keyboard_bind: Option<String>,
     pending_gamepad_bind: Option<String>,
     is_playing: bool,
+    play_view: bool,
     frame_clock: FrameClock,
     show_compact_settings: bool,
     show_compact_session: bool,
@@ -181,6 +182,7 @@ impl StarbyteApp {
             pending_keyboard_bind: None,
             pending_gamepad_bind: None,
             is_playing: start_playing,
+            play_view: start_playing,
             frame_clock: FrameClock::new(Instant::now()),
             show_compact_settings: false,
             show_compact_session: false,
@@ -275,6 +277,7 @@ impl StarbyteApp {
                         let _ = self.session.run_frame();
                         self.refresh_framebuffer(ctx);
                         self.is_playing = true;
+                        self.play_view = true;
                         self.frame_clock.reset(Instant::now());
                         let detail = format!("Loaded {}", rom_path.display());
                         self.update_job(job_id, "Load Game", "done", &detail);
@@ -553,10 +556,53 @@ impl StarbyteApp {
 
     fn draw_top_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, compact: bool) {
         ui.horizontal_wrapped(|ui| {
+            if self.play_view {
+                ui.heading("Starbyte");
+                if ui.button("Library (Esc)").clicked() {
+                    self.play_view = false;
+                }
+                if ui
+                    .add_enabled(
+                        self.session.snapshot().has_rom,
+                        egui::Button::new(if self.is_playing { "Pause" } else { "Play" }),
+                    )
+                    .clicked()
+                {
+                    self.is_playing = !self.is_playing;
+                    self.frame_clock.reset(Instant::now());
+                }
+                if ui.button("Quick Save (F5)").clicked() {
+                    self.quick_save();
+                }
+                if ui
+                    .add_enabled(
+                        self.session.has_quick_save(),
+                        egui::Button::new("Quick Load (F8)"),
+                    )
+                    .clicked()
+                {
+                    self.quick_load(ctx);
+                }
+                if ui.button("Fullscreen").clicked() {
+                    self.config.video.fullscreen = !self.config.video.fullscreen;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(
+                        self.config.video.fullscreen,
+                    ));
+                    self.persist_config();
+                }
+                return;
+            }
+
             ui.heading("Starbyte");
             ui.label("Cozy SNES · experimental");
             ui.separator();
             let has_rom = self.session.snapshot().has_rom;
+            if ui
+                .add_enabled(has_rom, egui::Button::new("Play View (F9)"))
+                .clicked()
+            {
+                self.play_view = true;
+            }
             if ui
                 .add_enabled(
                     has_rom,
@@ -1004,6 +1050,24 @@ impl StarbyteApp {
         }
     }
 
+    fn draw_play_view(&mut self, ui: &mut egui::Ui) {
+        let rect = ui.max_rect();
+        ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
+        if let Some(texture) = &self.framebuffer_texture {
+            let image_size = fit_game_size(
+                texture.size_vec2(),
+                rect.size(),
+                self.config.video.integer_scale,
+            );
+            let image_rect = egui::Rect::from_center_size(rect.center(), image_size);
+            ui.put(image_rect, egui::Image::new((texture.id(), image_size)));
+        } else {
+            ui.centered_and_justified(|ui| {
+                ui.label("The game framebuffer will appear after a frame has been rendered.");
+            });
+        }
+    }
+
     fn draw_session_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.heading("Session");
         let snapshot = self.session.snapshot();
@@ -1382,16 +1446,27 @@ impl eframe::App for StarbyteApp {
             {
                 self.quick_load(ctx);
             }
+            if ctx.input(|input| input.key_pressed(egui::Key::F9))
+                && self.session.snapshot().has_rom
+            {
+                self.play_view = !self.play_view;
+            }
+            if self.play_view && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+                self.play_view = false;
+            }
         }
 
         let available = ctx.available_rect();
         let compact = is_compact_layout(available.width(), available.height());
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| self.draw_top_bar(ui, ctx, compact));
-        if !compact {
-            self.draw_log_panel(ctx);
-        }
+        if self.play_view {
+            egui::CentralPanel::default().show(ctx, |ui| self.draw_play_view(ui));
+        } else {
+            if !compact {
+                self.draw_log_panel(ctx);
+            }
 
-        if !compact && self.config.ui.show_left_panel {
+            if !compact && self.config.ui.show_left_panel {
             let response = egui::SidePanel::left("settings")
                 .resizable(true)
                 .default_width(self.config.ui.left_panel_width)
@@ -1456,8 +1531,9 @@ impl eframe::App for StarbyteApp {
             self.show_compact_logs = open;
         }
 
-        if self.show_properties {
-            self.draw_properties_window(ctx);
+            if self.show_properties {
+                self.draw_properties_window(ctx);
+            }
         }
 
         if self.is_playing && self.session.snapshot().has_rom {
@@ -1477,7 +1553,7 @@ impl eframe::App for StarbyteApp {
 mod playback_tests {
     use std::time::{Duration, Instant};
 
-    use super::{FRAME_INTERVAL, FrameClock, is_compact_layout};
+    use super::{FRAME_INTERVAL, FrameClock, Vec2, fit_game_size, is_compact_layout};
 
     #[test]
     fn clock_limits_work_to_one_frame_per_tick_and_does_not_accumulate_lag() {
@@ -1493,6 +1569,24 @@ mod playback_tests {
 
         clock.reset(late);
         assert!(clock.take_due_frame(late));
+    }
+
+    #[test]
+    fn game_view_scales_to_integer_pixels_without_clipping_small_tiles() {
+        let source = Vec2::new(256.0, 224.0);
+        assert_eq!(
+            fit_game_size(source, Vec2::new(800.0, 600.0), true),
+            Vec2::new(512.0, 448.0)
+        );
+        assert_eq!(
+            fit_game_size(source, Vec2::new(2560.0, 1440.0), true),
+            Vec2::new(1536.0, 1344.0)
+        );
+        let small = fit_game_size(source, Vec2::new(450.0, 180.0), true);
+        assert!(small.x <= 450.0 && small.y <= 180.0);
+        let fractional = fit_game_size(source, Vec2::new(800.0, 600.0), false);
+        assert!(fractional.x > 512.0);
+        assert_eq!(fractional.y, 600.0);
     }
 
     #[test]
@@ -1654,6 +1748,23 @@ fn apply_theme(ctx: &egui::Context, prefer_dark_mode: bool) {
     } else {
         ctx.set_visuals(egui::Visuals::light());
     }
+}
+
+/// Use exact integer pixel multiples when requested; permit shrinking for
+/// very small Wayland tiles and fractional scaling when explicitly selected.
+fn fit_game_size(source: Vec2, available: Vec2, integer_scale: bool) -> Vec2 {
+    if source.x <= 0.0 || source.y <= 0.0 {
+        return source;
+    }
+    let maximum_scale = (available.x / source.x)
+        .min(available.y / source.y)
+        .max(0.01);
+    let scale = if integer_scale && maximum_scale >= 1.0 {
+        maximum_scale.floor()
+    } else {
+        maximum_scale
+    };
+    source * scale
 }
 
 fn fit_size(source: Vec2, available: Vec2) -> Vec2 {

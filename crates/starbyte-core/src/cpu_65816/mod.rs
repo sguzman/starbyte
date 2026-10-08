@@ -4437,6 +4437,82 @@ mod tests {
     }
 
     #[test]
+    fn wai_stalls_fetch_until_unmasked_irq_or_nmi() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        cpu.registers.p = 0x34; // Emulation mode with IRQ masked.
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0xCB),
+            (0x008001, 0xEA),
+            (0x00FFFA, 0x00),
+            (0x00FFFB, 0x81),
+            (0x008100, 0x40),
+        ]);
+        let wai = cpu.step_with_bus(&mut bus).unwrap();
+        assert!(!wai.is_empty());
+        assert_eq!(cpu.registers.pc, 0x8001);
+        assert!(cpu.waiting_for_interrupt);
+        let idle = cpu.step_with_bus(&mut bus).unwrap();
+        assert!(idle.is_empty());
+        assert_eq!(cpu.registers.pc, 0x8001);
+
+        // An IRQ wakes WAI even if P.I masks interrupt vectoring.
+        bus.pending_irq = true;
+        assert!(cpu.step_with_bus(&mut bus).unwrap().is_empty());
+        assert!(!cpu.waiting_for_interrupt);
+        assert_eq!(cpu.registers.pc, 0x8001);
+        cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(cpu.registers.pc, 0x8002);
+    }
+
+    #[test]
+    fn wai_nmi_services_vector_and_rti_returns_after_wai() {
+        let mut cpu = Cpu65816::default();
+        cpu.reset();
+        cpu.registers.pc = 0x8000;
+        let mut bus = TestBus::with_bytes(&[
+            (0x008000, 0xCB),
+            (0x008001, 0xEA),
+            (0x00FFFA, 0x00),
+            (0x00FFFB, 0x81),
+            (0x008100, 0x40),
+        ]);
+        cpu.step_with_bus(&mut bus).unwrap();
+        bus.pending_nmi = true;
+        let nmi = cpu.step_with_bus(&mut bus).unwrap();
+        assert!(!nmi.is_empty());
+        assert_eq!(cpu.registers.pc, 0x8100);
+        assert!(!cpu.waiting_for_interrupt);
+        cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(cpu.registers.pc, 0x8001);
+        cpu.step_with_bus(&mut bus).unwrap();
+        assert_eq!(cpu.registers.pc, 0x8002);
+    }
+
+    #[test]
+    fn stp_ignores_interrupts_until_reset_and_state_roundtrips() {
+        let mut cpu = Cpu65816::default();
+        cpu.registers.pc = 0x8000;
+        let mut bus = TestBus::with_bytes(&[(0x008000, 0xDB), (0x008001, 0xEA)]);
+        cpu.step_with_bus(&mut bus).unwrap();
+        assert!(cpu.stopped);
+        assert_eq!(cpu.registers.pc, 0x8001);
+        bus.pending_nmi = true;
+        bus.pending_irq = true;
+        assert!(cpu.step_with_bus(&mut bus).unwrap().is_empty());
+        assert_eq!(cpu.registers.pc, 0x8001);
+        assert!(bus.pending_nmi, "STP must not service even NMI");
+
+        let serialized = serde_json::to_string(&cpu).unwrap();
+        let restored: Cpu65816 = serde_json::from_str(&serialized).unwrap();
+        assert!(restored.stopped);
+
+        cpu.reset();
+        assert!(!cpu.stopped);
+        assert!(!cpu.waiting_for_interrupt);
+    }
+
+    #[test]
     fn mvn_copies_forward_from_source_bank_to_destination_bank() {
         let mut cpu = Cpu65816::default();
         cpu.registers.pc = 0x8000;

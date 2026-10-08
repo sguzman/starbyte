@@ -15,6 +15,18 @@ The JSON responses declare `starbyte.capabilities.v1` and `starbyte.doctor.v1`. 
 
 ROM execution reports (`run ROM --frames N --report-json PATH`) now include a versioned `starbyte.run_report.v1` schema. For black-screen triage, inspect `ppu_display` (brightness, forced blank, mode, layers, VRAM base registers) and `framebuffer` (nonblack pixel count, distinct RGB colors, center pixel, hash). These are deterministic **end-of-run diagnostics**, not verified gameplay measurements or proof of visual correctness.
 
+### Frame-by-frame failure capture
+
+For a game whose display flashes, corrupts, or turns black before emulation stalls, use an explicit local JSONL log. For example:
+
+```sh
+cargo run --release -p starbyte-cli -- run /path/to/game.sfc --frames 60 --frame-log /tmp/starbyte-frames.jsonl --report-json /tmp/starbyte-final.json
+```
+
+Each completed frame emits and flushes a `starbyte.frame_log.v1` JSON object containing the requested frame, actual completed frame count, CPU bank/program counter, framebuffer hash, nonblack pixel count, distinct RGB color count, PPU display setup, and APU steps. If a frame returns an emulation error, the log contains a final `status: "error"` record with the error string and the **last fully rendered framebuffer**. The separate end-of-run report is **not** written when emulation errors; the frame log preserves completed evidence. These reports cannot establish that the visible scene is *correct*, only what the emulator computed.
+
+The frame log is **opt-in**, writes only to its explicitly supplied local path, truncates a preexisting file at that path, and is flushed after each attempted frame. Do not publish ROM-specific file paths or proprietary traces without review. Note that this CLI command loads a **direct** ROM path: for a ZIP-backed library entry, supply an extracted ROM file in an authorized local location; do not modify the archive itself.
+
 Read-only Cheatarium lookup: `starbyte cheatarium --index /path/to/snes.json.gz --title 'Donkey Kong Country' --json`. It reads an explicit local index file only, reports unverified title candidates and source provenance, and cannot write to a ROM or enable cheats. See [Cheatarium integration](cheatarium.md).
 
 Other existing CLI actions include `inspect /path/to/game.sfc --json` (schema `starbyte.rom_inspect.v1`, no playability claim), `print-config json`, `library scan --json`, and `run /path/to/game.sfc --frames 1 --report-json /path/to/report.json`. The ROM run writes its report explicitly. Library scanning may write cache data and should not be treated as read-only. Provider-refresh commands may access the network if enabled.

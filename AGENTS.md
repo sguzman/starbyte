@@ -33,6 +33,7 @@ Prefer native Wayland and test under a Wayland session, especially resizing, ful
 
 - Expose stable, documented, serializable schemas for state inspection and automation before adding complex autonomous behavior.
 - Use bounded CLI commands and JSON outputs as the initial agent interface.
+- Query `starbyte capabilities` for the v1 command manifest and `starbyte doctor --json` for local platform state. See `docs/automation.md`.
 - For any future MCP server, define explicit tools/resources, input schemas, capability boundaries, opt-in permissions and safe read-only defaults.
 - Never grant an agent automatic access to arbitrary local ROM directories, file writes, network downloads or process execution.
 - Do not claim an MCP endpoint is operational until implemented and tested.

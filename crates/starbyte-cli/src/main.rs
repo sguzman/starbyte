@@ -20,7 +20,7 @@ use starbyte_core::{
 #[derive(Debug, Parser)]
 #[command(
     name = "starbyte",
-    about = "CLI-first bootstrap runner for the Starbyte SNES emulator"
+    about = "Headless inspection, diagnostics and automation for the Starbyte SNES emulator"
 )]
 struct Cli {
     #[command(flatten)]
@@ -79,6 +79,10 @@ enum Command {
     Run(RunArgs),
     /// Emit a sample runtime configuration file to stdout.
     PrintConfig { format: ConfigFormat },
+    /// Describe supported local automation commands as versioned JSON.
+    Capabilities,
+    /// Inspect local platform and user-directory configuration without loading a ROM.
+    Doctor(DoctorArgs),
 }
 
 #[derive(Debug, Args)]
@@ -142,6 +146,13 @@ struct LibraryScanArgs {
     /// Free-text query applied to the merged library snapshot.
     #[arg(long)]
     query: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct DoctorArgs {
+    /// Emit machine-readable JSON diagnostics.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Debug, Args)]
@@ -307,7 +318,93 @@ fn main() -> Result<()> {
         Command::Library(args) => run_library(args, assets),
         Command::Run(args) => run_rom(args, assets),
         Command::PrintConfig { format } => print_config(format),
+        Command::Capabilities => {
+            println!("{}", serde_json::to_string_pretty(&capabilities_manifest())?);
+            Ok(())
+        }
+        Command::Doctor(args) => print_doctor(&assets, args.json),
     }
+}
+
+/// Static, side-effect-free command discovery for future agent adapters.
+fn capabilities_manifest() -> serde_json::Value {
+    json!({
+        "schema": "starbyte.capabilities.v1",
+        "version": env!("CARGO_PKG_VERSION"),
+        "mcp_server": false,
+        "transport": "local_cli",
+        "commands": [
+            {
+                "name": "capabilities",
+                "argv": ["capabilities"],
+                "side_effects": "none"
+            },
+            {
+                "name": "doctor",
+                "argv": ["doctor", "--json"],
+                "side_effects": "read_local_environment"
+            },
+            {
+                "name": "print_config",
+                "argv": ["print-config", "json"],
+                "side_effects": "none"
+            },
+            {
+                "name": "library_scan",
+                "argv": ["library", "scan", "--json"],
+                "side_effects": "read_rom_directories_and_write_local_cache"
+            },
+            {
+                "name": "run_probe",
+                "argv": ["run", "<user_rom_path>", "--frames", "<count>", "--report-json", "<report_path>"],
+                "side_effects": "execute_local_rom_and_write_explicit_report"
+            }
+        ],
+        "policy": {
+            "user_supplies_roms": true,
+            "implicit_network_upload": false,
+            "arbitrary_shell_execution": false,
+            "unrestricted_file_access": false
+        }
+    })
+}
+
+fn doctor_report(assets: &AssetConfig) -> serde_json::Value {
+    json!({
+        "schema": "starbyte.doctor.v1",
+        "os": std::env::consts::OS,
+        "architecture": std::env::consts::ARCH,
+        "session_type": std::env::var("XDG_SESSION_TYPE").ok(),
+        "wayland_display_set": std::env::var_os("WAYLAND_DISPLAY").is_some(),
+        "x11_display_set": std::env::var_os("DISPLAY").is_some(),
+        "config_path": assets.config_path().display().to_string(),
+        "config_exists": assets.config_path().exists(),
+        "cache_root": assets.cache_root().display().to_string(),
+        "cache_exists": assets.cache_root().exists(),
+        "native_wayland_verified": false,
+        "audio_output_verified": false
+    })
+}
+
+fn print_doctor(assets: &AssetConfig, json_output: bool) -> Result<()> {
+    let report = doctor_report(assets);
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "Starbyte environment: {} / {}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        );
+        println!("Config: {}", assets.config_path().display());
+        println!("Cache: {}", assets.cache_root().display());
+        println!(
+            "Wayland environment variable set: {}",
+            std::env::var_os("WAYLAND_DISPLAY").is_some()
+        );
+        println!("This is an environment probe, not a compositor or game-compatibility test.");
+    }
+    Ok(())
 }
 
 fn load_runtime_config(assets: &AssetConfig) -> Result<RuntimeConfig> {

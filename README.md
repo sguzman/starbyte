@@ -82,5 +82,6 @@ Run core benchmarks with `cargo bench -p starbyte-core --bench core_bootstrap`. 
 - [Frontend architecture](docs/frontend-architecture.md) and [GUI backlog](docs/gui-roadmap.md).
 - [Commercial-game bring-up](docs/commercial-rom-roadmap.md) and [enhancement chips](docs/coprocessor-roadmap.md): historical engineering detail, **not** proof of broad playability.
 - [Agent/contributor guide](AGENTS.md): conventions for Rust, testing, Wayland, automation and MCP integration.
+- [CLI automation interface](docs/automation.md): machine-readable discovery, local diagnostics and future MCP boundaries.
 
 Starbyte is an evolving hobby emulator, not a high-accuracy replacement for established mature emulators.

@@ -46,6 +46,10 @@ Configuration and cache defaults now follow XDG paths with a HOME fallback, rath
 
 A pre-inheritance CI review found a large rustfmt backlog, a missing `libudev-dev` dependency on Ubuntu runners, and tests that constructed a native-mode CPU while asserting emulation-mode results. The first CI cleanup applies the formatter's exact reported diffs, installs Linux build dependencies, and initializes those CPU tests explicitly. The remaining commercial fixture failure was reproduced on Linux and Windows: one full frame ends with PC 0x0000 and WRAM[0x7E0100] = 0x34, not the old 0x8001 and 0x00 expectations. The fixture now asserts the observed end-of-frame state. No broad CI-green claim is made until the next runs complete.
 
+## Agent-readable CLI (no MCP server)
+
+The CLI now exposes `starbyte capabilities` as a versioned JSON command manifest and `starbyte doctor --json` for opt-in local platform/path diagnostics. These require no ROM or network and report Wayland/audio verification as false. A real MCP server and permission-bounded tools remain future work.
+
 ## Current functional gap
 
 The original commercial-ROM roadmap explicitly leaves SNES background/tilemap presentation, non-placeholder Super Mario World boot visuals, title/menu navigation, and first controllable gameplay incomplete. This is a **blocking playability gap**, not an optional accuracy task.

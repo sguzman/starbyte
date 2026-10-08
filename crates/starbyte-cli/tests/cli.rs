@@ -649,3 +649,40 @@ fn commercial_summary_and_run_current_work() {
     let trace_files = fs::read_dir(&trace_dir).unwrap().count();
     assert!(trace_files > 0);
 }
+
+/// Machine-facing commands must remain parseable without ROM files or network access.
+#[test]
+fn capabilities_and_doctor_produce_versioned_json() {
+    let output = Command::cargo_bin("starbyte")
+        .unwrap()
+        .arg("capabilities")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let caps: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(caps["schema"], "starbyte.capabilities.v1");
+    assert_eq!(caps["mcp_server"], false);
+    assert!(caps["commands"].as_array().unwrap().len() >= 4);
+
+    let dir = tempdir().unwrap();
+    let custom_config = dir.path().join("custom.toml");
+    let custom_cache = dir.path().join("custom-cache");
+    let output = Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "--config",
+            custom_config.to_str().unwrap(),
+            "--cache-dir",
+            custom_cache.to_str().unwrap(),
+            "doctor",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let doctor: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(doctor["schema"], "starbyte.doctor.v1");
+    assert_eq!(doctor["config_path"], custom_config.display().to_string());
+    assert_eq!(doctor["cache_root"], custom_cache.display().to_string());
+    assert_eq!(doctor["config_exists"], false);
+}

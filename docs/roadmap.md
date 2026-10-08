@@ -38,7 +38,8 @@ Mission: a fun-first, comfy Rust SNES emulator for Linux/Wayland, with a delight
 
 ## P3 — AI and MCP integration
 
-- [ ] Stabilize JSON CLI surfaces: inspect, sessions, compatibility probes, library status and diagnostics.
+- [x] Publish initial `capabilities` and `doctor --json` discovery/diagnostic entry points (source implementation; CI confirmation pending).
+- [ ] Stabilize JSON CLI surfaces: ROM inspection, sessions, compatibility probes and library status.
 - [ ] Document a versioned machine-readable introspection schema for emulator and library state.
 - [ ] Prototype an opt-in **read-only** MCP adapter with bounded resources/tools and tests.
 - [ ] Add explicit, user-authorized mutations only where safe (e.g. local library refresh); constrain file access and networking.

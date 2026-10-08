@@ -50,7 +50,7 @@ When black frames persist, the frame counters alone cannot reveal what the CPU i
 cargo run --release -p starbyte-cli -- compliance commercial-record /path/to/game.zip --frames 1 --fixture-out /tmp/starbyte-boot-fixture.json --trace-out /tmp/starbyte-boot-trace.json
 ```
 
-The command writes the fixture, a sibling `.report.json` file and the instruction trace only to the requested local paths. It does not save cartridge SRAM. One frame is normally sufficient to inspect the first busy loop; the captured trace can still be large. Use the trace's `frame`, `pbr`, `pc`, `opcode` and `mmio_events` to identify repeated reads and unmet handshakes.
+The command writes the fixture, a sibling `.report.json` file and the instruction trace only to the requested local paths. It does not save cartridge SRAM. One frame is normally sufficient to inspect the first busy loop; the captured trace can still be large. Use the trace's `frame`, `pbr`, `pc`, `opcode` and `mmio_events` to identify repeated reads and unmet handshakes. The `opcode` is **null** on interrupt-service steps that did not fetch an instruction; treating the first stack write as an opcode would produce false diagnoses.
 
 To inspect one frame **later** in a long boot without storing all preceding instructions:
 

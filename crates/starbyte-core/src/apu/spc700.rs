@@ -450,7 +450,7 @@ impl Spc700 {
                 (value, 2)
             }
             0xE9 | 0xEC => self.read_accumulator_operand(0xE5, read, trace), // MOV X/Y,abs
-            0xFB => self.read_accumulator_operand(0xF4, read, trace), // MOV Y,dp+X
+            0xFB => self.read_accumulator_operand(0xF4, read, trace),        // MOV Y,dp+X
             _ => unreachable!("not a supported SPC index-register load"),
         };
         if matches!(opcode, 0xF8 | 0xF9 | 0xE9) {
@@ -1570,8 +1570,7 @@ mod accumulator_alu_tests {
 
     #[test]
     fn mov_x_from_zero_sets_z_without_clearing_carry() {
-        let (cpu, trace, _) =
-            run_indexed(0xF9, &[0xfc], 0xaa, 0x21, 3, 5, &[(0x0101, 0)]);
+        let (cpu, trace, _) = run_indexed(0xF9, &[0xfc], 0xaa, 0x21, 3, 5, &[(0x0101, 0)]);
         assert_eq!(cpu.x, 0);
         assert_eq!(cpu.y, 5);
         assert_eq!(cpu.psw & 0x83, 0x03);

@@ -585,6 +585,12 @@ fn frame_scheduled_controller_input_runs_and_records_frames() {
     assert_eq!(frames.len(), 4);
     assert!(frames.iter().all(|frame| frame["status"] == "ok"));
     assert_eq!(frames[3]["completed_frame"], 4);
+    assert_eq!(frames[0]["joypad"]["host_controller1_bits"], 0);
+    assert_eq!(frames[1]["joypad"]["host_controller1_bits"], 8);
+    assert_eq!(frames[2]["joypad"]["host_controller1_bits"], 0);
+    assert_eq!(frames[3]["joypad"]["host_controller1_bits"], 129);
+    assert_eq!(frames[3]["joypad"]["latched_controller1_bits"], 0);
+    assert_eq!(frames[3]["joypad"]["auto_read_busy"], false);
 }
 
 #[test]

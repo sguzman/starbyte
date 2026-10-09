@@ -98,7 +98,10 @@ impl Spc700 {
             | 0x17 | 0x37 | 0x57 | 0x77 | 0x97 | 0xB7 => {
                 self.execute_accumulator_alu(opcode, &mut read, &mut trace)
             }
-            0x78 => self.execute_cmp_dp_imm(&mut read, &mut trace),
+            0x18 | 0x38 | 0x58 | 0x78 | 0x98 | 0xB8 | 0x09 | 0x29 | 0x49 | 0x69
+            | 0x89 | 0xA9 | 0x19 | 0x39 | 0x59 | 0x79 | 0x99 | 0xB9 => {
+                self.execute_memory_alu(opcode, &mut read, &mut write, &mut trace)
+            }
             0x7E => self.execute_cmp_y_dp(&mut read, &mut trace),
             0x50 => self.execute_bvc(&mut read, &mut trace),
             0x5C => self.execute_lsr_a(&mut read, &mut trace),
@@ -328,37 +331,34 @@ impl Spc700 {
         }
     }
 
-    fn execute_accumulator_alu<FRead>(
-        &mut self,
-        opcode: u8,
-        read: &mut FRead,
-        trace: &mut Vec<BusEvent>,
-    ) -> Result<()>
-    where
-        FRead: FnMut(u16) -> u8,
-    {
-        let (rhs, instruction_len) = self.read_accumulator_operand(opcode, read, trace);
-        let lhs = self.a;
-        let family = opcode & 0xe0;
-        match family {
+    /// Apply one SPC700 8-bit arithmetic/logical operator to an arbitrary
+    /// destination byte. The accumulator and direct-page memory forms use
+    /// identical N/V/H/Z/C semantics; CMP only changes flags.
+    fn calculate_alu(&mut self, opcode: u8, lhs: u8, rhs: u8) -> u8 {
+        match opcode & 0xe0 {
             0x00 => {
-                self.a |= rhs;
-                self.update_nz_flags(self.a);
+                let result = lhs | rhs;
+                self.update_nz_flags(result);
+                result
             }
             0x20 => {
-                self.a &= rhs;
-                self.update_nz_flags(self.a);
+                let result = lhs & rhs;
+                self.update_nz_flags(result);
+                result
             }
             0x40 => {
-                self.a ^= rhs;
-                self.update_nz_flags(self.a);
+                let result = lhs ^ rhs;
+                self.update_nz_flags(result);
+                result
             }
-            0x60 => self.update_cmp_flags(lhs, rhs),
+            0x60 => {
+                self.update_cmp_flags(lhs, rhs);
+                lhs
+            }
             0x80 => {
                 let carry = u16::from(self.psw & 0x01 != 0);
                 let sum = u16::from(lhs) + u16::from(rhs) + carry;
                 let result = sum as u8;
-                self.a = result;
                 self.psw &= !(0x01 | 0x08 | 0x40);
                 if sum > 0xff {
                     self.psw |= 0x01;
@@ -370,12 +370,12 @@ impl Spc700 {
                     self.psw |= 0x40;
                 }
                 self.update_nz_flags(result);
+                result
             }
             0xA0 => {
                 let borrow = u16::from(self.psw & 0x01 == 0);
                 let subtrahend = u16::from(rhs) + borrow;
                 let result = lhs.wrapping_sub(subtrahend as u8);
-                self.a = result;
                 self.psw &= !(0x01 | 0x08 | 0x40);
                 if u16::from(lhs) >= subtrahend {
                     self.psw |= 0x01;
@@ -387,9 +387,23 @@ impl Spc700 {
                     self.psw |= 0x40;
                 }
                 self.update_nz_flags(result);
+                result
             }
-            _ => unreachable!("unknown SPC accumulator ALU family"),
+            _ => unreachable!("unsupported SPC700 ALU family"),
         }
+    }
+
+    fn execute_accumulator_alu<FRead>(
+        &mut self,
+        opcode: u8,
+        read: &mut FRead,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        let (rhs, instruction_len) = self.read_accumulator_operand(opcode, read, trace);
+        self.a = self.calculate_alu(opcode, self.a, rhs);
         self.pc = self.pc.wrapping_add(instruction_len);
         Ok(())
     }
@@ -577,19 +591,53 @@ impl Spc700 {
     }
 
     /// CMP dp,#imm: compare the memory value to the immediate operand.
-    fn execute_cmp_dp_imm<FRead>(
+    /// SPC700 memory-destination ALU instructions. Instruction operands
+    /// are encoded source first, destination last (the reverse of assembly
+    /// syntax); (X),(Y) treats X as destination, Y as source.
+    fn execute_memory_alu<FRead, FWrite>(
         &mut self,
+        opcode: u8,
         read: &mut FRead,
+        write: &mut FWrite,
         trace: &mut Vec<BusEvent>,
     ) -> Result<()>
     where
         FRead: FnMut(u16) -> u8,
+        FWrite: FnMut(u16, u8),
     {
-        let imm = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
-        let dp = self.push_read_trace(read, trace, self.pc.wrapping_add(2));
-        let value = self.push_read_trace(read, trace, self.direct_page_address(dp));
-        self.update_cmp_flags(value, imm);
-        self.pc = self.pc.wrapping_add(3);
+        let (address, lhs, rhs, len) = match opcode & 0x1f {
+            0x18 => {
+                let immediate = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                let dest = self.push_read_trace(read, trace, self.pc.wrapping_add(2));
+                let address = self.direct_page_address(dest);
+                let lhs = self.push_read_trace(read, trace, address);
+                (address, lhs, immediate, 3)
+            }
+            0x09 => {
+                let source = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                let dest = self.push_read_trace(read, trace, self.pc.wrapping_add(2));
+                let rhs = self.push_read_trace(read, trace, self.direct_page_address(source));
+                let address = self.direct_page_address(dest);
+                let lhs = self.push_read_trace(read, trace, address);
+                (address, lhs, rhs, 3)
+            }
+            0x19 => {
+                self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                let rhs = self.push_read_trace(read, trace, self.direct_page_address(self.y));
+                let address = self.direct_page_address(self.x);
+                let lhs = self.push_read_trace(read, trace, address);
+                (address, lhs, rhs, 1)
+            }
+            _ => unreachable!("unsupported SPC700 memory-destination ALU mode"),
+        };
+        let result = self.calculate_alu(opcode, lhs, rhs);
+        if opcode & 0xe0 == 0x60 {
+            // CMP never mutates the destination. Its final bus slot is idle.
+            self.push_wait_trace(trace);
+        } else {
+            self.push_write_trace(write, trace, address, result);
+        }
+        self.pc = self.pc.wrapping_add(len);
         Ok(())
     }
 

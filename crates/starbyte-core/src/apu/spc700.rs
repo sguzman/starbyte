@@ -1549,10 +1549,7 @@ mod accumulator_alu_tests {
                 ),
             ] {
                 let opcode = family | mode;
-                let (mut cpu, _, _) =
-                    run_indexed(0x00, &[], 0x5a, 0x20 | carry, 0x12, 0x34, &data);
-                // The tested instruction starts from the same register
-                // snapshot but its own memory and operand bytes.
+                let mut cpu = Spc700::default();
                 cpu.load_state(0x8000, 0x5a, 0x12, 0x34, 0xef, 0x20 | carry);
                 let mut bytes = vec![0_u8; 65_536];
                 bytes[0x8000] = opcode;

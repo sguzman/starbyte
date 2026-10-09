@@ -1723,6 +1723,35 @@ mod accumulator_alu_tests {
     }
 
     #[test]
+    fn mov_dp_indirect_y_store_reads_destination_and_wraps_effective_address() {
+        let mut cpu = Spc700::default();
+        cpu.load_state(0x8000, 0x5a, 0, 5, 0xef, 0x20);
+        let memory = RefCell::new(vec![0_u8; 65_536]);
+        {
+            let mut bytes = memory.borrow_mut();
+            bytes[0x8000] = 0xd7;
+            bytes[0x8001] = 0xff;
+            bytes[0x01ff] = 0xfe; // 16-bit pointer $FFFE in page one.
+            bytes[0x0100] = 0xff;
+            bytes[0x0003] = 0xcc;
+        }
+        let trace = cpu
+            .step_with_memory(
+                |address| memory.borrow()[usize::from(address)],
+                |address, value| memory.borrow_mut()[usize::from(address)] = value,
+            )
+            .unwrap();
+        assert_eq!(cpu.pc, 0x8002);
+        assert_eq!(cpu.psw, 0x20);
+        assert_eq!(trace.len(), 7);
+        assert_eq!(trace[5].address, 0x0003);
+        assert_eq!(trace[5].access, AccessKind::Read);
+        assert_eq!(trace[6].address, 0x0003);
+        assert_eq!(trace[6].access, AccessKind::Write);
+        assert_eq!(memory.borrow()[0x0003], 0x5a);
+    }
+
+    #[test]
     fn mov_dp_dp_copies_source_first_without_reading_destination() {
         let mut cpu = Spc700::default();
         cpu.load_state(0x8000, 0xaa, 3, 5, 0xef, 0xA3);

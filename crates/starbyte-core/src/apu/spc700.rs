@@ -1528,7 +1528,7 @@ mod accumulator_alu_tests {
             (0xa0, 1, 0x01),    // SBC, no incoming borrow
         ] {
             for (mode, operands, data, destination, source, cycles, len) in [
-                (0x18_u8, vec![0x0f, 0x42], vec![(0x0142, 0x10)], 0x0142, None, 5, 3),
+                (0x18_u8, vec![0x0f, 0x42], vec![(0x0142_u16, 0x10)], 0x0142_u16, None, 5, 3),
                 (
                     0x09,
                     vec![0x43, 0x42],

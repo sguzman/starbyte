@@ -51,8 +51,7 @@ impl SpcTimers {
     }
 
     pub(super) fn advance_master_cycles(&mut self, master_cycles: u64) {
-        let total = u128::from(self.spc_clock_fraction)
-            + u128::from(master_cycles) * SPC_CLOCK_HZ;
+        let total = u128::from(self.spc_clock_fraction) + u128::from(master_cycles) * SPC_CLOCK_HZ;
         let cycles = (total / NTSC_MASTER_CLOCK_HZ) as u64;
         self.spc_clock_fraction = (total % NTSC_MASTER_CLOCK_HZ) as u64;
         self.advance_spc_cycles(cycles);

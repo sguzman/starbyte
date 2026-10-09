@@ -860,6 +860,10 @@ impl Spc700 {
         let low = self.push_read_trace(read, trace, self.direct_page_address(dp));
         let high = self.push_read_trace(read, trace, self.direct_page_address(dp.wrapping_add(1)));
         let destination = u16::from_le_bytes([low, high]).wrapping_add(u16::from(self.y));
+        self.push_wait_trace(trace);
+        // MOV [dp]+Y,A is a seven-cycle memory store, including a read
+        // of its destination before the write.
+        self.push_read_trace(read, trace, destination);
         self.push_write_trace(write, trace, destination, self.a);
         self.pc = self.pc.wrapping_add(2);
         Ok(())

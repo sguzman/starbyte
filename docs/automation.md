@@ -42,6 +42,13 @@ Each completed frame emits and flushes a `starbyte.frame_log.v1` JSON object con
 
 Each frame record now also includes a `joypad` object with `host_controller1_bits` (buttons from the frontend/CLI), `latched_controller1_bits` (the SNES's $4218/$4219 readback), and `auto_read_busy` (the $4212 bit-0 busy state). This distinguishes an input event being delivered by the host from an input actually being readable by the game. Joypad auto-read occurs at VBlank when NMITIMEN bit 0 is set, with an approximate 4,224-master-clock busy interval; exact serial clock timing remains outside the bootstrap model.
 
+### Optional per-frame game-state WRAM watch
+
+Add `--watch-wram 7E0100,7E0094,7E0095` to an existing `run ... --frame-log /tmp/frames.jsonl` command to snapshot those **canonical SNES WRAM bytes** into the per-frame JSONL `wram_watch` map, keyed by uppercase six-digit address. Values are unsigned bytes. All watches are read without MMIO side effects or modifications to CPU-visible open-bus state. The switch requires an explicit `--frame-log` path and accepts 1–32 **distinct** comma-separated six-digit hexadecimal addresses in banks `7E` or `7F`. Incorrect address formats, duplicates and MMIO/ROM addresses are rejected before loading the cartridge. Without the switch, the map is empty; this adds no background recording or implicit file writes.
+
+These addresses are game-specific conventions, not universal SNES hardware registers. For instance, in Super Mario World `7E0100` is commonly documented as game mode and `7E0094/7E0095` as Mario's horizontal position bytes; verify the ROM build and actual game behavior before relying on any interpretation. Watch data should remain in local diagnostics, not be committed or published by default. Compare multiple runs with and without scheduled inputs when distinguishing movement from cutscene animation or rendering artifacts.
+
+
 The frame log is **opt-in**, writes only to its explicitly supplied local path, truncates a preexisting file at that path, and is flushed after each attempted frame.
 
 For hands-free visual evidence, add `--frame-images-dir /tmp/starbyte-images`. The CLI saves PPM screenshots of completed frames: the first frame and then every frame by default, capped at **24** files per run. Use `--frame-image-every 10` to sample more widely or `--max-frame-images 8` to reduce disk use. Image paths are named `frame-000001.ppm` and so on using the actual completed frame counter. These are local generated outputs, not uploaded, and an existing matching filename in the chosen directory is replaced. Frames that fail before completion are not newly rendered or saved.

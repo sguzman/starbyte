@@ -1145,6 +1145,104 @@ impl Spc700 {
 }
 
 #[cfg(test)]
+mod accumulator_alu_tests {
+    use std::cell::RefCell;
+
+    use super::Spc700;
+    use crate::bus::AccessKind;
+
+    fn run(
+        opcode: u8,
+        operands: &[u8],
+        a: u8,
+        psw: u8,
+        memory_data: &[(u16, u8)],
+    ) -> (Spc700, Vec<crate::bus::BusEvent>, Vec<u8>) {
+        let mut cpu = Spc700::default();
+        cpu.load_state(0x8000, a, 0, 0, 0xef, psw);
+        let mut bytes = vec![0_u8; 65_536];
+        bytes[0x8000] = opcode;
+        for (index, &byte) in operands.iter().enumerate() {
+            bytes[0x8001 + index] = byte;
+        }
+        for &(address, value) in memory_data {
+            bytes[usize::from(address)] = value;
+        }
+        let bus = RefCell::new(bytes);
+        let trace = cpu
+            .step_with_memory(
+                |addr| bus.borrow()[usize::from(addr)],
+                |addr, value| bus.borrow_mut()[usize::from(addr)] = value,
+            )
+            .unwrap();
+        (cpu, trace, bus.into_inner())
+    }
+
+    #[test]
+    fn immediate_alu_updates_flags_for_carry_halfcarry_and_signed_overflow() {
+        for (opcode, a, rhs, initial_psw, expected_a, expected_nzcvh) in [
+            (0x08, 0xF0, 0x0F, 0x00, 0xFF, 0x80),
+            (0x28, 0xF0, 0x0F, 0x01, 0x00, 0x03),
+            (0x48, 0x80, 0xFF, 0x00, 0x7F, 0x00),
+            (0x68, 0x10, 0x11, 0x00, 0x10, 0x80),
+            (0x68, 0x11, 0x11, 0x00, 0x11, 0x03),
+            (0x88, 0x7F, 0x01, 0x00, 0x80, 0xC8),
+            (0x88, 0xFF, 0x01, 0x01, 0x01, 0x09),
+            (0xA8, 0x00, 0x01, 0x01, 0xFF, 0x80),
+            (0xA8, 0x80, 0x01, 0x01, 0x7F, 0x41),
+            (0xA8, 0x01, 0x01, 0x01, 0x00, 0x0B),
+        ] {
+            let (cpu, trace, _) = run(opcode, &[rhs], a, initial_psw, &[]);
+            assert_eq!(cpu.a, expected_a, "opcode {opcode:02X}, A={a:02X}");
+            assert_eq!(
+                cpu.psw & 0xCB,
+                expected_nzcvh,
+                "flags for opcode {opcode:02X}, A={a:02X}"
+            );
+            assert_eq!(cpu.pc, 0x8002);
+            assert_eq!(trace.len(), 2, "immediate opcode {opcode:02X}");
+            assert!(trace.iter().all(|event| event.access == AccessKind::Read));
+        }
+    }
+
+    #[test]
+    fn direct_page_and_absolute_alu_addressing_cover_all_six_families() {
+        for (dp_opcode, abs_opcode, a, data, carry, expected) in [
+            (0x04, 0x05, 0xF0, 0x0F, 0, 0xFF), // OR
+            (0x24, 0x25, 0xF0, 0x0F, 0, 0x00), // AND
+            (0x44, 0x45, 0xF0, 0x0F, 0, 0xFF), // XOR
+            (0x64, 0x65, 0x10, 0x0F, 0, 0x10), // CMP
+            (0x84, 0x85, 0x10, 0x0F, 0, 0x1F), // ADC
+            (0xA4, 0xA5, 0x10, 0x0F, 1, 0x01), // SBC
+        ] {
+            let (cpu, trace, bytes) =
+                run(dp_opcode, &[0x42], a, 0x20 | carry, &[(0x0142, data)]);
+            assert_eq!(cpu.a, expected, "direct-page opcode {dp_opcode:02X}");
+            assert_eq!(cpu.pc, 0x8002);
+            assert_eq!(trace.len(), 3);
+            assert_eq!(trace[2].address, 0x0142);
+            assert_eq!(bytes[0x0142], data, "ALU must not mutate source");
+            let (cpu, trace, bytes) =
+                run(abs_opcode, &[0x34, 0x92], a, carry, &[(0x9234, data)]);
+            assert_eq!(cpu.a, expected, "absolute opcode {abs_opcode:02X}");
+            assert_eq!(cpu.pc, 0x8003);
+            assert_eq!(trace.len(), 4);
+            assert_eq!(trace[3].address, 0x9234);
+            assert_eq!(bytes[0x9234], data);
+        }
+    }
+
+    #[test]
+    fn adc_and_sbc_preserve_unrelated_direct_page_interrupt_flags() {
+        let flags = 0x34; // PSW P, B and I; C is clear.
+        let (cpu, _, _) = run(0x88, &[0x10], 0x10, flags, &[]);
+        assert_eq!(cpu.psw & 0x34, flags);
+        let (cpu, _, _) = run(0xA8, &[0x10], 0x10, flags, &[]);
+        assert_eq!(cpu.psw & 0x34, flags);
+    }
+}
+
+#[cfg(test)]
 mod placeholder_tests {
     use super::Spc700;
 

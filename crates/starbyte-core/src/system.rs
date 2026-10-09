@@ -1230,6 +1230,96 @@ mod tests {
     }
 
     #[test]
+    fn automatic_joypad_read_latches_start_during_vblank_after_busy_interval() {
+        use crate::timing::{DOTS_PER_SCANLINE, MASTER_CLOCKS_PER_DOT, VBLANK_START_SCANLINE};
+
+        let mut bus = SystemBus::default();
+        bus.write(0x004200, 0x01); // NMITIMEN: enable automatic joypad read.
+        bus.set_controller1(ControllerState {
+            start: true,
+            b: true,
+            ..ControllerState::default()
+        });
+        assert_eq!(bus.read(0x004218), 0);
+
+        bus.advance_master_clocks(
+            u64::from(VBLANK_START_SCANLINE)
+                * u64::from(DOTS_PER_SCANLINE)
+                * MASTER_CLOCKS_PER_DOT,
+        );
+        assert_eq!(bus.read(0x004212) & 0x81, 0x81); // VBlank and busy.
+        assert_eq!(bus.read(0x004218), 0, "read has not finished yet");
+
+        // Controller is sampled at the beginning of automatic polling.
+        bus.set_controller1(ControllerState::default());
+        bus.advance_master_clocks(AUTO_JOYPAD_READ_MASTER_CLOCKS - 1);
+        assert_eq!(bus.read(0x004212) & 0x01, 1, "still busy");
+        assert_eq!(bus.read(0x004218), 0);
+
+        bus.advance_master_clocks(1);
+        assert_eq!(bus.read(0x004212) & 0x01, 0, "auto read finished");
+        assert_eq!(bus.read(0x004218), 0x09, "B and Start are latched");
+        assert_eq!(bus.read(0x004219), 0);
+    }
+
+    #[test]
+    fn automatic_joypad_polling_requires_nmitimen_bit_zero() {
+        use crate::timing::{DOTS_PER_SCANLINE, MASTER_CLOCKS_PER_DOT, VBLANK_START_SCANLINE};
+
+        let mut bus = SystemBus::default();
+        bus.write(0x004200, 0x80); // NMI enabled, auto polling disabled.
+        bus.set_controller1(ControllerState {
+            start: true,
+            ..ControllerState::default()
+        });
+        bus.advance_master_clocks(
+            u64::from(VBLANK_START_SCANLINE)
+                * u64::from(DOTS_PER_SCANLINE)
+                * MASTER_CLOCKS_PER_DOT,
+        );
+        bus.advance_master_clocks(AUTO_JOYPAD_READ_MASTER_CLOCKS);
+        assert_eq!(bus.read(0x004212) & 0x01, 0, "never busy");
+        assert_eq!(bus.read(0x004218), 0, "no automatic latch");
+
+        // Explicit manual latching still works regardless of NMITIMEN.
+        bus.write(0x004016, 1);
+        bus.write(0x004016, 0);
+        assert_eq!(bus.read(0x004218), 0x08);
+    }
+
+    #[test]
+    fn automatic_joypad_read_uses_current_vblank_sample_on_subsequent_frames() {
+        use crate::timing::{
+            DOTS_PER_SCANLINE, MASTER_CLOCKS_PER_DOT, NTSC_SCANLINES_PER_FRAME,
+            VBLANK_START_SCANLINE,
+        };
+
+        let mut bus = SystemBus::default();
+        bus.write(0x004200, 0x01);
+        let clocks_to_vblank = u64::from(VBLANK_START_SCANLINE)
+            * u64::from(DOTS_PER_SCANLINE)
+            * MASTER_CLOCKS_PER_DOT;
+        let clocks_per_frame = u64::from(NTSC_SCANLINES_PER_FRAME)
+            * u64::from(DOTS_PER_SCANLINE)
+            * MASTER_CLOCKS_PER_DOT;
+
+        bus.advance_master_clocks(clocks_to_vblank);
+        bus.advance_master_clocks(AUTO_JOYPAD_READ_MASTER_CLOCKS);
+        assert_eq!(bus.read(0x004218), 0);
+
+        bus.set_controller1(ControllerState {
+            start: true,
+            ..ControllerState::default()
+        });
+        bus.advance_master_clocks(clocks_per_frame - clocks_to_vblank - AUTO_JOYPAD_READ_MASTER_CLOCKS);
+        assert_eq!(bus.timing().scanline, 0);
+        bus.advance_master_clocks(clocks_to_vblank);
+        assert_eq!(bus.read(0x004212) & 0x01, 1);
+        bus.advance_master_clocks(AUTO_JOYPAD_READ_MASTER_CLOCKS);
+        assert_eq!(bus.read(0x004218), 0x08);
+    }
+
+    #[test]
     fn latches_joypad_state_into_parallel_and_serial_registers() {
         let mut bus = SystemBus::default();
         bus.set_controller1(ControllerState {

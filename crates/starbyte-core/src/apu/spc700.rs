@@ -41,6 +41,20 @@ impl Spc700 {
         self.cycles = self.cycles.saturating_add(1);
     }
 
+    /// Advance the legacy non-executing placeholder without an O(steps) loop.
+    ///
+    /// This changes neither guest memory nor the real interpreter. The
+    /// production frame loop still uses the placeholder for compatibility
+    /// while authentic sound driver execution is under development.
+    pub fn advance_placeholder_steps(&mut self, steps: u64) {
+        if steps == 0 {
+            return;
+        }
+        trace!(pc = self.pc, steps, "advancing placeholder spc700");
+        self.pc = self.pc.wrapping_add(steps as u16);
+        self.cycles = self.cycles.saturating_add(steps);
+    }
+
     /// Execute one instruction against a 64 KiB memory callback and return the trace.
     pub fn step_with_memory<FRead, FWrite>(
         &mut self,
@@ -133,6 +147,18 @@ impl Spc700 {
 
         self.cycles = trace.len() as u64;
         Ok(trace)
+    }
+
+    /// Compare bulk placeholder execution against repeated dummy steps.
+    #[cfg(test)]
+    fn matches_individual_dummy_steps(&self, count: u64) -> bool {
+        let mut bulk = self.clone();
+        let mut repeated = self.clone();
+        bulk.advance_placeholder_steps(count);
+        for _ in 0..count {
+            repeated.step();
+        }
+        bulk == repeated
     }
 
     /// Load a register snapshot and reset cycle accounting for compliance work.

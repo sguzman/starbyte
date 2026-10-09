@@ -208,6 +208,11 @@ struct RunArgs {
     #[arg(long)]
     controller1: Option<String>,
 
+    /// One-based frame events: "350:start;353:none;440:right,b". Buttons
+    /// remain held until the next event; "none" releases all buttons.
+    #[arg(long)]
+    controller1_events: Option<String>,
+
     /// Write one flushed JSON object per attempted frame, including failures.
     #[arg(long)]
     frame_log: Option<PathBuf>,
@@ -925,6 +930,12 @@ fn run_compliance(args: ComplianceArgs, assets: AssetConfig) -> Result<()> {
 }
 
 fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
+    let controller_events = args
+        .controller1_events
+        .as_deref()
+        .map(|input| parse_controller_events(input, args.frames))
+        .transpose()?
+        .unwrap_or_default();
     if let Some(trace_frame) = args.trace_frame {
         anyhow::ensure!(
             trace_frame <= args.frames,
@@ -970,7 +981,15 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
         })
         .transpose()?;
     let mut saved_frame_images = 0_u32;
+    let mut next_controller_event = 0_usize;
     for index in 0..args.frames {
+        if let Some(&(frame, state)) = controller_events.get(next_controller_event)
+            && frame == index + 1
+        {
+            emulator.set_controller1(state);
+            info!(frame, "applied scheduled controller-1 input");
+            next_controller_event += 1;
+        }
         let mut instruction_records = Vec::new();
         let step = if args.trace_frame == Some(index + 1) {
             emulator.run_until_frame_observed(&mut |before, after, bus_events| {
@@ -1607,6 +1626,46 @@ fn make_relative_path(base_dir: &Path, target: &Path) -> PathBuf {
     } else {
         relative
     }
+}
+
+/// Parse a deterministic one-based controller-1 input timeline.
+///
+/// Each semicolon-delimited event replaces the prior held state before its
+/// frame: "300:start;303:none;400:right,b;430:none".
+/// Events must be ordered, unique, and inside the requested frame window.
+fn parse_controller_events(input: &str, frames: u32) -> Result<Vec<(u32, ControllerState)>> {
+    anyhow::ensure!(!input.trim().is_empty(), "controller-1 event timeline is empty");
+    let mut events = Vec::new();
+    let mut previous_frame = 0;
+    for event in input.split(';') {
+        let (frame_text, buttons_text) = event
+            .trim()
+            .split_once(':')
+            .ok_or_else(|| anyhow::anyhow!("invalid controller event '{event}'; expected frame:buttons"))?;
+        let frame = frame_text
+            .trim()
+            .parse::<u32>()
+            .with_context(|| format!("invalid controller event frame '{frame_text}'"))?;
+        anyhow::ensure!(
+            frame > previous_frame,
+            "controller events must be in strictly increasing one-based frame order"
+        );
+        anyhow::ensure!(
+            frame <= frames,
+            "controller event at frame {frame} exceeds requested {frames} frames"
+        );
+        let buttons = buttons_text.trim();
+        anyhow::ensure!(!buttons.is_empty(), "controller event at frame {frame} has no button state; use 'none' to release");
+        let state = if buttons.eq_ignore_ascii_case("none") {
+            ControllerState::default()
+        } else {
+            parse_controller_state(buttons)
+                .with_context(|| format!("invalid controller event at frame {frame}"))?
+        };
+        events.push((frame, state));
+        previous_frame = frame;
+    }
+    Ok(events)
 }
 
 fn parse_controller_state(input: &str) -> Result<ControllerState> {

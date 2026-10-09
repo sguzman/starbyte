@@ -1,12 +1,29 @@
 # Super Mario World — compatibility investigation
 
-**Current result (2026-10-09): three scripted Start presses navigate from title to the introductory in-game scene.** A 1,600-frame headless probe completed without a CPU error, with Start pulses at frames 450–454 (open MARIO A/B/C file selection), 550–554 (select MARIO A; open 1/2-player selection), and 680–684 (choose the default 1-player option). Frame 760 shows the introductory level's HUD and terrain; by frame 840, the familiar Dinosaur Land welcome text and Mario sprite appear, persisting through frame 1,580. These are **real-ROM, input-driven transitions**, not just the scripted title demo. **Movement, jumping, message dismissal, the overworld, authentic DSP audio, native Wayland input and save persistence remain unverified.**
+**Current result (2026-10-09): a 2,400-frame real-ROM probe reaches Yoshi's House and shows a Right-correlated Mario sprite displacement.** After three verified Start presses navigate title, MARIO A file selection and 1-player selection, the Dinosaur Land welcome message appears. A short B pulse at frame 950 does not visibly dismiss it; a second B pulse at frame 1700 initiates a fade and enters a screen labeled **YOSHI'S HOUSE** by frame 1780. Mario remains near screen x=120 through frame 2100, then moves toward x=181 by frame 2120 during a 40-frame Right input. **All 2,400 frames complete without CPU errors**, but the scene's black background and disconnected white graphic fragments, combined with later unusual sprite placement, mean **accurate playable gameplay is not yet established**. Native Wayland controls, jumping, collision correctness, audio and saves remain unverified.
 
 ## Controller bit-layout correction (2026-10-09)
 
 The 560-frame automatic-joypad retest completed without CPU errors. During frames 450–454, the CLI's host and latched joypad word both reported `$0008` for Start, and the title demonstration continued. That matched Starbyte's previous encoder but **not** SNES hardware: the correct auto-read word for Start alone is `$1000` (`$4218=$00, $4219=$10`), with buttons ordered BYsS UDLR AXlr 0000. The old implementation reversed the serial order and treated the low four signature bits as buttons. This is a verified encoding defect independent of input timing.
 
 The core now encodes the standard SNES auto-read word and shifts serial data most-significant first. Unconnected controller ports 2–4 explicitly read zero. Unit tests cover all twelve button positions, serial ordering and the automatic-read registers. **The subsequent 700-frame real-ROM retest verified the intended title-to-file-selection transition.**
+
+## Ninth headless probe: welcome dismissal, Yoshi's House and Right response (2,400 frames, 2026-10-09)
+
+With code from main `c143f20`, the user ran `Super Mario World.zip` with `--frames 2400 --no-save-ram` and scheduled inputs `450:start;455:none;550:start;555:none;680:start;685:none;950:b;955:none;1400:right;1440:none;1700:b;1705:none;2100:right;2140:none`. The JSONL file has **2,400/2,400 successful frame records**; the archive includes 120 spaced PPM samples. The host and latched controller values agree at every scheduled input: B=`$8000`, Right=`$0100`, Start=`$1000`.
+
+| Frame / interval | Observed behavior |
+| --- | --- |
+| 840–1699 | Dinosaur Land welcome text remains visible; no effective screen transition following B at 950 or Right at 1400 |
+| 1700–1740 | The second B pulse at 1700 is followed by a fade from the welcome screen |
+| 1760–1800 | A screen labeled **YOSHI'S HOUSE** appears, with Mario, HUD and other sprites |
+| 1900–2100 | Mario's red-pixel sprite center stays near screen x=119–121 |
+| 2100–2120 | A 40-frame Right pulse begins; Mario's red-pixel center shifts from x≈120 to x≈181 by frame 2120 |
+| 2140–2380 | The sprite appears at unusual, inconsistent positions, with a final recurring position near x≈161, y≈125 and little horizontal progress |
+
+**Interpretation:** title, file and player menus work, the introductory text can be dismissed with a subsequent B input, and a directional pulse correlates with movement of Mario's on-screen sprite. The exact reason the first B at 950 had no visible effect is not yet established; do not claim it was a missed hardware latch, since the controller register showed `$8000`. A **black background with fragmented/white tile-looking objects** persists in Yoshi's House, so graphics and/or game physics remain suspect. An image-derived screen coordinate is not the same as Mario's authoritative in-game position. Proper walking/jumping and successful level completion are **not verified**. Headless completion alone is not a playability certification.
+
+**Diagnostic improvement:** optional side-effect-free canonical WRAM watches (`--watch-wram 7E0100,7E0094,7E0095,...` with `--frame-log`) will permit correlating game mode and position RAM with sampled sprites on a future local run. This is generic emulator observability, not a ROM patch or a game-specific workaround. Verify implementation via matching-commit CI before the next user probe.
 
 ## Eighth headless probe: first in-game scene after three Start presses (1,600 frames, 2026-10-09)
 
@@ -300,8 +317,8 @@ A general hardware-level fix has been committed:
 
 ## Next evidence needed
 
-1. **Confirmed:** the first three Start pulses open the file-selection screen, choose MARIO A, and choose 1-player mode, reaching the Dinosaur Land welcome scene. Next, schedule a separate button press to close the introductory text and inspect the subsequent transition to the overworld.
-2. Once a genuinely controllable scene is visible, test movement and action inputs against captured frame differences and game state. Intro animations alone are not enough to claim normal gameplay.
+1. **Confirmed:** three Start presses reach the Dinosaur Land welcome; a later B press enters Yoshi's House; a Right pulse correlates with Mario sprite movement. Next, compare canonical game-mode and Mario-position WRAM values against the controller timeline, and exercise short Left/Right/Jump pulses as separate tests.
+2. Investigate the black/fragmented Yoshi's House graphics and abnormal later sprite positioning before claiming normal movement, collision physics or playable levels.
 3. Investigate DSP music/audio, native Wayland frame pacing and SRAM independently; synthetic samples are not faithful game sound.
 4. Record the exact local cartridge checksum/revision without committing or distributing ROM bytes.
 5. Add synthetic regressions for newly confirmed hardware faults and upgrade compatibility only when demonstrated.

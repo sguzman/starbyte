@@ -236,10 +236,12 @@ impl Apu {
         // Clock SPC hardware timers at their own fractional rate, independently
         // of the legacy placeholder CPU step counter.
         self.timers.advance_master_cycles(master_cycles);
-        // The exact CPU divider will be replaced when full system timing is modeled.
-        for _ in 0..(master_cycles / 6) {
-            self.step_spc700();
-        }
+        // The production sound-CPU path is still a non-executing placeholder.
+        // Bulk clock advancement is equivalent to repeated dummy steps and
+        // avoids thousands of unnecessary function calls per video frame.
+        let dummy_steps = master_cycles / 6;
+        self.spc700.advance_placeholder_steps(dummy_steps);
+        self.spc700_steps = self.spc700_steps.saturating_add(dummy_steps);
         if let Some(upload) = self.ipl_upload.as_mut() {
             let event = upload.observe(
                 self.cpu_to_apu_ports,
@@ -474,6 +476,17 @@ mod tests {
         let mut apu = Apu::default();
         let error = apu.install_ipl_rom_bytes(vec![0xAA; SPC700_IPL_ROM_LEN - 1], None);
         assert!(error.is_err());
+    }
+
+    #[test]
+    fn placeholder_apu_bulk_stepping_keeps_exact_step_counts() {
+        let mut apu = Apu::default();
+        apu.step_master_cycles(6 * 70_000);
+        assert_eq!(apu.status().spc700_steps, 70_000);
+        assert_eq!(apu.spc700.pc, 70_000_u64 as u16);
+        assert_eq!(apu.spc700.cycles(), 70_000);
+        apu.step_master_cycles(5);
+        assert_eq!(apu.status().spc700_steps, 70_000);
     }
 
     #[test]

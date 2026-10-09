@@ -543,6 +543,63 @@ mod tests {
     }
 
     #[test]
+    fn spc700_transfer_opcode_writes_through_pointer_plus_y() {
+        let mut apu = Apu::default();
+        apu.write_spc_ram(0x0010, 0xfe);
+        apu.write_spc_ram(0x0011, 0x02);
+        // MOV [dp]+Y,A: $02FE + 3 = $0301.
+        apu.write_spc_ram(0x0400, 0xd7);
+        apu.write_spc_ram(0x0401, 0x10);
+        apu.spc700.load_state(0x0400, 0x5a, 0, 3, 0xef, 0);
+        apu.execute_spc_program_instruction().unwrap();
+        assert_eq!(apu.read_spc_ram(0x0301), 0x5a);
+        assert_eq!(apu.spc700.pc, 0x0402);
+    }
+
+    #[test]
+    fn spc700_word_moves_wrap_within_selected_direct_page() {
+        let mut apu = Apu::default();
+        // SETP; MOVW YA,$FF; MOVW $FE,YA.
+        for (index, value) in [0x40, 0xba, 0xff, 0xda, 0xfe].into_iter().enumerate() {
+            apu.write_spc_ram(0x0400 + index as u16, value);
+        }
+        apu.write_spc_ram(0x01ff, 0x34);
+        apu.write_spc_ram(0x0100, 0x82);
+        apu.spc700.load_state(0x0400, 0, 0, 0, 0xef, 0);
+        for _ in 0..3 {
+            apu.execute_spc_program_instruction().unwrap();
+        }
+        assert_eq!((apu.spc700.a, apu.spc700.y), (0x34, 0x82));
+        assert_eq!(apu.read_spc_ram(0x01fe), 0x34);
+        assert_eq!(apu.read_spc_ram(0x01ff), 0x82);
+        assert_eq!(apu.read_spc_ram(0x00ff), 0);
+        assert_ne!(apu.spc700.psw & 0x80, 0);
+    }
+
+    #[test]
+    fn spc700_comparisons_update_carry_and_nz_without_mutating_operands() {
+        let mut apu = Apu::default();
+        // CMP $30,#$7C; CMP Y,$30; INC $30; MOV Y,$30.
+        for (index, value) in [
+            0x78, 0x7c, 0x30, 0x7e, 0x30, 0xab, 0x30, 0xeb, 0x30,
+        ].into_iter().enumerate() {
+            apu.write_spc_ram(0x0400 + index as u16, value);
+        }
+        apu.write_spc_ram(0x0030, 0x7c);
+        apu.spc700.load_state(0x0400, 0x66, 0, 0x70, 0xef, 0);
+        apu.execute_spc_program_instruction().unwrap();
+        assert_eq!(apu.spc700.psw & 0x03, 0x03); // equality -> C and Z
+        apu.execute_spc_program_instruction().unwrap();
+        assert_eq!(apu.spc700.psw & 0x01, 0); // Y < RAM -> clear C
+        assert_ne!(apu.spc700.psw & 0x80, 0); // negative result
+        apu.execute_spc_program_instruction().unwrap();
+        apu.execute_spc_program_instruction().unwrap();
+        assert_eq!(apu.spc700.y, 0x7d);
+        assert_eq!(apu.read_spc_ram(0x0030), 0x7d);
+        assert_eq!(apu.spc700.a, 0x66);
+    }
+
+    #[test]
     fn spc700_direct_page_flag_redirects_memory_moves_to_page_one() {
         let mut apu = Apu::default();
         // SETP; MOV $82,#$7B; MOV A,$82.

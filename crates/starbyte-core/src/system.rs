@@ -796,8 +796,7 @@ impl SystemBus {
             0x4203 => {
                 // The unsigned 8x8 multiplier shares its result registers
                 // with the 16/8 divider's remainder.
-                self.math.product_remainder =
-                    u16::from(self.math.multiplicand) * u16::from(value);
+                self.math.product_remainder = u16::from(self.math.multiplicand) * u16::from(value);
                 self.math.quotient = u16::from(value);
                 Some(())
             }

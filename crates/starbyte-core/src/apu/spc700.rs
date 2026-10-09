@@ -91,8 +91,8 @@ impl Spc700 {
             0x4D => self.execute_push_x(&mut read, &mut write, &mut trace),
             // Standard SPC700 accumulator ALU: immediate, direct-page,
             // and absolute memory addressing. Separate from word ALU.
-            0x08 | 0x28 | 0x48 | 0x68 | 0x88 | 0xA8 | 0x04 | 0x24 | 0x44 | 0x64
-            | 0x84 | 0xA4 | 0x05 | 0x25 | 0x45 | 0x65 | 0x85 | 0xA5 => {
+            0x08 | 0x28 | 0x48 | 0x68 | 0x88 | 0xA8 | 0x04 | 0x24 | 0x44 | 0x64 | 0x84 | 0xA4
+            | 0x05 | 0x25 | 0x45 | 0x65 | 0x85 | 0xA5 => {
                 self.execute_accumulator_alu(opcode, &mut read, &mut trace)
             }
             0x78 => self.execute_cmp_dp_imm(&mut read, &mut trace),
@@ -243,7 +243,10 @@ impl Spc700 {
     {
         let address_mode = opcode & 0x1f;
         let (rhs, instruction_len) = match address_mode {
-            0x08 => (self.push_read_trace(read, trace, self.pc.wrapping_add(1)), 2),
+            0x08 => (
+                self.push_read_trace(read, trace, self.pc.wrapping_add(1)),
+                2,
+            ),
             0x04 => {
                 let offset = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
                 let rhs = self.push_read_trace(read, trace, self.direct_page_address(offset));
@@ -1215,15 +1218,13 @@ mod accumulator_alu_tests {
             (0x84, 0x85, 0x10, 0x0F, 0, 0x1F), // ADC
             (0xA4, 0xA5, 0x10, 0x0F, 1, 0x01), // SBC
         ] {
-            let (cpu, trace, bytes) =
-                run(dp_opcode, &[0x42], a, 0x20 | carry, &[(0x0142, data)]);
+            let (cpu, trace, bytes) = run(dp_opcode, &[0x42], a, 0x20 | carry, &[(0x0142, data)]);
             assert_eq!(cpu.a, expected, "direct-page opcode {dp_opcode:02X}");
             assert_eq!(cpu.pc, 0x8002);
             assert_eq!(trace.len(), 3);
             assert_eq!(trace[2].address, 0x0142);
             assert_eq!(bytes[0x0142], data, "ALU must not mutate source");
-            let (cpu, trace, bytes) =
-                run(abs_opcode, &[0x34, 0x92], a, carry, &[(0x9234, data)]);
+            let (cpu, trace, bytes) = run(abs_opcode, &[0x34, 0x92], a, carry, &[(0x9234, data)]);
             assert_eq!(cpu.a, expected, "absolute opcode {abs_opcode:02X}");
             assert_eq!(cpu.pc, 0x8003);
             assert_eq!(trace.len(), 4);

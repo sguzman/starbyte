@@ -442,6 +442,7 @@ fn capabilities_manifest() -> serde_json::Value {
                 "argv": ["run", "<user_rom_path>", "--frames", "<count>", "--report-json", "<report_path>"],
                 "optional_frame_log": "--frame-log <explicit_jsonl_path>",
                 "optional_frame_images": "--frame-images-dir <explicit_directory> [--frame-image-every N] [--max-frame-images N]",
+                "optional_controller1_events": "--controller1-events <frame:buttons;frame:none>",
                 "optional_no_save_ram": "--no-save-ram",
                 "side_effects": "execute_local_rom_and_write_explicit_report"
             }

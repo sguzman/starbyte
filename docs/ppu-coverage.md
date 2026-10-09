@@ -14,8 +14,8 @@ Starbyte's framebuffer is currently a software-rendered 256×224 RGBA image. Onl
 | OBJSEL/OAM `$2101–04` | OAM writes, sprite sizes, palettes, relative priorities, flip bits, signed X and wraparound Y, tile-row wrap | Per-scanline sprite/tile limits, rotation priority, overflow flags |
 | VRAM `$2115–19, $2139–3A` | VMAIN port increment selection, 1/32/128 strides, remapping, prefetch read latch | Active-display access restrictions and bus/open-bus minutiae |
 | CGRAM `$2121–22, $213B` | Streaming color writes/reads, red low five bits, green middle, blue high bits | Partial hardware read latch and open-bus behavior |
-| TM/TMW/window `$2123–2C, $212E` | Main-screen BG/OBJ layer selection and masking; two horizontal windows, inversion, inclusive bounds and OR/AND/XOR/XNOR | Subscreen TSW, color-window clipping, per-scanline changes |
-| CGWSEL/CGADSUB/COLDATA `$2130–32` | Selected-layer fixed-color add/subtract/half in 5-bit channels; OBJ palettes 0–3 excluded | Subscreen blending, color-window regions/forced black; unsupported combinations currently leave main screen unblended |
+| TM/TS/TMW/TSW/window `$2123–2F` | Independent main/sub BG/OBJ layer selection and window masking; two horizontal windows, inversion, inclusive bounds and OR/AND/XOR/XNOR | Scanline-accurate window changes, complete object clipping semantics |
+| CGWSEL/CGADSUB/COLDATA `$2130–32` | Main/subscreen color math for Mode 0/1 using independent layer stacks; fixed-color or subscreen add/subtract/half, backdrop/selected BG/OBJ masks, color-window clipping and math-window conditions | No per-scanline/HDMA rendering, raster effects, direct color or validated cycle-perfect blending; visible commercial-ROM improvement still needs a new capture |
 | SETINI `$2133` | Register storage only | Overscan/interlace/hires and picture geometry |
 
 ## Reproducible evidence
@@ -23,12 +23,12 @@ Starbyte's framebuffer is currently a software-rendered 256×224 RGBA image. Onl
 - `crates/starbyte-core/tests/ppu_compositing.rs`: synthetic pixel checks covering layers, sprites, 16×16 quadrants, VRAM ports, CGRAM/brightness, windows, mosaic and scroll.
 - `crates/starbyte-core/tests/cpu_to_ppu_boot.rs`: source-generated LoROM executes actual 65816 writes through the system bus to create a visible BG1 pixel; the second fixture exercises fixed-color math. This is not proprietary software.
 - `crates/starbyte-core/src/ppu/mod.rs`: unit-level framebuffer, DMA-visible PPU register, and palette tests.
-- The CLI `run --report-json` reports PPU register activity, display mode, brightness, enabled layers, frame hash, nonblack-pixel count and color diversity for user-supplied ROM probes. These are diagnostic signals, **not** validation of correct visuals.
+- The CLI `run --report-json` reports PPU register activity, display mode, brightness, enabled layers, frame hash, nonblack-pixel count and color diversity for user-supplied ROM probes. Opt-in `--frame-log` records main/sub enable masks, color-window and color-math registers per frame, with optional canonical WRAM watches.  These are diagnostic signals, **not** validation of correct visuals.
 
 ## Work that would visibly improve games
 
-- Confirm actual Super Mario World title/menu output; use the new run reports and screenshots to locate missing layers and timing behavior.
-- Support the remaining subscreen / color math window behaviors that affect translucent sprites, water, and layered scenes.
+- Recheck the Super Mario World overworld scene after enabling subscreen color math. The previous probe showed BG2 on TS and a black/fragmented map; the synthetic regression proves compositing logic, not ROM-correct output.
+- Refine the remaining color-window/half-color corner cases affecting translucent sprites, water and layered scenes.
 - Improve scanline-accurate display state for HDMA and partial-frame changes; record tests showing before/after behavior.
 - Extend Mode 2–7 rendering only as real compatibility examples justify it.
 - Measure software-rendering frame time alongside actual game behavior before committing to expensive filters.

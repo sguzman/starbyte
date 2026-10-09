@@ -119,7 +119,8 @@ impl IplUpload {
         self.last_port0 = Some(token);
 
         match self.phase {
-            UploadPhase::Ready | UploadPhase::Executable => {
+            UploadPhase::Executable => UploadEvent::None,
+            UploadPhase::Ready => {
                 if token != 0xcc {
                     return UploadEvent::None;
                 }
@@ -234,6 +235,23 @@ mod tests {
             );
             assert_eq!(self.spc[0], token);
         }
+    }
+
+    #[test]
+    fn handoff_disables_loader_until_explicit_reset() {
+        let mut h = Harness::new();
+        h.cpu = [0, 0, 0x00, 0x04];
+        assert_eq!(h.send(0xcc), UploadEvent::EntryPoint { address: 0x0400 });
+        h.cpu[1] = 1;
+        assert_eq!(h.send(0), UploadEvent::None);
+        assert_eq!(h.send(0xcc), UploadEvent::None);
+        assert_eq!(h.transfer.entrypoint(), Some(0x0400));
+        assert_eq!(h.transfer.phase(), UploadPhase::Executable);
+
+        h.transfer.reset();
+        h.cpu[1] = 1;
+        assert_eq!(h.send(0xcc), UploadEvent::KickAccepted);
+        assert_eq!(h.transfer.phase(), UploadPhase::AwaitFirstByte);
     }
 
     #[test]

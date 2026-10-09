@@ -230,51 +230,29 @@ impl Ppu {
         }
 
         let backdrop = bgr555_to_rgba(self.backdrop_color());
-        let main_screen_enable = self.registers[0x2C];
-        if main_screen_enable == 0 {
-            fill_frame(framebuffer, backdrop);
-            self.apply_fixed_color_math(framebuffer, &[]);
-            apply_brightness(framebuffer, brightness);
-            return;
-        }
-
-        fill_frame(framebuffer, backdrop);
-        let mut depth = vec![0_u8; framebuffer.width * framebuffer.height];
-        // 0=backdrop, 1..4=BG1..BG4, 5=OBJ palettes 4..7,
-        // 6=OBJ palettes 0..3 (color math prohibited).
-        let mut origins = vec![0_u8; framebuffer.width * framebuffer.height];
         let bgmode = self.registers[0x05] & 0x07;
-        match bgmode {
-            0 => self.render_background_stack(
-                framebuffer,
-                &mut depth,
-                &mut origins,
-                bgmode,
-                &[
-                    BackgroundConfig::for_mode0(3),
-                    BackgroundConfig::for_mode0(2),
-                    BackgroundConfig::for_mode0(1),
-                    BackgroundConfig::for_mode0(0),
-                ],
-            ),
-            1 => self.render_background_stack(
-                framebuffer,
-                &mut depth,
-                &mut origins,
-                bgmode,
-                &[
-                    BackgroundConfig::for_mode1(2),
-                    BackgroundConfig::for_mode1(1),
-                    BackgroundConfig::for_mode1(0),
-                ],
-            ),
-            _ => {}
-        }
+        let mut origins = vec![0_u8; framebuffer.width * framebuffer.height];
+        self.render_screen_layers(framebuffer, &mut origins, bgmode, false);
 
-        if main_screen_enable & 0x10 != 0 {
-            self.render_objects(framebuffer, &mut depth, &mut origins, bgmode);
+        // CGWSEL selects the subscreen as the second color-math operand.
+        // Its layers must be composited independently of main-screen TM:
+        // Super Mario World, for instance, can put BG2 only on TS.
+        let mut subscreen = None;
+        let mut sub_origins = None;
+        if self.registers[0x30] & 0x02 != 0 && self.registers[0x31] & 0x3F != 0 {
+            let mut sub_frame = FrameBuffer::default();
+            fill_frame(&mut sub_frame, bgr555_to_rgba(self.fixed_color));
+            let mut sub_layers = vec![0_u8; sub_frame.width * sub_frame.height];
+            self.render_screen_layers(&mut sub_frame, &mut sub_layers, bgmode, true);
+            subscreen = Some(sub_frame);
+            sub_origins = Some(sub_layers);
         }
-        self.apply_fixed_color_math(framebuffer, &origins);
+        self.apply_color_math(
+            framebuffer,
+            &origins,
+            subscreen.as_ref(),
+            sub_origins.as_deref(),
+        );
         apply_brightness(framebuffer, brightness);
     }
 
@@ -364,25 +342,43 @@ impl Ppu {
         (usize::from(remapped) * 2 + usize::from(high_byte)) % VRAM_BYTES
     }
 
-    fn render_background_stack(
+    fn render_screen_layers(
         &self,
         framebuffer: &mut FrameBuffer,
-        depth: &mut [u8],
         origins: &mut [u8],
         mode: u8,
-        backgrounds: &[BackgroundConfig],
+        subscreen: bool,
     ) {
-        let enabled = self.registers[0x2C] & 0x0F;
+        let enabled = self.registers[if subscreen { 0x2D } else { 0x2C }];
+        let mut depth = vec![0_u8; framebuffer.width * framebuffer.height];
+        let backgrounds: &[BackgroundConfig] = match mode {
+            0 => &[
+                BackgroundConfig::for_mode0(3),
+                BackgroundConfig::for_mode0(2),
+                BackgroundConfig::for_mode0(1),
+                BackgroundConfig::for_mode0(0),
+            ],
+            1 => &[
+                BackgroundConfig::for_mode1(2),
+                BackgroundConfig::for_mode1(1),
+                BackgroundConfig::for_mode1(0),
+            ],
+            _ => &[],
+        };
         for background in backgrounds {
             if enabled & (1 << background.index) != 0 {
                 self.render_background(
                     framebuffer,
-                    depth,
+                    &mut depth,
                     origins,
                     mode,
                     self.resolve_background_config(*background),
+                    subscreen,
                 );
             }
+        }
+        if enabled & 0x10 != 0 {
+            self.render_objects(framebuffer, &mut depth, origins, mode, subscreen);
         }
     }
 
@@ -393,11 +389,12 @@ impl Ppu {
         origins: &mut [u8],
         mode: u8,
         background: BackgroundConfig,
+        subscreen: bool,
     ) {
         let bg3_high = self.registers[0x05] & 0x08 != 0;
         for y in 0..framebuffer.height {
             for x in 0..framebuffer.width {
-                if self.window_masks_main_layer(background.index, x) {
+                if self.window_masks_layer(background.index, x, subscreen) {
                     continue;
                 }
                 if let Some((pixel, high)) = self.background_pixel(background, x as u16, y as u16) {
@@ -532,8 +529,8 @@ impl Ppu {
     /// Window masking for BG1..BG4 and OBJ on the main screen. Window
     /// selectors are low/high nibbles of W12SEL/W34SEL, or OBJ's low
     /// nibble of WOBJSEL. If neither window is active, the layer is unmasked.
-    fn window_masks_main_layer(&self, layer: usize, x: usize) -> bool {
-        if self.registers[0x2E] & (1 << layer) == 0 {
+    fn window_masks_layer(&self, layer: usize, x: usize, subscreen: bool) -> bool {
+        if self.registers[if subscreen { 0x2F } else { 0x2E }] & (1 << layer) == 0 {
             return false;
         }
 
@@ -571,37 +568,95 @@ impl Ppu {
         start <= x && x <= end
     }
 
-    /// Fixed-COLDATA subset of SNES color math. Color-window clipping and
-    /// subscreen color math require separate per-pixel handling; do not
-    /// approximate them by accidentally blending every layer.
-    fn apply_fixed_color_math(&self, framebuffer: &mut FrameBuffer, origins: &[u8]) {
+    /// True when a pixel is selected by the PPU color window.
+    /// WOBJSEL high nibble chooses the windows; WOBJLOG bits 2-3 combine them.
+    fn inside_color_window(&self, x: usize) -> bool {
+        let selection = self.registers[0x25] >> 4;
+        let logic = (self.registers[0x2B] >> 2) & 0x03;
+        let window1_enabled = selection & 0x02 != 0;
+        let window2_enabled = selection & 0x08 != 0;
+        let window1 = self.inside_window(x, 0) ^ (selection & 0x01 != 0);
+        let window2 = self.inside_window(x, 1) ^ (selection & 0x04 != 0);
+        match (window1_enabled, window2_enabled) {
+            (true, false) => window1,
+            (false, true) => window2,
+            (true, true) => match logic {
+                0 => window1 || window2,
+                1 => window1 && window2,
+                2 => window1 ^ window2,
+                _ => !(window1 ^ window2),
+            },
+            (false, false) => false,
+        }
+    }
+
+    /// Apply CGWSEL/CGADSUB with independent main and sub layer stacks.
+    /// Window clipping acts on the main operand; color math is restricted to
+    /// the visible main layer. An empty subscreen pixel uses COLDATA as a
+    /// non-halved operand, matching the SNES transparent-subscreen rule.
+    fn apply_color_math(
+        &self,
+        framebuffer: &mut FrameBuffer,
+        origins: &[u8],
+        subscreen: Option<&FrameBuffer>,
+        sub_origins: Option<&[u8]>,
+    ) {
         let cgwsel = self.registers[0x30];
-        if cgwsel & 0xF2 != 0 {
-            // Unsupported subscreen/window-clipping configurations retain
-            // their unblended main-screen output for now.
-            return;
-        }
         let operation = self.registers[0x31];
-        if operation & 0x3F == 0 {
-            return;
-        }
-        let fixed = bgr555_to_rgba(self.fixed_color);
         let subtract = operation & 0x80 != 0;
         let half = operation & 0x40 != 0;
+        let fixed = bgr555_to_rgba(self.fixed_color);
+        let use_subscreen = cgwsel & 0x02 != 0;
+        let clip_mode = cgwsel >> 6;
+        let math_mode = (cgwsel >> 4) & 0x03;
         for (index, rgba) in framebuffer.pixels.chunks_exact_mut(4).enumerate() {
-            let origin = origins.get(index).copied().unwrap_or(0);
-            let source_mask = match origin {
-                0 => 0x20, // Backdrop.
-                1..=4 => 1 << (origin - 1),
-                5 => 0x10, // OBJ palettes 4..7.
-                _ => 0,    // OBJ palettes 0..3 never participate.
+            let x = index % framebuffer.width;
+            let inside = self.inside_color_window(x);
+            let clip_main = match clip_mode {
+                1 => !inside,
+                2 => inside,
+                3 => true,
+                _ => false,
+            };
+            if clip_main {
+                rgba[..3].fill(0);
+            }
+            let math_allowed = match math_mode {
+                1 => inside,
+                2 => !inside,
+                3 => false,
+                _ => true,
+            };
+            if !math_allowed {
+                continue;
+            }
+            let source_mask = match origins.get(index).copied().unwrap_or(0) {
+                0 => 0x20, // Backdrop
+                1..=4 => 1 << (origins[index] - 1), // BG1..BG4
+                5 => 0x10, // OBJ palettes 4..7
+                _ => 0, // OBJ palettes 0..3 do not participate
             };
             if operation & source_mask == 0 {
                 continue;
             }
-            for component in 0..3 {
-                rgba[component] =
-                    color_math_component(rgba[component], fixed[component], subtract, half);
+            let sub_visible = use_subscreen
+                && sub_origins
+                    .and_then(|layers| layers.get(index))
+                    .copied()
+                    .unwrap_or(0) != 0;
+            let source = if sub_visible {
+                subscreen
+                    .and_then(|sub| sub.pixels.chunks_exact(4).nth(index))
+                    .unwrap_or(&fixed)
+            } else {
+                &fixed
+            };
+            // Transparent subscreen backdrop and clipped main pixels are
+            // never halved when the subscreen is selected as math source.
+            let divide = half && !clip_main && (!use_subscreen || sub_visible);
+            for channel in 0..3 {
+                rgba[channel] =
+                    color_math_component(rgba[channel], source[channel], subtract, divide);
             }
         }
     }
@@ -616,6 +671,7 @@ impl Ppu {
         depth: &mut [u8],
         origins: &mut [u8],
         mode: u8,
+        subscreen: bool,
     ) {
         let objsel = self.registers[0x01];
         let (small_size, large_size) = object_size_pair(objsel >> 5);
@@ -659,7 +715,7 @@ impl Ppu {
                 for local_x in 0..usize::from(size) {
                     let screen_x = sprite_x + local_x as i16;
                     if !(0..framebuffer.width as i16).contains(&screen_x)
-                        || self.window_masks_main_layer(4, screen_x as usize)
+                        || self.window_masks_layer(4, screen_x as usize, subscreen)
                     {
                         continue;
                     }
@@ -1019,6 +1075,53 @@ mod tests {
 
         assert_eq!(&frame.pixels()[..4], &[248, 0, 0, 0xFF]);
         assert_eq!(&frame.pixels()[4..8], &[0, 0, 0, 0xFF]);
+    }
+
+    #[test]
+    fn subscreen_bg2_is_visible_via_backdrop_color_math() {
+        let mut ppu = Ppu::default();
+        ppu.write_register(0x2100, 0x0F);
+        ppu.write_register(0x2115, 0x80);
+        // BG2 4bpp tile 0, color index 1 at top-left pixel.
+        write_color(&mut ppu, 0x00, 0x0000);
+        write_color(&mut ppu, 0x01, 0x001F);
+        ppu.write_register(0x2116, 0x00);
+        ppu.write_register(0x2117, 0x10);
+        ppu.write_register(0x2118, 0x80);
+        ppu.write_register(0x2119, 0x00);
+        ppu.write_register(0x2105, 0x01);
+        ppu.write_register(0x2108, 0x00);
+        ppu.write_register(0x210B, 0x10);
+        ppu.write_register(0x212C, 0x00);
+        ppu.write_register(0x212D, 0x02);
+        ppu.write_register(0x2130, 0x02);
+        ppu.write_register(0x2131, 0x20);
+
+        let mut frame = FrameBuffer::default();
+        ppu.render_frame(&mut frame);
+        assert_eq!(&frame.pixels()[..4], &[248, 0, 0, 0xFF]);
+        assert_eq!(&frame.pixels()[4..8], &[0, 0, 0, 0xFF]);
+
+        // With backdrop math disabled, a BG visible only on TS cannot show.
+        ppu.write_register(0x2131, 0);
+        ppu.render_frame(&mut frame);
+        assert_eq!(&frame.pixels()[..4], &[0, 0, 0, 0xFF]);
+    }
+
+    #[test]
+    fn color_window_can_clip_main_before_subscreen_addition() {
+        let mut ppu = Ppu::default();
+        ppu.write_register(0x2100, 0x0F);
+        write_color(&mut ppu, 0x00, 0x03E0);
+        ppu.write_register(0x2132, 0x3F); // Red = 31.
+        ppu.write_register(0x2125, 0x20); // Color window 1 enabled.
+        ppu.write_register(0x2126, 0x00);
+        ppu.write_register(0x2127, 0x00);
+        ppu.write_register(0x2130, 0x80); // Clip inside window 1.
+        let mut frame = FrameBuffer::default();
+        ppu.render_frame(&mut frame);
+        assert_eq!(&frame.pixels()[..4], &[0, 0, 0, 0xFF]);
+        assert_eq!(&frame.pixels()[4..8], &[0, 248, 0, 0xFF]);
     }
 
     #[test]

@@ -112,6 +112,9 @@ impl Spc700 {
                 self.execute_mov_a_addressed(opcode, &mut read, &mut trace)
             }
             0xBF => self.execute_mov_a_x_increment(&mut read, &mut trace),
+            0xAF | 0xC5 | 0xC7 | 0xC9 | 0xCC | 0xD4 | 0xD5 | 0xD6 | 0xD8 | 0xD9
+            | 0xDB => self.execute_mov_store(opcode, &mut read, &mut write, &mut trace),
+            0xFA => self.execute_mov_dp_dp(&mut read, &mut write, &mut trace),
             0xE9 | 0xEC | 0xF8 | 0xF9 | 0xFB => {
                 self.execute_mov_index_load(opcode, &mut read, &mut trace)
             }
@@ -424,6 +427,99 @@ impl Spc700 {
         self.a = value;
         self.update_nz_flags(value);
         self.pc = self.pc.wrapping_add(instruction_len);
+        Ok(())
+    }
+
+    /// Indexed and absolute SPC700 memory stores. Unlike register loads,
+    /// stores do not change PSW flags and perform the memory read side-effect
+    /// before the write (including MMIO registers).
+    fn execute_mov_store<FRead, FWrite>(
+        &mut self,
+        opcode: u8,
+        read: &mut FRead,
+        write: &mut FWrite,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+        FWrite: FnMut(u16, u8),
+    {
+        let (address, len) = match opcode {
+            0xAF => {
+                self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                (self.direct_page_address(self.x), 1)
+            }
+            0xD4 | 0xD8 | 0xD9 | 0xDB => {
+                let offset = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                let index = match opcode {
+                    0xD4 | 0xDB => self.x,
+                    0xD9 => self.y,
+                    _ => 0,
+                };
+                if index != 0 || opcode != 0xD8 {
+                    self.push_wait_trace(trace);
+                }
+                (self.direct_page_address(offset.wrapping_add(index)), 2)
+            }
+            0xC5 | 0xC9 | 0xCC | 0xD5 | 0xD6 => {
+                let low = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                let high = self.push_read_trace(read, trace, self.pc.wrapping_add(2));
+                let index = match opcode {
+                    0xD5 => self.x,
+                    0xD6 => self.y,
+                    _ => 0,
+                };
+                if matches!(opcode, 0xD5 | 0xD6) {
+                    self.push_wait_trace(trace);
+                }
+                (u16::from_le_bytes([low, high]).wrapping_add(u16::from(index)), 3)
+            }
+            0xC7 => {
+                let offset = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                self.push_wait_trace(trace);
+                let indexed = offset.wrapping_add(self.x);
+                let low = self.push_read_trace(read, trace, self.direct_page_address(indexed));
+                let high = self.push_read_trace(
+                    read,
+                    trace,
+                    self.direct_page_address(indexed.wrapping_add(1)),
+                );
+                (u16::from_le_bytes([low, high]), 2)
+            }
+            _ => unreachable!("not an implemented SPC700 MOV store form"),
+        };
+        let value = match opcode {
+            0xD8 | 0xD9 | 0xC9 => self.x,
+            0xDB | 0xCC => self.y,
+            _ => self.a,
+        };
+        self.push_read_trace(read, trace, address);
+        self.push_write_trace(write, trace, address, value);
+        if opcode == 0xAF {
+            self.x = self.x.wrapping_add(1);
+        }
+        self.pc = self.pc.wrapping_add(len);
+        Ok(())
+    }
+
+    /// MOV dp,dp: SPC instruction stream places source before destination,
+    /// and, unlike register stores, this operation has no extra destination
+    /// read (critical for read-to-clear SPC timer MMIO locations).
+    fn execute_mov_dp_dp<FRead, FWrite>(
+        &mut self,
+        read: &mut FRead,
+        write: &mut FWrite,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+        FWrite: FnMut(u16, u8),
+    {
+        let source = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let destination = self.push_read_trace(read, trace, self.pc.wrapping_add(2));
+        let value = self.push_read_trace(read, trace, self.direct_page_address(source));
+        self.push_write_trace(write, trace, self.direct_page_address(destination), value);
+        self.pc = self.pc.wrapping_add(3);
         Ok(())
     }
 

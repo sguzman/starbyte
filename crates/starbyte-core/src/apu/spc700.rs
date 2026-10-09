@@ -112,6 +112,9 @@ impl Spc700 {
                 self.execute_mov_a_addressed(opcode, &mut read, &mut trace)
             }
             0xBF => self.execute_mov_a_x_increment(&mut read, &mut trace),
+            0xE9 | 0xEC | 0xF8 | 0xF9 | 0xFB => {
+                self.execute_mov_index_load(opcode, &mut read, &mut trace)
+            }
             0x40 => self.execute_setp(&mut read, &mut trace),
             0x70 => self.execute_bvs(&mut read, &mut trace),
             0x6D => self.execute_push_y(&mut read, &mut write, &mut trace),
@@ -421,6 +424,42 @@ impl Spc700 {
         self.a = value;
         self.update_nz_flags(value);
         self.pc = self.pc.wrapping_add(instruction_len);
+        Ok(())
+    }
+
+    fn execute_mov_index_load<FRead>(
+        &mut self,
+        opcode: u8,
+        read: &mut FRead,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        let (value, len) = match opcode {
+            0xF8 => self.read_accumulator_operand(0xE4, read, trace), // MOV X,dp
+            0xF9 => {
+                // MOV X,dp+Y, including wrap within the active direct page.
+                let offset = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                self.push_wait_trace(trace);
+                let value = self.push_read_trace(
+                    read,
+                    trace,
+                    self.direct_page_address(offset.wrapping_add(self.y)),
+                );
+                (value, 2)
+            }
+            0xE9 | 0xEC => self.read_accumulator_operand(0xE5, read, trace), // MOV X/Y,abs
+            0xFB => self.read_accumulator_operand(0xF4, read, trace), // MOV Y,dp+X
+            _ => unreachable!("not a supported SPC index-register load"),
+        };
+        if matches!(opcode, 0xF8 | 0xF9 | 0xE9) {
+            self.x = value;
+        } else {
+            self.y = value;
+        }
+        self.update_nz_flags(value);
+        self.pc = self.pc.wrapping_add(len);
         Ok(())
     }
 

@@ -287,6 +287,32 @@ mod tests {
     }
 
     #[test]
+    fn separate_voices_use_their_own_brr_source_and_loop_directory() {
+        let (mut dsp, mut ram) = looping_sample();
+        // Source one points to a separate, negative BRR waveform.
+        ram[0x204] = 0x00;
+        ram[0x205] = 0x04;
+        ram[0x206] = 0x00;
+        ram[0x207] = 0x04;
+        ram[0x400] = 0xc3;
+        ram[0x401..0x409].fill(0x88);
+        // Silence voice zero and drive only voice one to the left channel.
+        dsp.write_register(0x00, 0, &ram);
+        dsp.write_register(0x10, 0x7f, &ram);
+        dsp.write_register(0x11, 0, &ram);
+        dsp.write_register(0x13, 0x10, &ram);
+        dsp.write_register(0x14, 1, &ram);
+        dsp.write_register(0x17, 0x7f, &ram);
+        dsp.write_register(0x4c, 0b10, &ram);
+        for _ in 0..48 {
+            let (left, right) = dsp.next_stereo_pair(&ram);
+            assert!(left < -1000, "voice one must retain its own loop source");
+            assert_eq!(right, 0);
+        }
+        assert_eq!(dsp.read_register(0x7c) & 0b10, 0);
+    }
+
+    #[test]
     fn voice_end_sets_endx_and_muting_stops_output() {
         let (mut dsp, mut ram) = looping_sample();
         ram[0x300] = 0xc1; // End without loop.

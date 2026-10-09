@@ -103,6 +103,9 @@ impl Spc700 {
             0xED => self.execute_notc(&mut read, &mut trace),
             0xEE => self.execute_pop_y(&mut read, &mut trace),
             0x8D => self.execute_mov_y_imm(&mut read, &mut trace),
+            0x8F => self.execute_mov_dp_imm(&mut read, &mut write, &mut trace),
+            0xC4 => self.execute_mov_dp_a(&mut read, &mut write, &mut trace),
+            0xE4 => self.execute_mov_a_dp(&mut read, &mut trace),
             0xF0 => self.execute_beq(&mut read, &mut trace),
             0xFC => self.execute_inc_y(&mut read, &mut trace),
             0xFD => self.execute_mov_y_a(&mut read, &mut trace),
@@ -241,6 +244,57 @@ impl Spc700 {
         let operand = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
         self.y = operand;
         self.update_nz_flags(self.y);
+        self.pc = self.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    // MOV dp,#imm ($8F): the immediate precedes the direct-page address.
+    // The PSW direct-page bit selects page $0000 or $0100.
+    fn execute_mov_dp_imm<FRead, FWrite>(
+        &mut self,
+        read: &mut FRead,
+        write: &mut FWrite,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+        FWrite: FnMut(u16, u8),
+    {
+        let immediate = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let dp = self.push_read_trace(read, trace, self.pc.wrapping_add(2));
+        let address = u16::from(dp) | if self.psw & 0x20 != 0 { 0x0100 } else { 0 };
+        self.push_read_trace(read, trace, address);
+        self.push_write_trace(write, trace, address, immediate);
+        self.pc = self.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    fn execute_mov_dp_a<FRead, FWrite>(
+        &mut self,
+        read: &mut FRead,
+        write: &mut FWrite,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+        FWrite: FnMut(u16, u8),
+    {
+        let dp = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let address = u16::from(dp) | if self.psw & 0x20 != 0 { 0x0100 } else { 0 };
+        self.push_read_trace(read, trace, address);
+        self.push_write_trace(write, trace, address, self.a);
+        self.pc = self.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_mov_a_dp<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        let dp = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let address = u16::from(dp) | if self.psw & 0x20 != 0 { 0x0100 } else { 0 };
+        self.a = self.push_read_trace(read, trace, address);
+        self.update_nz_flags(self.a);
         self.pc = self.pc.wrapping_add(2);
         Ok(())
     }

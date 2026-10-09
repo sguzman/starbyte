@@ -1635,14 +1635,16 @@ fn make_relative_path(base_dir: &Path, target: &Path) -> PathBuf {
 /// frame: "300:start;303:none;400:right,b;430:none".
 /// Events must be ordered, unique, and inside the requested frame window.
 fn parse_controller_events(input: &str, frames: u32) -> Result<Vec<(u32, ControllerState)>> {
-    anyhow::ensure!(!input.trim().is_empty(), "controller-1 event timeline is empty");
+    anyhow::ensure!(
+        !input.trim().is_empty(),
+        "controller-1 event timeline is empty"
+    );
     let mut events = Vec::new();
     let mut previous_frame = 0;
     for event in input.split(';') {
-        let (frame_text, buttons_text) = event
-            .trim()
-            .split_once(':')
-            .ok_or_else(|| anyhow::anyhow!("invalid controller event '{event}'; expected frame:buttons"))?;
+        let (frame_text, buttons_text) = event.trim().split_once(':').ok_or_else(|| {
+            anyhow::anyhow!("invalid controller event '{event}'; expected frame:buttons")
+        })?;
         let frame = frame_text
             .trim()
             .parse::<u32>()
@@ -1656,7 +1658,10 @@ fn parse_controller_events(input: &str, frames: u32) -> Result<Vec<(u32, Control
             "controller event at frame {frame} exceeds requested {frames} frames"
         );
         let buttons = buttons_text.trim();
-        anyhow::ensure!(!buttons.is_empty(), "controller event at frame {frame} has no button state; use 'none' to release");
+        anyhow::ensure!(
+            !buttons.is_empty(),
+            "controller event at frame {frame} has no button state; use 'none' to release"
+        );
         let state = if buttons.eq_ignore_ascii_case("none") {
             ControllerState::default()
         } else {
@@ -1813,7 +1818,10 @@ mod tests {
     #[test]
     fn controller_timeline_supports_press_release_and_multiple_buttons() {
         let events = parse_controller_events("2:start;4:none;5:right,b", 5).unwrap();
-        assert_eq!(events.iter().map(|(frame, _)| *frame).collect::<Vec<_>>(), [2, 4, 5]);
+        assert_eq!(
+            events.iter().map(|(frame, _)| *frame).collect::<Vec<_>>(),
+            [2, 4, 5]
+        );
         assert!(events[0].1.start);
         assert!(!events[0].1.right);
         assert_eq!(events[1].1.to_bits(), 0);

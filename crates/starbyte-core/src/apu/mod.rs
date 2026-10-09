@@ -543,6 +543,35 @@ mod tests {
     }
 
     #[test]
+    fn synthetic_ipl_startup_clears_ram_and_signals_ready() {
+        let mut apu = Apu::default();
+        // MOV X,#3; MOV SP,X; MOV A,#0; clear_loop: MOV (X),A;
+        // DEC X; BNE clear_loop; MOV $F4,#$AA; MOV $F5,#$BB.
+        // A tiny original regression program, not a bundled IPL ROM.
+        let program = [
+            0xcd, 0x03, 0xbd, 0xe8, 0x00, 0xc6, 0x1d, 0xd0, 0xfc, 0x8f, 0xaa, 0xf4, 0x8f,
+            0xbb, 0xf5,
+        ];
+        for (index, byte) in program.into_iter().enumerate() {
+            apu.write_spc_ram(0x0400 + index as u16, byte);
+        }
+        for address in 1..=3 {
+            apu.write_spc_ram(address, 0x88);
+        }
+        apu.spc700.load_state(0x0400, 0, 0, 0, 0xff, 0);
+        for _ in 0..14 {
+            apu.execute_spc_program_instruction().unwrap();
+        }
+        assert_eq!(apu.spc700.sp, 3);
+        assert_eq!(apu.spc700.pc, 0x040f);
+        for address in 1..=3 {
+            assert_eq!(apu.read_spc_ram(address), 0);
+        }
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0xaa);
+        assert_eq!(apu.read_apu_port(1).unwrap(), 0xbb);
+    }
+
+    #[test]
     fn spc700_transfer_opcode_writes_through_pointer_plus_y() {
         let mut apu = Apu::default();
         apu.write_spc_ram(0x0010, 0xfe);

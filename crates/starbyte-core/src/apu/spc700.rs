@@ -1665,6 +1665,90 @@ mod accumulator_alu_tests {
     }
 
     #[test]
+    fn indexed_mov_store_forms_preserve_flags_and_read_before_write() {
+        for (opcode, operands, mut memory, target, len, cycles, expected) in [
+            (0xAF_u8, vec![], vec![], 0x0103_u16, 1, 4, 0x55),
+            (0xD4, vec![0xfe], vec![], 0x0101, 2, 5, 0x55),
+            (0xC5, vec![0xfe, 0xff], vec![], 0xfffe, 3, 5, 0x55),
+            (0xD5, vec![0xfe, 0xff], vec![], 0x0001, 3, 6, 0x55),
+            (0xD6, vec![0xfe, 0xff], vec![], 0x0003, 3, 6, 0x55),
+            (
+                0xC7,
+                vec![0xfc],
+                vec![(0x01ff, 0x30), (0x0100, 0x40)],
+                0x4030,
+                2,
+                7,
+                0x55,
+            ),
+            (0xD8, vec![0x42], vec![], 0x0142, 2, 4, 3),
+            (0xD9, vec![0xfe], vec![], 0x0103, 2, 5, 3),
+            (0xC9, vec![0xfe, 0xff], vec![], 0xfffe, 3, 5, 3),
+            (0xDB, vec![0xfe], vec![], 0x0101, 2, 5, 5),
+            (0xCC, vec![0xfe, 0xff], vec![], 0xfffe, 3, 5, 5),
+        ] {
+            memory.push((target, 0xcc));
+            let mut cpu = Spc700::default();
+            cpu.load_state(0x8000, 0x55, 3, 5, 0xef, 0xA3);
+            let mut bytes = vec![0_u8; 65_536];
+            bytes[0x8000] = opcode;
+            for (index, value) in operands.into_iter().enumerate() {
+                bytes[0x8001 + index] = value;
+            }
+            for (address, value) in memory {
+                bytes[usize::from(address)] = value;
+            }
+            let memory = RefCell::new(bytes);
+            let trace = cpu
+                .step_with_memory(
+                    |address| memory.borrow()[usize::from(address)],
+                    |address, value| memory.borrow_mut()[usize::from(address)] = value,
+                )
+                .unwrap();
+            assert_eq!(memory.borrow()[usize::from(target)], expected, "opcode {opcode:02X}");
+            assert_eq!(cpu.a, 0x55);
+            assert_eq!(cpu.x, if opcode == 0xAF { 4 } else { 3 });
+            assert_eq!(cpu.y, 5);
+            assert_eq!(cpu.psw, 0xA3, "MOV stores may not change flags");
+            assert_eq!(cpu.pc, 0x8000 + len);
+            assert_eq!(trace.len(), cycles);
+            assert_eq!(trace[trace.len() - 2].access, AccessKind::Read);
+            assert_eq!(trace.last().unwrap().access, AccessKind::Write);
+            assert_eq!(trace.last().unwrap().address, u32::from(target));
+        }
+    }
+
+    #[test]
+    fn mov_dp_dp_copies_source_first_without_reading_destination() {
+        let mut cpu = Spc700::default();
+        cpu.load_state(0x8000, 0xaa, 3, 5, 0xef, 0xA3);
+        let memory = RefCell::new(vec![0_u8; 65_536]);
+        {
+            let mut bytes = memory.borrow_mut();
+            bytes[0x8000] = 0xfa;
+            bytes[0x8001] = 0xff; // source
+            bytes[0x8002] = 0x42; // destination
+            bytes[0x01ff] = 0x5a;
+            bytes[0x0142] = 0xcc;
+        }
+        let trace = cpu
+            .step_with_memory(
+                |address| memory.borrow()[usize::from(address)],
+                |address, value| memory.borrow_mut()[usize::from(address)] = value,
+            )
+            .unwrap();
+        assert_eq!(memory.borrow()[0x0142], 0x5a);
+        assert_eq!(memory.borrow()[0x01ff], 0x5a);
+        assert_eq!(cpu.pc, 0x8003);
+        assert_eq!(cpu.psw, 0xA3);
+        assert_eq!(trace.len(), 5);
+        assert!(trace.iter().all(|event| {
+            event.address != 0x0142 || event.access != AccessKind::Read
+        }));
+        assert_eq!(trace.last().unwrap().access, AccessKind::Write);
+    }
+
+    #[test]
     fn mov_x_from_zero_sets_z_without_clearing_carry() {
         let (cpu, trace, _) = run_indexed(0xF9, &[0xfc], 0xaa, 0x21, 3, 5, &[(0x0101, 0)]);
         assert_eq!(cpu.x, 0);

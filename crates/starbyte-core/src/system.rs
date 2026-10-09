@@ -366,6 +366,17 @@ impl SystemBus {
         (self.nmitimen, self.htime, self.vtime)
     }
 
+    /// Controller-1 host bits, last latched $4218/$4219 bits, and auto-read busy.
+    /// These are diagnostic values; querying them does not clock the joypad.
+    #[must_use]
+    pub const fn joypad_status(&self) -> (u16, u16, bool) {
+        (
+            self.joypad.controller1.to_bits(),
+            self.joypad.latched1,
+            self.joypad.auto_read_complete_at.is_some(),
+        )
+    }
+
     /// Borrow compact MMIO observability counters collected during execution.
     #[must_use]
     pub const fn observability(&self) -> &SystemBusObservability {

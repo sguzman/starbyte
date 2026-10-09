@@ -741,6 +741,62 @@ mod tests {
     }
 
     #[test]
+    fn synthetic_spc700_arithmetic_program_configures_dsp_and_produces_audio() {
+        let mut apu = Apu::default();
+        // Copyright-free SPC sample directory and filter-zero looping BRR.
+        for (address, value) in [
+            (0x0200, 0x00),
+            (0x0201, 0x03),
+            (0x0202, 0x00),
+            (0x0203, 0x03),
+            (0x0300, 0xc3),
+        ] {
+            apu.write_spc_ram(address, value);
+        }
+        for offset in 1..9 {
+            apu.write_spc_ram(0x0300 + offset, 0x77);
+        }
+        // Configure voice 0, but leave global output volumes unset
+        // and key-on inactive. The sound CPU program must enable them.
+        for (register, value) in [
+            (0x5d, 0x02),
+            (0x00, 0x7f),
+            (0x01, 0x7f),
+            (0x03, 0x10),
+            (0x07, 0x7f),
+        ] {
+            apu.write_dsp_register(register, value);
+        }
+        let mut before = Vec::new();
+        apu.append_dsp_audio(21_477, &mut before);
+        assert!(before.iter().all(|&sample| sample == 0));
+
+        // MOV $F2,#$0C; MOV A,#$70; ADC A,#$0F; MOV $F3,A;
+        // repeat for right volume ($1C); select KON ($4C), write 1.
+        // The new immediate ADC opcode is therefore needed for sound.
+        let program = [
+            0x8f, 0x0c, 0xf2, 0xe8, 0x70, 0x88, 0x0f, 0xc4, 0xf3, 0x8f, 0x1c, 0xf2, 0xe8,
+            0x70, 0x88, 0x0f, 0xc4, 0xf3, 0x8f, 0x4c, 0xf2, 0x8f, 0x01, 0xf3,
+        ];
+        for (index, value) in program.into_iter().enumerate() {
+            apu.write_spc_ram(0x0400 + index as u16, value);
+        }
+        apu.spc700.load_state(0x0400, 0, 0, 0, 0xef, 0);
+        for _ in 0..10 {
+            apu.execute_spc_program_instruction().unwrap();
+        }
+        assert_eq!(apu.spc700.pc, 0x0418);
+        assert_eq!(apu.read_dsp_register(0x0c), 0x7f);
+        assert_eq!(apu.read_dsp_register(0x1c), 0x7f);
+        assert_eq!(apu.read_dsp_register(0x4c), 0x01);
+
+        let mut audio = Vec::new();
+        apu.append_dsp_audio(214_773, &mut audio);
+        assert!(audio.iter().any(|&sample| sample > 1000));
+        assert!(audio.chunks_exact(2).all(|pair| pair[0] == pair[1]));
+    }
+
+    #[test]
     fn sample_clock_produces_exactly_32k_pairs_per_ntsc_second() {
         let mut apu = Apu::default();
         assert_eq!(apu.advance_dsp_sample_clock(21_477_272), 32_000);

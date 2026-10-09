@@ -774,6 +774,65 @@ mod tests {
     }
 
     #[test]
+    fn two_block_ipl_upload_produces_brr_audio_from_transferred_ram() {
+        let mut apu = Apu::default();
+        apu.reset();
+        apu.enable_isolated_ipl_upload();
+
+        // First block: source zero's start/loop directory entry at $0200.
+        for (port, value) in [(1, 1), (2, 0), (3, 2), (0, 0xcc)] {
+            apu.write_cpu_port(port, value).unwrap();
+        }
+        apu.step_master_cycles(6);
+        for (index, byte) in [0, 3, 0, 3].into_iter().enumerate() {
+            apu.write_cpu_port(1, byte).unwrap();
+            apu.write_cpu_port(0, index as u8).unwrap();
+            apu.step_master_cycles(6);
+        }
+
+        // Close block one, select a second block at $0300.
+        for (port, value) in [(1, 1), (2, 0), (3, 3), (0, 5)] {
+            apu.write_cpu_port(port, value).unwrap();
+        }
+        apu.step_master_cycles(6);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 5);
+
+        // Second block: one looping, filter-zero BRR waveform.
+        for (index, byte) in [0xc3, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77]
+            .into_iter()
+            .enumerate()
+        {
+            apu.write_cpu_port(1, byte).unwrap();
+            apu.write_cpu_port(0, index as u8).unwrap();
+            apu.step_master_cycles(6);
+        }
+        for (port, value) in [(1, 0), (2, 0), (3, 2), (0, 10)] {
+            apu.write_cpu_port(port, value).unwrap();
+        }
+        apu.step_master_cycles(6);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().blocks_finished(), 2);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 13);
+        assert_eq!(apu.read_spc_ram(0x0300), 0xc3);
+
+        for (register, value) in [
+            (0x5d, 0x02),
+            (0x00, 0x7f),
+            (0x01, 0x7f),
+            (0x03, 0x10),
+            (0x07, 0x7f),
+            (0x0c, 0x7f),
+            (0x1c, 0x7f),
+            (0x4c, 1),
+        ] {
+            apu.write_dsp_register(register, value);
+        }
+        let mut samples = Vec::new();
+        apu.append_dsp_audio(214_773, &mut samples);
+        assert!(samples.iter().any(|&value| value > 1000));
+        assert!(samples.chunks_exact(2).all(|pair| pair[0] == pair[1]));
+    }
+
+    #[test]
     fn opt_in_upload_copies_sound_driver_and_keeps_runtime_default_unchanged() {
         let mut apu = Apu::default();
         apu.reset();

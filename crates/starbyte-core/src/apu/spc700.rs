@@ -89,6 +89,12 @@ impl Spc700 {
             0x30 => self.execute_bmi(&mut read, &mut trace),
             0x3F => self.execute_call_abs(&mut read, &mut write, &mut trace),
             0x4D => self.execute_push_x(&mut read, &mut write, &mut trace),
+            // Standard SPC700 accumulator ALU: immediate, direct-page,
+            // and absolute memory addressing. Separate from word ALU.
+            0x08 | 0x28 | 0x48 | 0x68 | 0x88 | 0xA8 | 0x04 | 0x24 | 0x44 | 0x64
+            | 0x84 | 0xA4 | 0x05 | 0x25 | 0x45 | 0x65 | 0x85 | 0xA5 => {
+                self.execute_accumulator_alu(opcode, &mut read, &mut trace)
+            }
             0x78 => self.execute_cmp_dp_imm(&mut read, &mut trace),
             0x7E => self.execute_cmp_y_dp(&mut read, &mut trace),
             0x50 => self.execute_bvc(&mut read, &mut trace),
@@ -223,6 +229,87 @@ impl Spc700 {
         let low = self.push_read_trace(read, trace, vector_base);
         let high = self.push_read_trace(read, trace, vector_base.wrapping_add(1));
         self.pc = u16::from_le_bytes([low, high]);
+        Ok(())
+    }
+
+    fn execute_accumulator_alu<FRead>(
+        &mut self,
+        opcode: u8,
+        read: &mut FRead,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        let address_mode = opcode & 0x1f;
+        let (rhs, instruction_len) = match address_mode {
+            0x08 => (self.push_read_trace(read, trace, self.pc.wrapping_add(1)), 2),
+            0x04 => {
+                let offset = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                let rhs = self.push_read_trace(read, trace, self.direct_page_address(offset));
+                (rhs, 2)
+            }
+            0x05 => {
+                let low = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                let high = self.push_read_trace(read, trace, self.pc.wrapping_add(2));
+                let rhs = self.push_read_trace(read, trace, u16::from_le_bytes([low, high]));
+                (rhs, 3)
+            }
+            _ => unreachable!("not an implemented SPC accumulator ALU mode"),
+        };
+        let lhs = self.a;
+        let family = opcode & 0xe0;
+        match family {
+            0x00 => {
+                self.a |= rhs;
+                self.update_nz_flags(self.a);
+            }
+            0x20 => {
+                self.a &= rhs;
+                self.update_nz_flags(self.a);
+            }
+            0x40 => {
+                self.a ^= rhs;
+                self.update_nz_flags(self.a);
+            }
+            0x60 => self.update_cmp_flags(lhs, rhs),
+            0x80 => {
+                let carry = u16::from(self.psw & 0x01 != 0);
+                let sum = u16::from(lhs) + u16::from(rhs) + carry;
+                let result = sum as u8;
+                self.a = result;
+                self.psw &= !(0x01 | 0x08 | 0x40);
+                if sum > 0xff {
+                    self.psw |= 0x01;
+                }
+                if (u16::from(lhs & 0x0f) + u16::from(rhs & 0x0f) + carry) > 0x0f {
+                    self.psw |= 0x08;
+                }
+                if (!(lhs ^ rhs) & (lhs ^ result) & 0x80) != 0 {
+                    self.psw |= 0x40;
+                }
+                self.update_nz_flags(result);
+            }
+            0xA0 => {
+                let borrow = u16::from(self.psw & 0x01 == 0);
+                let subtrahend = u16::from(rhs) + borrow;
+                let result = lhs.wrapping_sub(subtrahend as u8);
+                self.a = result;
+                self.psw &= !(0x01 | 0x08 | 0x40);
+                if u16::from(lhs) >= subtrahend {
+                    self.psw |= 0x01;
+                }
+                if u16::from(lhs & 0x0f) >= u16::from(rhs & 0x0f) + borrow {
+                    self.psw |= 0x08;
+                }
+                if ((lhs ^ rhs) & (lhs ^ result) & 0x80) != 0 {
+                    self.psw |= 0x40;
+                }
+                self.update_nz_flags(result);
+            }
+            _ => unreachable!("unknown SPC accumulator ALU family"),
+        }
+        self.pc = self.pc.wrapping_add(instruction_len);
         Ok(())
     }
 

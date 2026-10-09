@@ -98,8 +98,8 @@ impl Spc700 {
             | 0x17 | 0x37 | 0x57 | 0x77 | 0x97 | 0xB7 => {
                 self.execute_accumulator_alu(opcode, &mut read, &mut trace)
             }
-            0x18 | 0x38 | 0x58 | 0x78 | 0x98 | 0xB8 | 0x09 | 0x29 | 0x49 | 0x69
-            | 0x89 | 0xA9 | 0x19 | 0x39 | 0x59 | 0x79 | 0x99 | 0xB9 => {
+            0x18 | 0x38 | 0x58 | 0x78 | 0x98 | 0xB8 | 0x09 | 0x29 | 0x49 | 0x69 | 0x89 | 0xA9
+            | 0x19 | 0x39 | 0x59 | 0x79 | 0x99 | 0xB9 => {
                 self.execute_memory_alu(opcode, &mut read, &mut write, &mut trace)
             }
             0x7E => self.execute_cmp_y_dp(&mut read, &mut trace),
@@ -1506,8 +1506,7 @@ mod accumulator_alu_tests {
 
     #[test]
     fn mov_a_x_postincrement_wraps_without_leaving_selected_direct_page() {
-        let (cpu, trace, bytes) =
-            run_indexed(0xBF, &[], 0, 0x22, 0xff, 0, &[(0x01ff, 0x7f)]);
+        let (cpu, trace, bytes) = run_indexed(0xBF, &[], 0, 0x22, 0xff, 0, &[(0x01ff, 0x7f)]);
         assert_eq!(cpu.a, 0x7f);
         assert_eq!(cpu.x, 0);
         assert_eq!(cpu.pc, 0x8001);
@@ -1572,11 +1571,17 @@ mod accumulator_alu_tests {
                 assert_eq!(cpu.a, 0x5a, "memory ALU must not overwrite A");
                 assert_eq!(trace.len(), cycles, "opcode {opcode:02X}");
                 assert!(
-                    trace.iter().any(|event| event.address == u32::from(destination)),
+                    trace
+                        .iter()
+                        .any(|event| event.address == u32::from(destination)),
                     "opcode {opcode:02X} must read destination"
                 );
                 if let Some(address) = source {
-                    assert!(trace.iter().any(|event| event.address == u32::from(address)));
+                    assert!(
+                        trace
+                            .iter()
+                            .any(|event| event.address == u32::from(address))
+                    );
                     assert_eq!(bytes[usize::from(address)], 0x0f, "source unchanged");
                 }
                 if family == 0x60 {

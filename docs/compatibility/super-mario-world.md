@@ -1,12 +1,16 @@
 # Super Mario World — compatibility investigation
 
-**Current result (2026-10-09): sustained first-level platforming and recovery from death verified in a commercial-ROM headless run.** The 3,575-frame script enters Yoshi's Island 2, holds Right in mode `$14`, and advances Mario from X=16 to X=391 while the camera scrolls from X=0 to X=285. Mario performs a moving jump and a standing jump; Koopas, a shell and a visible 200-point score event appear on correctly scrolled terrain. On the standing jump, player-state `$7E0071` changes `0→9` at frame 2833 (death), lives fall from 4 to 3 at frame 3023 and mode returns to `$0E` (overworld) at 3128. All frames have `status=ok`. Actual gameplay is thus materially functional; full level completion, reliable leftward **in-level** movement, save/audio quality, and native Wayland frontend performance remain unverified.
+**Current result (2026-10-09): sustained first-level platforming and recovery from death verified in a commercial-ROM headless run.** The 3,575-frame script enters Yoshi's Island 2, holds Right in mode `$14`, and advances Mario from X=16 to X=391 while the camera scrolls from X=0 to X=285. Mario performs a moving jump and a standing jump; Koopas, a shell and a visible 200-point score event appear on correctly scrolled terrain. On the standing jump, player-state `$7E0071` changes `0→9` at frame 2833 (death), lives fall from 4 to 3 at frame 3023 and mode returns to `$0E` (overworld) at 3128. All frames have `status=ok`. Actual gameplay is thus materially functional; full level completion, item/block interaction fidelity, save/audio quality, and native Wayland frontend performance remain unverified.
 
 ## Controller bit-layout correction (2026-10-09)
 
 The 560-frame automatic-joypad retest completed without CPU errors. During frames 450–454, the CLI's host and latched joypad word both reported `$0008` for Start, and the title demonstration continued. That matched Starbyte's previous encoder but **not** SNES hardware: the correct auto-read word for Start alone is `$1000` (`$4218=$00, $4219=$10`), with buttons ordered BYsS UDLR AXlr 0000. The old implementation reversed the serial order and treated the low four signature bits as buttons. This is a verified encoding defect independent of input timing.
 
 The core now encodes the standard SNES auto-read word and shifts serial data most-significant first. Unconnected controller ports 2–4 explicitly read zero. Unit tests cover all twelve button positions, serial ordering and the automatic-read registers. **The subsequent 700-frame real-ROM retest verified the intended title-to-file-selection transition.**
+
+## Fifteenth headless probe: in-level reversal verified; investigation concluded (3,350 frames, 2026-10-09)
+
+A bounded follow-up run completes all **3,350 frames** without emulator errors. Mario reaches X=341 moving right; the scheduled Left hold from frame 2775 changes the direction of movement to X=59 by frame 3050. The horizontal camera reverses from X=235 to X=0. Right applied again at frame 3080 resumes movement to X=248, camera X=142, by frame 3250. **These controls work in the observed sequence.** Further reverse-movement experimentation is **deferred by maintainer choice**, while Starbyte as a whole **remains in active development** on the established emulator roadmap. No additional local retest is requested for this feature.
 
 ## Fourteenth headless probe: sustained side-scrolling gameplay, enemy contact, death and overworld return (3,575 frames, 2026-10-09)
 
@@ -381,7 +385,7 @@ A general hardware-level fix has been committed:
 ## Next evidence needed
 
 1. **Confirmed:** general SNES subscreen color math restores the colorful Yoshi's Island overworld map in a private real-ROM probe, including BG2 water/terrain previously omitted. Preserve this rendering regression.
-2. **First-level gameplay confirmed:** 3,575 frames demonstrate actual in-level Right movement X=16→391, camera following X=0→285, jumping while running, visible Koopas and a 200-point event, then a death/life decrement and return to the overworld. **Next:** move Left inside the level, test blocks/items and level persistence or completion, and separately validate the native frontend.
+2. **First-level gameplay confirmed:** 3,575 frames demonstrate Right movement X=16→391, camera tracking X=0→285, moving jumps, a 200-point event, and death/overworld return. A later 3,350-frame probe verifies Left movement X=341→59, reversing camera X=235→0 and resuming Right. **Direction reversal is validated; no further tests or fixes for it are prioritized.** Remaining work centers on authentic audio, native Linux/Wayland play, and further gameplay mechanics.
 3. Investigate DSP music/audio, native Wayland frame pacing and SRAM independently; synthetic samples are not faithful game sound.
 4. Record the exact local cartridge checksum/revision without committing or distributing ROM bytes.
 5. Add synthetic regressions for newly confirmed hardware faults and upgrade compatibility only when demonstrated.

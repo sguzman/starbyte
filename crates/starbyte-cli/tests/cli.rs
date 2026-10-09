@@ -555,6 +555,59 @@ fn selected_frame_instruction_trace_accepts_sbc_long_x() {
 }
 
 #[test]
+fn frame_scheduled_controller_input_runs_and_records_frames() {
+    let dir = tempdir().unwrap();
+    let rom = dir.path().join("timeline.sfc");
+    let log = dir.path().join("timeline.jsonl");
+    write_test_rom(&rom);
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "run",
+            rom.to_str().unwrap(),
+            "--frames",
+            "4",
+            "--controller1-events",
+            "2:start;3:none;4:right,b",
+            "--frame-log",
+            log.to_str().unwrap(),
+            "--no-save-ram",
+        ])
+        .assert()
+        .success();
+
+    let lines = fs::read_to_string(&log).unwrap();
+    let frames: Vec<serde_json::Value> = lines
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(frames.len(), 4);
+    assert!(frames.iter().all(|frame| frame["status"] == "ok"));
+    assert_eq!(frames[3]["completed_frame"], 4);
+}
+
+#[test]
+fn controller_timeline_rejects_invalid_frames_before_rom_loading() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("missing.sfc");
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "run",
+            path.to_str().unwrap(),
+            "--frames",
+            "10",
+            "--controller1-events",
+            "5:start;5:none",
+            "--no-save-ram",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("strictly increasing"));
+}
+
+#[test]
 fn instruction_trace_rejects_frame_beyond_run() {
     let dir = tempdir().unwrap();
     let rom = dir.path().join("sample.sfc");

@@ -1220,8 +1220,20 @@ mod accumulator_alu_tests {
         psw: u8,
         memory_data: &[(u16, u8)],
     ) -> (Spc700, Vec<crate::bus::BusEvent>, Vec<u8>) {
+        run_indexed(opcode, operands, a, psw, 0, 0, memory_data)
+    }
+
+    fn run_indexed(
+        opcode: u8,
+        operands: &[u8],
+        a: u8,
+        psw: u8,
+        x: u8,
+        y: u8,
+        memory_data: &[(u16, u8)],
+    ) -> (Spc700, Vec<crate::bus::BusEvent>, Vec<u8>) {
         let mut cpu = Spc700::default();
-        cpu.load_state(0x8000, a, 0, 0, 0xef, psw);
+        cpu.load_state(0x8000, a, x, y, 0xef, psw);
         let mut bytes = vec![0_u8; 65_536];
         bytes[0x8000] = opcode;
         for (index, &byte) in operands.iter().enumerate() {
@@ -1289,6 +1301,70 @@ mod accumulator_alu_tests {
             assert_eq!(trace.len(), 4);
             assert_eq!(trace[3].address, 0x9234);
             assert_eq!(bytes[0x9234], data);
+        }
+    }
+
+    #[test]
+    fn indexed_alu_modes_apply_spc_direct_page_and_absolute_wrap_rules() {
+        let x = 3;
+        let y = 5;
+        for (base, a, carry, expected) in [
+            (0x00_u8, 0x10, 0, 0x1F), // OR
+            (0x20, 0x10, 0, 0x00), // AND
+            (0x40, 0x10, 0, 0x1F), // EOR
+            (0x60, 0x10, 0, 0x10), // CMP
+            (0x80, 0x10, 0, 0x1F), // ADC
+            (0xA0, 0x10, 1, 0x01), // SBC
+        ] {
+            for mode in [0x06_u8, 0x07, 0x14, 0x15, 0x16, 0x17] {
+                let opcode = base | mode;
+                let (operands, mut memory, expected_address, expected_len, expected_cycles) =
+                    match mode {
+                        0x06 => (vec![], vec![], 0x0103, 1, 3),
+                        0x07 => (
+                            vec![0xfc],
+                            vec![(0x01ff, 0x30), (0x0100, 0x40)],
+                            0x4030,
+                            2,
+                            6,
+                        ),
+                        0x14 => (vec![0xfe], vec![], 0x0101, 2, 4),
+                        0x15 => (vec![0xfe, 0xff], vec![], 0x0001, 3, 5),
+                        0x16 => (vec![0xfe, 0xff], vec![], 0x0003, 3, 5),
+                        0x17 => (
+                            vec![0xff],
+                            vec![(0x01ff, 0x30), (0x0100, 0x40)],
+                            0x4035,
+                            2,
+                            6,
+                        ),
+                        _ => unreachable!(),
+                    };
+                memory.push((expected_address, 0x0f));
+                let (cpu, trace, bytes) = run_indexed(
+                    opcode,
+                    &operands,
+                    a,
+                    0x20 | carry,
+                    x,
+                    y,
+                    &memory,
+                );
+                assert_eq!(cpu.a, expected, "opcode {opcode:02X}");
+                assert_eq!(cpu.pc, 0x8000 + expected_len, "opcode {opcode:02X}");
+                assert_eq!(trace.len(), expected_cycles, "opcode {opcode:02X}");
+                assert_eq!(
+                    trace.last().unwrap().address,
+                    u32::from(expected_address),
+                    "opcode {opcode:02X} did not access expected target"
+                );
+                assert_eq!(
+                    bytes[usize::from(expected_address)],
+                    0x0f,
+                    "operand must be unchanged"
+                );
+                assert!(trace.iter().any(|event| event.access == AccessKind::Read));
+            }
         }
     }
 

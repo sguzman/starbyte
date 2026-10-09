@@ -225,12 +225,8 @@ impl Voice {
             let predicted = match filter {
                 0 => decoded,
                 1 => decoded + ((self.previous * 15) >> 4),
-                2 => {
-                    decoded + ((self.previous * 61) >> 5) - ((self.older * 15) >> 4)
-                }
-                _ => {
-                    decoded + ((self.previous * 115) >> 6) - ((self.older * 13) >> 4)
-                }
+                2 => decoded + ((self.previous * 61) >> 5) - ((self.older * 15) >> 4),
+                _ => decoded + ((self.previous * 115) >> 6) - ((self.older * 13) >> 4),
             };
             let output = predicted.clamp(-16384, 16383);
             self.samples[i] = (output << 1) as i16;
@@ -245,8 +241,7 @@ fn read_ram(ram: &[u8], address: u16) -> u8 {
 }
 
 fn read_word(ram: &[u8], address: u16) -> u16 {
-    u16::from(read_ram(ram, address))
-        | (u16::from(read_ram(ram, address.wrapping_add(1))) << 8)
+    u16::from(read_ram(ram, address)) | (u16::from(read_ram(ram, address.wrapping_add(1))) << 8)
 }
 
 fn clamp_i16(value: i64) -> i16 {

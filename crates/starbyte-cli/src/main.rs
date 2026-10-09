@@ -1399,6 +1399,12 @@ fn build_ppu_display_report(emulator: &starbyte_core::Emulator) -> serde_json::V
         "mosaic_bg_mask": mosaic & 0x0F,
         "main_screen_enable_mask": register(0x212C),
         "sub_screen_enable_mask": register(0x212D),
+        "main_screen_window_mask": register(0x212E),
+        "sub_screen_window_mask": register(0x212F),
+        "color_window_select": register(0x2125),
+        "color_window_logic": register(0x212B),
+        "color_math_select": register(0x2130),
+        "color_math_operation": register(0x2131),
         "vmain": register(0x2115),
         "bg_screen_base_registers": [
             register(0x2107),

@@ -1518,6 +1518,84 @@ mod accumulator_alu_tests {
     }
 
     #[test]
+    fn memory_destination_alu_modes_respect_source_destination_order_and_cycles() {
+        for (family, carry, expected) in [
+            (0x00_u8, 0, 0x1f), // OR
+            (0x20, 0, 0x00),    // AND
+            (0x40, 0, 0x1f),    // EOR
+            (0x60, 0, 0x10),    // CMP leaves destination unchanged
+            (0x80, 0, 0x1f),    // ADC
+            (0xa0, 1, 0x01),    // SBC, no incoming borrow
+        ] {
+            for (mode, operands, data, destination, source, cycles, len) in [
+                (0x18_u8, vec![0x0f, 0x42], vec![(0x0142, 0x10)], 0x0142, None, 5, 3),
+                (
+                    0x09,
+                    vec![0x43, 0x42],
+                    vec![(0x0143, 0x0f), (0x0142, 0x10)],
+                    0x0142,
+                    Some(0x0143),
+                    6,
+                    3,
+                ),
+                (
+                    0x19,
+                    vec![],
+                    vec![(0x0134, 0x0f), (0x0112, 0x10)],
+                    0x0112,
+                    Some(0x0134),
+                    5,
+                    1,
+                ),
+            ] {
+                let opcode = family | mode;
+                let (mut cpu, _, _) =
+                    run_indexed(0x00, &[], 0x5a, 0x20 | carry, 0x12, 0x34, &data);
+                // The tested instruction starts from the same register
+                // snapshot but its own memory and operand bytes.
+                cpu.load_state(0x8000, 0x5a, 0x12, 0x34, 0xef, 0x20 | carry);
+                let mut bytes = vec![0_u8; 65_536];
+                bytes[0x8000] = opcode;
+                for (i, &byte) in operands.iter().enumerate() {
+                    bytes[0x8001 + i] = byte;
+                }
+                for (address, value) in data {
+                    bytes[usize::from(address)] = value;
+                }
+                let bus = RefCell::new(bytes);
+                let trace = cpu
+                    .step_with_memory(
+                        |address| bus.borrow()[usize::from(address)],
+                        |address, value| bus.borrow_mut()[usize::from(address)] = value,
+                    )
+                    .unwrap();
+                let bytes = bus.into_inner();
+
+                assert_eq!(cpu.pc, 0x8000 + len, "opcode {opcode:02X}");
+                assert_eq!(cpu.a, 0x5a, "memory ALU must not overwrite A");
+                assert_eq!(trace.len(), cycles, "opcode {opcode:02X}");
+                assert!(
+                    trace.iter().any(|event| event.address == u32::from(destination)),
+                    "opcode {opcode:02X} must read destination"
+                );
+                if let Some(address) = source {
+                    assert!(trace.iter().any(|event| event.address == u32::from(address)));
+                    assert_eq!(bytes[usize::from(address)], 0x0f, "source unchanged");
+                }
+                if family == 0x60 {
+                    assert_eq!(bytes[usize::from(destination)], 0x10);
+                    assert_eq!(trace.last().unwrap().access, AccessKind::Wait);
+                    assert_ne!(cpu.psw & 0x01, 0, "CMP carry indicates lhs >= rhs");
+                } else {
+                    assert_eq!(bytes[usize::from(destination)], expected);
+                    assert_eq!(trace.last().unwrap().access, AccessKind::Write);
+                    assert_eq!(trace.last().unwrap().address, u32::from(destination));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn adc_and_sbc_preserve_unrelated_direct_page_interrupt_flags() {
         let flags = 0x34; // PSW P, B and I; C is clear.
         let (cpu, _, _) = run(0x88, &[0x10], 0x10, flags, &[]);

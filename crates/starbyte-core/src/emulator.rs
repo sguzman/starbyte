@@ -307,6 +307,13 @@ impl Emulator {
         self.system.read(address)
     }
 
+    /// Side-effect-free read of one byte from canonical WRAM banks $7E/$7F.
+    /// Useful for optional per-frame game-state diagnostics.
+    #[must_use]
+    pub fn peek_wram_u8(&self, address: u32) -> Option<u8> {
+        self.system.peek_wram_u8(address)
+    }
+
     /// Borrow the current CPU-to-APU communication ports.
     #[must_use]
     pub fn cpu_to_apu_ports(&self) -> &[u8] {

@@ -341,7 +341,10 @@ mod tests {
         }
         resumed.reset();
         let mut fresh = Apu::default();
-        assert_eq!(resumed.advance_dsp_sample_clock(300), fresh.advance_dsp_sample_clock(300));
+        assert_eq!(
+            resumed.advance_dsp_sample_clock(300),
+            fresh.advance_dsp_sample_clock(300)
+        );
     }
 
     #[test]

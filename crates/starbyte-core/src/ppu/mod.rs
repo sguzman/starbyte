@@ -231,6 +231,7 @@ impl Ppu {
 
         let backdrop = bgr555_to_rgba(self.backdrop_color());
         let bgmode = self.registers[0x05] & 0x07;
+        fill_frame(framebuffer, backdrop);
         let mut origins = vec![0_u8; framebuffer.width * framebuffer.height];
         self.render_screen_layers(framebuffer, &mut origins, bgmode, false);
 
@@ -646,7 +647,7 @@ impl Ppu {
                     .unwrap_or(0) != 0;
             let source = if sub_visible {
                 subscreen
-                    .and_then(|sub| sub.pixels.chunks_exact(4).nth(index))
+                    .and_then(|sub| sub.pixels.get(index * 4..index * 4 + 4))
                     .unwrap_or(&fixed)
             } else {
                 &fixed

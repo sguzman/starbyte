@@ -92,7 +92,10 @@ impl Spc700 {
             // Standard SPC700 accumulator ALU: immediate, direct-page,
             // and absolute memory addressing. Separate from word ALU.
             0x08 | 0x28 | 0x48 | 0x68 | 0x88 | 0xA8 | 0x04 | 0x24 | 0x44 | 0x64 | 0x84 | 0xA4
-            | 0x05 | 0x25 | 0x45 | 0x65 | 0x85 | 0xA5 => {
+            | 0x05 | 0x25 | 0x45 | 0x65 | 0x85 | 0xA5 | 0x06 | 0x26 | 0x46 | 0x66 | 0x86 | 0xA6
+            | 0x07 | 0x27 | 0x47 | 0x67 | 0x87 | 0xA7 | 0x14 | 0x34 | 0x54 | 0x74 | 0x94 | 0xB4
+            | 0x15 | 0x35 | 0x55 | 0x75 | 0x95 | 0xB5 | 0x16 | 0x36 | 0x56 | 0x76 | 0x96 | 0xB6
+            | 0x17 | 0x37 | 0x57 | 0x77 | 0x97 | 0xB7 => {
                 self.execute_accumulator_alu(opcode, &mut read, &mut trace)
             }
             0x78 => self.execute_cmp_dp_imm(&mut read, &mut trace),
@@ -257,6 +260,62 @@ impl Spc700 {
                 let high = self.push_read_trace(read, trace, self.pc.wrapping_add(2));
                 let rhs = self.push_read_trace(read, trace, u16::from_le_bytes([low, high]));
                 (rhs, 3)
+            }
+            0x06 => {
+                // (X): one-byte opcode with a dummy bus read before DP access.
+                self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                let rhs = self.push_read_trace(read, trace, self.direct_page_address(self.x));
+                (rhs, 1)
+            }
+            0x07 => {
+                // [dp+X]: add X within the selected direct page before
+                // fetching the little-endian pointer. Both pointer bytes
+                // wrap at 0xFF without escaping the active direct-page bank.
+                let offset = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                self.push_wait_trace(trace);
+                let index = offset.wrapping_add(self.x);
+                let low = self.push_read_trace(read, trace, self.direct_page_address(index));
+                let high = self.push_read_trace(
+                    read,
+                    trace,
+                    self.direct_page_address(index.wrapping_add(1)),
+                );
+                let rhs = self.push_read_trace(read, trace, u16::from_le_bytes([low, high]));
+                (rhs, 2)
+            }
+            0x14 => {
+                let offset = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                self.push_wait_trace(trace);
+                let rhs = self.push_read_trace(
+                    read,
+                    trace,
+                    self.direct_page_address(offset.wrapping_add(self.x)),
+                );
+                (rhs, 2)
+            }
+            0x15 | 0x16 => {
+                let low = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                let high = self.push_read_trace(read, trace, self.pc.wrapping_add(2));
+                self.push_wait_trace(trace);
+                let index = if address_mode == 0x15 { self.x } else { self.y };
+                let effective = u16::from_le_bytes([low, high]).wrapping_add(u16::from(index));
+                let rhs = self.push_read_trace(read, trace, effective);
+                (rhs, 3)
+            }
+            0x17 => {
+                // [dp]+Y: indirect pointer comes from unindexed direct
+                // page, then Y indexes the 16-bit effective address.
+                let offset = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                let low = self.push_read_trace(read, trace, self.direct_page_address(offset));
+                let high = self.push_read_trace(
+                    read,
+                    trace,
+                    self.direct_page_address(offset.wrapping_add(1)),
+                );
+                self.push_wait_trace(trace);
+                let effective = u16::from_le_bytes([low, high]).wrapping_add(u16::from(self.y));
+                let rhs = self.push_read_trace(read, trace, effective);
+                (rhs, 2)
             }
             _ => unreachable!("not an implemented SPC accumulator ALU mode"),
         };

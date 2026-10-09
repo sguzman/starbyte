@@ -1,6 +1,6 @@
 # Super Mario World — compatibility investigation
 
-**Current result: a stable "Nintendo Presents" opening is verified; the latest real-ROM probe completed 165 frames before stopping on a missing 65816 instruction at frame 166.** Earlier host-stack corruption was traced to, and fixed in, native NMI status saving. All 256 opcode values are now decoded in source and are under synthetic CI verification, but this has **not yet been re-tested** on the user's ROM. Title screen, input and gameplay remain unverified. This document separates observed outcomes from planned fixes.
+**Current result: a recognizable, stable Super Mario World title screen is verified in a successful 300-frame real-ROM probe.** The first title pixels appear at frame 215, the logo fades to full brightness at frame 245, and the title scene changes at frame 286. Nintendo Presents also renders and fades normally. The 65816 decoder now handles all 256 opcode values; Linux lint, Ubuntu and Windows CI passed at the pre-probe commit. **Title rendering is verified; responsive controls, actual gameplay, accurate audio, and saves remain unverified.** This document separates observations, causes and remaining work.
 
 ## First reproducible headless probe
 
@@ -211,13 +211,44 @@ The frame-166 error `$DF` is a valid indexed long comparison (`CMP.L`). Instead 
 
 All **256 opcode values** are handled by the dispatch table after these changes; tests and CI must establish correctness. Opcode coverage is **not** a claim of complete hardware emulation: cycle timing, decimal arithmetic, dummy reads, interrupt edge cases, and full video/audio accuracy still require work. No SNES ROM bytes were used as test fixtures or committed.
 
+## Tenth probe: complete 300-frame run reaches the Super Mario World title screen
+
+On 2026-10-08 / 2026-10-09 UTC, the user reran the same private LoROM `Super Mario World.smc` member through Starbyte after the all-256-opcode implementation. Command:
+
+```text
+starbyte run "Super Mario World.zip" --frames 300 --no-save-ram
+  --frame-log /tmp/starbyte-smw-300.jsonl
+  --frame-images-dir /tmp/starbyte-smw-300-frames
+  --frame-image-every 10 --max-frame-images 30
+```
+
+**Outcome: all 300 of 300 frames completed successfully**, with zero logged emulation errors. The user supplied the full 300-row JSONL and 30 PPM captures (plus terminal log), which were independently inspected. This is the first actual title-screen observation and a substantial increase from the prior 165-frame run stopped by `CMP long,X`.
+
+| Frame(s) | Direct observations |
+| --- | --- |
+| 1–37 | Blank screen during initialization and initial audio upload; NMI and PPU setup proceed. |
+| 38–131 | Coherent, recognizable Nintendo Presents text on black background. |
+| 132–161 | Opening fades to black as PPU brightness declines. |
+| 162–212 | Dark loading/transition phase, CPU moves through routines with a normal, bounded stack and DMA/PPU work. |
+| 213–214 | Forced blank disabled, title background enabled, brightness still zero. |
+| **215** | **First title image pixels**: 19,235 nonblack pixels, eight RGB colors. Screenshot contains legible colored `SUPER MARIO WORLD` logo, patterned border and `© 1990, 1991 Nintendo` below. |
+| 215–245 | Smooth brightness fade-in from 1 to 15; stable framebuffer contents and plausible CPU main-loop state; stack returns to `$01FF`. |
+| 245–285 | Full brightness. Coherent title image remains stable while game code continues. |
+| **286–300** | **Title scene changes:** 23,273 nonblack pixels and 16 colors, with additional green foreground graphics visible in screenshots 290–300. This is evidence of the beginning of a title animation, not verified controller-responsive gameplay. |
+
+The final CPU sample at frame 300 has `PBR:PC=$00:CAE7`, `S=$01FD`, `P=$E0`, and `DBR=$00` while title-scene code executes. Total transferred DMA bytes reach 259,293; no unsupported opcode and no runaway BRK stack sequence occurred. Framebuffer hashes change 32 times during the 300-frame run. The final display is unblanked, brightness 15, Mode 1, with main-screen enables `$15`.
+
+The accompanying ZIP member title and LoROM header were identified, but the precise ROM digest/region revision has **not** been independently recorded. No commercial ROM bytes or screenshots were committed to this repository; the supplied diagnostics remain external.
+
+**Compatibility milestone: title-screen rendering confirmed; gameplay not yet tested.** Synthetic CPU opcode coverage and bounded headless title frames are not enough to establish accurate input handling, sound effects/music, physics, title-demo progression or save reliability.
+
 ## Next evidence needed
 
-1. Once the combined opcode completion and idle-state changes pass Linux/Windows CI, run a bounded **300-frame** commercial probe with JSONL frame logs and periodic PPM images. Confirm that frame 166 is no longer blocked and examine whether title-screen or actual level graphics appear.
-2. If the CPU fails, capture the earliest divergent frame's instruction/bus trace; if it continues but rendering is wrong, prioritize PPU/HDMA evidence rather than arbitrary CPU changes. Never equate 256 decoded opcode values with fully accurate execution.
-3. Record local cartridge SHA-256/region/revision without distributing ROM bytes.
-4. Add copyright-free synthetic regressions for any new demonstrated correctness defect.
-5. Verify title scene, input, gameplay and sound separately before upgrading the compatibility grade.
+1. Run a bounded longer headless/title-demo probe to observe whether the title scene animates without corruption and whether idle transitions advance correctly. Use existing frame logs and selectively captured PPM images.
+2. Establish a repeatable controller-input probe (Start at title, then direction/jump in the first level). Do not claim gameplay or controller compatibility until the game visibly responds.
+3. Investigate authentic DSP audio, sound/music and native Wayland frame pacing separately; current audio remains synthesized placeholder output and is not faithful to the game.
+4. Record cartridge SHA-256/region/revision without committing or distributing the ROM.
+5. Preserve copyright-free CPU/PPU/DMA regressions for any newly confirmed hardware defect, and promote the compatibility grade only as empirical evidence supports.
 
 ## Acceptance criteria
 

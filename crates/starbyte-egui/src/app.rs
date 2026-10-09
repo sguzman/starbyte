@@ -25,7 +25,10 @@ use starbyte_frontend::{
     LibraryTarget,
 };
 
-const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
+// NTSC SNES video: 341 dots/scanline × 262 lines × 4 master clocks/dot
+// at 21,477,272 master clocks/second ≈ 60.0985 frames/second.
+// Pacing at a generic 60.0 Hz slowly desynchronizes eventual DSP audio.
+const FRAME_INTERVAL: Duration = Duration::from_nanos(16_639_357);
 // A bad game frame can run on the egui thread: return control to Wayland
 // with a diagnostic rather than freezing until the process is killed.
 const GUI_FRAME_TIMEOUT: Duration = Duration::from_millis(1_500);
@@ -1982,6 +1985,13 @@ mod playback_tests {
         FRAME_INTERVAL, FrameClock, FramePerformance, Vec2, fit_game_size, is_compact_layout,
         merged_gamepad_buttons, pressed_button_labels, record_recent_rom, write_png_screenshot,
     };
+
+    #[test]
+    fn frame_pacing_matches_ntsc_master_clock_ratio() {
+        let expected_ns = 341_u128 * 262 * 4 * 1_000_000_000 / 21_477_272;
+        assert_eq!(FRAME_INTERVAL.as_nanos(), expected_ns);
+        assert!(FRAME_INTERVAL < Duration::from_nanos(16_666_667));
+    }
 
     #[test]
     fn clock_limits_work_to_one_frame_per_tick_and_does_not_accumulate_lag() {

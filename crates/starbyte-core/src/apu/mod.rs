@@ -12,7 +12,12 @@ use tracing::{debug, instrument};
 
 use crate::error::{Error, Result};
 
-use self::{dsp::Dsp, spc700::Spc700, timers::SpcTimers, upload::{IplUpload, UploadEvent}};
+use self::{
+    dsp::Dsp,
+    spc700::Spc700,
+    timers::SpcTimers,
+    upload::{IplUpload, UploadEvent},
+};
 
 /// Size of the user-supplied SPC700 IPL ROM.
 pub const SPC700_IPL_ROM_LEN: usize = 64;
@@ -799,7 +804,10 @@ mod tests {
         assert_eq!(apu.read_apu_port(0).unwrap(), 5);
         assert_eq!(apu.spc700.pc, 0x0400);
         assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 4);
-        assert_eq!(apu.isolated_ipl_upload().unwrap().entrypoint(), Some(0x0400));
+        assert_eq!(
+            apu.isolated_ipl_upload().unwrap().entrypoint(),
+            Some(0x0400)
+        );
         apu.execute_spc_program_instruction().unwrap();
         apu.execute_spc_program_instruction().unwrap();
         assert_eq!(apu.read_apu_port(0).unwrap(), 0x42);

@@ -377,6 +377,13 @@ impl SystemBus {
         )
     }
 
+    /// Peek at canonical SNES WRAM without changing open-bus or MMIO state.
+    /// Only addresses in banks $7E and $7F are accepted.
+    #[must_use]
+    pub fn peek_wram_u8(&self, address: u32) -> Option<u8> {
+        high_wram_index(address).and_then(|index| self.wram.get(index).copied())
+    }
+
     /// Borrow compact MMIO observability counters collected during execution.
     #[must_use]
     pub const fn observability(&self) -> &SystemBusObservability {

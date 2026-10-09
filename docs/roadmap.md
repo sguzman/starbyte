@@ -6,9 +6,9 @@
 
 - [ ] Validate native Wayland launch, tiled-window behavior, fullscreen, focus and gamepad use on the target Linux desktop.
 - [x] Provide a copyright-free, built-in visual demo for local Wayland smoke testing and generated CPU-to-PPU pixel regression (implemented; native desktop verification remains open).
-- [ ] Capture a recognizable Super Mario World title frame from a user-supplied ROM; rule out synthetic/nonblack placeholders.
-- [ ] Drive title/menu navigation using controller input, then reach first controllable gameplay.
-- [ ] Trace and fix the earliest observed real-game blockers in PPU, CPU, DMA/HDMA and timing; do not introduce ROM-specific hacks.
+- [x] Capture a recognizable Super Mario World title frame from a user-supplied ROM; real-ROM screenshot evidence is documented in [the compatibility record](compatibility/super-mario-world.md).
+- [x] Drive Super Mario World title, save-selection, welcome and overworld navigation into Yoshi's Island 2; deterministic headless input confirms sustained rightward movement, a running jump, camera scrolling and death/recovery. Native controls remain a separate open gate.
+- [x] Trace and fix the observed SMW boot/gameplay blockers without ROM-specific hacks: controller encoding and VBlank polling, PPU subscreen compositing, and CPU multiply/divide MMIO. More accurate bus timing and broader ROM compatibility remain ongoing.
 - [x] Preserve observable early-frame emulator errors in Play View and Logs rather than silently proceeding after failed first frame (source; core panic/OS crash triage still open).
 - [ ] Replace placeholder audio with authentic sound synthesis and a responsive Linux audio output path.
 - [ ] Measure and improve frame pacing, latency, pauses and save stability during sustained play.

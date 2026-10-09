@@ -10,7 +10,7 @@
 - [x] Drive Super Mario World title, save-selection, welcome and overworld navigation into Yoshi's Island 2; deterministic headless input confirms sustained rightward movement, a running jump, camera scrolling and death/recovery. Native controls remain a separate open gate.
 - [x] Trace and fix the observed SMW boot/gameplay blockers without ROM-specific hacks: controller encoding and VBlank polling, PPU subscreen compositing, and CPU multiply/divide MMIO. More accurate bus timing and broader ROM compatibility remain ongoing.
 - [x] Preserve observable early-frame emulator errors in Play View and Logs rather than silently proceeding after failed first frame (source; core panic/OS crash triage still open).
-- [ ] Replace placeholder audio with authentic sound synthesis and a responsive Linux audio output path.
+- [ ] Implement authentic SNES DSP sound synthesis and a responsive Linux audio output path. The core now schedules 32 kHz stereo sample pairs with fractional NTSC timing and outputs silence rather than an invented waveform; the DSP and device backend remain unimplemented.
 - [ ] Measure and improve frame pacing, latency, pauses and save stability during sustained play.
 - [x] Isolate ROM materialization from the cover-download worker and expose an explicit Play Selected action and visible job feedback (hosted CI passed at `9fe41ff5`; native Wayland launch still unverified).
 - [x] Add core frame instruction-progress guard and GUI 1.5-second wall-clock budget with frame/PC diagnostics to prevent indefinite synchronous stalls (native test pending).

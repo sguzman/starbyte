@@ -3,7 +3,7 @@
 pub mod dsp;
 pub mod spc700;
 
-use std::path::PathBuf;
+use std::{cell::RefCell, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument};
@@ -159,6 +159,28 @@ impl Apu {
     pub fn step_spc700(&mut self) {
         self.spc700.step();
         self.spc700_steps = self.spc700_steps.saturating_add(1);
+    }
+
+    /// Execute a single SPC700 instruction against its own RAM and MMIO bus.
+    ///
+    /// This path is available for isolated sound-driver regression tests.
+    /// Full cartridge runtime still uses the historical bootstrap boundary
+    /// until uploaded game sound drivers and missing SPC700 opcodes are ready.
+    pub fn execute_spc_program_instruction(&mut self) -> Result<Vec<crate::bus::BusEvent>> {
+        // The CPU needs independent read/write callbacks to the same bus.
+        // Temporarily move it out so the callbacks can safely borrow the APU.
+        let mut cpu = std::mem::take(&mut self.spc700);
+        let bus = RefCell::new(&mut *self);
+        let result = cpu.step_with_memory(
+            |address| bus.borrow().read_spc_bus(address),
+            |address, value| bus.borrow_mut().write_spc_bus(address, value),
+        );
+        let mut apu = bus.borrow_mut();
+        apu.spc700 = cpu;
+        if result.is_ok() {
+            apu.spc700_steps = apu.spc700_steps.saturating_add(1);
+        }
+        result
     }
 
     /// Advance placeholder APU work for a number of master cycles.
@@ -398,6 +420,25 @@ mod tests {
 
         apu.write_spc_bus(0x0300, 0x7b);
         assert_eq!(apu.read_spc_bus(0x0300), 0x7b);
+    }
+
+    #[test]
+    fn spc700_program_moves_data_through_real_dsp_and_cpu_mailbox_ports() {
+        let mut apu = Apu::default();
+        // MOV $F2,#$5D; MOV $F3,#$02; MOV A,$F5; MOV $F4,A.
+        let program = [0x8f, 0x5d, 0xf2, 0x8f, 0x02, 0xf3, 0xe4, 0xf5, 0xc4, 0xf4];
+        for (index, byte) in program.into_iter().enumerate() {
+            apu.write_spc_ram(0x0200 + index as u16, byte);
+        }
+        apu.spc700.load_state(0x0200, 0, 0, 0, 0xef, 0);
+        apu.write_cpu_port(1, 0x55).unwrap();
+
+        for _ in 0..4 {
+            assert!(!apu.execute_spc_program_instruction().unwrap().is_empty());
+        }
+        assert_eq!(apu.read_dsp_register(0x5d), 2);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0x55);
+        assert_eq!(apu.spc700.pc, 0x020a);
     }
 
     #[test]

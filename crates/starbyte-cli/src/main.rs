@@ -1958,6 +1958,7 @@ mod tests {
         assert_eq!(record["wram_watch"]["7E0100"], 7);
         assert_eq!(record["wram_watch"]["7E0094"], 42);
         assert_eq!(emulator.peek_wram_u8(0x7D0100), None);
+        assert_eq!(emulator.peek_wram_u8(0x17E0100), None);
     }
 
     #[test]

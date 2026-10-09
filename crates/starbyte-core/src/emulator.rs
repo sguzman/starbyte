@@ -379,14 +379,11 @@ impl Emulator {
     }
 
     fn append_audio_samples(&mut self, master_cycles: u64) {
-        // DSP synthesis is not implemented. Maintain the correct 32 kHz
-        // interleaved stereo cadence, but emit explicit silence instead of
-        // the previous CPU-frequency alternating tone (which was neither
-        // game audio nor a useful output signal).
-        let sample_pairs = self.apu.advance_dsp_sample_clock(master_cycles);
-        self.pending_audio
-            .samples
-            .resize(self.pending_audio.samples.len() + sample_pairs * 2, 0);
+        // The partial BRR voice mixer produces samples at the fractional
+        // DSP cadence. Until SPC700 upload/execution is wired to the mixer,
+        // commercial-game audio stays silent, not a synthetic test tone.
+        self.apu
+            .append_dsp_audio(master_cycles, &mut self.pending_audio.samples);
     }
 
     /// Return the loaded cartridge if any.

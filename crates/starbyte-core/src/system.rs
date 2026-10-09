@@ -708,6 +708,7 @@ impl SystemBus {
             }
             0x4218 => Some((self.joypad.latched1 & 0x00FF) as u8),
             0x4219 => Some((self.joypad.latched1 >> 8) as u8),
+            0x421A..=0x421F => Some(0), // No second controller or multitap connected.
             0x4300..=0x437F => Some(self.dma.read_register(register - 0x4300)),
             _ => None,
         }
@@ -855,11 +856,11 @@ impl JoypadIo {
 
     fn read_serial_port1(&mut self) -> u8 {
         if self.latch_line {
-            return (self.latched1 & 0x01) as u8;
+            return (self.latched1 >> 15) as u8;
         }
 
-        let bit = (self.shift1 & 0x01) as u8;
-        self.shift1 = (self.shift1 >> 1) | 0x8000;
+        let bit = (self.shift1 >> 15) as u8;
+        self.shift1 = (self.shift1 << 1) | 1;
         bit
     }
 }
@@ -1267,8 +1268,8 @@ mod tests {
 
         bus.advance_master_clocks(1);
         assert_eq!(bus.read(0x004212) & 0x01, 0, "auto read finished");
-        assert_eq!(bus.read(0x004218), 0x09, "B and Start are latched");
-        assert_eq!(bus.read(0x004219), 0);
+        assert_eq!(bus.read(0x004218), 0, "signature remains zero");
+        assert_eq!(bus.read(0x004219), 0x90, "B and Start are latched");
     }
 
     #[test]
@@ -1291,7 +1292,8 @@ mod tests {
         // Explicit manual latching still works regardless of NMITIMEN.
         bus.write(0x004016, 1);
         bus.write(0x004016, 0);
-        assert_eq!(bus.read(0x004218), 0x08);
+        assert_eq!(bus.read(0x004218), 0);
+        assert_eq!(bus.read(0x004219), 0x10);
     }
 
     #[test]
@@ -1324,7 +1326,8 @@ mod tests {
         bus.advance_master_clocks(clocks_to_vblank);
         assert_eq!(bus.read(0x004212) & 0x01, 1);
         bus.advance_master_clocks(AUTO_JOYPAD_READ_MASTER_CLOCKS);
-        assert_eq!(bus.read(0x004218), 0x08);
+        assert_eq!(bus.read(0x004218), 0);
+        assert_eq!(bus.read(0x004219), 0x10);
     }
 
     #[test]
@@ -1340,12 +1343,18 @@ mod tests {
         bus.write(0x004016, 0x01);
         bus.write(0x004016, 0x00);
 
-        assert_eq!(bus.read(0x004218), 0x09);
-        assert_eq!(bus.read(0x004219), 0x01);
-        assert_eq!(bus.read(0x004016) & 0x01, 1);
-        assert_eq!(bus.read(0x004016) & 0x01, 0);
-        assert_eq!(bus.read(0x004016) & 0x01, 0);
-        assert_eq!(bus.read(0x004016) & 0x01, 1);
+        assert_eq!(bus.read(0x004218), 0x80); // A, first byte.
+        assert_eq!(bus.read(0x004219), 0x90); // B and Start, second byte.
+        assert_eq!(bus.read(0x00421A), 0); // No second controller connected.
+        assert_eq!(bus.read(0x00421B), 0);
+        assert_eq!(bus.read(0x004016) & 0x01, 1); // B
+        assert_eq!(bus.read(0x004016) & 0x01, 0); // Y
+        assert_eq!(bus.read(0x004016) & 0x01, 0); // Select
+        assert_eq!(bus.read(0x004016) & 0x01, 1); // Start
+        for _ in 0..12 {
+            bus.read(0x004016); // Remaining controller bits.
+        }
+        assert_eq!(bus.read(0x004016) & 0x01, 1); // Serial reads beyond bit 16 return 1.
     }
 
     #[test]

@@ -1833,7 +1833,7 @@ mod tests {
         assert_eq!(events[1].1.to_bits(), 0);
         assert!(events[2].1.right);
         assert!(events[2].1.b);
-        assert_eq!(events[2].1.to_bits(), (1 << 7) | 1);
+        assert_eq!(events[2].1.to_bits(), (1 << 8) | (1 << 15));
     }
 
     #[test]

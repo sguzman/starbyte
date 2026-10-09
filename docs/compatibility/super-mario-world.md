@@ -2,6 +2,12 @@
 
 **Current result: a successful 900-frame real-ROM probe confirms a coherent, sustained animated Super Mario World title demo (Mario, Yoshi, enemies, coins and scrolling terrain).** A scripted Start pulse at frames 450–454 did not visibly exit the demo. Inspection identified a concrete core deficiency: the game enables NMITIMEN=$81 (automatic joypad polling), but Starbyte previously updated $4218/$4219 only on manual $4016 latch writes. VBlank automatic polling, the busy flag and diagnostic host/latched controller state are now implemented, **pending real-ROM retest**. Title and title-demo rendering are confirmed; interactive title navigation, gameplay, audio fidelity and saving are not.
 
+## Controller bit-layout correction (2026-10-09)
+
+The 560-frame automatic-joypad retest completed without CPU errors. During frames 450–454, the CLI's host and latched joypad word both reported `$0008` for Start, and the title demonstration continued. That matched Starbyte's previous encoder but **not** SNES hardware: the correct auto-read word for Start alone is `$1000` (`$4218=$00, $4219=$10`), with buttons ordered BYsS UDLR AXlr 0000. The old implementation reversed the serial order and treated the low four signature bits as buttons. This is a verified encoding defect independent of input timing.
+
+The core now encodes the standard SNES auto-read word and shifts serial data most-significant first. Unconnected controller ports 2–4 explicitly read zero. Unit tests cover all twelve button positions, serial ordering and the automatic-read registers. **A new real-ROM retest is required before claiming Super Mario World responds to Start or reaches file selection.**
+
 ## First reproducible headless probe
 
 On 2026-10-08, the user ran the optimized Starbyte CLI against a locally supplied SNES ZIP, with `--frames 60 --no-save-ram --frame-log` and a 24-image PPM sample. The user provided the resulting JSONL log and screenshots for analysis; no copyrighted ROM or derived program code was committed.

@@ -203,7 +203,8 @@ mod tests {
 
         fn send(&mut self, token: u8) -> UploadEvent {
             self.cpu[0] = token;
-            self.transfer.observe(self.cpu, &mut self.spc, &mut self.ram)
+            self.transfer
+                .observe(self.cpu, &mut self.spc, &mut self.ram)
         }
 
         fn kick(&mut self, destination: u16) {

@@ -1243,9 +1243,7 @@ mod tests {
         assert_eq!(bus.read(0x004218), 0);
 
         bus.advance_master_clocks(
-            u64::from(VBLANK_START_SCANLINE)
-                * u64::from(DOTS_PER_SCANLINE)
-                * MASTER_CLOCKS_PER_DOT,
+            u64::from(VBLANK_START_SCANLINE) * u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT,
         );
         assert_eq!(bus.read(0x004212) & 0x81, 0x81); // VBlank and busy.
         assert_eq!(bus.read(0x004218), 0, "read has not finished yet");
@@ -1273,9 +1271,7 @@ mod tests {
             ..ControllerState::default()
         });
         bus.advance_master_clocks(
-            u64::from(VBLANK_START_SCANLINE)
-                * u64::from(DOTS_PER_SCANLINE)
-                * MASTER_CLOCKS_PER_DOT,
+            u64::from(VBLANK_START_SCANLINE) * u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT,
         );
         bus.advance_master_clocks(AUTO_JOYPAD_READ_MASTER_CLOCKS);
         assert_eq!(bus.read(0x004212) & 0x01, 0, "never busy");
@@ -1296,9 +1292,8 @@ mod tests {
 
         let mut bus = SystemBus::default();
         bus.write(0x004200, 0x01);
-        let clocks_to_vblank = u64::from(VBLANK_START_SCANLINE)
-            * u64::from(DOTS_PER_SCANLINE)
-            * MASTER_CLOCKS_PER_DOT;
+        let clocks_to_vblank =
+            u64::from(VBLANK_START_SCANLINE) * u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT;
         let clocks_per_frame = u64::from(NTSC_SCANLINES_PER_FRAME)
             * u64::from(DOTS_PER_SCANLINE)
             * MASTER_CLOCKS_PER_DOT;
@@ -1311,7 +1306,9 @@ mod tests {
             start: true,
             ..ControllerState::default()
         });
-        bus.advance_master_clocks(clocks_per_frame - clocks_to_vblank - AUTO_JOYPAD_READ_MASTER_CLOCKS);
+        bus.advance_master_clocks(
+            clocks_per_frame - clocks_to_vblank - AUTO_JOYPAD_READ_MASTER_CLOCKS,
+        );
         assert_eq!(bus.timing().scanline, 0);
         bus.advance_master_clocks(clocks_to_vblank);
         assert_eq!(bus.read(0x004212) & 0x01, 1);

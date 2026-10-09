@@ -1709,7 +1709,10 @@ fn parse_controller_events(input: &str, frames: u32) -> Result<Vec<(u32, Control
 
 /// Observe only canonical SNES WRAM banks $7E/$7F so reads cannot trigger MMIO.
 fn parse_wram_watch_addresses(input: &str) -> Result<Vec<u32>> {
-    anyhow::ensure!(!input.trim().is_empty(), "WRAM watch list must not be empty");
+    anyhow::ensure!(
+        !input.trim().is_empty(),
+        "WRAM watch list must not be empty"
+    );
     let mut addresses = Vec::new();
     for token in input.split(',') {
         let token = token.trim();
@@ -1916,15 +1919,29 @@ mod tests {
             parse_wram_watch_addresses("7E0100,7e0094,7F0010").unwrap(),
             [0x7E0100, 0x7E0094, 0x7F0010]
         );
-        for invalid in ["", "0100", "0x7E0100", "7E010G", "7D0100", "7E0100,", "7E0100,7e0100"] {
+        for invalid in [
+            "",
+            "0100",
+            "0x7E0100",
+            "7E010G",
+            "7D0100",
+            "7E0100,",
+            "7E0100,7e0100",
+        ] {
             assert!(
                 parse_wram_watch_addresses(invalid).is_err(),
                 "should reject watch list: {invalid:?}"
             );
         }
-        assert!(parse_wram_watch_addresses(
-            &(0..33).map(|index| format!("7E{index:04X}")).collect::<Vec<_>>().join(",")
-        ).is_err());
+        assert!(
+            parse_wram_watch_addresses(
+                &(0..33)
+                    .map(|index| format!("7E{index:04X}"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1935,8 +1952,7 @@ mod tests {
         let mut emulator = Emulator::default();
         emulator.host_write_u8(0x7E0100, 7);
         emulator.host_write_u8(0x7E0094, 42);
-        write_frame_log_entry(&mut writer, &emulator, 1, None, &[0x7E0100, 0x7E0094])
-            .unwrap();
+        write_frame_log_entry(&mut writer, &emulator, 1, None, &[0x7E0100, 0x7E0094]).unwrap();
         let record: serde_json::Value =
             serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         assert_eq!(record["wram_watch"]["7E0100"], 7);

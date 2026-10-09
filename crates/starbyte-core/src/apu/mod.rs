@@ -580,9 +580,10 @@ mod tests {
     fn spc700_comparisons_update_carry_and_nz_without_mutating_operands() {
         let mut apu = Apu::default();
         // CMP $30,#$7C; CMP Y,$30; INC $30; MOV Y,$30.
-        for (index, value) in [
-            0x78, 0x7c, 0x30, 0x7e, 0x30, 0xab, 0x30, 0xeb, 0x30,
-        ].into_iter().enumerate() {
+        for (index, value) in [0x78, 0x7c, 0x30, 0x7e, 0x30, 0xab, 0x30, 0xeb, 0x30]
+            .into_iter()
+            .enumerate()
+        {
             apu.write_spc_ram(0x0400 + index as u16, value);
         }
         apu.write_spc_ram(0x0030, 0x7c);

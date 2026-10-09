@@ -1247,6 +1247,7 @@ fn write_frame_log_entry(
     let cpu = emulator.cpu_registers();
     let (nonblack_pixels, distinct_rgb_colors) = framebuffer_color_metrics(frame);
     let (nmitimen, htime, vtime) = emulator.irq_timer_configuration();
+    let (host_bits, latched_bits, auto_read_busy) = emulator.joypad_status();
     let report = json!({
         "schema": "starbyte.frame_log.v1",
         "requested_frame": requested_frame,
@@ -1280,6 +1281,11 @@ fn write_frame_log_entry(
             "nmitimen": nmitimen,
             "htime": htime,
             "vtime": vtime,
+        },
+        "joypad": {
+            "host_controller1_bits": host_bits,
+            "latched_controller1_bits": latched_bits,
+            "auto_read_busy": auto_read_busy,
         },
         "apu_steps": emulator.apu_status().spc700_steps,
     });

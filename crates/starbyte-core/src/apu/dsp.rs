@@ -118,7 +118,7 @@ impl Dsp {
                 | u16::from(self.registers[base + 2]);
             let adsr1 = self.registers[base + 5];
             let gain = self.registers[base + 7];
-            let sample = self.voices[index].clock(pitch, adsr1, gain, ram, &self.registers);
+            let sample = self.voices[index].clock(index, pitch, adsr1, gain, ram, &self.registers);
             left += i64::from(sample) * i64::from(self.registers[base] as i8);
             right += i64::from(sample) * i64::from(self.registers[base + 1] as i8);
             self.registers[base + 8] = (self.voices[index].envelope >> 4) as u8;
@@ -156,6 +156,7 @@ impl Dsp {
 impl Voice {
     fn clock(
         &mut self,
+        voice_index: usize,
         pitch: u16,
         adsr1: u8,
         gain: u8,
@@ -194,7 +195,7 @@ impl Voice {
                         break;
                     }
                     let dir = u16::from(registers[0x5d]) << 8;
-                    let source = u16::from(registers[registers_source_offset(self, registers)]);
+                    let source = u16::from(registers[voice_index * 16 + 4]);
                     let entry = dir.wrapping_add(source * 4);
                     self.address = read_word(ram, entry.wrapping_add(2));
                 } else {
@@ -237,12 +238,6 @@ impl Voice {
             self.previous = output;
         }
     }
-}
-
-// The source number belongs to the current voice. To keep this routine
-// independent of a separate index field, caller sets the voice index below.
-fn registers_source_offset(_voice: &Voice, _registers: &[u8]) -> usize {
-    4
 }
 
 fn read_ram(ram: &[u8], address: u16) -> u8 {

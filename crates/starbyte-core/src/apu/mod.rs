@@ -321,7 +321,10 @@ mod tests {
         observed += chunks.advance_dsp_sample_clock(clocks % 6);
         assert_eq!(expected, observed);
         assert!((530..=534).contains(&observed));
-        assert_eq!(whole.advance_dsp_sample_clock(clocks), chunks.advance_dsp_sample_clock(clocks));
+        assert_eq!(
+            whole.advance_dsp_sample_clock(clocks),
+            chunks.advance_dsp_sample_clock(clocks)
+        );
     }
 
     #[test]
@@ -331,7 +334,10 @@ mod tests {
         let serialized = serde_json::to_string(&apu).unwrap();
         let mut resumed: Apu = serde_json::from_str(&serialized).unwrap();
         for clocks in [6, 4, 400, 357_368, 1, 123_456] {
-            assert_eq!(apu.advance_dsp_sample_clock(clocks), resumed.advance_dsp_sample_clock(clocks));
+            assert_eq!(
+                apu.advance_dsp_sample_clock(clocks),
+                resumed.advance_dsp_sample_clock(clocks)
+            );
         }
         resumed.reset();
         let mut fresh = Apu::default();

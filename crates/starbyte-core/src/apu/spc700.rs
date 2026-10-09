@@ -75,6 +75,8 @@ impl Spc700 {
             0x30 => self.execute_bmi(&mut read, &mut trace),
             0x3F => self.execute_call_abs(&mut read, &mut write, &mut trace),
             0x4D => self.execute_push_x(&mut read, &mut write, &mut trace),
+            0x78 => self.execute_cmp_dp_imm(&mut read, &mut trace),
+            0x7E => self.execute_cmp_y_dp(&mut read, &mut trace),
             0x50 => self.execute_bvc(&mut read, &mut trace),
             0x5C => self.execute_lsr_a(&mut read, &mut trace),
             0x5D => self.execute_mov_x_a(&mut read, &mut trace),
@@ -104,6 +106,13 @@ impl Spc700 {
             0xEE => self.execute_pop_y(&mut read, &mut trace),
             0x8D => self.execute_mov_y_imm(&mut read, &mut trace),
             0x8F => self.execute_mov_dp_imm(&mut read, &mut write, &mut trace),
+            0xAB => self.execute_inc_dp(&mut read, &mut write, &mut trace),
+            0xBA => self.execute_movw_ya_dp(&mut read, &mut trace),
+            0xC6 => self.execute_mov_x_indirect_a(&mut read, &mut write, &mut trace),
+            0xCB => self.execute_mov_dp_y(&mut read, &mut write, &mut trace),
+            0xD7 => self.execute_mov_indirect_y_a(&mut read, &mut write, &mut trace),
+            0xDA => self.execute_movw_dp_ya(&mut read, &mut write, &mut trace),
+            0xEB => self.execute_mov_y_dp(&mut read, &mut trace),
             0xC4 => self.execute_mov_dp_a(&mut read, &mut write, &mut trace),
             0xE4 => self.execute_mov_a_dp(&mut read, &mut trace),
             0xF0 => self.execute_beq(&mut read, &mut trace),
@@ -295,6 +304,170 @@ impl Spc700 {
         let address = u16::from(dp) | if self.psw & 0x20 != 0 { 0x0100 } else { 0 };
         self.a = self.push_read_trace(read, trace, address);
         self.update_nz_flags(self.a);
+        self.pc = self.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    /// MOV (X),A: write A to the active zero page at X.
+    fn execute_mov_x_indirect_a<FRead, FWrite>(
+        &mut self,
+        read: &mut FRead,
+        write: &mut FWrite,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+        FWrite: FnMut(u16, u8),
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let address = self.direct_page_address(self.x);
+        self.push_read_trace(read, trace, address);
+        self.push_write_trace(write, trace, address, self.a);
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    /// MOV Y,dp: direct-page read, updating N/Z.
+    fn execute_mov_y_dp<FRead>(
+        &mut self,
+        read: &mut FRead,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        let dp = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.y = self.push_read_trace(read, trace, self.direct_page_address(dp));
+        self.update_nz_flags(self.y);
+        self.pc = self.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    /// MOV dp,Y: direct-page write without altering flags.
+    fn execute_mov_dp_y<FRead, FWrite>(
+        &mut self,
+        read: &mut FRead,
+        write: &mut FWrite,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+        FWrite: FnMut(u16, u8),
+    {
+        let dp = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let address = self.direct_page_address(dp);
+        self.push_read_trace(read, trace, address);
+        self.push_write_trace(write, trace, address, self.y);
+        self.pc = self.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    /// CMP dp,#imm: compare the memory value to the immediate operand.
+    fn execute_cmp_dp_imm<FRead>(
+        &mut self,
+        read: &mut FRead,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        let imm = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let dp = self.push_read_trace(read, trace, self.pc.wrapping_add(2));
+        let value = self.push_read_trace(read, trace, self.direct_page_address(dp));
+        self.update_cmp_flags(value, imm);
+        self.pc = self.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    /// CMP Y,dp: compare the Y register to a direct-page value.
+    fn execute_cmp_y_dp<FRead>(
+        &mut self,
+        read: &mut FRead,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        let dp = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let value = self.push_read_trace(read, trace, self.direct_page_address(dp));
+        self.update_cmp_flags(self.y, value);
+        self.pc = self.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    fn execute_inc_dp<FRead, FWrite>(
+        &mut self,
+        read: &mut FRead,
+        write: &mut FWrite,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+        FWrite: FnMut(u16, u8),
+    {
+        let dp = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let address = self.direct_page_address(dp);
+        let previous = self.push_read_trace(read, trace, address);
+        let value = previous.wrapping_add(1);
+        self.push_write_trace(write, trace, address, value);
+        self.update_nz_flags(value);
+        self.pc = self.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    /// MOVW YA,dp: 16-bit direct-page load with page-wrapped high byte.
+    fn execute_movw_ya_dp<FRead>(
+        &mut self,
+        read: &mut FRead,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        let dp = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.a = self.push_read_trace(read, trace, self.direct_page_address(dp));
+        self.y = self.push_read_trace(read, trace, self.direct_page_address(dp.wrapping_add(1)));
+        self.update_nz_word_flags(u16::from_le_bytes([self.a, self.y]));
+        self.pc = self.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    /// MOVW dp,YA: 16-bit direct-page store with page-wrapped high byte.
+    fn execute_movw_dp_ya<FRead, FWrite>(
+        &mut self,
+        read: &mut FRead,
+        write: &mut FWrite,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+        FWrite: FnMut(u16, u8),
+    {
+        let dp = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let low_address = self.direct_page_address(dp);
+        let high_address = self.direct_page_address(dp.wrapping_add(1));
+        self.push_write_trace(write, trace, low_address, self.a);
+        self.push_write_trace(write, trace, high_address, self.y);
+        self.pc = self.pc.wrapping_add(2);
+        Ok(())
+    }
+
+    /// MOV [dp]+Y,A: dereference a little-endian zero-page pointer.
+    fn execute_mov_indirect_y_a<FRead, FWrite>(
+        &mut self,
+        read: &mut FRead,
+        write: &mut FWrite,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+        FWrite: FnMut(u16, u8),
+    {
+        let dp = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let low = self.push_read_trace(read, trace, self.direct_page_address(dp));
+        let high = self.push_read_trace(read, trace, self.direct_page_address(dp.wrapping_add(1)));
+        let destination = u16::from_le_bytes([low, high]).wrapping_add(u16::from(self.y));
+        self.push_write_trace(write, trace, destination, self.a);
         self.pc = self.pc.wrapping_add(2);
         Ok(())
     }
@@ -842,6 +1015,29 @@ impl Spc700 {
             self.pc = next_pc;
         }
         Ok(())
+    }
+
+    fn direct_page_address(&self, offset: u8) -> u16 {
+        u16::from(offset) | if self.psw & 0x20 != 0 { 0x0100 } else { 0 }
+    }
+
+    fn update_cmp_flags(&mut self, lhs: u8, rhs: u8) {
+        self.update_nz_flags(lhs.wrapping_sub(rhs));
+        if lhs >= rhs {
+            self.psw |= 0x01;
+        } else {
+            self.psw &= !0x01;
+        }
+    }
+
+    fn update_nz_word_flags(&mut self, value: u16) {
+        self.psw &= !(0x80 | 0x02);
+        if value & 0x8000 != 0 {
+            self.psw |= 0x80;
+        }
+        if value == 0 {
+            self.psw |= 0x02;
+        }
     }
 
     fn update_nz_flags(&mut self, value: u8) {

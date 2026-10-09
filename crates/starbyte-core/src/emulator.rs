@@ -379,18 +379,14 @@ impl Emulator {
     }
 
     fn append_audio_samples(&mut self, master_cycles: u64) {
-        let sample_pairs = (master_cycles / CPU_BUS_CYCLE_MASTER_CYCLES).max(1) as usize;
-        let phase = self.apu_status().spc700_steps as i16;
-        let amplitude = ((phase & 0x1F) + 1) * 192;
-        for index in 0..sample_pairs {
-            let sample = if index % 2 == 0 {
-                amplitude
-            } else {
-                -amplitude
-            };
-            self.pending_audio.samples.push(sample);
-            self.pending_audio.samples.push(sample);
-        }
+        // DSP synthesis is not implemented. Maintain the correct 32 kHz
+        // interleaved stereo cadence, but emit explicit silence instead of
+        // the previous CPU-frequency alternating tone (which was neither
+        // game audio nor a useful output signal).
+        let sample_pairs = self.apu.advance_dsp_sample_clock(master_cycles);
+        self.pending_audio
+            .samples
+            .resize(self.pending_audio.samples.len() + sample_pairs * 2, 0);
     }
 
     /// Return the loaded cartridge if any.
@@ -648,7 +644,11 @@ mod tests {
         emulator.host_write_u8(0x004016, 0x00);
         emulator.run_until_frame().unwrap();
 
-        assert!(!emulator.audio_samples().samples.is_empty());
+        let samples = &emulator.audio_samples().samples;
+        // One NTSC video frame has roughly 533 stereo sample pairs at
+        // 32 kHz, not one pair for every CPU bus access.
+        assert!((1_050..=1_100).contains(&samples.len()), "unexpected sample count: {}", samples.len());
+        assert!(samples.iter().all(|&sample| sample == 0), "DSP not synthesized yet");
         assert_eq!(emulator.host_read_u8(0x004218), 0x80);
         assert_eq!(emulator.host_read_u8(0x004219), 0x10);
     }

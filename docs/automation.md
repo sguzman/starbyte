@@ -15,6 +15,21 @@ The JSON responses declare `starbyte.capabilities.v1` and `starbyte.doctor.v1`. 
 
 ROM execution reports (`run ROM --frames N --report-json PATH`) now include a versioned `starbyte.run_report.v1` schema. For black-screen triage, inspect `ppu_display` (brightness, forced blank, mode, layers, VRAM base registers) and `framebuffer` (nonblack pixel count, distinct RGB colors, center pixel, hash). These are deterministic **end-of-run diagnostics**, not verified gameplay measurements or proof of visual correctness.
 
+### Frame-scheduled controller input
+
+A ROM's boot sequence usually takes hundreds of frames before Start can be meaningfully tested. Holding Start from frame 1 (`--controller1 start`) is not equivalent to a button press on the title screen. Headless `run` therefore also accepts an optional `--controller1-events` timeline:
+
+```sh
+cargo run --release -p starbyte-cli -- run /path/to/game.sfc --frames 750 --no-save-ram \
+  --controller1-events "360:start;364:none;500:right,b;530:none" \
+  --frame-log /tmp/starbyte-input-frames.jsonl \
+  --frame-images-dir /tmp/starbyte-input-images --frame-image-every 20
+```
+
+Entries are semicolon-separated `one-based-frame:comma-separated-buttons`. Each entry replaces the currently held controller-1 state **before the corresponding frame runs**, and remains in effect through subsequent frames until the next event. `none` releases all buttons. The parser accepts the usual SNES buttons (`a,b,x,y,l,r,start,select,up,down,left,right`), case-insensitively. Events must be sorted by **strictly increasing, unique** frame numbers in `1..=--frames`; malformed timelines cause an error before the ROM is loaded. The existing `--controller1` flag remains a default held state until a scheduled event overrides it.
+
+This is diagnostic automation, not proof of gameplay or a built-in TAS recorder. Use visual frames and game-state evidence to confirm that a press was actually accepted. One event cannot infer *when* a game's own startup/menu becomes responsive, and full end-to-end input/focus behavior in native Wayland still requires separate testing.
+
 ### Frame-by-frame failure capture
 
 For a game whose display flashes, corrupts, or turns black before emulation stalls, use an explicit local JSONL log. For example:

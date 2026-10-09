@@ -1,12 +1,31 @@
 # Super Mario World — compatibility investigation
 
-**Current result (2026-10-09): real-ROM input-driven file selection confirmed.** A 700-frame headless Super Mario World probe completed without errors after correcting SNES joypad bit ordering. Start was pressed on frames 450–454; both host and latched joypad diagnostics read `$1000` (the SNES Start bit). Captured frame 440 shows the animated title, and frame 460 shows the **MARIO A/B/C ... EMPTY** file-selection menu with a blinking cursor; subsequent samples through frame 680 retain a coherent menu. This verifies title-to-file-selection interaction, beyond merely running a preprogrammed title demonstration. Selecting a save file, player selection, entering gameplay, genuine DSP audio, native Wayland input and save persistence are **not yet verified**.
+**Current result (2026-10-09): three scripted Start presses navigate from title to the introductory in-game scene.** A 1,600-frame headless probe completed without a CPU error, with Start pulses at frames 450–454 (open MARIO A/B/C file selection), 550–554 (select MARIO A; open 1/2-player selection), and 680–684 (choose the default 1-player option). Frame 760 shows the introductory level's HUD and terrain; by frame 840, the familiar Dinosaur Land welcome text and Mario sprite appear, persisting through frame 1,580. These are **real-ROM, input-driven transitions**, not just the scripted title demo. **Movement, jumping, message dismissal, the overworld, authentic DSP audio, native Wayland input and save persistence remain unverified.**
 
 ## Controller bit-layout correction (2026-10-09)
 
 The 560-frame automatic-joypad retest completed without CPU errors. During frames 450–454, the CLI's host and latched joypad word both reported `$0008` for Start, and the title demonstration continued. That matched Starbyte's previous encoder but **not** SNES hardware: the correct auto-read word for Start alone is `$1000` (`$4218=$00, $4219=$10`), with buttons ordered BYsS UDLR AXlr 0000. The old implementation reversed the serial order and treated the low four signature bits as buttons. This is a verified encoding defect independent of input timing.
 
 The core now encodes the standard SNES auto-read word and shifts serial data most-significant first. Unconnected controller ports 2–4 explicitly read zero. Unit tests cover all twelve button positions, serial ordering and the automatic-read registers. **The subsequent 700-frame real-ROM retest verified the intended title-to-file-selection transition.**
+
+## Eighth headless probe: first in-game scene after three Start presses (1,600 frames, 2026-10-09)
+
+The user ran the same local `Super Mario World.zip` at main commit `a32e36b`, with `--frames 1600 --no-save-ram --controller1-events "450:start;455:none;550:start;555:none;680:start;685:none"`. All **1,600** JSONL frame attempts succeeded with no CPU error, and 80 sampled PPM images were inspected. The frame log captured `$1000` in the host and latched joypad word on each Start pulse, with `$0000` after release.
+
+| Sampled frame | Observed game state |
+| --- | --- |
+| 440 | Animated Super Mario World title demo |
+| 460 | File-selection screen, MARIO A/B/C marked EMPTY |
+| 560 | 1 PLAYER GAME / 2 PLAYER GAME selection |
+| 680 | Default 1-player option still on screen while third Start pulse takes effect |
+| 720–740 | Black transition frames; CPU advances and does not error |
+| 760 | Recognizable in-level HUD, score/time elements, grassy land, bushes |
+| 780–820 | Mario character appears against the introductory terrain |
+| 840–1580 | The introductory message beginning **Welcome! This is Dinosaur Land...** is legible and remains onscreen with Mario and terrain; no further user input is scheduled |
+
+This is the first confirmed **save-slot selection, player-count selection and entry into an actual in-game scene** in Super Mario World. The in-game introductory message remains visible because the scripted controller timeline stops after frame 685; there is no evidence of an emulator hang or of failed subsequent input. We **must not** claim ordinary walking/jumping, overworld navigation, authentic DSP sound or reliable SRAM saves from this evidence. The exact ROM revision/hash is still unidentified. Original game images and proprietary ROM bytes remain exclusively in user-supplied local diagnostic artifacts; none are committed here.
+
+**Next test:** replay the same initial Start pulses, then send an explicit B/A/Start dismissal input after the welcome text is visible (e.g. frame 980), sample later frames for a transition to the overworld, and only then test movement. A distinct user-input-driven transition is needed before marking normal gameplay control as verified.
 
 ## Seventh headless probe: real-ROM Start opens file selection (700 frames, 2026-10-09)
 
@@ -281,8 +300,8 @@ A general hardware-level fix has been committed:
 
 ## Next evidence needed
 
-1. With title-to-file-selection now confirmed, schedule a second Start pulse on the default **MARIO A ... EMPTY** slot and capture the resulting screen. If player selection opens, send a third distinct input pulse for one-player mode, then check the intro/overworld transition.
-2. Verify real player control with explicitly scheduled directional and action inputs once actual gameplay is reached; preprogrammed title animations are not sufficient evidence.
+1. **Confirmed:** the first three Start pulses open the file-selection screen, choose MARIO A, and choose 1-player mode, reaching the Dinosaur Land welcome scene. Next, schedule a separate button press to close the introductory text and inspect the subsequent transition to the overworld.
+2. Once a genuinely controllable scene is visible, test movement and action inputs against captured frame differences and game state. Intro animations alone are not enough to claim normal gameplay.
 3. Investigate DSP music/audio, native Wayland frame pacing and SRAM independently; synthetic samples are not faithful game sound.
 4. Record the exact local cartridge checksum/revision without committing or distributing ROM bytes.
 5. Add synthetic regressions for newly confirmed hardware faults and upgrade compatibility only when demonstrated.

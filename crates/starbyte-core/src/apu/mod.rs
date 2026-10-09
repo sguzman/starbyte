@@ -357,7 +357,12 @@ mod tests {
     fn can_decode_and_mix_brr_audio_from_spc_ram() {
         let mut apu = Apu::default();
         // Directory at $0200 and a filter-0 looping BRR block at $0300.
-        for (address, value) in [(0x0200, 0x00), (0x0201, 0x03), (0x0202, 0x00), (0x0203, 0x03)] {
+        for (address, value) in [
+            (0x0200, 0x00),
+            (0x0201, 0x03),
+            (0x0202, 0x00),
+            (0x0203, 0x03),
+        ] {
             apu.write_spc_ram(address, value);
         }
         apu.write_spc_ram(0x0300, 0xc3);

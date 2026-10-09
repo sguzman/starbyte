@@ -604,9 +604,7 @@ fn controller_timeline_rejects_invalid_frames_before_rom_loading() {
         ])
         .assert()
         .failure();
-    assert!(
-        String::from_utf8_lossy(&result.get_output().stderr).contains("strictly increasing")
-    );
+    assert!(String::from_utf8_lossy(&result.get_output().stderr).contains("strictly increasing"));
 }
 
 #[test]

@@ -22,6 +22,10 @@ const NTSC_MASTER_CLOCK_HZ: u64 = 21_477_272;
 pub const DSP_SAMPLE_RATE_HZ: u64 = 32_000;
 const SPC_RAM_BYTES: usize = 65_536;
 
+const fn ipl_overlay_default() -> bool {
+    true
+}
+
 fn blank_spc_ram() -> Vec<u8> {
     vec![0; SPC_RAM_BYTES]
 }
@@ -70,6 +74,9 @@ pub struct Apu {
     /// Sound-CPU timer registers and their fractional master-clock phase.
     #[serde(default)]
     timers: SpcTimers,
+    /// SPC700 CONTROL bit 7: read the optional IPL from $FFC0-$FFFF.
+    #[serde(default = "ipl_overlay_default")]
+    ipl_overlay_enabled: bool,
 }
 
 impl Default for Apu {
@@ -86,6 +93,7 @@ impl Default for Apu {
             spc_ram: blank_spc_ram(),
             dsp: Dsp::default(),
             timers: SpcTimers::default(),
+            ipl_overlay_enabled: true,
         }
     }
 }
@@ -115,6 +123,7 @@ impl Apu {
         self.spc_ram.fill(0);
         self.dsp.reset();
         self.timers = SpcTimers::default();
+        self.ipl_overlay_enabled = true;
         self.bootstrap_state = if self.bootstrap_program_available() {
             BootstrapState::WaitingForCpuBootstrapAck
         } else {
@@ -235,6 +244,9 @@ impl Apu {
             0x00f3 => self.dsp.read_register(self.spc_ram[0x00f2]),
             0x00f4..=0x00f7 => self.cpu_to_apu_ports[usize::from(address - 0x00f4)],
             0x00fd..=0x00ff => self.timers.read_and_clear(usize::from(address - 0x00fd)),
+            0xffc0..=0xffff if self.ipl_overlay_enabled && self.ipl_rom.is_some() => {
+                self.ipl_rom.as_ref().unwrap()[usize::from(address - 0xffc0)]
+            }
             _ => self.read_spc_ram(address),
         }
     }
@@ -243,6 +255,7 @@ impl Apu {
     pub fn write_spc_bus(&mut self, address: u16, value: u8) {
         match address {
             0x00f1 => {
+                self.ipl_overlay_enabled = value & 0x80 != 0;
                 self.timers.write_control(value);
                 // CONTROL bits 4 and 5 clear the CPU-to-SPC input latches;
                 // they do not clear the SNES-visible SPC output ports.
@@ -427,6 +440,34 @@ mod tests {
         assert_eq!(apu.read_cpu_port(0).unwrap(), 0x12);
         assert_eq!(apu.read_apu_port(3).unwrap(), 0x34);
         assert_eq!(apu.status().spc700_steps, 2);
+    }
+
+    #[test]
+    fn optional_ipl_overlay_hides_but_preserves_underlying_high_ram() {
+        let mut apu = Apu::default();
+        let mut image = vec![0; SPC700_IPL_ROM_LEN];
+        image[0] = 0xe8; // MOV A,#imm
+        image[1] = 0x42;
+        image[63] = 0xbb;
+        apu.install_ipl_rom_bytes(image, None).unwrap();
+        apu.reset();
+
+        apu.write_spc_bus(0xffc0, 0x11);
+        apu.write_spc_bus(0xffff, 0x22);
+        assert_eq!(apu.read_spc_ram(0xffc0), 0x11);
+        assert_eq!(apu.read_spc_bus(0xffc0), 0xe8);
+        assert_eq!(apu.read_spc_bus(0xffff), 0xbb);
+
+        // An isolated SPC instruction really fetches bytes from IPL overlay.
+        apu.spc700.load_state(0xffc0, 0, 0, 0, 0xef, 0);
+        apu.execute_spc_program_instruction().unwrap();
+        assert_eq!(apu.spc700.a, 0x42);
+
+        apu.write_spc_bus(0x00f1, 0);
+        assert_eq!(apu.read_spc_bus(0xffc0), 0x11);
+        assert_eq!(apu.read_spc_bus(0xffff), 0x22);
+        apu.write_spc_bus(0x00f1, 0x80);
+        assert_eq!(apu.read_spc_bus(0xffc0), 0xe8);
     }
 
     #[test]

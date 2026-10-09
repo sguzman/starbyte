@@ -369,7 +369,7 @@ A general hardware-level fix has been committed:
 ## Next evidence needed
 
 1. **Confirmed:** general SNES subscreen color math restores the colorful Yoshi's Island overworld map in a private real-ROM probe, including BG2 water/terrain previously omitted. Preserve this rendering regression.
-2. **Core fault identified and fixed, pending real-ROM retest:** the 22,438-instruction trace proved missing unsigned CPU math MMIO made `$4216`/`$4214` return open-bus `$4242` instead of the expected product `$0340`/quotient `$0068`. Retest overworld walking, position convergence, and B-to-level entry after the new arithmetic-register implementation; do not claim playable before observing a normal level.
+2. **Real-ROM math fix confirmed:** the former `$4242` product/division open-bus error is eliminated. Mario walks smoothly from `(104,120)` to `(152,136)`, B enters Yoshi's Island 2, mode reaches `$14`, and two separate jumps/landings are visible. **Next: exercise horizontal movement and scenery/collision interactions *inside* level mode `$14`** (the previous in-level Right pulse happened prematurely during mode `$13`).
 3. Investigate DSP music/audio, native Wayland frame pacing and SRAM independently; synthetic samples are not faithful game sound.
 4. Record the exact local cartridge checksum/revision without committing or distributing ROM bytes.
 5. Add synthetic regressions for newly confirmed hardware faults and upgrade compatibility only when demonstrated.

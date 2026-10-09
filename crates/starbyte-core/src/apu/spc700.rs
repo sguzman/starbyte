@@ -1310,11 +1310,11 @@ mod accumulator_alu_tests {
         let y = 5;
         for (base, a, carry, expected) in [
             (0x00_u8, 0x10, 0, 0x1F), // OR
-            (0x20, 0x10, 0, 0x00), // AND
-            (0x40, 0x10, 0, 0x1F), // EOR
-            (0x60, 0x10, 0, 0x10), // CMP
-            (0x80, 0x10, 0, 0x1F), // ADC
-            (0xA0, 0x10, 1, 0x01), // SBC
+            (0x20, 0x10, 0, 0x00),    // AND
+            (0x40, 0x10, 0, 0x1F),    // EOR
+            (0x60, 0x10, 0, 0x10),    // CMP
+            (0x80, 0x10, 0, 0x1F),    // ADC
+            (0xA0, 0x10, 1, 0x01),    // SBC
         ] {
             for mode in [0x06_u8, 0x07, 0x14, 0x15, 0x16, 0x17] {
                 let opcode = base | mode;
@@ -1341,15 +1341,8 @@ mod accumulator_alu_tests {
                         _ => unreachable!(),
                     };
                 memory.push((expected_address, 0x0f));
-                let (cpu, trace, bytes) = run_indexed(
-                    opcode,
-                    &operands,
-                    a,
-                    0x20 | carry,
-                    x,
-                    y,
-                    &memory,
-                );
+                let (cpu, trace, bytes) =
+                    run_indexed(opcode, &operands, a, 0x20 | carry, x, y, &memory);
                 assert_eq!(cpu.a, expected, "opcode {opcode:02X}");
                 assert_eq!(cpu.pc, 0x8000 + expected_len, "opcode {opcode:02X}");
                 assert_eq!(trace.len(), expected_cycles, "opcode {opcode:02X}");

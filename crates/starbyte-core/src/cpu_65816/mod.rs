@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tracing::trace;
 
 use crate::bus::{AccessKind, Address, Bus, BusEvent};
-use crate::error::{Error, Result};
+use crate::error::Result;
 
 /// Minimal bootstrap CPU core state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

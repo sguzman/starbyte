@@ -105,6 +105,10 @@ impl Spc700 {
             0x5D => self.execute_mov_x_a(&mut read, &mut trace),
             0x5F => self.execute_jmp_abs(&mut read, &mut trace),
             0xE8 => self.execute_mov_a_imm(&mut read, &mut trace),
+            0xE5 | 0xE6 | 0xE7 | 0xF4 | 0xF5 | 0xF6 | 0xF7 => {
+                self.execute_mov_a_addressed(opcode, &mut read, &mut trace)
+            }
+            0xBF => self.execute_mov_a_x_increment(&mut read, &mut trace),
             0x40 => self.execute_setp(&mut read, &mut trace),
             0x70 => self.execute_bvs(&mut read, &mut trace),
             0x6D => self.execute_push_y(&mut read, &mut write, &mut trace),
@@ -235,12 +239,15 @@ impl Spc700 {
         Ok(())
     }
 
-    fn execute_accumulator_alu<FRead>(
-        &mut self,
+    /// Read an SPC700 accumulator operand with its addressing bus events.
+    /// Shared by arithmetic and MOV A modes to keep DP pointer wrapping
+    /// and indexed addressing consistent across instruction families.
+    fn read_accumulator_operand<FRead>(
+        &self,
         opcode: u8,
         read: &mut FRead,
         trace: &mut Vec<BusEvent>,
-    ) -> Result<()>
+    ) -> (u8, u16)
     where
         FRead: FnMut(u16) -> u8,
     {
@@ -318,7 +325,19 @@ impl Spc700 {
                 (rhs, 2)
             }
             _ => unreachable!("not an implemented SPC accumulator ALU mode"),
-        };
+        }
+    }
+
+    fn execute_accumulator_alu<FRead>(
+        &mut self,
+        opcode: u8,
+        read: &mut FRead,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        let (rhs, instruction_len) = self.read_accumulator_operand(opcode, read, trace);
         let lhs = self.a;
         let family = opcode & 0xe0;
         match family {
@@ -372,6 +391,42 @@ impl Spc700 {
             _ => unreachable!("unknown SPC accumulator ALU family"),
         }
         self.pc = self.pc.wrapping_add(instruction_len);
+        Ok(())
+    }
+
+    fn execute_mov_a_addressed<FRead>(
+        &mut self,
+        opcode: u8,
+        read: &mut FRead,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        let (value, instruction_len) = self.read_accumulator_operand(opcode, read, trace);
+        self.a = value;
+        self.update_nz_flags(value);
+        self.pc = self.pc.wrapping_add(instruction_len);
+        Ok(())
+    }
+
+    fn execute_mov_a_x_increment<FRead>(
+        &mut self,
+        read: &mut FRead,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        // MOV A,(X)+ reads the current direct-page X address and advances
+        // X modulo 256 without crossing to the other direct-page bank.
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let value = self.push_read_trace(read, trace, self.direct_page_address(self.x));
+        self.push_wait_trace(trace);
+        self.a = value;
+        self.x = self.x.wrapping_add(1);
+        self.update_nz_flags(value);
+        self.pc = self.pc.wrapping_add(1);
         Ok(())
     }
 

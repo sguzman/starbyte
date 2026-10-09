@@ -1544,6 +1544,41 @@ mod accumulator_alu_tests {
     }
 
     #[test]
+    fn mov_x_y_indexed_loads_preserve_other_register_and_wrap_direct_page() {
+        for (opcode, operands, target, len, cycles, writes_x) in [
+            (0xF8_u8, vec![0xff], 0x01ff_u16, 2, 3, true),
+            (0xF9, vec![0xfc], 0x0101, 2, 4, true),
+            (0xE9, vec![0x34, 0x12], 0x1234, 3, 4, true),
+            (0xEC, vec![0x34, 0x12], 0x1234, 3, 4, false),
+            (0xFB, vec![0xfe], 0x0101, 2, 4, false),
+        ] {
+            let (cpu, trace, bytes) =
+                run_indexed(opcode, &operands, 0x55, 0x22, 3, 5, &[(target, 0x80)]);
+            assert_eq!(cpu.a, 0x55, "opcode {opcode:02X} must preserve A");
+            assert_eq!(
+                (cpu.x, cpu.y),
+                if writes_x { (0x80, 5) } else { (3, 0x80) },
+                "opcode {opcode:02X}"
+            );
+            assert_eq!(cpu.pc, 0x8000 + len);
+            assert_eq!(cpu.psw & 0x83, 0x80, "N/Z/C");
+            assert_eq!(trace.len(), cycles);
+            assert_eq!(trace.last().unwrap().address, u32::from(target));
+            assert_eq!(bytes[usize::from(target)], 0x80);
+        }
+    }
+
+    #[test]
+    fn mov_x_from_zero_sets_z_without_clearing_carry() {
+        let (cpu, trace, _) =
+            run_indexed(0xF9, &[0xfc], 0xaa, 0x21, 3, 5, &[(0x0101, 0)]);
+        assert_eq!(cpu.x, 0);
+        assert_eq!(cpu.y, 5);
+        assert_eq!(cpu.psw & 0x83, 0x03);
+        assert_eq!(trace.len(), 4);
+    }
+
+    #[test]
     fn mov_a_x_postincrement_wraps_without_leaving_selected_direct_page() {
         let (cpu, trace, bytes) = run_indexed(0xBF, &[], 0, 0x22, 0xff, 0, &[(0x01ff, 0x7f)]);
         assert_eq!(cpu.a, 0x7f);

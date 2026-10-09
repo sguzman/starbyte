@@ -339,11 +339,6 @@ impl Cpu65816 {
             | 0x5F => self.execute_eor_addressed(bus, &mut trace, opcode),
             0xE1 | 0xE3 | 0xE5 | 0xE7 | 0xED | 0xEF | 0xF1 | 0xF2 | 0xF3 | 0xF5 | 0xF7 | 0xF9
             | 0xFD | 0xFF => self.execute_sbc_addressed(bus, &mut trace, opcode),
-            _ => Err(Error::UnsupportedOpcode {
-                cpu: "65816",
-                opcode,
-                address: opcode_address,
-            }),
         }?;
 
         self.cycles = trace.len() as u64;

@@ -445,10 +445,7 @@ mod tests {
     fn spc700_direct_page_flag_redirects_memory_moves_to_page_one() {
         let mut apu = Apu::default();
         // SETP; MOV $82,#$7B; MOV A,$82.
-        for (index, value) in [0x40, 0x8f, 0x7b, 0x82, 0xe4, 0x82]
-            .into_iter()
-            .enumerate()
-        {
+        for (index, value) in [0x40, 0x8f, 0x7b, 0x82, 0xe4, 0x82].into_iter().enumerate() {
             apu.write_spc_ram(0x0200 + index as u16, value);
         }
         apu.spc700.load_state(0x0200, 0, 0, 0, 0xef, 0);

@@ -1,6 +1,6 @@
 # Super Mario World — compatibility investigation
 
-**Current result: a recognizable, stable Super Mario World title screen is verified in a successful 300-frame real-ROM probe.** The first title pixels appear at frame 215, the logo fades to full brightness at frame 245, and the title scene changes at frame 286. Nintendo Presents also renders and fades normally. The 65816 decoder now handles all 256 opcode values; Linux lint, Ubuntu and Windows CI passed at the pre-probe commit. **Title rendering is verified; responsive controls, actual gameplay, accurate audio, and saves remain unverified.** This document separates observations, causes and remaining work.
+**Current result: a successful 900-frame real-ROM probe confirms a coherent, sustained animated Super Mario World title demo (Mario, Yoshi, enemies, coins and scrolling terrain).** A scripted Start pulse at frames 450–454 did not visibly exit the demo. Inspection identified a concrete core deficiency: the game enables NMITIMEN=$81 (automatic joypad polling), but Starbyte previously updated $4218/$4219 only on manual $4016 latch writes. VBlank automatic polling, the busy flag and diagnostic host/latched controller state are now implemented, **pending real-ROM retest**. Title and title-demo rendering are confirmed; interactive title navigation, gameplay, audio fidelity and saving are not.
 
 ## First reproducible headless probe
 
@@ -242,13 +242,29 @@ The accompanying ZIP member title and LoROM header were identified, but the prec
 
 **Compatibility milestone: title-screen rendering confirmed; gameplay not yet tested.** Synthetic CPU opcode coverage and bounded headless title frames are not enough to establish accurate input handling, sound effects/music, physics, title-demo progression or save reliability.
 
+## Eleventh probe: 900-frame title demo and missing VBlank joypad polling
+
+On 2026-10-09 UTC the user ran `starbyte run "Super Mario World.zip" --frames 900 --no-save-ram --controller1-events "450:start;455:none"`, saving 900 JSONL frame records and 46 PPM screenshot samples. The entire run **completed successfully** with no CPU halt, unsupported opcode, host crash or corrupt-stack regression. The input timeline applied Start before frame 450 and released it before frame 455; the CLI log confirms both updates.
+
+Captured frames 320–900 show **substantial, coherent title-demo gameplay animation** within the Super Mario World title border: Mario, Yoshi, enemies, coins, foreground terrain, and horizontal scrolling. At frames 440, 460, 480, 520 and later, the animation proceeds but no visible file-selection screen appears after the Start pulse. The title sprite/demo is the *scripted attract sequence*, not proof that the host can control Mario or launch a first playable level.
+
+The reported `irq_timer.nmitimen` value during frames 38–900 is **129 decimal (`$81`)**: VBlank NMI enabled (bit 7), **automatic controller read enabled (bit 0)**. Starbyte's pre-fix `SystemBus` had working *manual* controller latching (`$4016` strobe) and returned `latched1` at `$4218/$4219`, but **never automatically latched on VBlank**, despite bit 0 being enabled. Thus the game's automatically polled pad values could remain unchanged even while the host `controller1` state changed. This is a specific emulation omission, not just an unproven theory about input timing.
+
+A general hardware-level fix has been committed:
+- Begin automatic controller-1 sampling each VBlank only when NMITIMEN bit 0 is set.
+- Preserve sampled button bits and update `$4218/$4219` when the approximate 4,224-master-clock automatic read interval completes. `$4212` bit 0 reports busy during that interval.
+- Keep explicit `$4016` serial latching available. New synthetic tests exercise Start, disabled polling, the busy interval, repeated VBlank updates and a snapshot unaffected by a host release during polling.
+- Expose a read-only `joypad` record in each opted-in `starbyte.frame_log.v1` entry (`host_controller1_bits`, `latched_controller1_bits`, `auto_read_busy`) so future tests can distinguish host delivery from what the emulated game can see.
+
+**Next evidence needed:** rerun a bounded scheduled Start pulse after CI passes and verify both that `$4218` reflects Start during the correct frames and that the title/demo transitions visibly into an interactive screen. Do not mark gameplay verified solely from animation or from accepted input bits. The busy interval is modeled approximately; precise sub-scanline timing remains an open emulator fidelity task.
+
 ## Next evidence needed
 
-1. Run a bounded longer headless/title-demo probe to observe whether the title scene animates without corruption and whether idle transitions advance correctly. Use existing frame logs and selectively captured PPM images.
-2. Establish a repeatable controller-input probe (Start at title, then direction/jump in the first level). Do not claim gameplay or controller compatibility until the game visibly responds.
-3. Investigate authentic DSP audio, sound/music and native Wayland frame pacing separately; current audio remains synthesized placeholder output and is not faithful to the game.
-4. Record cartridge SHA-256/region/revision without committing or distributing the ROM.
-5. Preserve copyright-free CPU/PPU/DMA regressions for any newly confirmed hardware defect, and promote the compatibility grade only as empirical evidence supports.
+1. After the automatic joypad latch and per-frame diagnostics pass CI, rerun the title Start pulse in a **560-frame probe**. Inspect exact host and latched bits around frames 450–455; capture periodic screenshots for a menu/level transition. If Start is not accepted, use the new evidence to isolate game-side polling or CPU control flow.
+2. If title Start navigation works, schedule subsequent menu selections and first-level controls. Verify true player responsiveness separately from scripted title demo animation.
+3. Investigate DSP music/audio, native Wayland frame pacing and SRAM independently; synthetic samples are not faithful game sound.
+4. Record the exact local cartridge checksum/revision without committing or distributing ROM bytes.
+5. Add synthetic regressions for newly confirmed hardware faults and upgrade compatibility only when demonstrated.
 
 ## Acceptance criteria
 

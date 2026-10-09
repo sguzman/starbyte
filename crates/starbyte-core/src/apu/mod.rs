@@ -212,7 +212,9 @@ impl Apu {
     pub fn write_spc_bus(&mut self, address: u16, value: u8) {
         match address {
             0x00f2 => self.spc_ram[0x00f2] = value & 0x7f,
-            0x00f3 => self.dsp.write_register(self.spc_ram[0x00f2], value, &self.spc_ram),
+            0x00f3 => self
+                .dsp
+                .write_register(self.spc_ram[0x00f2], value, &self.spc_ram),
             0x00f4..=0x00f7 => {
                 self.apu_to_cpu_ports[usize::from(address - 0x00f4)] = value;
             }

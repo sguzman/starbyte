@@ -1541,7 +1541,7 @@ mod accumulator_alu_tests {
                     vec![0x43, 0x42],
                     vec![(0x0143, 0x0f), (0x0142, 0x10)],
                     0x0142,
-                    Some(0x0143),
+                    Some(0x0143_u16),
                     6,
                     3,
                 ),

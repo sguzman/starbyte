@@ -591,7 +591,7 @@ fn frame_scheduled_controller_input_runs_and_records_frames() {
 fn controller_timeline_rejects_invalid_frames_before_rom_loading() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("missing.sfc");
-    Command::cargo_bin("starbyte")
+    let result = Command::cargo_bin("starbyte")
         .unwrap()
         .args([
             "run",
@@ -603,8 +603,10 @@ fn controller_timeline_rejects_invalid_frames_before_rom_loading() {
             "--no-save-ram",
         ])
         .assert()
-        .failure()
-        .stderr(predicates::str::contains("strictly increasing"));
+        .failure();
+    assert!(
+        String::from_utf8_lossy(&result.get_output().stderr).contains("strictly increasing")
+    );
 }
 
 #[test]

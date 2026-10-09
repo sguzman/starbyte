@@ -1,5 +1,6 @@
 //! Audio processing unit bootstrap boundary.
 
+pub mod dsp;
 pub mod spc700;
 
 use std::path::PathBuf;
@@ -9,7 +10,7 @@ use tracing::{debug, instrument};
 
 use crate::error::{Error, Result};
 
-use self::spc700::Spc700;
+use self::{dsp::Dsp, spc700::Spc700};
 
 /// Size of the user-supplied SPC700 IPL ROM.
 pub const SPC700_IPL_ROM_LEN: usize = 64;
@@ -18,6 +19,11 @@ pub const SPC700_IPL_ROM_LEN: usize = 64;
 const NTSC_MASTER_CLOCK_HZ: u64 = 21_477_272;
 /// SNES DSP produces 32,000 stereo sample pairs per second.
 pub const DSP_SAMPLE_RATE_HZ: u64 = 32_000;
+const SPC_RAM_BYTES: usize = 65_536;
+
+fn blank_spc_ram() -> Vec<u8> {
+    vec![0; SPC_RAM_BYTES]
+}
 
 /// Buffered audio samples returned to a frontend.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -54,6 +60,12 @@ pub struct Apu {
     /// Fractional numerator of the DSP sample clock; serialized for save-state continuity.
     #[serde(default)]
     dsp_sample_phase: u64,
+    /// Independent SPC700 address space (not main CPU WRAM).
+    #[serde(default = "blank_spc_ram")]
+    spc_ram: Vec<u8>,
+    /// Partial SNES DSP synthesis engine and voice/register state.
+    #[serde(default)]
+    dsp: Dsp,
 }
 
 impl Default for Apu {
@@ -67,6 +79,8 @@ impl Default for Apu {
             spc700_steps: 0,
             bootstrap_state: BootstrapState::default(),
             dsp_sample_phase: 0,
+            spc_ram: blank_spc_ram(),
+            dsp: Dsp::default(),
         }
     }
 }
@@ -92,6 +106,9 @@ impl Apu {
         };
         self.spc700_steps = 0;
         self.dsp_sample_phase = 0;
+        self.spc_ram.resize(SPC_RAM_BYTES, 0);
+        self.spc_ram.fill(0);
+        self.dsp.reset();
         self.bootstrap_state = if self.bootstrap_program_available() {
             BootstrapState::WaitingForCpuBootstrapAck
         } else {
@@ -164,6 +181,41 @@ impl Apu {
         let denominator = u128::from(NTSC_MASTER_CLOCK_HZ);
         self.dsp_sample_phase = (numerator % denominator) as u64;
         usize::try_from(numerator / denominator).expect("DSP sample count exceeds platform usize")
+    }
+
+    /// Write SPC700 RAM (separate from the SNES main CPU address space).
+    pub fn write_spc_ram(&mut self, address: u16, value: u8) {
+        self.spc_ram[usize::from(address)] = value;
+    }
+
+    /// Read SPC700 RAM, including user-uploaded BRR samples.
+    #[must_use]
+    pub fn read_spc_ram(&self, address: u16) -> u8 {
+        self.spc_ram[usize::from(address)]
+    }
+
+    /// Write an S-DSP register; the SPC700 $F2/$F3 memory map is future work.
+    pub fn write_dsp_register(&mut self, register: u8, value: u8) {
+        self.dsp.write_register(register, value, &self.spc_ram);
+    }
+
+    /// Read the current register value from the partial S-DSP model.
+    #[must_use]
+    pub fn read_dsp_register(&self, register: u8) -> u8 {
+        self.dsp.read_register(register)
+    }
+
+    /// Append DSP-paced interleaved stereo output into one frame's buffer.
+    ///
+    /// Current real-game output remains silent until SPC700 sound-program
+    /// execution and DSP register writes are connected to the runtime.
+    pub fn append_dsp_audio(&mut self, master_cycles: u64, output: &mut Vec<i16>) {
+        let pairs = self.advance_dsp_sample_clock(master_cycles);
+        for _ in 0..pairs {
+            let (left, right) = self.dsp.next_stereo_pair(&self.spc_ram);
+            output.push(left);
+            output.push(right);
+        }
     }
 
     /// Write one CPU-to-APU communication port byte.
@@ -299,6 +351,37 @@ mod tests {
         assert_eq!(apu.read_cpu_port(0).unwrap(), 0x12);
         assert_eq!(apu.read_apu_port(3).unwrap(), 0x34);
         assert_eq!(apu.status().spc700_steps, 2);
+    }
+
+    #[test]
+    fn can_decode_and_mix_brr_audio_from_spc_ram() {
+        let mut apu = Apu::default();
+        // Directory at $0200 and a filter-0 looping BRR block at $0300.
+        for (address, value) in [(0x0200, 0x00), (0x0201, 0x03), (0x0202, 0x00), (0x0203, 0x03)] {
+            apu.write_spc_ram(address, value);
+        }
+        apu.write_spc_ram(0x0300, 0xc3);
+        for offset in 1..9 {
+            apu.write_spc_ram(0x0300 + offset, 0x77);
+        }
+        for (register, value) in [
+            (0x5d, 0x02),
+            (0x00, 0x7f),
+            (0x01, 0x7f),
+            (0x03, 0x10),
+            (0x07, 0x7f),
+            (0x0c, 0x7f),
+            (0x1c, 0x7f),
+            (0x4c, 0x01),
+        ] {
+            apu.write_dsp_register(register, value);
+        }
+        let mut audio = Vec::new();
+        apu.append_dsp_audio(21_477_272 / 100, &mut audio);
+        assert!((600..=700).contains(&audio.len()));
+        assert!(audio.iter().any(|sample| *sample > 1000));
+        assert_eq!(apu.read_spc_ram(0x0300), 0xc3);
+        assert_eq!(apu.read_dsp_register(0x5d), 0x02);
     }
 
     #[test]

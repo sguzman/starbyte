@@ -652,7 +652,10 @@ mod tests {
             "unexpected sample count: {}",
             samples.len()
         );
-        assert!(samples.iter().all(|&sample| sample == 0), "DSP not synthesized yet");
+        assert!(
+            samples.iter().all(|&sample| sample == 0),
+            "DSP not synthesized yet"
+        );
         assert_eq!(emulator.host_read_u8(0x004218), 0x80);
         assert_eq!(emulator.host_read_u8(0x004219), 0x10);
     }

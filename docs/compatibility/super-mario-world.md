@@ -1,12 +1,33 @@
 # Super Mario World — compatibility investigation
 
-**Current result (2026-10-09): a 2,400-frame real-ROM probe reaches Yoshi's House and shows a Right-correlated Mario sprite displacement.** After three verified Start presses navigate title, MARIO A file selection and 1-player selection, the Dinosaur Land welcome message appears. A short B pulse at frame 950 does not visibly dismiss it; a second B pulse at frame 1700 initiates a fade and enters a screen labeled **YOSHI'S HOUSE** by frame 1780. Mario remains near screen x=120 through frame 2100, then moves toward x=181 by frame 2120 during a 40-frame Right input. **All 2,400 frames complete without CPU errors**, but the scene's black background and disconnected white graphic fragments, combined with later unusual sprite placement, mean **accurate playable gameplay is not yet established**. Native Wayland controls, jumping, collision correctness, audio and saves remain unverified.
+**Current result (2026-10-09): 2,900-frame WRAM probe confirms the Yoshi's House screen is the overworld, not a playable level.** Three Start presses and the later B press navigate into overworld game mode `$0E` by frame 1900. All 2,900 frames finish without an emulator error, and additional Right/Left/B inputs reach the game's controller registers; however, Mario's **level** coordinates `$7E0094-$7E0097` remain unchanged through those inputs because the game is in overworld mode. Earlier movement observations must **not** be described as in-level walking. The background map is largely black with fragmented white objects. The PPU lacked subscreen color math even though the ROM placed BG2 on the subscreen: a general-purpose PPU color-compositing path has been implemented with synthetic tests, pending a new real-ROM visual probe. Native Wayland input, correct overworld navigation, entering a level, jumping, collisions, authentic audio and saves remain unverified.
 
 ## Controller bit-layout correction (2026-10-09)
 
 The 560-frame automatic-joypad retest completed without CPU errors. During frames 450–454, the CLI's host and latched joypad word both reported `$0008` for Start, and the title demonstration continued. That matched Starbyte's previous encoder but **not** SNES hardware: the correct auto-read word for Start alone is `$1000` (`$4218=$00, $4219=$10`), with buttons ordered BYsS UDLR AXlr 0000. The old implementation reversed the serial order and treated the low four signature bits as buttons. This is a verified encoding defect independent of input timing.
 
 The core now encodes the standard SNES auto-read word and shifts serial data most-significant first. Unconnected controller ports 2–4 explicitly read zero. Unit tests cover all twelve button positions, serial ordering and the automatic-read registers. **The subsequent 700-frame real-ROM retest verified the intended title-to-file-selection transition.**
+
+## Tenth headless probe: WRAM confirms overworld game mode (2,900 frames, 2026-10-09)
+
+The user ran the new `--watch-wram` CLI build against the same private `Super Mario World.zip` with **2,900/2,900 successful frames**. The command additionally watched `7E0100,7E0094,7E0095,7E0096,7E0097,7E007B,7E007D,7E0015,7E0016,7E13E0`. Its inputs repeated the three Start presses and two B presses, sent Right frames 2100–2139, Left frames 2450–2489, then B frames 2600–2604. All controller pulses were present in the host and latched registers.
+
+| Frame(s) | Game-mode `$7E0100` (hex) | Observation from logged state |
+| --- | --- | --- |
+| 450 | `$07` | Title, after first Start |
+| 550 | `$09` | File-selection transition |
+| 680 | `$0A` | Player-selection transition |
+| 840–1699 | `$14` | Introductory in-level welcome text; `$7E0094/95=$0080`, `$7E0096/97=$0160` |
+| 1700 | `$0B` | B press initiates transition out of the intro |
+| 1780 | `$0D` | Overworld loading and fade |
+| **1900 onward** | **`$0E`** | **Overworld mode**; screen labeled Yoshi's House |
+| 2100–2140 | `$0E` | Right input seen, but **level** X bytes `$7E0094/95` remain `$000D` |
+| 2450–2490 | `$0E` | Left input seen; level X/Y bytes still unchanged |
+| 2600–2900 | `$0E` | B pulse seen; no transition into level mode |
+
+`$0E` is SMW's overworld game mode; `$14` is in-level mode. The static `$0094` position bytes are **not** evidence that overworld walking failed, because the game stores the overworld X/Y coordinates separately at `$7E1F17–$7E1F1A`. The screenshots show the Mario-map icon moving immediately after Right, but overworld position must be verified with the correct memory addresses before claiming navigable paths. The visually black map also limits interpreting sprite positions. All byte-value data above are from the user's local frame log; no private ROM or snapshots are committed here.
+
+**Technical finding:** the PPU report shows SNES Mode 1, main-screen layers BG1/BG3/OBJ (`TM=$15`), and subscreen BG2 (`TS=$02`) in the overworld. Before this run, `Ppu::render_frame` rendered main-screen layers and a narrow fixed-color effect only; it did **not** render BG2 into a separate subscreen or blend that with the main screen using `CGWSEL/CGADSUB`. General main/sub rendering with color-window clipping and color math has now been added, and synthetic tests cover subscreen-only BG2 showing through main backdrop math. A follow-up ROM capture is required to determine how much of the missing map it fixes; a code change is not equivalent to successful visual validation.
 
 ## Ninth headless probe: welcome dismissal, Yoshi's House and Right response (2,400 frames, 2026-10-09)
 
@@ -317,8 +338,8 @@ A general hardware-level fix has been committed:
 
 ## Next evidence needed
 
-1. **Confirmed:** three Start presses reach the Dinosaur Land welcome; a later B press enters Yoshi's House; a Right pulse correlates with Mario sprite movement. Next, compare canonical game-mode and Mario-position WRAM values against the controller timeline, and exercise short Left/Right/Jump pulses as separate tests.
-2. Investigate the black/fragmented Yoshi's House graphics and abnormal later sprite positioning before claiming normal movement, collision physics or playable levels.
+1. **Confirmed:** Start and B navigate to `$0E` overworld mode; the Yoshi's House screen is **not** a normal level. Next, record `$7E1F17-$7E1F1A` and `$7E0DD5` to verify actual overworld position and walking states after Right/Left.
+2. **New PPU implementation needs real-ROM validation:** capture overworld frames after subscreen color math and compare with the previously black map. Do not mark SMW playable until level entry and correct graphics, jumping and collision are verified.
 3. Investigate DSP music/audio, native Wayland frame pacing and SRAM independently; synthetic samples are not faithful game sound.
 4. Record the exact local cartridge checksum/revision without committing or distributing ROM bytes.
 5. Add synthetic regressions for newly confirmed hardware faults and upgrade compatibility only when demonstrated.

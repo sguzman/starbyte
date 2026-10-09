@@ -57,23 +57,43 @@ mod tests {
 
     #[test]
     fn snes_joypad_word_places_all_twelve_buttons_in_hardware_bits() {
-        let cases = [
-            (ControllerState { b: true, ..ControllerState::default() }, 0x8000),
-            (ControllerState { y: true, ..ControllerState::default() }, 0x4000),
-            (ControllerState { select: true, ..ControllerState::default() }, 0x2000),
-            (ControllerState { start: true, ..ControllerState::default() }, 0x1000),
-            (ControllerState { up: true, ..ControllerState::default() }, 0x0800),
-            (ControllerState { down: true, ..ControllerState::default() }, 0x0400),
-            (ControllerState { left: true, ..ControllerState::default() }, 0x0200),
-            (ControllerState { right: true, ..ControllerState::default() }, 0x0100),
-            (ControllerState { a: true, ..ControllerState::default() }, 0x0080),
-            (ControllerState { x: true, ..ControllerState::default() }, 0x0040),
-            (ControllerState { l: true, ..ControllerState::default() }, 0x0020),
-            (ControllerState { r: true, ..ControllerState::default() }, 0x0010),
-        ];
-        for (state, expected) in cases {
-            assert_eq!(state.to_bits(), expected);
-        }
-        assert_eq!(ControllerState::default().to_bits(), 0);
+        let mut state = ControllerState::default();
+        state.b = true;
+        assert_eq!(state.to_bits(), 0x8000);
+        state.b = false;
+        state.y = true;
+        assert_eq!(state.to_bits(), 0x4000);
+        state.y = false;
+        state.select = true;
+        assert_eq!(state.to_bits(), 0x2000);
+        state.select = false;
+        state.start = true;
+        assert_eq!(state.to_bits(), 0x1000);
+        state.start = false;
+        state.up = true;
+        assert_eq!(state.to_bits(), 0x0800);
+        state.up = false;
+        state.down = true;
+        assert_eq!(state.to_bits(), 0x0400);
+        state.down = false;
+        state.left = true;
+        assert_eq!(state.to_bits(), 0x0200);
+        state.left = false;
+        state.right = true;
+        assert_eq!(state.to_bits(), 0x0100);
+        state.right = false;
+        state.a = true;
+        assert_eq!(state.to_bits(), 0x0080);
+        state.a = false;
+        state.x = true;
+        assert_eq!(state.to_bits(), 0x0040);
+        state.x = false;
+        state.l = true;
+        assert_eq!(state.to_bits(), 0x0020);
+        state.l = false;
+        state.r = true;
+        assert_eq!(state.to_bits(), 0x0010);
+        state.r = false;
+        assert_eq!(state.to_bits(), 0);
     }
 }

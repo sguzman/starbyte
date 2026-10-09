@@ -1789,7 +1789,9 @@ mod tests {
     use starbyte_core::{Emulator, Error, cartridge::Cartridge};
     use tempfile::tempdir;
 
-    use super::{resolve_state_path, sanitize_file_stem, write_frame_log_entry};
+    use super::{
+        parse_controller_events, resolve_state_path, sanitize_file_stem, write_frame_log_entry,
+    };
 
     fn test_cartridge() -> Cartridge {
         let mut rom = vec![0_u8; 0x10000];
@@ -1805,6 +1807,39 @@ mod tests {
         rom[base + 0x1E] = 0xFF;
         rom[base + 0x1F] = 0x00;
         Cartridge::from_bytes(rom, Some(PathBuf::from("C:/ROMs/test game.sfc"))).unwrap()
+    }
+
+    #[test]
+    fn controller_timeline_supports_press_release_and_multiple_buttons() {
+        let events = parse_controller_events("2:start;4:none;5:right,b", 5).unwrap();
+        assert_eq!(events.iter().map(|(frame, _)| *frame).collect::<Vec<_>>(), [2, 4, 5]);
+        assert!(events[0].1.start);
+        assert!(!events[0].1.right);
+        assert_eq!(events[1].1.to_bits(), 0);
+        assert!(events[2].1.right);
+        assert!(events[2].1.b);
+        assert_eq!(events[2].1.to_bits(), (1 << 7) | 1);
+    }
+
+    #[test]
+    fn controller_timeline_rejects_invalid_frames_and_button_names() {
+        for invalid in [
+            "",
+            "0:start",
+            "1:start;1:none",
+            "3:start;2:none",
+            "6:start",
+            "2:start;",
+            "2:",
+            "2start",
+            "2:space",
+        ] {
+            assert!(
+                parse_controller_events(invalid, 5).is_err(),
+                "should reject invalid timeline: {invalid:?}"
+            );
+        }
+        assert!(parse_controller_events("1:START;5:NoNe", 5).is_ok());
     }
 
     #[test]

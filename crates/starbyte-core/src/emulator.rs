@@ -348,6 +348,12 @@ impl Emulator {
         self.system.irq_timer_configuration()
     }
 
+    /// Nonmutating host controller bits, latched automatic/serial bits and busy state.
+    #[must_use]
+    pub const fn joypad_status(&self) -> (u16, u16, bool) {
+        self.system.joypad_status()
+    }
+
     /// Borrow compact bus activity counters for CLI reporting and regressions.
     #[must_use]
     pub fn system_observability(&self) -> &SystemBusObservability {

@@ -194,7 +194,34 @@ impl Apu {
         self.spc_ram[usize::from(address)]
     }
 
-    /// Write an S-DSP register; the SPC700 $F2/$F3 memory map is future work.
+    /// Read from the SPC700 address space, including DSP and CPU mailbox ports.
+    ///
+    /// This exposes the essential sound-CPU data path without enabling
+    /// execution of incomplete SPC700 sound drivers. Timers, IPL overlay,
+    /// and general SPC700 instruction timing remain separate work.
+    #[must_use]
+    pub fn read_spc_bus(&self, address: u16) -> u8 {
+        match address {
+            0x00f3 => self.dsp.read_register(self.spc_ram[0x00f2]),
+            0x00f4..=0x00f7 => self.cpu_to_apu_ports[usize::from(address - 0x00f4)],
+            _ => self.read_spc_ram(address),
+        }
+    }
+
+    /// Write the SPC700 RAM/MMIO bus, including indirect DSP register access.
+    pub fn write_spc_bus(&mut self, address: u16, value: u8) {
+        match address {
+            0x00f2 => self.spc_ram[0x00f2] = value & 0x7f,
+            0x00f3 => self.dsp.write_register(self.spc_ram[0x00f2], value, &self.spc_ram),
+            0x00f4..=0x00f7 => {
+                self.apu_to_cpu_ports[usize::from(address - 0x00f4)] = value;
+            }
+            _ => self.write_spc_ram(address, value),
+        }
+    }
+
+    /// Write an S-DSP register directly (normally through SPC700 $F2/$F3).
+
     pub fn write_dsp_register(&mut self, register: u8, value: u8) {
         self.dsp.write_register(register, value, &self.spc_ram);
     }
@@ -351,6 +378,24 @@ mod tests {
         assert_eq!(apu.read_cpu_port(0).unwrap(), 0x12);
         assert_eq!(apu.read_apu_port(3).unwrap(), 0x34);
         assert_eq!(apu.status().spc700_steps, 2);
+    }
+
+    #[test]
+    fn spc700_bus_routes_indirect_dsp_and_bidirectional_mailboxes() {
+        let mut apu = Apu::default();
+        apu.write_spc_bus(0x00f2, 0x5d);
+        apu.write_spc_bus(0x00f3, 0x02);
+        assert_eq!(apu.read_spc_bus(0x00f2), 0x5d);
+        assert_eq!(apu.read_spc_bus(0x00f3), 0x02);
+        assert_eq!(apu.read_dsp_register(0x5d), 0x02);
+
+        apu.write_cpu_port(1, 0x34).unwrap();
+        assert_eq!(apu.read_spc_bus(0x00f5), 0x34);
+        apu.write_spc_bus(0x00f6, 0x56);
+        assert_eq!(apu.read_apu_port(2).unwrap(), 0x56);
+
+        apu.write_spc_bus(0x0300, 0x7b);
+        assert_eq!(apu.read_spc_bus(0x0300), 0x7b);
     }
 
     #[test]

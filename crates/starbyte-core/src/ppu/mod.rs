@@ -632,10 +632,10 @@ impl Ppu {
                 continue;
             }
             let source_mask = match origins.get(index).copied().unwrap_or(0) {
-                0 => 0x20, // Backdrop
+                0 => 0x20,                          // Backdrop
                 1..=4 => 1 << (origins[index] - 1), // BG1..BG4
-                5 => 0x10, // OBJ palettes 4..7
-                _ => 0, // OBJ palettes 0..3 do not participate
+                5 => 0x10,                          // OBJ palettes 4..7
+                _ => 0,                             // OBJ palettes 0..3 do not participate
             };
             if operation & source_mask == 0 {
                 continue;
@@ -644,7 +644,8 @@ impl Ppu {
                 && sub_origins
                     .and_then(|layers| layers.get(index))
                     .copied()
-                    .unwrap_or(0) != 0;
+                    .unwrap_or(0)
+                    != 0;
             let source = if sub_visible {
                 subscreen
                     .and_then(|sub| sub.pixels.get(index * 4..index * 4 + 4))

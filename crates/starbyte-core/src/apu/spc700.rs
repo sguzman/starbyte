@@ -328,11 +328,7 @@ impl Spc700 {
     }
 
     /// MOV Y,dp: direct-page read, updating N/Z.
-    fn execute_mov_y_dp<FRead>(
-        &mut self,
-        read: &mut FRead,
-        trace: &mut Vec<BusEvent>,
-    ) -> Result<()>
+    fn execute_mov_y_dp<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
     where
         FRead: FnMut(u16) -> u8,
     {
@@ -380,11 +376,7 @@ impl Spc700 {
     }
 
     /// CMP Y,dp: compare the Y register to a direct-page value.
-    fn execute_cmp_y_dp<FRead>(
-        &mut self,
-        read: &mut FRead,
-        trace: &mut Vec<BusEvent>,
-    ) -> Result<()>
+    fn execute_cmp_y_dp<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
     where
         FRead: FnMut(u16) -> u8,
     {

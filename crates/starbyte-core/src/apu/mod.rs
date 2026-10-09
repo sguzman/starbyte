@@ -3,6 +3,7 @@
 pub mod dsp;
 pub mod spc700;
 mod timers;
+pub mod upload;
 
 use std::{cell::RefCell, path::PathBuf};
 
@@ -11,7 +12,7 @@ use tracing::{debug, instrument};
 
 use crate::error::{Error, Result};
 
-use self::{dsp::Dsp, spc700::Spc700, timers::SpcTimers};
+use self::{dsp::Dsp, spc700::Spc700, timers::SpcTimers, upload::{IplUpload, UploadEvent}};
 
 /// Size of the user-supplied SPC700 IPL ROM.
 pub const SPC700_IPL_ROM_LEN: usize = 64;
@@ -77,6 +78,9 @@ pub struct Apu {
     /// SPC700 CONTROL bit 7: read the optional IPL from $FFC0-$FFFF.
     #[serde(default = "ipl_overlay_default")]
     ipl_overlay_enabled: bool,
+    /// Explicitly enabled IPL transfer capture; disabled in the production shim.
+    #[serde(default)]
+    ipl_upload: Option<IplUpload>,
 }
 
 impl Default for Apu {
@@ -94,6 +98,7 @@ impl Default for Apu {
             dsp: Dsp::default(),
             timers: SpcTimers::default(),
             ipl_overlay_enabled: true,
+            ipl_upload: None,
         }
     }
 }
@@ -124,7 +129,12 @@ impl Apu {
         self.dsp.reset();
         self.timers = SpcTimers::default();
         self.ipl_overlay_enabled = true;
-        self.bootstrap_state = if self.bootstrap_program_available() {
+        if let Some(upload) = self.ipl_upload.as_mut() {
+            upload.reset();
+        }
+        self.bootstrap_state = if self.ipl_upload.is_some() {
+            BootstrapState::Idle
+        } else if self.bootstrap_program_available() {
             BootstrapState::WaitingForCpuBootstrapAck
         } else {
             BootstrapState::Idle
@@ -198,6 +208,24 @@ impl Apu {
         result
     }
 
+    /// Enable byte-accurate mailbox upload capture for an isolated APU test.
+    ///
+    /// The production emulator deliberately retains its previous compatibility
+    /// bootstrap until we can execute actual commercial sound drivers.
+    /// This decoder stores uploaded bytes in audio RAM but cannot run the
+    /// transferred program continuously. Do not enable it implicitly.
+    pub fn enable_isolated_ipl_upload(&mut self) {
+        self.ipl_upload = Some(IplUpload::default());
+        self.bootstrap_state = BootstrapState::Idle;
+        self.apu_to_cpu_ports = [0xaa, 0xbb, 0, 0];
+    }
+
+    /// State of the explicitly enabled sound-program upload decoder.
+    #[must_use]
+    pub fn isolated_ipl_upload(&self) -> Option<&IplUpload> {
+        self.ipl_upload.as_ref()
+    }
+
     /// Advance placeholder APU work for a number of master cycles.
     pub fn step_master_cycles(&mut self, master_cycles: u64) {
         // Clock SPC hardware timers at their own fractional rate, independently
@@ -207,7 +235,20 @@ impl Apu {
         for _ in 0..(master_cycles / 6) {
             self.step_spc700();
         }
-        self.advance_bootstrap_handshake();
+        if let Some(upload) = self.ipl_upload.as_mut() {
+            let event = upload.observe(
+                self.cpu_to_apu_ports,
+                &mut self.apu_to_cpu_ports,
+                &mut self.spc_ram,
+            );
+            if let UploadEvent::EntryPoint { address } = event {
+                // The sound driver has been uploaded but is NOT being
+                // automatically executed by the production frame loop.
+                self.spc700.load_state(address, 0, 0, 0, 0xef, 0x02);
+            }
+        } else {
+            self.advance_bootstrap_handshake();
+        }
     }
 
     /// Return the number of SNES DSP sample pairs due for this many NTSC master clocks.
@@ -725,6 +766,48 @@ mod tests {
             resumed.advance_dsp_sample_clock(300),
             fresh.advance_dsp_sample_clock(300)
         );
+    }
+
+    #[test]
+    fn opt_in_upload_copies_sound_driver_and_keeps_runtime_default_unchanged() {
+        let mut apu = Apu::default();
+        apu.reset();
+        assert!(apu.isolated_ipl_upload().is_none());
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0xaa);
+
+        apu.enable_isolated_ipl_upload();
+        for (port, value) in [(1, 1), (2, 0x00), (3, 0x04), (0, 0xcc)] {
+            apu.write_cpu_port(port, value).unwrap();
+        }
+        apu.step_master_cycles(6);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0xcc);
+
+        // Upload MOV A,#$42; MOV $F4,A with port-0 index acknowledgements.
+        for (index, byte) in [0xe8, 0x42, 0xc4, 0xf4].into_iter().enumerate() {
+            apu.write_cpu_port(1, byte).unwrap();
+            apu.write_cpu_port(0, index as u8).unwrap();
+            apu.step_master_cycles(6);
+            assert_eq!(apu.read_apu_port(0).unwrap(), index as u8);
+            assert_eq!(apu.read_spc_ram(0x0400 + index as u16), byte);
+        }
+
+        apu.write_cpu_port(1, 0).unwrap();
+        apu.write_cpu_port(2, 0).unwrap();
+        apu.write_cpu_port(3, 4).unwrap();
+        apu.write_cpu_port(0, 5).unwrap();
+        apu.step_master_cycles(6);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 5);
+        assert_eq!(apu.spc700.pc, 0x0400);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 4);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().entrypoint(), Some(0x0400));
+        apu.execute_spc_program_instruction().unwrap();
+        apu.execute_spc_program_instruction().unwrap();
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0x42);
+
+        let saved = serde_json::to_string(&apu).unwrap();
+        let restored: Apu = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.isolated_ipl_upload().unwrap().bytes_written(), 4);
+        assert_eq!(restored.read_spc_ram(0x0402), 0xc4);
     }
 
     #[test]

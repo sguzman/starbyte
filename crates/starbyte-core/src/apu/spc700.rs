@@ -1417,6 +1417,59 @@ mod accumulator_alu_tests {
     }
 
     #[test]
+    fn mov_a_indexed_forms_share_alu_addressing_and_update_only_nz() {
+        for (opcode, operands, initial_data, expected_address, expected_len, cycles) in [
+            (0xE6_u8, vec![], vec![], 0x0103, 1, 3),
+            (
+                0xE7,
+                vec![0xfc],
+                vec![(0x01ff, 0x30), (0x0100, 0x40)],
+                0x4030,
+                2,
+                6,
+            ),
+            (0xE5, vec![0xfe, 0xff], vec![], 0xfffe, 3, 4),
+            (0xF4, vec![0xfe], vec![], 0x0101, 2, 4),
+            (0xF5, vec![0xfe, 0xff], vec![], 0x0001, 3, 5),
+            (0xF6, vec![0xfe, 0xff], vec![], 0x0003, 3, 5),
+            (
+                0xF7,
+                vec![0xff],
+                vec![(0x01ff, 0x30), (0x0100, 0x40)],
+                0x4035,
+                2,
+                6,
+            ),
+        ] {
+            let mut initial_data = initial_data;
+            initial_data.push((expected_address, 0x80));
+            let (cpu, trace, bytes) =
+                run_indexed(opcode, &operands, 0xAA, 0x23, 3, 5, &initial_data);
+            assert_eq!(cpu.a, 0x80, "opcode {opcode:02X}");
+            assert_eq!(cpu.x, 3, "opcode {opcode:02X}");
+            assert_eq!(cpu.y, 5, "opcode {opcode:02X}");
+            assert_eq!(cpu.pc, 0x8000 + expected_len, "opcode {opcode:02X}");
+            assert_eq!(cpu.psw & 0x83, 0x81, "opcode {opcode:02X} N/Z/C");
+            assert_eq!(trace.len(), cycles, "opcode {opcode:02X}");
+            assert_eq!(trace.last().unwrap().address, u32::from(expected_address));
+            assert_eq!(bytes[usize::from(expected_address)], 0x80);
+        }
+    }
+
+    #[test]
+    fn mov_a_x_postincrement_wraps_without_leaving_selected_direct_page() {
+        let (cpu, trace, bytes) =
+            run_indexed(0xBF, &[], 0, 0x22, 0xff, 0, &[(0x01ff, 0x7f)]);
+        assert_eq!(cpu.a, 0x7f);
+        assert_eq!(cpu.x, 0);
+        assert_eq!(cpu.pc, 0x8001);
+        assert_eq!(cpu.psw & 0x83, 0, "N/Z cleared, C unchanged");
+        assert_eq!(trace.len(), 4);
+        assert_eq!(trace[2].address, 0x01ff);
+        assert_eq!(bytes[0x01ff], 0x7f);
+    }
+
+    #[test]
     fn adc_and_sbc_preserve_unrelated_direct_page_interrupt_flags() {
         let flags = 0x34; // PSW P, B and I; C is clear.
         let (cpu, _, _) = run(0x88, &[0x10], 0x10, flags, &[]);

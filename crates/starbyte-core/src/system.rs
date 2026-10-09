@@ -381,6 +381,9 @@ impl SystemBus {
     /// Only addresses in banks $7E and $7F are accepted.
     #[must_use]
     pub fn peek_wram_u8(&self, address: u32) -> Option<u8> {
+        if !(0x7E0000..=0x7FFFFF).contains(&address) {
+            return None;
+        }
         high_wram_index(address).and_then(|index| self.wram.get(index).copied())
     }
 

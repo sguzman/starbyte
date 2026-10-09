@@ -217,6 +217,11 @@ struct RunArgs {
     #[arg(long)]
     frame_log: Option<PathBuf>,
 
+    /// Comma-separated canonical WRAM addresses to observe, such as 7E0100,7E0094.
+    /// Adds a side-effect-free wram_watch map to each explicitly requested frame log.
+    #[arg(long, requires = "frame_log")]
+    watch_wram: Option<String>,
+
     /// Optionally save bounded PPM snapshots of completed frames to this directory.
     #[arg(long)]
     frame_images_dir: Option<PathBuf>,
@@ -937,6 +942,12 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
         .map(|input| parse_controller_events(input, args.frames))
         .transpose()?
         .unwrap_or_default();
+    let watched_wram_addresses = args
+        .watch_wram
+        .as_deref()
+        .map(parse_wram_watch_addresses)
+        .transpose()?
+        .unwrap_or_default();
     if let Some(trace_frame) = args.trace_frame {
         anyhow::ensure!(
             trace_frame <= args.frames,
@@ -1016,7 +1027,13 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
             emulator.run_until_frame()
         };
         if let Some(file) = frame_log.as_mut() {
-            write_frame_log_entry(file, &emulator, index + 1, step.as_ref().err())?;
+            write_frame_log_entry(
+                file,
+                &emulator,
+                index + 1,
+                step.as_ref().err(),
+                &watched_wram_addresses,
+            )?;
         }
         if args.trace_frame == Some(index + 1) {
             write_selected_frame_trace(
@@ -1242,12 +1259,21 @@ fn write_frame_log_entry(
     emulator: &starbyte_core::Emulator,
     requested_frame: u32,
     error: Option<&starbyte_core::error::Error>,
+    watched_wram_addresses: &[u32],
 ) -> Result<()> {
     let frame = emulator.framebuffer();
     let cpu = emulator.cpu_registers();
     let (nonblack_pixels, distinct_rgb_colors) = framebuffer_color_metrics(frame);
     let (nmitimen, htime, vtime) = emulator.irq_timer_configuration();
     let (host_bits, latched_bits, auto_read_busy) = emulator.joypad_status();
+    let wram_watch = watched_wram_addresses
+        .iter()
+        .filter_map(|&address| {
+            emulator
+                .peek_wram_u8(address)
+                .map(|value| (format!("{address:06X}"), value))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
     let report = json!({
         "schema": "starbyte.frame_log.v1",
         "requested_frame": requested_frame,
@@ -1288,6 +1314,7 @@ fn write_frame_log_entry(
             "auto_read_busy": auto_read_busy,
         },
         "apu_steps": emulator.apu_status().spc700_steps,
+        "wram_watch": wram_watch,
     });
     serde_json::to_writer(&mut *writer, &report)?;
     writer.write_all(b"\n")?;
@@ -1680,6 +1707,31 @@ fn parse_controller_events(input: &str, frames: u32) -> Result<Vec<(u32, Control
     Ok(events)
 }
 
+/// Observe only canonical SNES WRAM banks $7E/$7F so reads cannot trigger MMIO.
+fn parse_wram_watch_addresses(input: &str) -> Result<Vec<u32>> {
+    anyhow::ensure!(!input.trim().is_empty(), "WRAM watch list must not be empty");
+    let mut addresses = Vec::new();
+    for token in input.split(',') {
+        let token = token.trim();
+        anyhow::ensure!(
+            token.len() == 6 && token.chars().all(|ch| ch.is_ascii_hexdigit()),
+            "invalid WRAM watch address '{token}'; expected six hex digits, e.g. 7E0100"
+        );
+        let address = u32::from_str_radix(token, 16)?;
+        anyhow::ensure!(
+            (0x7E0000..=0x7FFFFF).contains(&address),
+            "WRAM watch address {token} is not in banks 7E or 7F"
+        );
+        anyhow::ensure!(
+            !addresses.contains(&address),
+            "duplicate WRAM watch address {token}"
+        );
+        anyhow::ensure!(addresses.len() < 32, "limit WRAM watches to 32 bytes");
+        addresses.push(address);
+    }
+    Ok(addresses)
+}
+
 fn parse_controller_state(input: &str) -> Result<ControllerState> {
     let mut state = ControllerState::default();
     for token in input
@@ -1802,7 +1854,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        parse_controller_events, resolve_state_path, sanitize_file_stem, write_frame_log_entry,
+        parse_controller_events, parse_wram_watch_addresses, resolve_state_path,
+        sanitize_file_stem, write_frame_log_entry,
     };
 
     fn test_cartridge() -> Cartridge {
@@ -1858,6 +1911,40 @@ mod tests {
     }
 
     #[test]
+    fn wram_watch_accepts_bounded_canonical_addresses_only() {
+        assert_eq!(
+            parse_wram_watch_addresses("7E0100,7e0094,7F0010").unwrap(),
+            [0x7E0100, 0x7E0094, 0x7F0010]
+        );
+        for invalid in ["", "0100", "0x7E0100", "7E010G", "7D0100", "7E0100,", "7E0100,7e0100"] {
+            assert!(
+                parse_wram_watch_addresses(invalid).is_err(),
+                "should reject watch list: {invalid:?}"
+            );
+        }
+        assert!(parse_wram_watch_addresses(
+            &(0..33).map(|index| format!("7E{index:04X}")).collect::<Vec<_>>().join(",")
+        ).is_err());
+    }
+
+    #[test]
+    fn frame_log_contains_side_effect_free_wram_snapshots() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("wram.jsonl");
+        let mut writer = std::fs::File::create(&path).unwrap();
+        let mut emulator = Emulator::default();
+        emulator.host_write_u8(0x7E0100, 7);
+        emulator.host_write_u8(0x7E0094, 42);
+        write_frame_log_entry(&mut writer, &emulator, 1, None, &[0x7E0100, 0x7E0094])
+            .unwrap();
+        let record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(record["wram_watch"]["7E0100"], 7);
+        assert_eq!(record["wram_watch"]["7E0094"], 42);
+        assert_eq!(emulator.peek_wram_u8(0x7D0100), None);
+    }
+
+    #[test]
     fn frame_log_error_is_written_with_last_completed_frame() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("frames.jsonl");
@@ -1869,7 +1956,7 @@ mod tests {
             elapsed_ms: 0,
             pc: 0x008000,
         };
-        write_frame_log_entry(&mut writer, &emulator, 1, Some(&stall)).unwrap();
+        write_frame_log_entry(&mut writer, &emulator, 1, Some(&stall), &[]).unwrap();
         let record: serde_json::Value =
             serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         assert_eq!(record["schema"], "starbyte.frame_log.v1");

@@ -14,6 +14,11 @@ use self::spc700::Spc700;
 /// Size of the user-supplied SPC700 IPL ROM.
 pub const SPC700_IPL_ROM_LEN: usize = 64;
 
+/// NTSC master-clock frequency in Hz. See `TimingState` for frame/dot clocks.
+const NTSC_MASTER_CLOCK_HZ: u64 = 21_477_272;
+/// SNES DSP produces 32,000 stereo sample pairs per second.
+pub const DSP_SAMPLE_RATE_HZ: u64 = 32_000;
+
 /// Buffered audio samples returned to a frontend.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct AudioFrame {
@@ -46,6 +51,9 @@ pub struct Apu {
     spc700_steps: u64,
     #[serde(default)]
     bootstrap_state: BootstrapState,
+    /// Fractional numerator of the DSP sample clock; serialized for save-state continuity.
+    #[serde(default)]
+    dsp_sample_phase: u64,
 }
 
 impl Default for Apu {
@@ -58,6 +66,7 @@ impl Default for Apu {
             configured_ipl_path: None,
             spc700_steps: 0,
             bootstrap_state: BootstrapState::default(),
+            dsp_sample_phase: 0,
         }
     }
 }
@@ -82,6 +91,7 @@ impl Apu {
             [0; 4]
         };
         self.spc700_steps = 0;
+        self.dsp_sample_phase = 0;
         self.bootstrap_state = if self.bootstrap_program_available() {
             BootstrapState::WaitingForCpuBootstrapAck
         } else {
@@ -141,6 +151,19 @@ impl Apu {
             self.step_spc700();
         }
         self.advance_bootstrap_handshake();
+    }
+
+    /// Return the number of SNES DSP sample pairs due for this many NTSC master clocks.
+    ///
+    /// The DSP itself is not yet emulated, so the current caller emits silence.
+    /// Retaining the fractional remainder avoids drift across CPU instructions,
+    /// frames, and save-state restoration. This does not run the SPC700.
+    pub fn advance_dsp_sample_clock(&mut self, master_cycles: u64) -> usize {
+        let numerator = u128::from(self.dsp_sample_phase)
+            + u128::from(master_cycles) * u128::from(DSP_SAMPLE_RATE_HZ);
+        let denominator = u128::from(NTSC_MASTER_CLOCK_HZ);
+        self.dsp_sample_phase = (numerator % denominator) as u64;
+        usize::try_from(numerator / denominator).expect("DSP sample count exceeds platform usize")
     }
 
     /// Write one CPU-to-APU communication port byte.
@@ -276,6 +299,43 @@ mod tests {
         assert_eq!(apu.read_cpu_port(0).unwrap(), 0x12);
         assert_eq!(apu.read_apu_port(3).unwrap(), 0x34);
         assert_eq!(apu.status().spc700_steps, 2);
+    }
+
+    #[test]
+    fn sample_clock_produces_exactly_32k_pairs_per_ntsc_second() {
+        let mut apu = Apu::default();
+        assert_eq!(apu.advance_dsp_sample_clock(21_477_272), 32_000);
+        assert_eq!(apu.advance_dsp_sample_clock(21_477_272), 32_000);
+    }
+
+    #[test]
+    fn sample_clock_is_independent_of_cpu_instruction_chunking() {
+        let mut whole = Apu::default();
+        let mut chunks = Apu::default();
+        let clocks = 357_368_u64; // one nominal NTSC frame
+        let expected = whole.advance_dsp_sample_clock(clocks);
+        let mut observed = 0;
+        for _ in 0..(clocks / 6) {
+            observed += chunks.advance_dsp_sample_clock(6);
+        }
+        observed += chunks.advance_dsp_sample_clock(clocks % 6);
+        assert_eq!(expected, observed);
+        assert!((530..=534).contains(&observed));
+        assert_eq!(whole.advance_dsp_sample_clock(clocks), chunks.advance_dsp_sample_clock(clocks));
+    }
+
+    #[test]
+    fn dsp_fraction_survives_save_states_and_reset_clears_it() {
+        let mut apu = Apu::default();
+        assert_eq!(apu.advance_dsp_sample_clock(300), 0);
+        let serialized = serde_json::to_string(&apu).unwrap();
+        let mut resumed: Apu = serde_json::from_str(&serialized).unwrap();
+        for clocks in [6, 4, 400, 357_368, 1, 123_456] {
+            assert_eq!(apu.advance_dsp_sample_clock(clocks), resumed.advance_dsp_sample_clock(clocks));
+        }
+        resumed.reset();
+        let mut fresh = Apu::default();
+        assert_eq!(resumed.advance_dsp_sample_clock(300), fresh.advance_dsp_sample_clock(300));
     }
 
     #[test]

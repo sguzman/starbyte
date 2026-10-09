@@ -1,12 +1,27 @@
 # Super Mario World — compatibility investigation
 
-**Current result: a successful 900-frame real-ROM probe confirms a coherent, sustained animated Super Mario World title demo (Mario, Yoshi, enemies, coins and scrolling terrain).** A scripted Start pulse at frames 450–454 did not visibly exit the demo. Inspection identified a concrete core deficiency: the game enables NMITIMEN=$81 (automatic joypad polling), but Starbyte previously updated $4218/$4219 only on manual $4016 latch writes. VBlank automatic polling, the busy flag and diagnostic host/latched controller state are now implemented, **pending real-ROM retest**. Title and title-demo rendering are confirmed; interactive title navigation, gameplay, audio fidelity and saving are not.
+**Current result (2026-10-09): real-ROM input-driven file selection confirmed.** A 700-frame headless Super Mario World probe completed without errors after correcting SNES joypad bit ordering. Start was pressed on frames 450–454; both host and latched joypad diagnostics read `$1000` (the SNES Start bit). Captured frame 440 shows the animated title, and frame 460 shows the **MARIO A/B/C ... EMPTY** file-selection menu with a blinking cursor; subsequent samples through frame 680 retain a coherent menu. This verifies title-to-file-selection interaction, beyond merely running a preprogrammed title demonstration. Selecting a save file, player selection, entering gameplay, genuine DSP audio, native Wayland input and save persistence are **not yet verified**.
 
 ## Controller bit-layout correction (2026-10-09)
 
 The 560-frame automatic-joypad retest completed without CPU errors. During frames 450–454, the CLI's host and latched joypad word both reported `$0008` for Start, and the title demonstration continued. That matched Starbyte's previous encoder but **not** SNES hardware: the correct auto-read word for Start alone is `$1000` (`$4218=$00, $4219=$10`), with buttons ordered BYsS UDLR AXlr 0000. The old implementation reversed the serial order and treated the low four signature bits as buttons. This is a verified encoding defect independent of input timing.
 
-The core now encodes the standard SNES auto-read word and shifts serial data most-significant first. Unconnected controller ports 2–4 explicitly read zero. Unit tests cover all twelve button positions, serial ordering and the automatic-read registers. **A new real-ROM retest is required before claiming Super Mario World responds to Start or reaches file selection.**
+The core now encodes the standard SNES auto-read word and shifts serial data most-significant first. Unconnected controller ports 2–4 explicitly read zero. Unit tests cover all twelve button positions, serial ordering and the automatic-read registers. **The subsequent 700-frame real-ROM retest verified the intended title-to-file-selection transition.**
+
+## Seventh headless probe: real-ROM Start opens file selection (700 frames, 2026-10-09)
+
+The user retested the unmodified locally held `Super Mario World.zip` with the controller-bit-order fix at main commit `14697c4`, using `--frames 700 --no-save-ram --controller1-events "450:start;455:none"`, JSONL diagnostics and sampled PPM framebuffers. The optimized run completed **700/700** frames with no CPU error. Input observations:
+
+| Frame(s) | Host controller 1 bits | Auto-read latched bits | Rendered behavior |
+| --- | --- | --- | --- |
+| 440, 449 | `$0000` | `$0000` | Title demo continues |
+| 450–454 | `$1000` | `$1000` | Start delivered in the correct SNES hardware bit; title transition begins |
+| 455+ | `$0000` | `$0000` | Button released |
+| 460–680 sampled | `$0000` | `$0000` | File-select menu stays visible, showing MARIO A/B/C as EMPTY and a blinking selection cursor |
+
+The sampled image at frame 460 clearly shows the file-selection menu. The CPU resumes its normal loop (around `$00:806B–$00:806D`) and subsequent frames remain error-free. The menu's pointer periodically blinks, so this is **not** simply a stuck framebuffer. This is Starbyte's first verified **commercial-ROM interactive title navigation** milestone. The ROM's precise revision/hash remains unrecorded; no proprietary ROM bytes or screenshots are committed.
+
+The next reproducible target is a **second Start press while MARIO A is selected**, followed by a separately timed 1-player selection if available, then the first demonstrably input-controlled game scene. Keep those distinct from automatic animations and confirm each by captured frames. `--no-save-ram` intentionally avoids persisting cartridge save data during these compatibility probes.
 
 ## First reproducible headless probe
 
@@ -266,8 +281,8 @@ A general hardware-level fix has been committed:
 
 ## Next evidence needed
 
-1. After the automatic joypad latch and per-frame diagnostics pass CI, rerun the title Start pulse in a **560-frame probe**. Inspect exact host and latched bits around frames 450–455; capture periodic screenshots for a menu/level transition. If Start is not accepted, use the new evidence to isolate game-side polling or CPU control flow.
-2. If title Start navigation works, schedule subsequent menu selections and first-level controls. Verify true player responsiveness separately from scripted title demo animation.
+1. With title-to-file-selection now confirmed, schedule a second Start pulse on the default **MARIO A ... EMPTY** slot and capture the resulting screen. If player selection opens, send a third distinct input pulse for one-player mode, then check the intro/overworld transition.
+2. Verify real player control with explicitly scheduled directional and action inputs once actual gameplay is reached; preprogrammed title animations are not sufficient evidence.
 3. Investigate DSP music/audio, native Wayland frame pacing and SRAM independently; synthetic samples are not faithful game sound.
 4. Record the exact local cartridge checksum/revision without committing or distributing ROM bytes.
 5. Add synthetic regressions for newly confirmed hardware faults and upgrade compatibility only when demonstrated.

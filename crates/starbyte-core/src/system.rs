@@ -93,6 +93,8 @@ pub struct SystemBus {
     #[serde(default)]
     pending_irq: bool,
     joypad: JoypadIo,
+    #[serde(default)]
+    math: MathIo,
     wram_address: u32,
     #[serde(default)]
     observability: SystemBusObservability,
@@ -119,6 +121,7 @@ impl Default for SystemBus {
             timeup: false,
             pending_irq: false,
             joypad: JoypadIo::default(),
+            math: MathIo::default(),
             wram_address: 0,
             observability: SystemBusObservability::default(),
         }
@@ -161,6 +164,7 @@ impl SystemBus {
         self.timeup = false;
         self.pending_irq = false;
         self.joypad = JoypadIo::default();
+        self.math = MathIo::default();
         self.wram_address = 0;
         self.observability = SystemBusObservability::default();
     }
@@ -716,6 +720,10 @@ impl SystemBus {
                 }
                 Some(value)
             }
+            0x4214 => Some(self.math.quotient as u8),
+            0x4215 => Some((self.math.quotient >> 8) as u8),
+            0x4216 => Some(self.math.product_remainder as u8),
+            0x4217 => Some((self.math.product_remainder >> 8) as u8),
             0x4218 => Some((self.joypad.latched1 & 0x00FF) as u8),
             0x4219 => Some((self.joypad.latched1 >> 8) as u8),
             0x421A..=0x421F => Some(0), // No second controller or multitap connected.
@@ -781,6 +789,36 @@ impl SystemBus {
                 }
                 Some(())
             }
+            0x4202 => {
+                self.math.multiplicand = value;
+                Some(())
+            }
+            0x4203 => {
+                // The unsigned 8x8 multiplier shares its result registers
+                // with the 16/8 divider's remainder.
+                self.math.product_remainder =
+                    u16::from(self.math.multiplicand) * u16::from(value);
+                self.math.quotient = u16::from(value);
+                Some(())
+            }
+            0x4204 => {
+                self.math.dividend = (self.math.dividend & 0xFF00) | u16::from(value);
+                Some(())
+            }
+            0x4205 => {
+                self.math.dividend = (self.math.dividend & 0x00FF) | (u16::from(value) << 8);
+                Some(())
+            }
+            0x4206 => {
+                if value == 0 {
+                    self.math.quotient = 0xFFFF;
+                    self.math.product_remainder = self.math.dividend;
+                } else {
+                    self.math.quotient = self.math.dividend / u16::from(value);
+                    self.math.product_remainder = self.math.dividend % u16::from(value);
+                }
+                Some(())
+            }
             0x4207 => {
                 self.htime = (self.htime & 0x0100) | u16::from(value);
                 Some(())
@@ -815,6 +853,28 @@ impl SystemBus {
                 Some(())
             }
             _ => None,
+        }
+    }
+}
+
+/// The SNES's CPU-side unsigned multiply/divide registers ($4202-$4206,
+/// $4214-$4217). Results are committed at operation start in the current
+/// instruction-granular timing model; mid-operation results are not modeled.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct MathIo {
+    multiplicand: u8,
+    dividend: u16,
+    quotient: u16,
+    product_remainder: u16,
+}
+
+impl Default for MathIo {
+    fn default() -> Self {
+        Self {
+            multiplicand: 0xFF,
+            dividend: 0xFFFF,
+            quotient: 0,
+            product_remainder: 0,
         }
     }
 }
@@ -1025,6 +1085,67 @@ mod tests {
             rom[base + 0x18] = 0x00;
         }
         Cartridge::from_bytes(rom, None).unwrap()
+    }
+
+    #[test]
+    fn cpu_math_multiplier_produces_unsigned_product_in_system_banks() {
+        let mut bus = SystemBus::default();
+        bus.write(0x044202, 0xD0);
+        bus.write(0x044203, 0x04);
+        assert_eq!(bus.read(0x044216), 0x40);
+        assert_eq!(bus.read(0x804217), 0x03);
+        assert_eq!(bus.read(0x004214), 0x04);
+
+        // Updating only the second factor must start another multiplication.
+        bus.write(0x004203, 0x02);
+        assert_eq!(bus.read(0x004216), 0xA0);
+        assert_eq!(bus.read(0x004217), 0x01);
+        bus.write(0x004202, 0xFF);
+        bus.write(0x004203, 0xFF);
+        assert_eq!(bus.read(0x004216), 0x01);
+        assert_eq!(bus.read(0x004217), 0xFE);
+    }
+
+    #[test]
+    fn cpu_math_divider_produces_quotient_and_remainder_in_system_banks() {
+        let mut bus = SystemBus::default();
+        bus.write(0x044204, 0x40);
+        bus.write(0x044205, 0x03);
+        bus.write(0x044206, 0x08);
+        assert_eq!(bus.read(0x044214), 0x68);
+        assert_eq!(bus.read(0x044215), 0x00);
+        assert_eq!(bus.read(0x044216), 0x00);
+        assert_eq!(bus.read(0x044217), 0x00);
+
+        bus.write(0x004204, 0x03);
+        bus.write(0x004205, 0x01);
+        bus.write(0x004206, 0x02);
+        assert_eq!(bus.read(0x004214), 0x81);
+        assert_eq!(bus.read(0x004215), 0x00);
+        assert_eq!(bus.read(0x004216), 0x01);
+        assert_eq!(bus.read(0x004217), 0x00);
+
+        bus.write(0x004206, 0);
+        assert_eq!(bus.read(0x004214), 0xFF);
+        assert_eq!(bus.read(0x004215), 0xFF);
+        assert_eq!(bus.read(0x004216), 0x03);
+        assert_eq!(bus.read(0x004217), 0x01);
+    }
+
+    #[test]
+    fn cpu_math_is_reset_and_not_mirrored_into_cartridge_banks() {
+        let mut bus = SystemBus::default();
+        bus.write(0x004202, 0xD0);
+        bus.write(0x004203, 0x04);
+        bus.write(0x404203, 0xFF);
+        assert_eq!(bus.read(0x004216), 0x40);
+        assert_eq!(bus.read(0x004217), 0x03);
+        bus.reset();
+        assert_eq!(bus.read(0x004216), 0);
+        assert_eq!(bus.read(0x004217), 0);
+        bus.write(0x004203, 0x02);
+        assert_eq!(bus.read(0x004216), 0xFE);
+        assert_eq!(bus.read(0x004217), 0x01);
     }
 
     #[test]

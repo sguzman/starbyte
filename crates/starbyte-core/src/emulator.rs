@@ -647,7 +647,11 @@ mod tests {
         let samples = &emulator.audio_samples().samples;
         // One NTSC video frame has roughly 533 stereo sample pairs at
         // 32 kHz, not one pair for every CPU bus access.
-        assert!((1_050..=1_100).contains(&samples.len()), "unexpected sample count: {}", samples.len());
+        assert!(
+            (1_050..=1_100).contains(&samples.len()),
+            "unexpected sample count: {}",
+            samples.len()
+        );
         assert!(samples.iter().all(|&sample| sample == 0), "DSP not synthesized yet");
         assert_eq!(emulator.host_read_u8(0x004218), 0x80);
         assert_eq!(emulator.host_read_u8(0x004219), 0x10);

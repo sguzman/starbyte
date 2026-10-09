@@ -2,6 +2,7 @@
 
 pub mod dsp;
 pub mod spc700;
+mod timers;
 
 use std::{cell::RefCell, path::PathBuf};
 
@@ -10,7 +11,7 @@ use tracing::{debug, instrument};
 
 use crate::error::{Error, Result};
 
-use self::{dsp::Dsp, spc700::Spc700};
+use self::{dsp::Dsp, spc700::Spc700, timers::SpcTimers};
 
 /// Size of the user-supplied SPC700 IPL ROM.
 pub const SPC700_IPL_ROM_LEN: usize = 64;
@@ -66,6 +67,9 @@ pub struct Apu {
     /// Partial SNES DSP synthesis engine and voice/register state.
     #[serde(default)]
     dsp: Dsp,
+    /// Sound-CPU timer registers and their fractional master-clock phase.
+    #[serde(default)]
+    timers: SpcTimers,
 }
 
 impl Default for Apu {
@@ -81,6 +85,7 @@ impl Default for Apu {
             dsp_sample_phase: 0,
             spc_ram: blank_spc_ram(),
             dsp: Dsp::default(),
+            timers: SpcTimers::default(),
         }
     }
 }
@@ -109,6 +114,7 @@ impl Apu {
         self.spc_ram.resize(SPC_RAM_BYTES, 0);
         self.spc_ram.fill(0);
         self.dsp.reset();
+        self.timers = SpcTimers::default();
         self.bootstrap_state = if self.bootstrap_program_available() {
             BootstrapState::WaitingForCpuBootstrapAck
         } else {
@@ -172,7 +178,7 @@ impl Apu {
         let mut cpu = std::mem::take(&mut self.spc700);
         let bus = RefCell::new(&mut *self);
         let result = cpu.step_with_memory(
-            |address| bus.borrow().read_spc_bus(address),
+            |address| bus.borrow_mut().read_spc_bus(address),
             |address, value| bus.borrow_mut().write_spc_bus(address, value),
         );
         let mut apu = bus.borrow_mut();
@@ -185,7 +191,10 @@ impl Apu {
 
     /// Advance placeholder APU work for a number of master cycles.
     pub fn step_master_cycles(&mut self, master_cycles: u64) {
-        // The exact divider will be replaced when full system timing is modeled.
+        // Clock SPC hardware timers at their own fractional rate, independently
+        // of the legacy placeholder CPU step counter.
+        self.timers.advance_master_cycles(master_cycles);
+        // The exact CPU divider will be replaced when full system timing is modeled.
         for _ in 0..(master_cycles / 6) {
             self.step_spc700();
         }
@@ -216,16 +225,16 @@ impl Apu {
         self.spc_ram[usize::from(address)]
     }
 
-    /// Read from the SPC700 address space, including DSP and CPU mailbox ports.
+    /// Read SPC700 RAM or an MMIO port. Timer outputs clear on read.
     ///
-    /// This exposes the essential sound-CPU data path without enabling
-    /// execution of incomplete SPC700 sound drivers. Timers, IPL overlay,
-    /// and general SPC700 instruction timing remain separate work.
-    #[must_use]
-    pub fn read_spc_bus(&self, address: u16) -> u8 {
+    /// This remains a standalone bus until real sound-driver execution is
+    /// enabled. IPL overlay and general sound-CPU instruction timing are
+    /// separate work.
+    pub fn read_spc_bus(&mut self, address: u16) -> u8 {
         match address {
             0x00f3 => self.dsp.read_register(self.spc_ram[0x00f2]),
             0x00f4..=0x00f7 => self.cpu_to_apu_ports[usize::from(address - 0x00f4)],
+            0x00fd..=0x00ff => self.timers.read_and_clear(usize::from(address - 0x00fd)),
             _ => self.read_spc_ram(address),
         }
     }
@@ -233,6 +242,17 @@ impl Apu {
     /// Write the SPC700 RAM/MMIO bus, including indirect DSP register access.
     pub fn write_spc_bus(&mut self, address: u16, value: u8) {
         match address {
+            0x00f1 => {
+                self.timers.write_control(value);
+                // CONTROL bits 4 and 5 clear the CPU-to-SPC input latches;
+                // they do not clear the SNES-visible SPC output ports.
+                if value & 0x10 != 0 {
+                    self.cpu_to_apu_ports[0..2].fill(0);
+                }
+                if value & 0x20 != 0 {
+                    self.cpu_to_apu_ports[2..4].fill(0);
+                }
+            }
             0x00f2 => self.spc_ram[0x00f2] = value & 0x7f,
             0x00f3 => self
                 .dsp
@@ -240,6 +260,11 @@ impl Apu {
             0x00f4..=0x00f7 => {
                 self.apu_to_cpu_ports[usize::from(address - 0x00f4)] = value;
             }
+            0x00fa..=0x00fc => {
+                self.timers
+                    .write_target(usize::from(address - 0x00fa), value);
+            }
+            0x00fd..=0x00ff => {} // Timer output counters are read-only.
             _ => self.write_spc_ram(address, value),
         }
     }
@@ -402,6 +427,41 @@ mod tests {
         assert_eq!(apu.read_cpu_port(0).unwrap(), 0x12);
         assert_eq!(apu.read_apu_port(3).unwrap(), 0x34);
         assert_eq!(apu.status().spc700_steps, 2);
+    }
+
+    #[test]
+    fn spc_timer_targets_control_and_read_clear_work_through_bus() {
+        let mut apu = Apu::default();
+        apu.write_spc_bus(0x00fa, 77);
+        apu.write_spc_bus(0x00fc, 251);
+        apu.write_spc_bus(0x00f1, 0b101);
+        // Exactly one NTSC second corresponds to 8000 + 64000 timer ticks.
+        apu.timers.advance_master_cycles(21_477_272);
+        assert_eq!(apu.read_spc_bus(0x00fd), (8000 / 77) as u8 & 15);
+        assert_eq!(apu.read_spc_bus(0x00fd), 0);
+        assert_eq!(apu.read_spc_bus(0x00fe), 0);
+        assert_eq!(apu.read_spc_bus(0x00ff), (64000 / 251) as u8 & 15);
+        assert_eq!(apu.read_spc_bus(0x00ff), 0);
+    }
+
+    #[test]
+    fn spc_control_clears_only_selected_cpu_input_ports() {
+        let mut apu = Apu::default();
+        for index in 0..4 {
+            apu.write_cpu_port(index, (index as u8) + 1).unwrap();
+            apu.write_apu_port(index, (index as u8) + 10).unwrap();
+        }
+        apu.write_spc_bus(0x00f1, 0x10);
+        assert_eq!(apu.read_cpu_port(0).unwrap(), 0);
+        assert_eq!(apu.read_cpu_port(1).unwrap(), 0);
+        assert_eq!(apu.read_cpu_port(2).unwrap(), 3);
+        assert_eq!(apu.read_cpu_port(3).unwrap(), 4);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 10);
+
+        apu.write_spc_bus(0x00f1, 0x20);
+        assert_eq!(apu.read_cpu_port(2).unwrap(), 0);
+        assert_eq!(apu.read_cpu_port(3).unwrap(), 0);
+        assert_eq!(apu.read_apu_port(3).unwrap(), 13);
     }
 
     #[test]

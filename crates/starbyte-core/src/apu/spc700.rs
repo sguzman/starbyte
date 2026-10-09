@@ -252,7 +252,7 @@ impl Spc700 {
         FRead: FnMut(u16) -> u8,
     {
         let address_mode = opcode & 0x1f;
-        let (rhs, instruction_len) = match address_mode {
+        match address_mode {
             0x08 => (
                 self.push_read_trace(read, trace, self.pc.wrapping_add(1)),
                 2,

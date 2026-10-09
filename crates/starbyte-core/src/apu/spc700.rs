@@ -149,18 +149,6 @@ impl Spc700 {
         Ok(trace)
     }
 
-    /// Compare bulk placeholder execution against repeated dummy steps.
-    #[cfg(test)]
-    fn matches_individual_dummy_steps(&self, count: u64) -> bool {
-        let mut bulk = self.clone();
-        let mut repeated = self.clone();
-        bulk.advance_placeholder_steps(count);
-        for _ in 0..count {
-            repeated.step();
-        }
-        bulk == repeated
-    }
-
     /// Load a register snapshot and reset cycle accounting for compliance work.
     pub fn load_state(&mut self, pc: u16, a: u8, x: u8, y: u8, sp: u8, psw: u8) {
         self.pc = pc;
@@ -1066,5 +1054,25 @@ impl Spc700 {
         if value == 0 {
             self.psw |= 0x02;
         }
+    }
+}
+
+#[cfg(test)]
+mod placeholder_tests {
+    use super::Spc700;
+
+    #[test]
+    fn bulk_dummy_clock_matches_individual_steps_across_pc_wrap() {
+        let mut bulk = Spc700::default();
+        bulk.load_state(0xfffe, 1, 2, 3, 0xef, 0x02);
+        let mut single = bulk.clone();
+        bulk.advance_placeholder_steps(70_000);
+        for _ in 0..70_000 {
+            single.step();
+        }
+        assert_eq!(bulk, single);
+        bulk.advance_placeholder_steps(0);
+        assert_eq!(bulk, single);
+        assert_eq!(bulk.cycles(), 70_000);
     }
 }

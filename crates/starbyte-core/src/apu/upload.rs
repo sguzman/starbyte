@@ -298,6 +298,23 @@ mod tests {
     }
 
     #[test]
+    fn mid_transfer_serialization_keeps_expected_ack_index() {
+        let mut h = Harness::new();
+        h.kick(0x5000);
+        h.send_byte(0, 0x8f, 0x5000);
+        let saved = serde_json::to_string(&h.transfer).unwrap();
+        h.transfer = serde_json::from_str(&saved).unwrap();
+
+        // Restoring the decoder must not re-copy the last acknowledged byte.
+        assert_eq!(h.send(0), UploadEvent::None);
+        h.send_byte(1, 0xaa, 0x5001);
+        h.send_byte(2, 0xf4, 0x5002);
+        assert_eq!(&h.ram[0x5000..0x5003], &[0x8f, 0xaa, 0xf4]);
+        assert_eq!(h.transfer.bytes_written(), 3);
+        assert_eq!(h.transfer.phase(), UploadPhase::Receiving);
+    }
+
+    #[test]
     fn index_and_address_wrap_without_buffer_overrun() {
         let mut h = Harness::new();
         h.kick(0xfffc);

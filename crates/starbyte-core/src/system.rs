@@ -20,6 +20,9 @@ const LOW_WRAM_MIRROR_SIZE: usize = 0x2000;
 const APU_IO_PORT_COUNT: usize = 4;
 const PPU_REGISTER_COUNT: usize = 0x40;
 const DEFAULT_IRQ_TIMER_COMPARE: u16 = 0x01FF;
+/// Approximate SNES automatic joypad read duration: ~3 scanlines.
+/// Precise controller serial timing remains outside the bootstrap clock model.
+const AUTO_JOYPAD_READ_MASTER_CLOCKS: u64 = 4224;
 
 const fn default_irq_timer_compare() -> u16 {
     DEFAULT_IRQ_TIMER_COMPARE
@@ -181,6 +184,13 @@ impl SystemBus {
                 scanline = self.timing.scanline,
                 "entered vblank"
             );
+            // NMITIMEN bit 0 starts the SNES's automatic joypad read
+            // every VBlank. Games such as Super Mario World consume
+            // $4218/$4219, without explicitly pulsing the $4016 latch.
+            if self.nmitimen & 0x01 != 0 {
+                self.joypad
+                    .start_auto_read(self.timing.master_clock + AUTO_JOYPAD_READ_MASTER_CLOCKS);
+            }
             self.rdnmi = true;
             if self.nmi_enabled() {
                 self.pending_nmi = true;
@@ -190,6 +200,7 @@ impl SystemBus {
             self.timeup = true;
             self.pending_irq = true;
         }
+        self.joypad.advance_auto_read(self.timing.master_clock);
     }
 
     /// Approximate IRQ trigger coordinates in the current dot-based timing
@@ -673,6 +684,9 @@ impl SystemBus {
             }
             0x4212 => {
                 let mut value = self.open_bus & 0x3E;
+                if self.joypad.auto_read_complete_at.is_some() {
+                    value |= 0x01;
+                }
                 if self.timing.in_vblank() {
                     value |= 0x80;
                 }
@@ -789,9 +803,30 @@ struct JoypadIo {
     latch_line: bool,
     latched1: u16,
     shift1: u16,
+    /// Pending auto-read completion time in master clock units.
+    #[serde(default)]
+    auto_read_complete_at: Option<u64>,
+    /// Snapshot of the input at VBlank before automatic serial read completes.
+    #[serde(default)]
+    auto_read_bits: u16,
 }
 
 impl JoypadIo {
+    fn start_auto_read(&mut self, complete_at: u64) {
+        self.auto_read_bits = self.controller1.to_bits();
+        self.auto_read_complete_at = Some(complete_at);
+    }
+
+    fn advance_auto_read(&mut self, master_clock: u64) {
+        if self
+            .auto_read_complete_at
+            .is_some_and(|complete_at| master_clock >= complete_at)
+        {
+            self.latched1 = self.auto_read_bits;
+            self.auto_read_complete_at = None;
+        }
+    }
+
     fn latch(&mut self) {
         self.latched1 = self.controller1.to_bits();
         self.shift1 = self.latched1;

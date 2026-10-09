@@ -126,9 +126,19 @@ impl IplUpload {
                 self.destination = u16::from_le_bytes([cpu_ports[2], cpu_ports[3]]);
                 self.expected_index = 0;
                 self.entrypoint = None;
-                self.phase = UploadPhase::AwaitFirstByte;
                 spc_ports[0] = token;
-                UploadEvent::KickAccepted
+                // The IPL also supports starting an already resident program
+                // directly: command zero and the entry address in ports 2/3.
+                if cpu_ports[1] == 0 {
+                    self.entrypoint = Some(self.destination);
+                    self.phase = UploadPhase::Executable;
+                    UploadEvent::EntryPoint {
+                        address: self.destination,
+                    }
+                } else {
+                    self.phase = UploadPhase::AwaitFirstByte;
+                    UploadEvent::KickAccepted
+                }
             }
             UploadPhase::AwaitFirstByte => {
                 if token != 0 {
@@ -224,6 +234,18 @@ mod tests {
             );
             assert_eq!(self.spc[0], token);
         }
+    }
+
+    #[test]
+    fn initial_zero_command_jumps_to_resident_code_without_upload() {
+        let mut h = Harness::new();
+        h.cpu = [0, 0, 0x00, 0x04];
+        assert_eq!(h.send(0xcc), UploadEvent::EntryPoint { address: 0x0400 });
+        assert_eq!(h.spc[0], 0xcc);
+        assert_eq!(h.transfer.entrypoint(), Some(0x0400));
+        assert_eq!(h.transfer.bytes_written(), 0);
+        assert_eq!(h.transfer.blocks_finished(), 0);
+        assert_eq!(h.transfer.phase(), UploadPhase::Executable);
     }
 
     #[test]

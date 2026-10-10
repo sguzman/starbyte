@@ -99,6 +99,7 @@ impl Spc700 {
             0x2D => self.execute_push_a(&mut read, &mut write, &mut trace),
             0x30 => self.execute_bmi(&mut read, &mut trace),
             0x3F => self.execute_call_abs(&mut read, &mut write, &mut trace),
+            0x4F => self.execute_pcall(&mut read, &mut write, &mut trace),
             0x4D => self.execute_push_x(&mut read, &mut write, &mut trace),
             // Standard SPC700 accumulator ALU: immediate, direct-page,
             // and absolute memory addressing. Separate from word ALU.
@@ -166,6 +167,9 @@ impl Spc700 {
             }
             0x8B | 0x8C | 0x9B | 0xAB | 0xAC | 0xBB => {
                 self.execute_memory_inc_dec(opcode, &mut read, &mut write, &mut trace)
+            }
+            0x1A | 0x3A | 0x5A => {
+                self.execute_word_increment_compare(opcode, &mut read, &mut write, &mut trace)
             }
             0xBA => self.execute_movw_ya_dp(&mut read, &mut trace),
             0xC6 => self.execute_mov_x_indirect_a(&mut read, &mut write, &mut trace),
@@ -269,6 +273,27 @@ impl Spc700 {
         let low = self.push_read_trace(read, trace, vector_base);
         let high = self.push_read_trace(read, trace, vector_base.wrapping_add(1));
         self.pc = u16::from_le_bytes([low, high]);
+        Ok(())
+    }
+
+    /// PCALL jumps to $FF00+imm, pushing the address after its operand.
+    fn execute_pcall<FRead, FWrite>(
+        &mut self,
+        read: &mut FRead,
+        write: &mut FWrite,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+        FWrite: FnMut(u16, u8),
+    {
+        let offset = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.push_wait_trace(trace);
+        let return_pc = self.pc.wrapping_add(2);
+        self.push_stack(write, trace, (return_pc >> 8) as u8);
+        self.push_stack(write, trace, return_pc as u8);
+        self.push_wait_trace(trace);
+        self.pc = 0xff00 | u16::from(offset);
         Ok(())
     }
 
@@ -932,6 +957,43 @@ impl Spc700 {
         self.psw = (self.psw & !0x01) | u8::from(carry_out);
         self.update_nz_flags(value);
         self.pc = self.pc.wrapping_add(len);
+        Ok(())
+    }
+
+    /// INCW/DECW modify a direct-page word with page-wrapped high byte;
+    /// CMPW compares YA to the word, without mutating the source or A/Y.
+    fn execute_word_increment_compare<FRead, FWrite>(
+        &mut self,
+        opcode: u8,
+        read: &mut FRead,
+        write: &mut FWrite,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+        FWrite: FnMut(u16, u8),
+    {
+        let offset = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let low_addr = self.direct_page_address(offset);
+        let high_addr = self.direct_page_address(offset.wrapping_add(1));
+        let low = self.push_read_trace(read, trace, low_addr);
+        let high = self.push_read_trace(read, trace, high_addr);
+        let previous = u16::from_le_bytes([low, high]);
+        if opcode == 0x5A {
+            let ya = u16::from_le_bytes([self.a, self.y]);
+            self.update_nz_word_flags(ya.wrapping_sub(previous));
+            self.psw = (self.psw & !0x01) | u8::from(ya >= previous);
+        } else {
+            let value = if opcode == 0x3A {
+                previous.wrapping_add(1)
+            } else {
+                previous.wrapping_sub(1)
+            };
+            self.push_write_trace(write, trace, low_addr, value as u8);
+            self.push_write_trace(write, trace, high_addr, (value >> 8) as u8);
+            self.update_nz_word_flags(value);
+        }
+        self.pc = self.pc.wrapping_add(2);
         Ok(())
     }
 
@@ -2565,6 +2627,76 @@ mod accumulator_alu_tests {
                 assert_eq!(trace[2].address, 0x01ff);
                 assert_eq!(trace[2].access, AccessKind::Read);
             }
+        }
+    }
+
+    #[test]
+    fn pcall_pushes_return_address_and_jumps_to_high_page() {
+        let (cpu, trace, bytes) = run(0x4F, &[0x7c], 0x42, 0x31, &[]);
+        assert_eq!(cpu.pc, 0xff7c);
+        assert_eq!(cpu.sp, 0xed);
+        assert_eq!(cpu.psw, 0x31);
+        assert_eq!(bytes[0x01ef], 0x80);
+        assert_eq!(bytes[0x01ee], 0x02);
+        assert_eq!(trace.len(), 6);
+        assert_eq!(trace[3].access, AccessKind::Write);
+        assert_eq!(trace[4].access, AccessKind::Write);
+    }
+
+    #[test]
+    fn word_inc_dec_wrap_values_and_direct_page_high_byte() {
+        for (opcode, before, after) in [
+            (0x1A_u8, 0x0000_u16, 0xffff_u16),
+            (0x3A, 0xffff, 0x0000),
+            (0x1A, 0x8000, 0x7fff),
+            (0x3A, 0x7fff, 0x8000),
+        ] {
+            let (cpu, trace, bytes) = run_indexed(
+                opcode,
+                &[0xff],
+                0x55,
+                0x31,
+                0x66,
+                0x77,
+                &[(0x01ff, before as u8), (0x0100, (before >> 8) as u8)],
+            );
+            assert_eq!(u16::from_le_bytes([bytes[0x01ff], bytes[0x0100]]), after);
+            assert_eq!((cpu.a, cpu.x, cpu.y), (0x55, 0x66, 0x77));
+            assert_eq!(cpu.pc, 0x8002);
+            assert_eq!(cpu.psw & !0x82, 0x31 & !0x82);
+            assert_eq!(cpu.psw & 0x80 != 0, after & 0x8000 != 0);
+            assert_eq!(cpu.psw & 0x02 != 0, after == 0);
+            assert_eq!(trace.len(), 6);
+            assert_eq!(trace[4].access, AccessKind::Write);
+            assert_eq!(trace[4].address, 0x01ff);
+            assert_eq!(trace[5].access, AccessKind::Write);
+            assert_eq!(trace[5].address, 0x0100);
+        }
+    }
+
+    #[test]
+    fn cmpw_ya_uses_word_flags_without_writing_source() {
+        for (ya, rhs, expected_flags) in [
+            (0x8001_u16, 0x8001_u16, 0x03_u8),
+            (0x7fff, 0x8000, 0x80),
+            (0x8000, 0x7fff, 0x01),
+        ] {
+            let (cpu, trace, bytes) = run_indexed(
+                0x5A,
+                &[0xff],
+                ya as u8,
+                0x30,
+                0x55,
+                (ya >> 8) as u8,
+                &[(0x01ff, rhs as u8), (0x0100, (rhs >> 8) as u8)],
+            );
+            assert_eq!(cpu.psw & 0x83, expected_flags);
+            assert_eq!(cpu.psw & !0x83, 0x30 & !0x83);
+            assert_eq!(u16::from_le_bytes([cpu.a, cpu.y]), ya);
+            assert_eq!(u16::from_le_bytes([bytes[0x01ff], bytes[0x0100]]), rhs);
+            assert_eq!(cpu.pc, 0x8002);
+            assert_eq!(trace.len(), 4);
+            assert!(trace.iter().all(|event| event.access == AccessKind::Read));
         }
     }
 

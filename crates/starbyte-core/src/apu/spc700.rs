@@ -3251,6 +3251,10 @@ mod accumulator_alu_tests {
             let serialized = serde_json::to_string(&cpu).unwrap();
             let restored: Spc700 = serde_json::from_str(&serialized).unwrap();
             assert_eq!(restored.halt_state(), halt_state);
+            let mut legacy = serde_json::to_value(&cpu).unwrap();
+            legacy.as_object_mut().unwrap().remove("halt_state");
+            let restored_legacy: Spc700 = serde_json::from_value(legacy).unwrap();
+            assert_eq!(restored_legacy.halt_state(), Spc700HaltState::Running);
 
             cpu.load_state(0x8001, 0x42, 0x55, 0x66, 0xef, 0x31);
             assert_eq!(cpu.halt_state(), Spc700HaltState::Running);

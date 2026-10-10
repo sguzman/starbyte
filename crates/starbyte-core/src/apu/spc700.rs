@@ -100,6 +100,7 @@ impl Spc700 {
             0x30 => self.execute_bmi(&mut read, &mut trace),
             0x3F => self.execute_call_abs(&mut read, &mut write, &mut trace),
             0x4F => self.execute_pcall(&mut read, &mut write, &mut trace),
+            0x0E | 0x4E => self.execute_test_and_set_clear_bits(opcode, &mut read, &mut write, &mut trace),
             0x4D => self.execute_push_x(&mut read, &mut write, &mut trace),
             // Standard SPC700 accumulator ALU: immediate, direct-page,
             // and absolute memory addressing. Separate from word ALU.
@@ -957,6 +958,35 @@ impl Spc700 {
         self.psw = (self.psw & !0x01) | u8::from(carry_out);
         self.update_nz_flags(value);
         self.pc = self.pc.wrapping_add(len);
+        Ok(())
+    }
+
+    /// TSET1/TCLR1 apply an accumulator bitmask to absolute memory.
+    /// Their N/Z result tests A-old byte, not the new memory value.
+    fn execute_test_and_set_clear_bits<FRead, FWrite>(
+        &mut self,
+        opcode: u8,
+        read: &mut FRead,
+        write: &mut FWrite,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+        FWrite: FnMut(u16, u8),
+    {
+        let low = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let high = self.push_read_trace(read, trace, self.pc.wrapping_add(2));
+        let address = u16::from_le_bytes([low, high]);
+        let previous = self.push_read_trace(read, trace, address);
+        self.update_nz_flags(self.a.wrapping_sub(previous));
+        let value = if opcode == 0x0E {
+            previous | self.a
+        } else {
+            previous & !self.a
+        };
+        self.push_wait_trace(trace);
+        self.push_write_trace(write, trace, address, value);
+        self.pc = self.pc.wrapping_add(3);
         Ok(())
     }
 
@@ -2697,6 +2727,36 @@ mod accumulator_alu_tests {
             assert_eq!(cpu.pc, 0x8002);
             assert_eq!(trace.len(), 4);
             assert!(trace.iter().all(|event| event.access == AccessKind::Read));
+        }
+    }
+
+    #[test]
+    fn tset1_tclr1_test_difference_and_write_mask_without_carry_change() {
+        for (opcode, a, before, after, nz) in [
+            (0x0E_u8, 0x0f_u8, 0x0f_u8, 0x0f_u8, 0x02_u8),
+            (0x0E, 0x0f, 0xf0, 0xff, 0x00),
+            (0x4E, 0x0f, 0xff, 0xf0, 0x00),
+            (0x4E, 0x01, 0x81, 0x80, 0x80),
+        ] {
+            let (cpu, trace, bytes) = run_indexed(
+                opcode,
+                &[0x34, 0x92],
+                a,
+                0x31,
+                0x55,
+                0x66,
+                &[(0x9234, before)],
+            );
+            assert_eq!(bytes[0x9234], after);
+            assert_eq!(cpu.psw & 0x82, nz);
+            assert_eq!(cpu.psw & !0x82, 0x31 & !0x82);
+            assert_eq!((cpu.a, cpu.x, cpu.y), (a, 0x55, 0x66));
+            assert_eq!(cpu.pc, 0x8003);
+            assert_eq!(trace.len(), 6);
+            assert_eq!(trace[3].access, AccessKind::Read);
+            assert_eq!(trace[3].address, 0x9234);
+            assert_eq!(trace[5].access, AccessKind::Write);
+            assert_eq!(trace[5].address, 0x9234);
         }
     }
 

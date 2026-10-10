@@ -14,7 +14,7 @@ use crate::error::{Error, Result};
 
 use self::{
     dsp::Dsp,
-    spc700::Spc700,
+    spc700::{Spc700, Spc700HaltState},
     timers::SpcTimers,
     upload::{IplUpload, UploadEvent},
 };
@@ -27,6 +27,8 @@ const NTSC_MASTER_CLOCK_HZ: u64 = 21_477_272;
 /// SNES DSP produces 32,000 stereo sample pairs per second.
 pub const DSP_SAMPLE_RATE_HZ: u64 = 32_000;
 const SPC_RAM_BYTES: usize = 65_536;
+/// SPC700 instructions use a nominal 1.024 MHz cycle clock.
+const SPC700_CLOCK_HZ: u64 = 1_024_000;
 
 const fn ipl_overlay_default() -> bool {
     true
@@ -71,6 +73,9 @@ pub struct Apu {
     /// Fractional numerator of the DSP sample clock; serialized for save-state continuity.
     #[serde(default)]
     dsp_sample_phase: u64,
+    /// Fractional SPC CPU cycles to NTSC master clocks for isolated execution.
+    #[serde(default)]
+    isolated_spc_master_phase: u64,
     /// Independent SPC700 address space (not main CPU WRAM).
     #[serde(default = "blank_spc_ram")]
     spc_ram: Vec<u8>,
@@ -99,6 +104,7 @@ impl Default for Apu {
             spc700_steps: 0,
             bootstrap_state: BootstrapState::default(),
             dsp_sample_phase: 0,
+            isolated_spc_master_phase: 0,
             spc_ram: blank_spc_ram(),
             dsp: Dsp::default(),
             timers: SpcTimers::default(),
@@ -129,6 +135,7 @@ impl Apu {
         };
         self.spc700_steps = 0;
         self.dsp_sample_phase = 0;
+        self.isolated_spc_master_phase = 0;
         self.spc_ram.resize(SPC_RAM_BYTES, 0);
         self.spc_ram.fill(0);
         self.dsp.reset();
@@ -211,6 +218,43 @@ impl Apu {
             apu.spc700_steps = apu.spc700_steps.saturating_add(1);
         }
         result
+    }
+
+    /// Execute up to `instruction_limit` uploaded SPC700 instructions and
+    /// synthesize DSP samples in emulated time, for isolated audio bring-up.
+    ///
+    /// This is explicitly NOT the production frame loop: it runs only after
+    /// an opt-in IPL upload has handed off to an entry point. The instruction
+    /// budget bounds infinite sound-driver loops. Uploaded commercial driver
+    /// behavior, Linux speaker output and host/audio synchronization remain
+    /// unverified. Do not mix this clock with `step_master_cycles` playback.
+    pub fn run_isolated_uploaded_spc_program(
+        &mut self,
+        instruction_limit: usize,
+        audio: &mut Vec<i16>,
+    ) -> Result<usize> {
+        if self.ipl_upload.as_ref().and_then(IplUpload::entrypoint).is_none() {
+            return Err(Error::Unimplemented(
+                "isolated SPC700 upload has not reached a sound-program entrypoint",
+            ));
+        }
+        let mut executed = 0;
+        for _ in 0..instruction_limit {
+            if self.spc700.halt_state() != Spc700HaltState::Running {
+                break;
+            }
+            let trace = self.execute_spc_program_instruction()?;
+            let cpu_cycles = trace.len() as u64;
+            let numerator = u128::from(self.isolated_spc_master_phase)
+                + u128::from(cpu_cycles) * u128::from(NTSC_MASTER_CLOCK_HZ);
+            let denominator = u128::from(SPC700_CLOCK_HZ);
+            self.isolated_spc_master_phase = (numerator % denominator) as u64;
+            let master_cycles = (numerator / denominator) as u64;
+            self.timers.advance_master_cycles(master_cycles);
+            self.append_dsp_audio(master_cycles, audio);
+            executed += 1;
+        }
+        Ok(executed)
     }
 
     /// Enable byte-accurate mailbox upload capture for an isolated APU test.
@@ -944,6 +988,78 @@ mod tests {
         let restored: Apu = serde_json::from_str(&saved).unwrap();
         assert_eq!(restored.isolated_ipl_upload().unwrap().bytes_written(), 4);
         assert_eq!(restored.read_spc_ram(0x0402), 0xc4);
+    }
+
+    #[test]
+    fn isolated_uploaded_sound_program_configures_dsp_and_produces_audio() {
+        let mut apu = Apu::default();
+        apu.reset();
+        let mut output = Vec::new();
+        assert!(apu.run_isolated_uploaded_spc_program(2, &mut output).is_err());
+        apu.enable_isolated_ipl_upload();
+        assert!(apu.run_isolated_uploaded_spc_program(2, &mut output).is_err());
+
+        // Source zero directory and an original looping BRR waveform.
+        for (index, byte) in [0, 3, 0, 3].into_iter().enumerate() {
+            apu.write_spc_ram(0x0200 + index as u16, byte);
+        }
+        for (index, byte) in [0xc3, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77]
+            .into_iter()
+            .enumerate()
+        {
+            apu.write_spc_ram(0x0300 + index as u16, byte);
+        }
+        let mut program = Vec::new();
+        for (register, value) in [
+            (0x5d, 0x02),
+            (0x00, 0x7f),
+            (0x01, 0x7f),
+            (0x03, 0x10),
+            (0x07, 0x7f),
+            (0x0c, 0x7f),
+            (0x1c, 0x7f),
+            (0x4c, 0x01),
+        ] {
+            // MOV $F2,#register; MOV $F3,#value.
+            program.extend_from_slice(&[0x8f, register, 0xf2, 0x8f, value, 0xf3]);
+        }
+        program.extend_from_slice(&[0x2f, 0xfe]); // BRA -2 (bounded by host).
+        for (port, value) in [(1, 1), (2, 0), (3, 4), (0, 0xcc)] {
+            apu.write_cpu_port(port, value).unwrap();
+        }
+        apu.step_master_cycles(6);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0xcc);
+        for (index, byte) in program.iter().copied().enumerate() {
+            apu.write_cpu_port(1, byte).unwrap();
+            apu.write_cpu_port(0, index as u8).unwrap();
+            apu.step_master_cycles(6);
+            assert_eq!(apu.read_spc_ram(0x0400 + index as u16), byte);
+        }
+        for (port, value) in [(1, 0), (2, 0), (3, 4), (0, program.len() as u8 + 1)] {
+            apu.write_cpu_port(port, value).unwrap();
+        }
+        apu.step_master_cycles(6);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().entrypoint(), Some(0x0400));
+        assert_eq!(apu.spc700.pc, 0x0400);
+
+        let executed = apu.run_isolated_uploaded_spc_program(400, &mut output).unwrap();
+        assert_eq!(executed, 400);
+        assert_eq!(apu.read_dsp_register(0x5d), 2);
+        assert_eq!(apu.read_dsp_register(0x4c), 1);
+        assert!(output.len() >= 30, "audio must advance with instruction timing");
+        assert!(output.iter().any(|&sample| sample > 1000));
+        assert!(output.chunks_exact(2).all(|pair| pair[0] == pair[1]));
+
+        // Host instruction limit prevents unbounded BRA loops.
+        let steps = apu.run_isolated_uploaded_spc_program(3, &mut output).unwrap();
+        assert_eq!(steps, 3);
+        let saved = serde_json::to_string(&apu).unwrap();
+        let restored: Apu = serde_json::from_str(&saved).unwrap();
+        assert_eq!(
+            restored.isolated_ipl_upload().unwrap().entrypoint(),
+            Some(0x0400)
+        );
+        assert_eq!(restored.read_dsp_register(0x4c), 1);
     }
 
     #[test]

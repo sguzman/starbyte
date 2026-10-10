@@ -177,6 +177,7 @@ impl Spc700 {
             0x1A | 0x3A | 0x5A => {
                 self.execute_word_increment_compare(opcode, &mut read, &mut write, &mut trace)
             }
+            0x7A | 0x9A => self.execute_word_add_sub(opcode, &mut read, &mut trace),
             0xBA => self.execute_movw_ya_dp(&mut read, &mut trace),
             0xC6 => self.execute_mov_x_indirect_a(&mut read, &mut write, &mut trace),
             0xCB => self.execute_mov_dp_y(&mut read, &mut write, &mut trace),
@@ -1048,6 +1049,59 @@ impl Spc700 {
         self.push_wait_trace(trace);
         self.push_write_trace(write, trace, address, value);
         self.pc = self.pc.wrapping_add(3);
+        Ok(())
+    }
+
+    /// ADDW/SUBW update YA without consuming the old carry bit.
+    /// H reflects the carry/no-borrow across the low 12-bit boundary.
+    fn execute_word_add_sub<FRead>(
+        &mut self,
+        opcode: u8,
+        read: &mut FRead,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        let offset = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let low = self.push_read_trace(read, trace, self.direct_page_address(offset));
+        let high = self.push_read_trace(
+            read,
+            trace,
+            self.direct_page_address(offset.wrapping_add(1)),
+        );
+        self.push_wait_trace(trace);
+        let rhs = u16::from_le_bytes([low, high]);
+        let lhs = u16::from_le_bytes([self.a, self.y]);
+        let subtract = opcode == 0x9A;
+        let result = if subtract {
+            lhs.wrapping_sub(rhs)
+        } else {
+            lhs.wrapping_add(rhs)
+        };
+        let carry = if subtract {
+            lhs >= rhs
+        } else {
+            u32::from(lhs) + u32::from(rhs) > 0xffff
+        };
+        let half_carry = if subtract {
+            lhs & 0x0fff >= rhs & 0x0fff
+        } else {
+            u32::from(lhs & 0x0fff) + u32::from(rhs & 0x0fff) > 0x0fff
+        };
+        let overflow = if subtract {
+            ((lhs ^ rhs) & (lhs ^ result)) & 0x8000 != 0
+        } else {
+            (!(lhs ^ rhs) & (lhs ^ result)) & 0x8000 != 0
+        };
+        self.a = result as u8;
+        self.y = (result >> 8) as u8;
+        self.psw &= !(0x40 | 0x08 | 0x01);
+        self.psw |= (u8::from(overflow) << 6)
+            | (u8::from(half_carry) << 3)
+            | u8::from(carry);
+        self.update_nz_word_flags(result);
+        self.pc = self.pc.wrapping_add(2);
         Ok(())
     }
 
@@ -2876,6 +2930,44 @@ mod accumulator_alu_tests {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn addw_subw_use_independent_carry_and_16bit_flags() {
+        for (opcode, lhs, rhs, answer, flags) in [
+            (0x7A_u8, 0x0000_u16, 0x0000_u16, 0x0000_u16, 0x02_u8),
+            (0x7A, 0x0001, 0x0001, 0x0002, 0x00),
+            (0x7A, 0x0fff, 0x0001, 0x1000, 0x08),
+            (0x7A, 0xffff, 0x0001, 0x0000, 0x0b),
+            (0x7A, 0x7fff, 0x0001, 0x8000, 0xc8),
+            (0x9A, 0x0002, 0x0001, 0x0001, 0x09),
+            (0x9A, 0x1000, 0x0001, 0x0fff, 0x01),
+            (0x9A, 0x0000, 0x0001, 0xffff, 0x80),
+            (0x9A, 0x8000, 0x0001, 0x7fff, 0x49),
+            (0x9A, 0x0001, 0x0001, 0x0000, 0x0b),
+        ] {
+            for carry in [0_u8, 1] {
+                let (cpu, trace, bytes) = run_indexed(
+                    opcode,
+                    &[0xff],
+                    lhs as u8,
+                    0x30 | carry,
+                    0x77,
+                    (lhs >> 8) as u8,
+                    &[(0x01ff, rhs as u8), (0x0100, (rhs >> 8) as u8)],
+                );
+                assert_eq!(u16::from_le_bytes([cpu.a, cpu.y]), answer);
+                assert_eq!(cpu.psw & 0xcb, flags, "opcode {opcode:02X}");
+                assert_eq!(cpu.psw & !0xcb, 0x30 & !0xcb);
+                assert_eq!(cpu.x, 0x77);
+                assert_eq!(cpu.pc, 0x8002);
+                assert_eq!(trace.len(), 5);
+                assert_eq!(trace[2].address, 0x01ff);
+                assert_eq!(trace[3].address, 0x0100);
+                assert_eq!(bytes[0x01ff], rhs as u8);
+                assert_eq!(bytes[0x0100], (rhs >> 8) as u8);
             }
         }
     }

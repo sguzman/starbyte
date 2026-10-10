@@ -147,8 +147,9 @@ impl Spc700 {
             0xEE => self.execute_pop_y(&mut read, &mut trace),
             0x8D => self.execute_mov_y_imm(&mut read, &mut trace),
             0x8F => self.execute_mov_dp_imm(&mut read, &mut write, &mut trace),
-            0x0B | 0x0C | 0x1B | 0x2B | 0x2C | 0x3B | 0x4B | 0x4C | 0x5B | 0x6B | 0x6C
-            | 0x7B => self.execute_memory_shift_rotate(opcode, &mut read, &mut write, &mut trace),
+            0x0B | 0x0C | 0x1B | 0x2B | 0x2C | 0x3B | 0x4B | 0x4C | 0x5B | 0x6B | 0x6C | 0x7B => {
+                self.execute_memory_shift_rotate(opcode, &mut read, &mut write, &mut trace)
+            }
             0x8B | 0x8C | 0x9B | 0xAB | 0xAC | 0xBB => {
                 self.execute_memory_inc_dec(opcode, &mut read, &mut write, &mut trace)
             }
@@ -908,15 +909,9 @@ impl Spc700 {
         let carry_in = self.psw & 0x01;
         let (value, carry_out) = match opcode & 0x60 {
             0x00 => (previous.wrapping_shl(1), previous & 0x80 != 0),
-            0x20 => (
-                previous.wrapping_shl(1) | carry_in,
-                previous & 0x80 != 0,
-            ),
+            0x20 => (previous.wrapping_shl(1) | carry_in, previous & 0x80 != 0),
             0x40 => (previous >> 1, previous & 0x01 != 0),
-            0x60 => (
-                (previous >> 1) | (carry_in << 7),
-                previous & 0x01 != 0,
-            ),
+            0x60 => ((previous >> 1) | (carry_in << 7), previous & 0x01 != 0),
             _ => unreachable!(),
         };
         self.push_write_trace(write, trace, address, value);
@@ -2137,9 +2132,8 @@ mod accumulator_alu_tests {
                     0x44,
                     &[(address, previous)],
                 );
-                let expected_flags = (expected & 0x80)
-                    | if expected == 0 { 0x02 } else { 0 }
-                    | u8::from(carry);
+                let expected_flags =
+                    (expected & 0x80) | if expected == 0 { 0x02 } else { 0 } | u8::from(carry);
                 assert_eq!(bytes[usize::from(address)], expected, "opcode {opcode:02X}");
                 assert_eq!(cpu.psw & 0x83, expected_flags, "opcode {opcode:02X}");
                 assert_eq!(cpu.psw & !0x83, 0x31 & !0x83);

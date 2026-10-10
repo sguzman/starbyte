@@ -1056,10 +1056,26 @@ mod tests {
         );
         assert_eq!(apu.spc700.pc, 0x0400);
 
+        let mut split_run = apu.clone();
+        let mut split_audio = Vec::new();
+        for _ in 0..4 {
+            assert_eq!(
+                split_run
+                    .run_isolated_uploaded_spc_program(100, &mut split_audio)
+                    .unwrap(),
+                100
+            );
+        }
+
         let executed = apu
             .run_isolated_uploaded_spc_program(400, &mut output)
             .unwrap();
         assert_eq!(executed, 400);
+        assert_eq!(split_audio, output);
+        assert_eq!(
+            serde_json::to_value(&split_run).unwrap(),
+            serde_json::to_value(&apu).unwrap()
+        );
         assert_eq!(apu.read_dsp_register(0x5d), 2);
         assert_eq!(apu.read_dsp_register(0x4c), 1);
         assert!(

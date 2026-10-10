@@ -146,6 +146,9 @@ impl Spc700 {
             0xD0 => self.execute_bne(&mut read, &mut trace),
             0xDC => self.execute_dec_y(&mut read, &mut trace),
             0xDD => self.execute_mov_a_y(&mut read, &mut trace),
+            0x9F => self.execute_xcn_a(&mut read, &mut trace),
+            0xCF => self.execute_mul_ya(&mut read, &mut trace),
+            0xE0 => self.execute_clrv(&mut read, &mut trace),
             0xED => self.execute_notc(&mut read, &mut trace),
             0xEE => self.execute_pop_y(&mut read, &mut trace),
             0x8D => self.execute_mov_y_imm(&mut read, &mut trace),
@@ -1447,6 +1450,49 @@ impl Spc700 {
         Ok(())
     }
 
+    /// Swap A's nibbles without touching carry, overflow or half-carry.
+    fn execute_xcn_a<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        for _ in 0..3 {
+            self.push_wait_trace(trace);
+        }
+        self.a = self.a.rotate_left(4);
+        self.update_nz_flags(self.a);
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    /// Multiply the two unsigned accumulators into YA. N/Z reflect Y only.
+    fn execute_mul_ya<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        for _ in 0..7 {
+            self.push_wait_trace(trace);
+        }
+        let product = u16::from(self.a) * u16::from(self.y);
+        self.a = product as u8;
+        self.y = (product >> 8) as u8;
+        self.update_nz_flags(self.y);
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    /// Clear overflow and half-carry, preserving every other PSW bit.
+    fn execute_clrv<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.psw &= !(0x40 | 0x08);
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
     fn execute_notc<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
     where
         FRead: FnMut(u16) -> u8,
@@ -2357,6 +2403,48 @@ mod accumulator_alu_tests {
             assert_eq!(trace.len(), if taken { 6 } else { 4 });
             assert_eq!(cpu.psw, 0x31);
         }
+    }
+
+    #[test]
+    fn xcn_a_preserves_non_nz_flags_and_uses_five_cycles() {
+        for (a, expected) in [(0xf0_u8, 0x0f_u8), (0x08, 0x80), (0x00, 0x00)] {
+            let (cpu, trace, _) = run(0x9F, &[], a, 0x79, &[]);
+            assert_eq!(cpu.a, expected);
+            assert_eq!(cpu.psw & !0x82, 0x79 & !0x82);
+            assert_eq!(cpu.psw & 0x80 != 0, expected & 0x80 != 0);
+            assert_eq!(cpu.psw & 0x02 != 0, expected == 0);
+            assert_eq!(cpu.pc, 0x8001);
+            assert_eq!(trace.len(), 5);
+        }
+    }
+
+    #[test]
+    fn mul_ya_uses_unsigned_product_and_y_for_nz_flags() {
+        for (a, y, product) in [
+            (0x12_u8, 0x34_u8, 0x03a8_u16),
+            (0x00, 0x80, 0x0000),
+            (0xff, 0xff, 0xfe01),
+            (0xff, 0x01, 0x00ff),
+        ] {
+            let (cpu, trace, _) = run_indexed(0xCF, &[], a, 0x79, 0x55, y, &[]);
+            assert_eq!(u16::from_le_bytes([cpu.a, cpu.y]), product);
+            assert_eq!(cpu.x, 0x55);
+            assert_eq!(cpu.psw & !0x82, 0x79 & !0x82);
+            assert_eq!(cpu.psw & 0x80 != 0, cpu.y & 0x80 != 0);
+            assert_eq!(cpu.psw & 0x02 != 0, cpu.y == 0);
+            assert_eq!(cpu.pc, 0x8001);
+            assert_eq!(trace.len(), 9);
+            assert_eq!(cpu.cycles(), 9);
+        }
+    }
+
+    #[test]
+    fn clrv_clears_overflow_and_half_carry_only() {
+        let (cpu, trace, _) = run(0xE0, &[], 0x42, 0xff, &[]);
+        assert_eq!(cpu.psw, 0xb7);
+        assert_eq!(cpu.a, 0x42);
+        assert_eq!(cpu.pc, 0x8001);
+        assert_eq!(trace.len(), 2);
     }
 
     #[test]

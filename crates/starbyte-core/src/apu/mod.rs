@@ -233,7 +233,12 @@ impl Apu {
         instruction_limit: usize,
         audio: &mut Vec<i16>,
     ) -> Result<usize> {
-        if self.ipl_upload.as_ref().and_then(IplUpload::entrypoint).is_none() {
+        if self
+            .ipl_upload
+            .as_ref()
+            .and_then(IplUpload::entrypoint)
+            .is_none()
+        {
             return Err(Error::Unimplemented(
                 "isolated SPC700 upload has not reached a sound-program entrypoint",
             ));
@@ -995,9 +1000,15 @@ mod tests {
         let mut apu = Apu::default();
         apu.reset();
         let mut output = Vec::new();
-        assert!(apu.run_isolated_uploaded_spc_program(2, &mut output).is_err());
+        assert!(
+            apu.run_isolated_uploaded_spc_program(2, &mut output)
+                .is_err()
+        );
         apu.enable_isolated_ipl_upload();
-        assert!(apu.run_isolated_uploaded_spc_program(2, &mut output).is_err());
+        assert!(
+            apu.run_isolated_uploaded_spc_program(2, &mut output)
+                .is_err()
+        );
 
         // Source zero directory and an original looping BRR waveform.
         for (index, byte) in [0, 3, 0, 3].into_iter().enumerate() {
@@ -1039,19 +1050,29 @@ mod tests {
             apu.write_cpu_port(port, value).unwrap();
         }
         apu.step_master_cycles(6);
-        assert_eq!(apu.isolated_ipl_upload().unwrap().entrypoint(), Some(0x0400));
+        assert_eq!(
+            apu.isolated_ipl_upload().unwrap().entrypoint(),
+            Some(0x0400)
+        );
         assert_eq!(apu.spc700.pc, 0x0400);
 
-        let executed = apu.run_isolated_uploaded_spc_program(400, &mut output).unwrap();
+        let executed = apu
+            .run_isolated_uploaded_spc_program(400, &mut output)
+            .unwrap();
         assert_eq!(executed, 400);
         assert_eq!(apu.read_dsp_register(0x5d), 2);
         assert_eq!(apu.read_dsp_register(0x4c), 1);
-        assert!(output.len() >= 30, "audio must advance with instruction timing");
+        assert!(
+            output.len() >= 30,
+            "audio must advance with instruction timing"
+        );
         assert!(output.iter().any(|&sample| sample > 1000));
         assert!(output.chunks_exact(2).all(|pair| pair[0] == pair[1]));
 
         // Host instruction limit prevents unbounded BRA loops.
-        let steps = apu.run_isolated_uploaded_spc_program(3, &mut output).unwrap();
+        let steps = apu
+            .run_isolated_uploaded_spc_program(3, &mut output)
+            .unwrap();
         assert_eq!(steps, 3);
         let saved = serde_json::to_string(&apu).unwrap();
         let restored: Apu = serde_json::from_str(&saved).unwrap();

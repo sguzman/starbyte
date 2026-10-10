@@ -112,8 +112,9 @@ impl Spc700 {
                 self.execute_mov_a_addressed(opcode, &mut read, &mut trace)
             }
             0xBF => self.execute_mov_a_x_increment(&mut read, &mut trace),
-            0xAF | 0xC5 | 0xC7 | 0xC9 | 0xCC | 0xD4 | 0xD5 | 0xD6 | 0xD8 | 0xD9
-            | 0xDB => self.execute_mov_store(opcode, &mut read, &mut write, &mut trace),
+            0xAF | 0xC5 | 0xC7 | 0xC9 | 0xCC | 0xD4 | 0xD5 | 0xD6 | 0xD8 | 0xD9 | 0xDB => {
+                self.execute_mov_store(opcode, &mut read, &mut write, &mut trace)
+            }
             0xFA => self.execute_mov_dp_dp(&mut read, &mut write, &mut trace),
             0xE9 | 0xEC | 0xF8 | 0xF9 | 0xFB => {
                 self.execute_mov_index_load(opcode, &mut read, &mut trace)
@@ -472,7 +473,10 @@ impl Spc700 {
                 if matches!(opcode, 0xD5 | 0xD6) {
                     self.push_wait_trace(trace);
                 }
-                (u16::from_le_bytes([low, high]).wrapping_add(u16::from(index)), 3)
+                (
+                    u16::from_le_bytes([low, high]).wrapping_add(u16::from(index)),
+                    3,
+                )
             }
             0xC7 => {
                 let offset = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
@@ -1709,7 +1713,11 @@ mod accumulator_alu_tests {
                     |address, value| memory.borrow_mut()[usize::from(address)] = value,
                 )
                 .unwrap();
-            assert_eq!(memory.borrow()[usize::from(target)], expected, "opcode {opcode:02X}");
+            assert_eq!(
+                memory.borrow()[usize::from(target)],
+                expected,
+                "opcode {opcode:02X}"
+            );
             assert_eq!(cpu.a, 0x55);
             assert_eq!(cpu.x, if opcode == 0xAF { 4 } else { 3 });
             assert_eq!(cpu.y, 5);
@@ -1775,9 +1783,11 @@ mod accumulator_alu_tests {
         assert_eq!(cpu.pc, 0x8003);
         assert_eq!(cpu.psw, 0xA3);
         assert_eq!(trace.len(), 5);
-        assert!(trace.iter().all(|event| {
-            event.address != 0x0142 || event.access != AccessKind::Read
-        }));
+        assert!(
+            trace
+                .iter()
+                .all(|event| { event.address != 0x0142 || event.access != AccessKind::Read })
+        );
         assert_eq!(trace.last().unwrap().access, AccessKind::Write);
     }
 

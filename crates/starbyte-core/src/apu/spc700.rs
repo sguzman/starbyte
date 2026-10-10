@@ -22,6 +22,18 @@ pub struct Spc700 {
     /// Status register.
     pub psw: u8,
     cycles: u64,
+    /// Standby state entered by SLEEP or STOP. Earlier save states default to Running.
+    #[serde(default)]
+    halt_state: Spc700HaltState,
+}
+
+/// Execution state of the SPC700 interpreter; the legacy dummy clock is separate.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Spc700HaltState {
+    #[default]
+    Running,
+    Sleeping,
+    Stopped,
 }
 
 impl Spc700 {
@@ -55,6 +67,12 @@ impl Spc700 {
         self.cycles = self.cycles.saturating_add(steps);
     }
 
+    /// Report whether the isolated sound CPU has entered standby.
+    #[must_use]
+    pub const fn halt_state(&self) -> Spc700HaltState {
+        self.halt_state
+    }
+
     /// Execute one instruction against a 64 KiB memory callback and return the trace.
     pub fn step_with_memory<FRead, FWrite>(
         &mut self,
@@ -65,6 +83,17 @@ impl Spc700 {
         FRead: FnMut(u16) -> u8,
         FWrite: FnMut(u16, u8),
     {
+        if self.halt_state != Spc700HaltState::Running {
+            // Surface one bounded idle event instead of repeatedly fetching
+            // the next opcode. Interrupt wakeup is not connected to runtime.
+            self.cycles = 1;
+            return Ok(vec![BusEvent {
+                address: u32::from(self.pc),
+                value: 0,
+                access: AccessKind::Wait,
+                cycle: 0,
+            }]);
+        }
         let opcode_address = self.pc;
         let opcode = read(opcode_address);
         let mut trace = vec![BusEvent {
@@ -167,6 +196,7 @@ impl Spc700 {
             0xBE | 0xDF => self.execute_decimal_adjust(opcode, &mut read, &mut trace),
             0xCF => self.execute_mul_ya(&mut read, &mut trace),
             0xE0 => self.execute_clrv(&mut read, &mut trace),
+            0xEF | 0xFF => self.execute_standby(opcode, &mut read, &mut trace),
             0xED => self.execute_notc(&mut read, &mut trace),
             0xEE => self.execute_pop_y(&mut read, &mut trace),
             0x8D => self.execute_mov_y_imm(&mut read, &mut trace),
@@ -218,6 +248,7 @@ impl Spc700 {
         self.sp = sp;
         self.psw = psw;
         self.cycles = 0;
+        self.halt_state = Spc700HaltState::Running;
     }
 
     /// Total executed cycles in the placeholder model.
@@ -1693,11 +1724,7 @@ impl Spc700 {
 
     /// DIV YA,X includes the SPC700's deterministic overflow/divide-by-zero
     /// behavior. N/Z reflect the resulting accumulator, not the remainder.
-    fn execute_div_ya_x<FRead>(
-        &mut self,
-        read: &mut FRead,
-        trace: &mut Vec<BusEvent>,
-    ) -> Result<()>
+    fn execute_div_ya_x<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
     where
         FRead: FnMut(u16) -> u8,
     {
@@ -1727,6 +1754,29 @@ impl Spc700 {
         self.psw |= (u8::from(overflow) << 6) | (u8::from(half_carry) << 3);
         self.update_nz_flags(self.a);
         self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    /// SLEEP and STOP enter standby after the three-cycle opcode. The
+    /// emulator does not yet model hardware interrupt wakeup, so the state
+    /// remains halted until a new register snapshot or reset is loaded.
+    fn execute_standby<FRead>(
+        &mut self,
+        opcode: u8,
+        read: &mut FRead,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.push_wait_trace(trace);
+        self.pc = self.pc.wrapping_add(1);
+        self.halt_state = if opcode == 0xEF {
+            Spc700HaltState::Sleeping
+        } else {
+            Spc700HaltState::Stopped
+        };
         Ok(())
     }
 
@@ -3152,6 +3202,65 @@ mod accumulator_alu_tests {
             assert_eq!(cpu.pc, 0x8001);
             assert_eq!(trace.len(), 12);
             assert_eq!(cpu.cycles(), 12);
+        }
+    }
+
+    #[test]
+    fn sleep_and_stop_halt_instruction_fetch_and_resume_on_state_load() {
+        use super::Spc700HaltState;
+
+        for (opcode, halt_state) in [
+            (0xEF_u8, Spc700HaltState::Sleeping),
+            (0xFF_u8, Spc700HaltState::Stopped),
+        ] {
+            let mut cpu = Spc700::default();
+            cpu.load_state(0x8000, 0x42, 0x55, 0x66, 0xef, 0x31);
+            let memory = RefCell::new(vec![0_u8; 65_536]);
+            memory.borrow_mut()[0x8000] = opcode;
+            memory.borrow_mut()[0x8001] = 0xe8; // MOV A,#$77
+            memory.borrow_mut()[0x8002] = 0x77;
+            let mut reads = 0;
+            let first = cpu
+                .step_with_memory(
+                    |address| {
+                        reads += 1;
+                        memory.borrow()[usize::from(address)]
+                    },
+                    |address, value| memory.borrow_mut()[usize::from(address)] = value,
+                )
+                .unwrap();
+            assert_eq!(first.len(), 3);
+            assert_eq!(cpu.pc, 0x8001);
+            assert_eq!(cpu.halt_state(), halt_state);
+            assert_eq!(cpu.psw, 0x31);
+            let reads_after_halt = reads;
+            let idle = cpu
+                .step_with_memory(
+                    |address| {
+                        reads += 1;
+                        memory.borrow()[usize::from(address)]
+                    },
+                    |address, value| memory.borrow_mut()[usize::from(address)] = value,
+                )
+                .unwrap();
+            assert_eq!(reads, reads_after_halt, "halted CPU must not fetch");
+            assert_eq!(idle.len(), 1);
+            assert_eq!(idle[0].access, AccessKind::Wait);
+            assert_eq!(cpu.a, 0x42);
+            assert_eq!(cpu.pc, 0x8001);
+            let serialized = serde_json::to_string(&cpu).unwrap();
+            let restored: Spc700 = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(restored.halt_state(), halt_state);
+
+            cpu.load_state(0x8001, 0x42, 0x55, 0x66, 0xef, 0x31);
+            assert_eq!(cpu.halt_state(), Spc700HaltState::Running);
+            cpu.step_with_memory(
+                |address| memory.borrow()[usize::from(address)],
+                |address, value| memory.borrow_mut()[usize::from(address)] = value,
+            )
+            .unwrap();
+            assert_eq!(cpu.a, 0x77);
+            assert_eq!(cpu.pc, 0x8003);
         }
     }
 

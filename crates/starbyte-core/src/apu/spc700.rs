@@ -143,7 +143,9 @@ impl Spc700 {
             0xEE => self.execute_pop_y(&mut read, &mut trace),
             0x8D => self.execute_mov_y_imm(&mut read, &mut trace),
             0x8F => self.execute_mov_dp_imm(&mut read, &mut write, &mut trace),
-            0xAB => self.execute_inc_dp(&mut read, &mut write, &mut trace),
+            0x8B | 0x8C | 0x9B | 0xAB | 0xAC | 0xBB => {
+                self.execute_memory_inc_dec(opcode, &mut read, &mut write, &mut trace)
+            }
             0xBA => self.execute_movw_ya_dp(&mut read, &mut trace),
             0xC6 => self.execute_mov_x_indirect_a(&mut read, &mut write, &mut trace),
             0xCB => self.execute_mov_dp_y(&mut read, &mut write, &mut trace),
@@ -792,8 +794,11 @@ impl Spc700 {
         Ok(())
     }
 
-    fn execute_inc_dp<FRead, FWrite>(
+    /// Memory INC/DEC: direct page, direct page + X and absolute.
+    /// Indexed direct-page addresses wrap within the selected 256-byte page.
+    fn execute_memory_inc_dec<FRead, FWrite>(
         &mut self,
+        opcode: u8,
         read: &mut FRead,
         write: &mut FWrite,
         trace: &mut Vec<BusEvent>,
@@ -802,13 +807,33 @@ impl Spc700 {
         FRead: FnMut(u16) -> u8,
         FWrite: FnMut(u16, u8),
     {
-        let dp = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
-        let address = self.direct_page_address(dp);
+        let (address, len) = match opcode {
+            0x8B | 0xAB => {
+                let offset = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                (self.direct_page_address(offset), 2)
+            }
+            0x9B | 0xBB => {
+                let offset = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                self.push_wait_trace(trace);
+                (self.direct_page_address(offset.wrapping_add(self.x)), 2)
+            }
+            0x8C | 0xAC => {
+                let low = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                let high = self.push_read_trace(read, trace, self.pc.wrapping_add(2));
+                (u16::from_le_bytes([low, high]), 3)
+            }
+            _ => unreachable!("not a supported SPC700 memory INC/DEC opcode"),
+        };
+
         let previous = self.push_read_trace(read, trace, address);
-        let value = previous.wrapping_add(1);
+        let value = if matches!(opcode, 0xAB | 0xAC | 0xBB) {
+            previous.wrapping_add(1)
+        } else {
+            previous.wrapping_sub(1)
+        };
         self.push_write_trace(write, trace, address, value);
         self.update_nz_flags(value);
-        self.pc = self.pc.wrapping_add(2);
+        self.pc = self.pc.wrapping_add(len);
         Ok(())
     }
 
@@ -1899,6 +1924,68 @@ mod accumulator_alu_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn memory_inc_dec_cover_page_wrap_flag_results_and_bus_cycles() {
+        for (opcode, operands, address, cycles) in [
+            (0x8B_u8, vec![0xf0], 0x01f0_u16, 4_usize),
+            (0x9B, vec![0xf0], 0x0110, 5),
+            (0x8C, vec![0xff, 0xff], 0xffff, 5),
+            (0xAB, vec![0xf0], 0x01f0, 4),
+            (0xBB, vec![0xf0], 0x0110, 5),
+            (0xAC, vec![0xff, 0xff], 0xffff, 5),
+        ] {
+            for previous in [0x00_u8, 0x7f, 0x80, 0xff] {
+                let increment = matches!(opcode, 0xAB | 0xAC | 0xBB);
+                let expected = if increment {
+                    previous.wrapping_add(1)
+                } else {
+                    previous.wrapping_sub(1)
+                };
+                let (cpu, trace, bytes) = run_indexed(
+                    opcode,
+                    &operands,
+                    0x5a,
+                    0x31,
+                    0x20,
+                    0x44,
+                    &[(address, previous)],
+                );
+
+                assert_eq!(cpu.pc, 0x8000 + operands.len() as u16 + 1);
+                assert_eq!(cpu.a, 0x5a);
+                assert_eq!(cpu.x, 0x20);
+                assert_eq!(cpu.y, 0x44);
+                assert_eq!(bytes[usize::from(address)], expected);
+                assert_eq!(cpu.psw & !0x82, 0x31 & !0x82);
+                assert_eq!(cpu.psw & 0x80 != 0, expected & 0x80 != 0);
+                assert_eq!(cpu.psw & 0x02 != 0, expected == 0);
+                assert_eq!(trace.len(), cycles, "opcode {opcode:02X}");
+                assert_eq!(cpu.cycles(), cycles as u64);
+                assert_eq!(trace[cycles - 2].access, AccessKind::Read);
+                assert_eq!(trace[cycles - 2].address, u32::from(address));
+                assert_eq!(trace[cycles - 1].access, AccessKind::Write);
+                assert_eq!(trace[cycles - 1].address, u32::from(address));
+                assert_eq!(trace[cycles - 1].value, expected);
+            }
+        }
+
+        // The P flag selects $0000 or $0100 and indexing never carries
+        // across a direct-page boundary.
+        let (cpu, trace, bytes) = run_indexed(
+            0xBB,
+            &[0xfc],
+            0x42,
+            0x01,
+            0x05,
+            0,
+            &[(0x0001, 0xff), (0x0101, 0x12)],
+        );
+        assert_eq!(bytes[0x0001], 0);
+        assert_eq!(bytes[0x0101], 0x12);
+        assert_eq!(cpu.psw & 0x02, 0x02);
+        assert_eq!(trace[3].address, 0x0001);
     }
 
     #[test]

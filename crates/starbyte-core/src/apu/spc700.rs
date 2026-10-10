@@ -102,7 +102,9 @@ impl Spc700 {
             | 0x19 | 0x39 | 0x59 | 0x79 | 0x99 | 0xB9 => {
                 self.execute_memory_alu(opcode, &mut read, &mut write, &mut trace)
             }
-            0x7E => self.execute_cmp_y_dp(&mut read, &mut trace),
+            0x1E | 0x3E | 0x5E | 0x7E | 0xAD | 0xC8 => {
+                self.execute_cmp_index_register(opcode, &mut read, &mut trace)
+            }
             0x50 => self.execute_bvc(&mut read, &mut trace),
             0x1C => self.execute_asl_a(&mut read, &mut trace),
             0x3C => self.execute_rol_a(&mut read, &mut trace),
@@ -786,15 +788,46 @@ impl Spc700 {
         Ok(())
     }
 
-    /// CMP Y,dp: compare the Y register to a direct-page value.
-    fn execute_cmp_y_dp<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    /// CMP X/Y with immediate, selected direct-page or absolute source.
+    /// Comparison affects N, Z and C only; both registers remain untouched.
+    fn execute_cmp_index_register<FRead>(
+        &mut self,
+        opcode: u8,
+        read: &mut FRead,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
     where
         FRead: FnMut(u16) -> u8,
     {
-        let dp = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
-        let value = self.push_read_trace(read, trace, self.direct_page_address(dp));
-        self.update_cmp_flags(self.y, value);
-        self.pc = self.pc.wrapping_add(2);
+        let (operand, len) = match opcode {
+            0xAD | 0xC8 => (
+                self.push_read_trace(read, trace, self.pc.wrapping_add(1)),
+                2,
+            ),
+            0x3E | 0x7E => {
+                let offset = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                (
+                    self.push_read_trace(read, trace, self.direct_page_address(offset)),
+                    2,
+                )
+            }
+            0x1E | 0x5E => {
+                let low = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                let high = self.push_read_trace(read, trace, self.pc.wrapping_add(2));
+                (
+                    self.push_read_trace(read, trace, u16::from_le_bytes([low, high])),
+                    3,
+                )
+            }
+            _ => unreachable!("not a supported SPC700 X/Y compare"),
+        };
+        let register = if matches!(opcode, 0x1E | 0x3E | 0xC8) {
+            self.x
+        } else {
+            self.y
+        };
+        self.update_cmp_flags(register, operand);
+        self.pc = self.pc.wrapping_add(len);
         Ok(())
     }
 
@@ -2155,6 +2188,56 @@ mod accumulator_alu_tests {
             assert_eq!(cpu.psw & 0x80, expected & 0x80);
             assert_eq!(cpu.psw & 0x02 != 0, expected == 0);
         }
+    }
+
+    #[test]
+    fn cmp_x_y_immediate_dp_absolute_preserve_registers_and_non_compare_flags() {
+        for (opcode, operands, address, cycles, register) in [
+            (0xC8_u8, vec![0], None, 2_usize, 0x40_u8),
+            (0x3E, vec![0x42], Some(0x0142_u16), 3, 0x40),
+            (0x1E, vec![0x34, 0x92], Some(0x9234), 4, 0x40),
+            (0xAD, vec![0], None, 2, 0x80),
+            (0x7E, vec![0x42], Some(0x0142), 3, 0x80),
+            (0x5E, vec![0x34, 0x92], Some(0x9234), 4, 0x80),
+        ] {
+            for value in [register.wrapping_sub(1), register, register.wrapping_add(1)] {
+                let mut operands = operands.clone();
+                let memory = if let Some(address) = address {
+                    vec![(address, value)]
+                } else {
+                    operands[0] = value;
+                    Vec::new()
+                };
+                let (cpu, trace, bytes) =
+                    run_indexed(opcode, &operands, 0x23, 0x30, 0x40, 0x80, &memory);
+                let diff = register.wrapping_sub(value);
+                let expected_flags = (diff & 0x80)
+                    | (if diff == 0 { 0x02 } else { 0 })
+                    | u8::from(register >= value);
+                assert_eq!(cpu.psw & 0x83, expected_flags, "opcode {opcode:02X}");
+                assert_eq!(cpu.psw & !0x83, 0x30 & !0x83);
+                assert_eq!(cpu.a, 0x23);
+                assert_eq!(cpu.x, 0x40);
+                assert_eq!(cpu.y, 0x80);
+                assert_eq!(cpu.pc, 0x8001 + operands.len() as u16);
+                assert_eq!(trace.len(), cycles, "opcode {opcode:02X}");
+                assert_eq!(trace.last().unwrap().access, AccessKind::Read);
+                assert_eq!(
+                    trace.last().unwrap().address,
+                    u32::from(address.unwrap_or(0x8001)),
+                );
+                if let Some(address) = address {
+                    assert_eq!(bytes[usize::from(address)], value);
+                }
+            }
+        }
+
+        // Direct page is redirected to $0100 when P is set.
+        let (cpu, trace, bytes) =
+            run_indexed(0x3E, &[0xff], 0x23, 0x20, 0x40, 0x80, &[(0x01ff, 0x40)]);
+        assert_eq!(cpu.psw & 0x03, 0x03);
+        assert_eq!(trace.last().unwrap().address, 0x01ff);
+        assert_eq!(bytes[0x01ff], 0x40);
     }
 
     #[test]

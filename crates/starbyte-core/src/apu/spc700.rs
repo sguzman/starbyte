@@ -162,6 +162,7 @@ impl Spc700 {
             0xD0 => self.execute_bne(&mut read, &mut trace),
             0xDC => self.execute_dec_y(&mut read, &mut trace),
             0xDD => self.execute_mov_a_y(&mut read, &mut trace),
+            0x9E => self.execute_div_ya_x(&mut read, &mut trace),
             0x9F => self.execute_xcn_a(&mut read, &mut trace),
             0xBE | 0xDF => self.execute_decimal_adjust(opcode, &mut read, &mut trace),
             0xCF => self.execute_mul_ya(&mut read, &mut trace),
@@ -1690,6 +1691,45 @@ impl Spc700 {
         Ok(())
     }
 
+    /// DIV YA,X includes the SPC700's deterministic overflow/divide-by-zero
+    /// behavior. N/Z reflect the resulting accumulator, not the remainder.
+    fn execute_div_ya_x<FRead>(
+        &mut self,
+        read: &mut FRead,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        for _ in 0..10 {
+            self.push_wait_trace(trace);
+        }
+        let dividend = u32::from(u16::from_le_bytes([self.a, self.y]));
+        let divisor = u32::from(self.x);
+        let original_y = u32::from(self.y);
+        let half_carry = original_y & 0x0f >= divisor & 0x0f;
+        let overflow = original_y >= divisor;
+        let (quotient, remainder) = if original_y < divisor * 2 {
+            (dividend / divisor, dividend % divisor)
+        } else {
+            // The nine-step hardware divider continues after 8-bit overflow.
+            // This equivalent expression remains defined when X is zero.
+            let delta = dividend - divisor * 512;
+            (
+                255 - delta / (256 - divisor),
+                divisor + delta % (256 - divisor),
+            )
+        };
+        self.a = quotient as u8;
+        self.y = remainder as u8;
+        self.psw &= !(0x40 | 0x08);
+        self.psw |= (u8::from(overflow) << 6) | (u8::from(half_carry) << 3);
+        self.update_nz_flags(self.a);
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
     /// DAA/DAS adjust packed decimal after arithmetic. The high-decimal
     /// adjustment happens before the low-nibble test, which sees the new A.
     fn execute_decimal_adjust<FRead>(
@@ -3091,6 +3131,27 @@ mod accumulator_alu_tests {
             assert_eq!(cpu.pc, 0x8001);
             assert_eq!(trace.len(), 3);
             assert_eq!(trace[2].access, AccessKind::Wait);
+        }
+    }
+
+    #[test]
+    fn div_ya_x_handles_ordinary_overflow_and_zero_divisor_cases() {
+        for (a, y, x, out_a, out_y, nzvh) in [
+            (0x0a_u8, 0x00_u8, 0x03_u8, 0x03_u8, 0x01_u8, 0x00_u8),
+            (0x80, 0x02, 0x02, 0x40, 0x00, 0x48),
+            (0x00, 0x04, 0x01, 0xfd, 0x03, 0xc8),
+            (0x00, 0xff, 0x00, 0x00, 0x00, 0x4a),
+            (0x01, 0x10, 0x00, 0xef, 0x01, 0xc8),
+        ] {
+            let (cpu, trace, _) = run_indexed(0x9E, &[], a, 0x31, x, y, &[]);
+            assert_eq!(cpu.a, out_a, "A for YA={y:02X}{a:02X}/X={x:02X}");
+            assert_eq!(cpu.y, out_y);
+            assert_eq!(cpu.x, x);
+            assert_eq!(cpu.psw & 0xca, nzvh);
+            assert_eq!(cpu.psw & !0xca, 0x31 & !0xca);
+            assert_eq!(cpu.pc, 0x8001);
+            assert_eq!(trace.len(), 12);
+            assert_eq!(cpu.cycles(), 12);
         }
     }
 

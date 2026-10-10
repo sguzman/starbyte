@@ -104,6 +104,8 @@ impl Spc700 {
             }
             0x7E => self.execute_cmp_y_dp(&mut read, &mut trace),
             0x50 => self.execute_bvc(&mut read, &mut trace),
+            0x1C => self.execute_asl_a(&mut read, &mut trace),
+            0x3C => self.execute_rol_a(&mut read, &mut trace),
             0x5C => self.execute_lsr_a(&mut read, &mut trace),
             0x5D => self.execute_mov_x_a(&mut read, &mut trace),
             0x5F => self.execute_jmp_abs(&mut read, &mut trace),
@@ -143,6 +145,8 @@ impl Spc700 {
             0xEE => self.execute_pop_y(&mut read, &mut trace),
             0x8D => self.execute_mov_y_imm(&mut read, &mut trace),
             0x8F => self.execute_mov_dp_imm(&mut read, &mut write, &mut trace),
+            0x0B | 0x0C | 0x1B | 0x2B | 0x2C | 0x3B | 0x4B | 0x4C | 0x5B | 0x6B | 0x6C
+            | 0x7B => self.execute_memory_shift_rotate(opcode, &mut read, &mut write, &mut trace),
             0x8B | 0x8C | 0x9B | 0xAB | 0xAC | 0xBB => {
                 self.execute_memory_inc_dec(opcode, &mut read, &mut write, &mut trace)
             }
@@ -837,6 +841,58 @@ impl Spc700 {
         Ok(())
     }
 
+    /// ASL/ROL/LSR/ROR of memory in direct-page, indexed and absolute forms.
+    /// The 1.024 MHz SPC700 cycle model uses one wait for dp+X indexing.
+    fn execute_memory_shift_rotate<FRead, FWrite>(
+        &mut self,
+        opcode: u8,
+        read: &mut FRead,
+        write: &mut FWrite,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+        FWrite: FnMut(u16, u8),
+    {
+        let (address, len) = match opcode & 0x1f {
+            0x0B => {
+                let offset = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                (self.direct_page_address(offset), 2)
+            }
+            0x1B => {
+                let offset = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                self.push_wait_trace(trace);
+                (self.direct_page_address(offset.wrapping_add(self.x)), 2)
+            }
+            0x0C => {
+                let low = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                let high = self.push_read_trace(read, trace, self.pc.wrapping_add(2));
+                (u16::from_le_bytes([low, high]), 3)
+            }
+            _ => unreachable!("not a supported SPC700 memory shift/rotate mode"),
+        };
+        let previous = self.push_read_trace(read, trace, address);
+        let carry_in = self.psw & 0x01;
+        let (value, carry_out) = match opcode & 0x60 {
+            0x00 => (previous.wrapping_shl(1), previous & 0x80 != 0),
+            0x20 => (
+                previous.wrapping_shl(1) | carry_in,
+                previous & 0x80 != 0,
+            ),
+            0x40 => (previous >> 1, previous & 0x01 != 0),
+            0x60 => (
+                (previous >> 1) | (carry_in << 7),
+                previous & 0x01 != 0,
+            ),
+            _ => unreachable!(),
+        };
+        self.push_write_trace(write, trace, address, value);
+        self.psw = (self.psw & !0x01) | u8::from(carry_out);
+        self.update_nz_flags(value);
+        self.pc = self.pc.wrapping_add(len);
+        Ok(())
+    }
+
     /// MOVW YA,dp: 16-bit direct-page load with page-wrapped high byte.
     fn execute_movw_ya_dp<FRead>(
         &mut self,
@@ -959,6 +1015,33 @@ impl Spc700 {
     {
         self.push_read_trace(read, trace, self.pc.wrapping_add(1));
         self.sp = self.x;
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_asl_a<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let carry = self.a & 0x80 != 0;
+        self.a = self.a.wrapping_shl(1);
+        self.psw = (self.psw & !0x01) | u8::from(carry);
+        self.update_nz_flags(self.a);
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
+    fn execute_rol_a<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let carry_in = self.psw & 0x01;
+        let carry_out = self.a & 0x80 != 0;
+        self.a = self.a.wrapping_shl(1) | carry_in;
+        self.psw = (self.psw & !0x01) | u8::from(carry_out);
+        self.update_nz_flags(self.a);
         self.pc = self.pc.wrapping_add(1);
         Ok(())
     }
@@ -1986,6 +2069,92 @@ mod accumulator_alu_tests {
         assert_eq!(bytes[0x0101], 0x12);
         assert_eq!(cpu.psw & 0x02, 0x02);
         assert_eq!(trace[3].address, 0x0001);
+    }
+
+    #[test]
+    fn spc700_memory_shift_rotate_modes_observe_flags_and_cycle_order() {
+        for (opcode, operands, address, cycles) in [
+            (0x0B_u8, vec![0xfc], 0x01fc_u16, 4_usize),
+            (0x1B, vec![0xfc], 0x0101, 5),
+            (0x0C, vec![0xff, 0xff], 0xffff, 5),
+            (0x2B, vec![0xfc], 0x01fc, 4),
+            (0x3B, vec![0xfc], 0x0101, 5),
+            (0x2C, vec![0xff, 0xff], 0xffff, 5),
+            (0x4B, vec![0xfc], 0x01fc, 4),
+            (0x5B, vec![0xfc], 0x0101, 5),
+            (0x4C, vec![0xff, 0xff], 0xffff, 5),
+            (0x6B, vec![0xfc], 0x01fc, 4),
+            (0x7B, vec![0xfc], 0x0101, 5),
+            (0x6C, vec![0xff, 0xff], 0xffff, 5),
+        ] {
+            for previous in [0x00_u8, 0x01, 0x7f, 0x80, 0xff] {
+                let (expected, carry) = match opcode & 0x60 {
+                    0x00 => (previous.wrapping_shl(1), previous & 0x80 != 0),
+                    0x20 => (previous.wrapping_shl(1) | 1, previous & 0x80 != 0),
+                    0x40 => (previous >> 1, previous & 1 != 0),
+                    0x60 => ((previous >> 1) | 0x80, previous & 1 != 0),
+                    _ => unreachable!(),
+                };
+                let (cpu, trace, bytes) = run_indexed(
+                    opcode,
+                    &operands,
+                    0x5a,
+                    0x31,
+                    5,
+                    0x44,
+                    &[(address, previous)],
+                );
+                let expected_flags = (expected & 0x80)
+                    | if expected == 0 { 0x02 } else { 0 }
+                    | u8::from(carry);
+                assert_eq!(bytes[usize::from(address)], expected, "opcode {opcode:02X}");
+                assert_eq!(cpu.psw & 0x83, expected_flags, "opcode {opcode:02X}");
+                assert_eq!(cpu.psw & !0x83, 0x31 & !0x83);
+                assert_eq!(cpu.a, 0x5a);
+                assert_eq!(cpu.x, 5);
+                assert_eq!(cpu.y, 0x44);
+                assert_eq!(cpu.pc, 0x8001 + operands.len() as u16);
+                assert_eq!(trace.len(), cycles, "opcode {opcode:02X}");
+                assert_eq!(trace[cycles - 2].access, AccessKind::Read);
+                assert_eq!(trace[cycles - 2].address, u32::from(address));
+                assert_eq!(trace[cycles - 1].access, AccessKind::Write);
+                assert_eq!(trace[cycles - 1].address, u32::from(address));
+            }
+        }
+
+        let (cpu, trace, bytes) = run_indexed(
+            0x7B,
+            &[0xfe],
+            0x5a,
+            0x01,
+            3,
+            0,
+            &[(0x0001, 0x01), (0x0101, 0x77)],
+        );
+        assert_eq!(bytes[0x0001], 0x80);
+        assert_eq!(bytes[0x0101], 0x77);
+        assert_eq!(cpu.psw & 0x83, 0x81);
+        assert_eq!(trace.len(), 5);
+    }
+
+    #[test]
+    fn asl_and_rol_accumulator_preserve_non_nzc_flags() {
+        for (opcode, a, incoming_carry, expected, expected_carry) in [
+            (0x1C, 0x80_u8, 0, 0x00, 1),
+            (0x1C, 0x7f, 1, 0xfe, 0),
+            (0x3C, 0x80, 1, 0x01, 1),
+            (0x3C, 0x00, 1, 0x01, 0),
+            (0x3C, 0x7f, 0, 0xfe, 0),
+        ] {
+            let (cpu, trace, _) = run(opcode, &[], a, 0x30 | incoming_carry, &[]);
+            assert_eq!(cpu.a, expected);
+            assert_eq!(cpu.pc, 0x8001);
+            assert_eq!(trace.len(), 2);
+            assert_eq!(cpu.psw & 0x7c, 0x30);
+            assert_eq!(cpu.psw & 0x01, expected_carry);
+            assert_eq!(cpu.psw & 0x80, expected & 0x80);
+            assert_eq!(cpu.psw & 0x02 != 0, expected == 0);
+        }
     }
 
     #[test]

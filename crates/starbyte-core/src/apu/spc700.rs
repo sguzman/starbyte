@@ -1013,7 +1013,6 @@ impl Spc700 {
                 };
                 if opcode == 0xCA {
                     self.push_wait_trace(trace);
-                    self.push_wait_trace(trace);
                 }
                 self.push_write_trace(write, trace, address, value);
             }

@@ -100,7 +100,9 @@ impl Spc700 {
             0x30 => self.execute_bmi(&mut read, &mut trace),
             0x3F => self.execute_call_abs(&mut read, &mut write, &mut trace),
             0x4F => self.execute_pcall(&mut read, &mut write, &mut trace),
-            0x0E | 0x4E => self.execute_test_and_set_clear_bits(opcode, &mut read, &mut write, &mut trace),
+            0x0E | 0x4E => {
+                self.execute_test_and_set_clear_bits(opcode, &mut read, &mut write, &mut trace)
+            }
             0x4D => self.execute_push_x(&mut read, &mut write, &mut trace),
             // Standard SPC700 accumulator ALU: immediate, direct-page,
             // and absolute memory addressing. Separate from word ALU.

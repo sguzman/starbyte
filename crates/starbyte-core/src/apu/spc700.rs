@@ -85,6 +85,9 @@ impl Spc700 {
             0x1F => self.execute_jmp_abs_x_indirect(&mut read, &mut trace),
             0x20 => self.execute_clrp(&mut read, &mut trace),
             0x2F => self.execute_bra(&mut read, &mut trace),
+            0x2E | 0x6E | 0xDE | 0xFE => {
+                self.execute_compare_decrement_branch(opcode, &mut read, &mut write, &mut trace)
+            }
             0x2D => self.execute_push_a(&mut read, &mut write, &mut trace),
             0x30 => self.execute_bmi(&mut read, &mut trace),
             0x3F => self.execute_call_abs(&mut read, &mut write, &mut trace),
@@ -1533,6 +1536,65 @@ impl Spc700 {
         self.push_read_trace(read, trace, address)
     }
 
+    /// CBNE/DBNZ loop branches. Unlike CMP or DEC, these instructions never
+    /// modify the PSW; taken branches add two cycles to the base operation.
+    fn execute_compare_decrement_branch<FRead, FWrite>(
+        &mut self,
+        opcode: u8,
+        read: &mut FRead,
+        write: &mut FWrite,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+        FWrite: FnMut(u16, u8),
+    {
+        let (condition, displacement, next_pc) = match opcode {
+            0x2E | 0xDE => {
+                let offset = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                if opcode == 0xDE {
+                    self.push_wait_trace(trace);
+                }
+                let address = self.direct_page_address(if opcode == 0xDE {
+                    offset.wrapping_add(self.x)
+                } else {
+                    offset
+                });
+                let value = self.push_read_trace(read, trace, address);
+                let displacement =
+                    self.push_read_trace(read, trace, self.pc.wrapping_add(2)) as i8;
+                self.push_wait_trace(trace);
+                (self.a != value, displacement, self.pc.wrapping_add(3))
+            }
+            0x6E => {
+                let offset = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                let address = self.direct_page_address(offset);
+                let value = self.push_read_trace(read, trace, address).wrapping_sub(1);
+                self.push_write_trace(write, trace, address, value);
+                let displacement =
+                    self.push_read_trace(read, trace, self.pc.wrapping_add(2)) as i8;
+                (value != 0, displacement, self.pc.wrapping_add(3))
+            }
+            0xFE => {
+                let displacement =
+                    self.push_read_trace(read, trace, self.pc.wrapping_add(1)) as i8;
+                self.push_wait_trace(trace);
+                self.push_wait_trace(trace);
+                self.y = self.y.wrapping_sub(1);
+                (self.y != 0, displacement, self.pc.wrapping_add(2))
+            }
+            _ => unreachable!("not a supported SPC700 conditional loop branch"),
+        };
+        if condition {
+            self.push_wait_trace(trace);
+            self.push_wait_trace(trace);
+            self.pc = next_pc.wrapping_add_signed(i16::from(displacement));
+        } else {
+            self.pc = next_pc;
+        }
+        Ok(())
+    }
+
     fn execute_branch_relative<FRead>(
         &mut self,
         read: &mut FRead,
@@ -2232,6 +2294,75 @@ mod accumulator_alu_tests {
         assert_eq!(cpu.psw & 0x03, 0x03);
         assert_eq!(trace.last().unwrap().address, 0x01ff);
         assert_eq!(bytes[0x01ff], 0x40);
+    }
+
+    #[test]
+    fn cbne_direct_page_and_indexed_branches_do_not_touch_flags() {
+        for (opcode, address, cycles) in [
+            (0x2E_u8, 0x01f0_u16, 5_usize),
+            (0xDE, 0x01f5, 6),
+        ] {
+            for (value, taken) in [(0x42_u8, false), (0x43, true)] {
+                let (cpu, trace, bytes) = run_indexed(
+                    opcode,
+                    &[0xf0, 0xfc],
+                    0x42,
+                    0x31,
+                    5,
+                    0x77,
+                    &[(address, value)],
+                );
+                assert_eq!(cpu.pc, if taken { 0x7fff } else { 0x8003 });
+                assert_eq!(trace.len(), cycles + if taken { 2 } else { 0 });
+                assert_eq!(cpu.psw, 0x31);
+                assert_eq!((cpu.a, cpu.x, cpu.y), (0x42, 5, 0x77));
+                assert_eq!(bytes[usize::from(address)], value);
+                assert!(trace.iter().any(|event| {
+                    event.access == AccessKind::Read && event.address == u32::from(address)
+                }));
+            }
+        }
+    }
+
+    #[test]
+    fn dbnz_loops_wrap_without_updating_psw() {
+        for (previous, taken) in [(1_u8, false), (0, true)] {
+            let (cpu, trace, bytes) = run_indexed(
+                0x6E,
+                &[0xff, 0xfc],
+                0x42,
+                0x31,
+                5,
+                0x77,
+                &[(0x01ff, previous)],
+            );
+            assert_eq!(bytes[0x01ff], previous.wrapping_sub(1));
+            assert_eq!(cpu.pc, if taken { 0x7fff } else { 0x8003 });
+            assert_eq!(trace.len(), if taken { 7 } else { 5 });
+            assert_eq!(trace[2].access, AccessKind::Read);
+            assert_eq!(trace[2].address, 0x01ff);
+            assert_eq!(trace[3].access, AccessKind::Write);
+            assert_eq!(trace[3].address, 0x01ff);
+            assert_eq!(cpu.psw, 0x31);
+            assert_eq!(cpu.y, 0x77);
+
+            let mut memory = vec![0_u8; 65_536];
+            memory[0x8000] = 0xFE; // DBNZ Y,rel
+            memory[0x8001] = 0xFE; // branch to instruction start
+            let bus = RefCell::new(memory);
+            let mut cpu = Spc700::default();
+            cpu.load_state(0x8000, 0x42, 5, previous, 0xef, 0x31);
+            let trace = cpu
+                .step_with_memory(
+                    |address| bus.borrow()[usize::from(address)],
+                    |address, value| bus.borrow_mut()[usize::from(address)] = value,
+                )
+                .unwrap();
+            assert_eq!(cpu.y, previous.wrapping_sub(1));
+            assert_eq!(cpu.pc, if taken { 0x8000 } else { 0x8002 });
+            assert_eq!(trace.len(), if taken { 6 } else { 4 });
+            assert_eq!(cpu.psw, 0x31);
+        }
     }
 
     #[test]

@@ -77,6 +77,7 @@ impl Spc700 {
         match opcode {
             0x00 => self.execute_nop(&mut read, &mut trace),
             0x0D => self.execute_push_psw(&mut read, &mut write, &mut trace),
+            0x0F => self.execute_brk(&mut read, &mut write, &mut trace),
             0x01 | 0x11 | 0x21 | 0x31 | 0x41 | 0x51 | 0x61 | 0x71 | 0x81 | 0x91 | 0xA1 | 0xB1
             | 0xC1 | 0xD1 | 0xE1 | 0xF1 => {
                 self.execute_tcall(opcode, &mut read, &mut write, &mut trace)
@@ -254,6 +255,31 @@ impl Spc700 {
         FRead: FnMut(u16) -> u8,
     {
         self.execute_branch_relative(read, trace, true)
+    }
+
+    /// SPC700 software break: save the return PC and prior status on the
+    /// page-one stack, then vector through $FFDE while setting B/clearing I.
+    fn execute_brk<FRead, FWrite>(
+        &mut self,
+        read: &mut FRead,
+        write: &mut FWrite,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+        FWrite: FnMut(u16, u8),
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let return_pc = self.pc.wrapping_add(1);
+        self.push_stack(write, trace, (return_pc >> 8) as u8);
+        self.push_stack(write, trace, return_pc as u8);
+        self.push_stack(write, trace, self.psw);
+        self.psw = (self.psw | 0x10) & !0x04;
+        self.push_wait_trace(trace);
+        let low = self.push_read_trace(read, trace, 0xffde);
+        let high = self.push_read_trace(read, trace, 0xffdf);
+        self.pc = u16::from_le_bytes([low, high]);
+        Ok(())
     }
 
     fn execute_tcall<FRead, FWrite>(
@@ -2968,6 +2994,42 @@ mod accumulator_alu_tests {
                 assert_eq!(bytes[0x0100], (rhs >> 8) as u8);
             }
         }
+    }
+
+    #[test]
+    fn brk_vectors_after_pushing_return_and_old_status_then_reti_restores_them() {
+        let (mut cpu, trace, mut bytes) = run_indexed(
+            0x0F,
+            &[],
+            0x42,
+            0x67,
+            0x55,
+            0x66,
+            &[(0xffde, 0x34), (0xffdf, 0x12), (0x1234, 0x7f)],
+        );
+        assert_eq!(cpu.pc, 0x1234);
+        assert_eq!(cpu.sp, 0xec);
+        assert_eq!(cpu.psw, 0x73);
+        assert_eq!(bytes[0x01ef], 0x80);
+        assert_eq!(bytes[0x01ee], 0x01);
+        assert_eq!(bytes[0x01ed], 0x67);
+        assert_eq!(trace.len(), 8);
+        assert_eq!(trace[2].access, AccessKind::Write);
+        assert_eq!(trace[4].access, AccessKind::Write);
+        assert_eq!(trace[6].address, 0xffde);
+        assert_eq!(trace[7].address, 0xffdf);
+        bytes[0x1234] = 0x7f;
+        let bus = RefCell::new(bytes);
+        let ret_trace = cpu
+            .step_with_memory(
+                |address| bus.borrow()[usize::from(address)],
+                |address, value| bus.borrow_mut()[usize::from(address)] = value,
+            )
+            .unwrap();
+        assert_eq!(cpu.pc, 0x8001);
+        assert_eq!(cpu.sp, 0xef);
+        assert_eq!(cpu.psw, 0x67);
+        assert_eq!(ret_trace.len(), 6);
     }
 
     #[test]

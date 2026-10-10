@@ -163,6 +163,7 @@ impl Spc700 {
             0xDC => self.execute_dec_y(&mut read, &mut trace),
             0xDD => self.execute_mov_a_y(&mut read, &mut trace),
             0x9F => self.execute_xcn_a(&mut read, &mut trace),
+            0xBE | 0xDF => self.execute_decimal_adjust(opcode, &mut read, &mut trace),
             0xCF => self.execute_mul_ya(&mut read, &mut trace),
             0xE0 => self.execute_clrv(&mut read, &mut trace),
             0xED => self.execute_notc(&mut read, &mut trace),
@@ -1689,6 +1690,43 @@ impl Spc700 {
         Ok(())
     }
 
+    /// DAA/DAS adjust packed decimal after arithmetic. The high-decimal
+    /// adjustment happens before the low-nibble test, which sees the new A.
+    fn execute_decimal_adjust<FRead>(
+        &mut self,
+        opcode: u8,
+        read: &mut FRead,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+    {
+        self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        self.push_wait_trace(trace);
+        let carry = self.psw & 1 != 0;
+        let half_carry = self.psw & 0x08 != 0;
+        if opcode == 0xDF {
+            if carry || self.a > 0x99 {
+                self.a = self.a.wrapping_add(0x60);
+                self.psw |= 1;
+            }
+            if half_carry || self.a & 0x0f > 9 {
+                self.a = self.a.wrapping_add(0x06);
+            }
+        } else {
+            if !carry || self.a > 0x99 {
+                self.a = self.a.wrapping_sub(0x60);
+                self.psw &= !1;
+            }
+            if !half_carry || self.a & 0x0f > 9 {
+                self.a = self.a.wrapping_sub(0x06);
+            }
+        }
+        self.update_nz_flags(self.a);
+        self.pc = self.pc.wrapping_add(1);
+        Ok(())
+    }
+
     /// Swap A's nibbles without touching carry, overflow or half-carry.
     fn execute_xcn_a<FRead>(&mut self, read: &mut FRead, trace: &mut Vec<BusEvent>) -> Result<()>
     where
@@ -3030,6 +3068,30 @@ mod accumulator_alu_tests {
         assert_eq!(cpu.sp, 0xef);
         assert_eq!(cpu.psw, 0x67);
         assert_eq!(ret_trace.len(), 6);
+    }
+
+    #[test]
+    fn daa_das_process_high_adjustment_then_modified_low_nibble() {
+        for (opcode, before, carry, half, after, out_carry) in [
+            (0xDF_u8, 0x15_u8, false, false, 0x15_u8, false),
+            (0xDF, 0x0a, false, false, 0x10, false),
+            (0xDF, 0x9a, false, false, 0x00, true),
+            (0xDF, 0x00, true, true, 0x66, true),
+            (0xBE, 0x15, true, true, 0x15, true),
+            (0xBE, 0xff, false, false, 0x99, false),
+            (0xBE, 0x0a, true, true, 0x04, true),
+        ] {
+            let psw = 0x34 | (u8::from(carry)) | (u8::from(half) << 3);
+            let (cpu, trace, _) = run(opcode, &[], before, psw, &[]);
+            assert_eq!(cpu.a, after, "opcode {opcode:02X}");
+            assert_eq!(cpu.psw & 0x01 != 0, out_carry);
+            assert_eq!(cpu.psw & 0x80 != 0, after & 0x80 != 0);
+            assert_eq!(cpu.psw & 0x02 != 0, after == 0);
+            assert_eq!(cpu.psw & 0x7c, psw & 0x7c);
+            assert_eq!(cpu.pc, 0x8001);
+            assert_eq!(trace.len(), 3);
+            assert_eq!(trace[2].access, AccessKind::Wait);
+        }
     }
 
     #[test]

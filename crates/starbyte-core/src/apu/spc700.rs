@@ -1561,8 +1561,7 @@ impl Spc700 {
                     offset
                 });
                 let value = self.push_read_trace(read, trace, address);
-                let displacement =
-                    self.push_read_trace(read, trace, self.pc.wrapping_add(2)) as i8;
+                let displacement = self.push_read_trace(read, trace, self.pc.wrapping_add(2)) as i8;
                 self.push_wait_trace(trace);
                 (self.a != value, displacement, self.pc.wrapping_add(3))
             }
@@ -1571,13 +1570,11 @@ impl Spc700 {
                 let address = self.direct_page_address(offset);
                 let value = self.push_read_trace(read, trace, address).wrapping_sub(1);
                 self.push_write_trace(write, trace, address, value);
-                let displacement =
-                    self.push_read_trace(read, trace, self.pc.wrapping_add(2)) as i8;
+                let displacement = self.push_read_trace(read, trace, self.pc.wrapping_add(2)) as i8;
                 (value != 0, displacement, self.pc.wrapping_add(3))
             }
             0xFE => {
-                let displacement =
-                    self.push_read_trace(read, trace, self.pc.wrapping_add(1)) as i8;
+                let displacement = self.push_read_trace(read, trace, self.pc.wrapping_add(1)) as i8;
                 self.push_wait_trace(trace);
                 self.push_wait_trace(trace);
                 self.y = self.y.wrapping_sub(1);
@@ -2298,10 +2295,7 @@ mod accumulator_alu_tests {
 
     #[test]
     fn cbne_direct_page_and_indexed_branches_do_not_touch_flags() {
-        for (opcode, address, cycles) in [
-            (0x2E_u8, 0x01f0_u16, 5_usize),
-            (0xDE, 0x01f5, 6),
-        ] {
+        for (opcode, address, cycles) in [(0x2E_u8, 0x01f0_u16, 5_usize), (0xDE, 0x01f5, 6)] {
             for (value, taken) in [(0x42_u8, false), (0x43, true)] {
                 let (cpu, trace, bytes) = run_indexed(
                     opcode,

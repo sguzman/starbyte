@@ -88,12 +88,12 @@ impl Spc700 {
             0x2E | 0x6E | 0xDE | 0xFE => {
                 self.execute_compare_decrement_branch(opcode, &mut read, &mut write, &mut trace)
             }
-            0x02 | 0x12 | 0x22 | 0x32 | 0x42 | 0x52 | 0x62 | 0x72
-            | 0x82 | 0x92 | 0xA2 | 0xB2 | 0xC2 | 0xD2 | 0xE2 | 0xF2 => {
+            0x02 | 0x12 | 0x22 | 0x32 | 0x42 | 0x52 | 0x62 | 0x72 | 0x82 | 0x92 | 0xA2 | 0xB2
+            | 0xC2 | 0xD2 | 0xE2 | 0xF2 => {
                 self.execute_direct_page_bit_set_clear(opcode, &mut read, &mut write, &mut trace)
             }
-            0x03 | 0x13 | 0x23 | 0x33 | 0x43 | 0x53 | 0x63 | 0x73
-            | 0x83 | 0x93 | 0xA3 | 0xB3 | 0xC3 | 0xD3 | 0xE3 | 0xF3 => {
+            0x03 | 0x13 | 0x23 | 0x33 | 0x43 | 0x53 | 0x63 | 0x73 | 0x83 | 0x93 | 0xA3 | 0xB3
+            | 0xC3 | 0xD3 | 0xE3 | 0xF3 => {
                 self.execute_direct_page_bit_branch(opcode, &mut read, &mut trace)
             }
             0x2D => self.execute_push_a(&mut read, &mut write, &mut trace),
@@ -2517,8 +2517,15 @@ mod accumulator_alu_tests {
                 ((bit << 5) | 0x02, 0x00, mask),
                 ((bit << 5) | 0x12, 0xff, !mask),
             ] {
-                let (cpu, trace, bytes) =
-                    run_indexed(opcode, &[0xff], 0x42, 0x31, 0x23, 0x56, &[(0x01ff, initial)]);
+                let (cpu, trace, bytes) = run_indexed(
+                    opcode,
+                    &[0xff],
+                    0x42,
+                    0x31,
+                    0x23,
+                    0x56,
+                    &[(0x01ff, initial)],
+                );
                 assert_eq!(bytes[0x01ff], expected, "opcode {opcode:02X}");
                 assert_eq!(cpu.psw, 0x31);
                 assert_eq!((cpu.a, cpu.x, cpu.y), (0x42, 0x23, 0x56));

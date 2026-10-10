@@ -1097,9 +1097,7 @@ impl Spc700 {
         self.a = result as u8;
         self.y = (result >> 8) as u8;
         self.psw &= !(0x40 | 0x08 | 0x01);
-        self.psw |= (u8::from(overflow) << 6)
-            | (u8::from(half_carry) << 3)
-            | u8::from(carry);
+        self.psw |= (u8::from(overflow) << 6) | (u8::from(half_carry) << 3) | u8::from(carry);
         self.update_nz_word_flags(result);
         self.pc = self.pc.wrapping_add(2);
         Ok(())

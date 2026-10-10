@@ -103,6 +103,9 @@ impl Spc700 {
             0x0E | 0x4E => {
                 self.execute_test_and_set_clear_bits(opcode, &mut read, &mut write, &mut trace)
             }
+            0x0A | 0x2A | 0x4A | 0x6A | 0x8A | 0xAA | 0xCA | 0xEA => {
+                self.execute_memory_bit_logic(opcode, &mut read, &mut write, &mut trace)
+            }
             0x4D => self.execute_push_x(&mut read, &mut write, &mut trace),
             // Standard SPC700 accumulator ALU: immediate, direct-page,
             // and absolute memory addressing. Separate from word ALU.
@@ -960,6 +963,63 @@ impl Spc700 {
         self.psw = (self.psw & !0x01) | u8::from(carry_out);
         self.update_nz_flags(value);
         self.pc = self.pc.wrapping_add(len);
+        Ok(())
+    }
+
+    /// SPC700 boolean operations on the lower 8 KiB. In the encoded
+    /// 16-bit operand, bits 0..12 select memory and bits 13..15 select the bit.
+    fn execute_memory_bit_logic<FRead, FWrite>(
+        &mut self,
+        opcode: u8,
+        read: &mut FRead,
+        write: &mut FWrite,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+        FWrite: FnMut(u16, u8),
+    {
+        let low = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+        let high = self.push_read_trace(read, trace, self.pc.wrapping_add(2));
+        let encoded = u16::from_le_bytes([low, high]);
+        let address = encoded & 0x1fff;
+        let mask = 1_u8 << (encoded >> 13);
+        let previous = self.push_read_trace(read, trace, address);
+        let bit_set = previous & mask != 0;
+        let carry = self.psw & 1 != 0;
+        match opcode {
+            0x0A | 0x2A | 0x4A | 0x6A | 0x8A | 0xAA => {
+                let result = match opcode {
+                    0x0A => carry || bit_set,
+                    0x2A => carry || !bit_set,
+                    0x4A => carry && bit_set,
+                    0x6A => carry && !bit_set,
+                    0x8A => carry ^ bit_set,
+                    0xAA => bit_set,
+                    _ => unreachable!(),
+                };
+                self.psw = (self.psw & !1) | u8::from(result);
+                if matches!(opcode, 0x0A | 0x2A | 0x8A) {
+                    self.push_wait_trace(trace);
+                }
+            }
+            0xCA | 0xEA => {
+                let value = if opcode == 0xEA {
+                    previous ^ mask
+                } else if carry {
+                    previous | mask
+                } else {
+                    previous & !mask
+                };
+                if opcode == 0xCA {
+                    self.push_wait_trace(trace);
+                    self.push_wait_trace(trace);
+                }
+                self.push_write_trace(write, trace, address, value);
+            }
+            _ => unreachable!("not an SPC700 boolean bit opcode"),
+        }
+        self.pc = self.pc.wrapping_add(3);
         Ok(())
     }
 
@@ -2759,6 +2819,65 @@ mod accumulator_alu_tests {
             assert_eq!(trace[3].address, 0x9234);
             assert_eq!(trace[5].access, AccessKind::Write);
             assert_eq!(trace[5].address, 0x9234);
+        }
+    }
+
+    #[test]
+    fn boolean_memory_bit_logic_covers_each_bit_and_carry_transition() {
+        for opcode in [0x0A_u8, 0x2A, 0x4A, 0x6A, 0x8A, 0xAA, 0xCA, 0xEA] {
+            for bit in 0..8_u16 {
+                for carry in [false, true] {
+                    for bit_set in [false, true] {
+                        let address = 0x1ff0_u16;
+                        let encoded = address | (bit << 13);
+                        let mask = 1_u8 << bit;
+                        let value = if bit_set { mask | 0x80 } else { 0x80 & !mask };
+                        let original_psw = 0x30 | u8::from(carry);
+                        let (cpu, trace, bytes) = run_indexed(
+                            opcode,
+                            &encoded.to_le_bytes(),
+                            0x55,
+                            original_psw,
+                            0x66,
+                            0x77,
+                            &[(address, value)],
+                        );
+                        let expected_carry = match opcode {
+                            0x0A => carry || bit_set,
+                            0x2A => carry || !bit_set,
+                            0x4A => carry && bit_set,
+                            0x6A => carry && !bit_set,
+                            0x8A => carry ^ bit_set,
+                            0xAA => bit_set,
+                            _ => carry,
+                        };
+                        let expected_memory = match opcode {
+                            0xCA if carry => value | mask,
+                            0xCA => value & !mask,
+                            0xEA => value ^ mask,
+                            _ => value,
+                        };
+                        let expected_cycles = match opcode {
+                            0x4A | 0x6A | 0xAA => 4,
+                            0xCA => 6,
+                            _ => 5,
+                        };
+                        assert_eq!(bytes[usize::from(address)], expected_memory);
+                        assert_eq!(cpu.psw, (original_psw & !1) | u8::from(expected_carry));
+                        assert_eq!((cpu.a, cpu.x, cpu.y), (0x55, 0x66, 0x77));
+                        assert_eq!(cpu.pc, 0x8003);
+                        assert_eq!(trace.len(), expected_cycles, "opcode {opcode:02X}");
+                        assert_eq!(trace[3].address, u32::from(address));
+                        assert_eq!(trace[3].access, AccessKind::Read);
+                        if matches!(opcode, 0xCA | 0xEA) {
+                            assert_eq!(trace.last().unwrap().access, AccessKind::Write);
+                            assert_eq!(trace.last().unwrap().address, u32::from(address));
+                        } else {
+                            assert!(trace.iter().all(|event| event.access != AccessKind::Write));
+                        }
+                    }
+                }
+            }
         }
     }
 

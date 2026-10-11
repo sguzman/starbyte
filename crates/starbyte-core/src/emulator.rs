@@ -835,7 +835,10 @@ mod tests {
             emulator.apu.write_cpu_port(port, value).unwrap();
         }
         emulator.apu.step_master_cycles(6);
-        assert_eq!(emulator.isolated_apu_upload().unwrap().entrypoint(), Some(0x0400));
+        assert_eq!(
+            emulator.isolated_apu_upload().unwrap().entrypoint(),
+            Some(0x0400)
+        );
 
         // Independent reference performs the six-clock APU sequence by
         // hand. The emulator helper must agree on exact serialized state,
@@ -1067,7 +1070,7 @@ mod tests {
         write_port(3, 0);
         write_port(0, 0xcc);
         write_port(1, 0x0c); // Master volume left register.
-        write_port(0, 0);    // Upload first byte at SPC $F2.
+        write_port(0, 0); // Upload first byte at SPC $F2.
         let before_second_byte = program.len() / 5 * 2;
         write_port(1, 0x55);
         write_port(0, 1); // Upload second byte at SPC $F3.

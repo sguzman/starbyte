@@ -2398,14 +2398,22 @@ mod accumulator_alu_tests {
                 (0x80, 0xff, 0xff, 0xff, 0xff),
                 (0, 0, 0, 0, 0x7f),
             ] {
-                let (cpu, trace, _) =
-                    run_indexed(opcode, &[operand, operand], a, psw, x, y, &[]);
+                let (cpu, trace, _) = run_indexed(opcode, &[operand, operand], a, psw, x, y, &[]);
                 let baseline = MIN_CYCLES[usize::from(opcode)];
                 let conditional = opcode & 0x0f == 0x03
                     || matches!(
                         opcode,
-                        0x10 | 0x30 | 0x50 | 0x70 | 0x90 | 0xb0 | 0xd0 | 0xf0
-                            | 0x2e | 0xde | 0x6e | 0xfe
+                        0x10 | 0x30
+                            | 0x50
+                            | 0x70
+                            | 0x90
+                            | 0xb0
+                            | 0xd0
+                            | 0xf0
+                            | 0x2e
+                            | 0xde
+                            | 0x6e
+                            | 0xfe
                     );
                 let actual = trace.len();
                 assert!(
@@ -2758,9 +2766,11 @@ mod accumulator_alu_tests {
         assert_eq!(trace[3].address, 0x8002);
         assert_eq!(trace[4].address, 0x0142);
         assert_eq!(trace[4].access, AccessKind::Write);
-        assert!(trace.iter().all(|event| {
-            event.address != 0x0142 || event.access != AccessKind::Read
-        }));
+        assert!(
+            trace
+                .iter()
+                .all(|event| { event.address != 0x0142 || event.access != AccessKind::Read })
+        );
     }
 
     #[test]
@@ -3306,7 +3316,12 @@ mod accumulator_alu_tests {
     #[test]
     fn movw_word_load_store_follow_five_cycle_smp_bus_order() {
         let (cpu, trace, _) = run_indexed(
-            0xba, &[0xff], 0, 0x31, 0, 0,
+            0xba,
+            &[0xff],
+            0,
+            0x31,
+            0,
+            0,
             &[(0x01ff, 0x66), (0x0100, 0x88)],
         );
         assert_eq!(u16::from_le_bytes([cpu.a, cpu.y]), 0x8866);
@@ -3318,7 +3333,12 @@ mod accumulator_alu_tests {
         assert_eq!(trace[4].address, 0x0100);
 
         let (cpu, trace, bytes) = run_indexed(
-            0xda, &[0xff], 0x12, 0x31, 0, 0x34,
+            0xda,
+            &[0xff],
+            0x12,
+            0x31,
+            0,
+            0x34,
             &[(0x01ff, 0xa5), (0x0100, 0x5a)],
         );
         assert_eq!(cpu.cycles(), 5);
@@ -3337,7 +3357,12 @@ mod accumulator_alu_tests {
     fn word_alu_reads_high_byte_after_internal_cycle() {
         for opcode in [0x7a_u8, 0x9a] {
             let (_, trace, _) = run_indexed(
-                opcode, &[0xff], 0x12, 0x31, 0, 0x34,
+                opcode,
+                &[0xff],
+                0x12,
+                0x31,
+                0,
+                0x34,
                 &[(0x01ff, 0x55), (0x0100, 0x66)],
             );
             assert_eq!(trace.len(), 5);
@@ -3354,10 +3379,8 @@ mod accumulator_alu_tests {
             (0xaf_u8, AccessKind::Wait, 0_u8),
             (0xc6_u8, AccessKind::Read, 0xff_u8),
         ] {
-            let (cpu, trace, bytes) = run_indexed(
-                opcode, &[], 0x42, 0x31, 0xff, 0,
-                &[(0x01ff, 0xaa)],
-            );
+            let (cpu, trace, bytes) =
+                run_indexed(opcode, &[], 0x42, 0x31, 0xff, 0, &[(0x01ff, 0xaa)]);
             assert_eq!(trace.len(), 4, "opcode {opcode:02X}");
             assert_eq!(cpu.cycles(), 4);
             assert_eq!(trace[2].access, expected_access);

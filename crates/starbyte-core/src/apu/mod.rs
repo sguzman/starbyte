@@ -464,8 +464,7 @@ impl Apu {
                 | UploadEvent::NextBlockWithByte {
                     destination: address,
                     value,
-                } if (0x00f0..=0x00ff).contains(&address) =>
-                {
+                } if (0x00f0..=0x00ff).contains(&address) => {
                     // The real IPL stores bytes with MOV [$00]+Y,A,
                     // including byte zero implicitly after a zero-valued
                     // block marker. The decoder has already copied RAM;
@@ -911,10 +910,9 @@ mod tests {
         let mut timer_probe = apu.clone();
         assert_eq!(timer_probe.read_spc_bus(0x00ff), 1);
 
-        for (opcode, expected_output, expected_x) in [
-            (0xaf_u8, 1_u8, 0_u8),
-            (0xc6_u8, 0_u8, 0xff_u8),
-        ] {
+        for (opcode, expected_output, expected_x) in
+            [(0xaf_u8, 1_u8, 0_u8), (0xc6_u8, 0_u8, 0xff_u8)]
+        {
             let mut state = apu.clone();
             state.write_spc_ram(0x0400, opcode);
             state.spc700.load_state(0x0400, 0x55, 0xff, 0, 0xef, 0x02);
@@ -1194,8 +1192,7 @@ mod tests {
         // MOV $F0,#$00; MOV A,#$99; MOV !$2200,A;
         // MOV $F0,#$0A; MOV !$2200,A.
         let program = [
-            0x8f, 0x00, 0xf0, 0xe8, 0x99, 0xc5, 0x00, 0x22,
-            0x8f, 0x0a, 0xf0, 0xc5, 0x00, 0x22,
+            0x8f, 0x00, 0xf0, 0xe8, 0x99, 0xc5, 0x00, 0x22, 0x8f, 0x0a, 0xf0, 0xc5, 0x00, 0x22,
         ];
         for (index, value) in program.into_iter().enumerate() {
             apu.write_spc_ram(0x0400 + index as u16, value);
@@ -1249,10 +1246,8 @@ mod tests {
         // MOV A,#$0A; MOV !$00F0,A (enable);
         // MOV !$2200,A (accepted).
         let program = [
-            0x40, 0xe8, 0x00, 0xc5, 0xf0, 0x00,
-            0xe8, 0x55, 0xc5, 0x00, 0x22, 0x20,
-            0xc5, 0xf0, 0x00, 0xe8, 0x77, 0xc5, 0x00, 0x22,
-            0xe8, 0x0a, 0xc5, 0xf0, 0x00, 0xc5, 0x00, 0x22,
+            0x40, 0xe8, 0x00, 0xc5, 0xf0, 0x00, 0xe8, 0x55, 0xc5, 0x00, 0x22, 0x20, 0xc5, 0xf0,
+            0x00, 0xe8, 0x77, 0xc5, 0x00, 0x22, 0xe8, 0x0a, 0xc5, 0xf0, 0x00, 0xc5, 0x00, 0x22,
         ];
         for (i, opcode) in program.into_iter().enumerate() {
             apu.write_spc_ram(0x0400 + i as u16, opcode);
@@ -1281,7 +1276,10 @@ mod tests {
     fn spc_test_inhibits_echo_ram_storage_without_stopping_pcm_or_dsp_clock() {
         let mut apu = Apu::default();
         for (address, value) in [
-            (0x0200, 0), (0x0201, 3), (0x0202, 0), (0x0203, 3),
+            (0x0200, 0),
+            (0x0201, 3),
+            (0x0202, 0),
+            (0x0203, 3),
             (0x0300, 0xc3),
         ] {
             apu.write_spc_ram(address, value);
@@ -1290,10 +1288,18 @@ mod tests {
             apu.write_spc_ram(0x0300 + offset, 0x77);
         }
         for (register, value) in [
-            (0x5d, 2), (0x00, 0x7f), (0x01, 0x7f),
-            (0x03, 0x10), (0x07, 0x7f),
-            (0x0c, 0x7f), (0x1c, 0x7f), (0x4d, 1),
-            (0x6d, 0x50), (0x7d, 1), (0x6c, 0), (0x4c, 1),
+            (0x5d, 2),
+            (0x00, 0x7f),
+            (0x01, 0x7f),
+            (0x03, 0x10),
+            (0x07, 0x7f),
+            (0x0c, 0x7f),
+            (0x1c, 0x7f),
+            (0x4d, 1),
+            (0x6d, 0x50),
+            (0x7d, 1),
+            (0x6c, 0),
+            (0x4c, 1),
         ] {
             apu.write_spc_bus(0x00f2, register);
             apu.write_spc_bus(0x00f3, value);
@@ -2150,10 +2156,16 @@ mod tests {
             apu.write_cpu_port(port, value).unwrap();
         }
         apu.step_master_cycles(6);
-        assert_eq!(apu.isolated_ipl_upload().unwrap().entrypoint(), Some(0x0400));
+        assert_eq!(
+            apu.isolated_ipl_upload().unwrap().entrypoint(),
+            Some(0x0400)
+        );
 
         let mut pcm = Vec::new();
-        assert_eq!(apu.run_isolated_uploaded_spc_program(1, &mut pcm).unwrap(), 1);
+        assert_eq!(
+            apu.run_isolated_uploaded_spc_program(1, &mut pcm).unwrap(),
+            1
+        );
         assert_ne!(apu.isolated_spc_master_phase, 0);
         assert_eq!(apu.isolated_spc700_status().unwrap().instructions, 1);
 

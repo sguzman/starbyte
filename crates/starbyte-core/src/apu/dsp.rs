@@ -488,9 +488,9 @@ impl Voice {
                 return;
             }
             self.envelope = match (gain >> 5) & 3 {
-                0 => self.envelope - 0x20,                     // Linear decrease.
+                0 => self.envelope - 0x20,                         // Linear decrease.
                 1 => exponential_envelope_decrease(self.envelope), // Exponential decrease.
-                2 => self.envelope + 0x20,                     // Linear increase.
+                2 => self.envelope + 0x20,                         // Linear increase.
                 _ => self.envelope + if self.envelope < 0x600 { 0x20 } else { 8 },
             }
             .clamp(0, 0x7ff);
@@ -781,7 +781,13 @@ mod tests {
         // samples. FIR7 would have produced output immediately.
         let (mut delayed_dsp, mut delayed_ram) = looping_sample();
         delayed_ram[0x5000..0x5004].copy_from_slice(&[0x10, 0x27, 0x10, 0x27]);
-        for (reg, value) in [(0x6d, 0x50), (0x7d, 1), (0x2c, 0x7f), (0x3c, 0x7f), (0x0f, 0x7f)] {
+        for (reg, value) in [
+            (0x6d, 0x50),
+            (0x7d, 1),
+            (0x2c, 0x7f),
+            (0x3c, 0x7f),
+            (0x0f, 0x7f),
+        ] {
             delayed_dsp.write_register(reg, value, &delayed_ram);
         }
         for _ in 0..7 {
@@ -930,7 +936,10 @@ mod tests {
         // Reopening RAM writes does not reset the DSP's echo position.
         let next = gated.echo_offset;
         let _ = gated.next_stereo_pair_with_ram_writes(&mut gated_ram, true);
-        assert_ne!(&gated_ram[0x5000 + usize::from(next)..0x5004 + usize::from(next)], &[0; 4]);
+        assert_ne!(
+            &gated_ram[0x5000 + usize::from(next)..0x5004 + usize::from(next)],
+            &[0; 4]
+        );
     }
 
     #[test]

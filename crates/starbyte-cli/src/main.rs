@@ -1451,9 +1451,7 @@ impl AudioProbeSummary {
                 nonzero += 1;
             }
         }
-        self.stereo_pairs = self
-            .stereo_pairs
-            .saturating_add((samples.len() / 2) as u64);
+        self.stereo_pairs = self.stereo_pairs.saturating_add((samples.len() / 2) as u64);
         self.nonzero_pairs = self.nonzero_pairs.saturating_add(nonzero);
         if nonzero > 0 && self.first_nonzero_frame.is_none() {
             self.first_nonzero_frame = Some(frame);
@@ -2149,8 +2147,8 @@ mod tests {
 
     use super::{
         AudioProbeSummary, UploadProbeTimeline, build_apu_io_activity_report,
-        maybe_write_run_report, parse_controller_events, parse_wram_watch_addresses, resolve_state_path,
-        sanitize_file_stem, write_frame_log_entry, write_pcm16_stereo_wav,
+        maybe_write_run_report, parse_controller_events, parse_wram_watch_addresses,
+        resolve_state_path, sanitize_file_stem, write_frame_log_entry, write_pcm16_stereo_wav,
     };
 
     fn test_cartridge() -> Cartridge {
@@ -2184,7 +2182,10 @@ mod tests {
         );
         assert_eq!(report["isolated_ipl_upload"]["bytes_written"], 0);
         assert_eq!(report["isolated_ipl_upload"]["bytes_stored"], 0);
-        assert_eq!(report["isolated_ipl_upload"]["next_ram_address"], serde_json::Value::Null);
+        assert_eq!(
+            report["isolated_ipl_upload"]["next_ram_address"],
+            serde_json::Value::Null
+        );
     }
 
     #[test]

@@ -194,14 +194,9 @@ mod speaker_cli_tests {
 
     #[test]
     fn speaker_probe_cannot_be_combined_with_game_or_demo_mode() {
+        assert!(Args::try_parse_from(["starbyte-egui", "--speaker-test", "--demo"]).is_err());
         assert!(
-            Args::try_parse_from(["starbyte-egui", "--speaker-test", "--demo"]).is_err()
-        );
-        assert!(
-            Args::try_parse_from([
-                "starbyte-egui", "--speaker-test", "--rom", "game.sfc"
-            ])
-            .is_err()
+            Args::try_parse_from(["starbyte-egui", "--speaker-test", "--rom", "game.sfc"]).is_err()
         );
     }
 }

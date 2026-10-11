@@ -553,7 +553,8 @@ mod tests {
         h.cpu[1] = 0x77;
         h.cpu[0] = 1;
         assert_eq!(
-            h.transfer.observe_with_ram_writes(h.cpu, &mut h.spc, &mut h.ram, true),
+            h.transfer
+                .observe_with_ram_writes(h.cpu, &mut h.spc, &mut h.ram, true),
             UploadEvent::ByteWritten {
                 address: 0x3001,
                 value: 0x77,

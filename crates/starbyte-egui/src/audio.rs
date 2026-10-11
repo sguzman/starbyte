@@ -212,10 +212,8 @@ fn speaker_test_tone() -> Vec<i16> {
         let attack = (index as f32 / FADE_FRAMES).min(1.0);
         let release = ((TONE_FRAMES - index) as f32 / FADE_FRAMES).min(1.0);
         let amplitude = attack.min(release);
-        let sample = (std::f32::consts::TAU * TONE_HZ * time).sin()
-            * amplitude
-            * 0.15
-            * f32::from(i16::MAX);
+        let sample =
+            (std::f32::consts::TAU * TONE_HZ * time).sin() * amplitude * 0.15 * f32::from(i16::MAX);
         let sample = sample as i16;
         output.extend_from_slice(&[sample, sample]);
     }

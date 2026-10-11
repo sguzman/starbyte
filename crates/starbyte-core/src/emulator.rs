@@ -1059,21 +1059,22 @@ mod tests {
         let mut rom = rom_bytes();
         rom[0x7ffc] = 0;
         rom[0x7ffd] = 0x80;
-        let mut program = Vec::new();
-        let mut write_port = |port: u8, value: u8| {
+        fn append_port_write(program: &mut Vec<u8>, port: u8, value: u8) {
             program.extend_from_slice(&[0xa9, value, 0x8d, 0x40 + port, 0x21]);
-        };
+        }
+
+        let mut program = Vec::new();
         // Original 65816 instructions drive the real $2140-$2143 bus,
         // then use the IPL to write SPC DSPADDR followed by DSPDATA.
-        write_port(1, 1);
-        write_port(2, 0xf2);
-        write_port(3, 0);
-        write_port(0, 0xcc);
-        write_port(1, 0x0c); // Master volume left register.
-        write_port(0, 0); // Upload first byte at SPC $F2.
+        append_port_write(&mut program, 1, 1);
+        append_port_write(&mut program, 2, 0xf2);
+        append_port_write(&mut program, 3, 0);
+        append_port_write(&mut program, 0, 0xcc);
+        append_port_write(&mut program, 1, 0x0c); // Master volume left register.
+        append_port_write(&mut program, 0, 0); // Upload first byte at SPC $F2.
         let before_second_byte = program.len() / 5 * 2;
-        write_port(1, 0x55);
-        write_port(0, 1); // Upload second byte at SPC $F3.
+        append_port_write(&mut program, 1, 0x55);
+        append_port_write(&mut program, 0, 1); // Upload second byte at SPC $F3.
         let total_instructions = program.len() / 5 * 2;
         rom[..program.len()].copy_from_slice(&program);
 

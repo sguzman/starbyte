@@ -432,15 +432,26 @@ impl Apu {
                 &mut self.apu_to_cpu_ports,
                 &mut self.spc_ram,
             );
-            if let UploadEvent::EntryPoint { address } = event {
-                // The sound driver has been uploaded but is NOT being
-                // automatically executed by the production frame loop.
-                // Discard any earlier dummy-clock count. The opt-in status
-                // reports only instructions executed by the uploaded driver.
-                self.spc700_steps = 0;
-                self.host_clocked_spc_phase = 0;
-                self.host_clocked_spc_credit = 0;
-                self.spc700.load_state(address, 0, 0, 0, 0xef, 0x02);
+            match event {
+                UploadEvent::ByteWritten { address, value }
+                    if (0x00f0..=0x00ff).contains(&address) =>
+                {
+                    // The real IPL stores bytes with MOV [$00]+Y,A, which
+                    // goes through the SPC bus. The isolated decoder has
+                    // already copied the RAM byte; replay its MMIO side
+                    // effect here too (including DSPADDR/DSPDATA writes).
+                    self.write_spc_bus(address, value);
+                }
+                UploadEvent::EntryPoint { address } => {
+                    // The driver was uploaded but is NOT automatically
+                    // executed by the production frame loop. Discard
+                    // earlier placeholder instruction counts.
+                    self.spc700_steps = 0;
+                    self.host_clocked_spc_phase = 0;
+                    self.host_clocked_spc_credit = 0;
+                    self.spc700.load_state(address, 0, 0, 0, 0, 0xef, 0x02);
+                }
+                _ => {}
             }
         } else {
             self.advance_bootstrap_handshake();
@@ -1582,6 +1593,53 @@ mod tests {
         let restored: Apu = serde_json::from_str(&saved).unwrap();
         assert_eq!(restored.isolated_ipl_upload().unwrap().bytes_written(), 4);
         assert_eq!(restored.read_spc_ram(0x0402), 0xc4);
+    }
+
+    #[test]
+    fn isolated_ipl_upload_to_dsp_mmio_applies_register_side_effects() {
+        let mut apu = Apu::default();
+        apu.reset();
+        apu.enable_isolated_ipl_upload();
+        // A real IPL block can target DSPADDR $F2 then DSPDATA $F3.
+        // The transfer's RAM bytes must also program the DSP register.
+        for (port, value) in [(1, 1), (2, 0xf2), (3, 0), (0, 0xcc)] {
+            apu.write_cpu_port(port, value).unwrap();
+        }
+        apu.step_master_cycles(6);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0xcc);
+
+        apu.write_cpu_port(1, 0x0c).unwrap(); // Main volume left.
+        apu.write_cpu_port(0, 0).unwrap();
+        apu.step_master_cycles(6);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0);
+        assert_eq!(apu.read_spc_ram(0x00f2), 0x0c);
+
+        apu.write_cpu_port(1, 0x5a).unwrap();
+        apu.write_cpu_port(0, 1).unwrap();
+        apu.step_master_cycles(6);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 1);
+        assert_eq!(apu.read_spc_ram(0x00f3), 0x5a);
+        assert_eq!(apu.read_dsp_register(0x0c), 0x5a);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 2);
+
+        // Another two-byte block with DSPADDR bit 7 set must not
+        // overwrite the existing left-volume register.
+        for (port, value) in [(1, 1), (2, 0xf2), (3, 0), (0, 3)] {
+            apu.write_cpu_port(port, value).unwrap();
+        }
+        apu.step_master_cycles(6);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 3);
+        apu.write_cpu_port(1, 0x8c).unwrap();
+        apu.write_cpu_port(0, 0).unwrap();
+        apu.step_master_cycles(6);
+        apu.write_cpu_port(1, 0x7f).unwrap();
+        apu.write_cpu_port(0, 1).unwrap();
+        apu.step_master_cycles(6);
+        assert_eq!(apu.read_dsp_register(0x0c), 0x5a);
+        assert_eq!(apu.read_spc_ram(0x00f2), 0x8c);
+        assert_eq!(apu.read_spc_ram(0x00f3), 0x7f);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 4);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().blocks_finished(), 1);
     }
 
     #[test]

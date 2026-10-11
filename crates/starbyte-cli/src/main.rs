@@ -1423,8 +1423,7 @@ fn write_frame_log_entry(
         "wram_watch": wram_watch,
     });
     if emulator.isolated_apu_upload().is_some() {
-        report["apu_upload_timeline"] =
-            upload_timeline.as_json(emulator.timing().frame);
+        report["apu_upload_timeline"] = upload_timeline.as_json(emulator.timing().frame);
     }
     serde_json::to_writer(&mut *writer, &report)?;
     writer.write_all(b"\n")?;
@@ -1523,13 +1522,19 @@ impl UploadProbeTimeline {
         json!({
             "first_accepted_frame": self.first_accepted_frame,
             "last_accepted_frame": self.last_accepted_frame,
-            "frames_since_accepted": self.last_accepted_frame.map(|frame| completed_frame.saturating_sub(frame)),
+            "frames_since_accepted": self
+                .last_accepted_frame
+                .map(|frame| completed_frame.saturating_sub(frame)),
             "last_stored_frame": self.last_stored_frame,
-            "frames_since_stored": self.last_stored_frame.map(|frame| completed_frame.saturating_sub(frame)),
+            "frames_since_stored": self
+                .last_stored_frame
+                .map(|frame| completed_frame.saturating_sub(frame)),
             "first_handoff_frame": self.first_handoff_frame,
             "first_execution_frame": self.first_execution_frame,
             "last_execution_frame": self.last_execution_frame,
-            "frames_since_execution": self.last_execution_frame.map(|frame| completed_frame.saturating_sub(frame)),
+            "frames_since_execution": self
+                .last_execution_frame
+                .map(|frame| completed_frame.saturating_sub(frame)),
         })
     }
 }
@@ -1593,8 +1598,7 @@ fn maybe_write_run_report(
         "save_state_path": save_state_path.map(|path| path.display().to_string()),
     });
     if emulator.isolated_apu_upload().is_some() {
-        report["apu_upload_timeline"] =
-            upload_timeline.as_json(emulator.timing().frame);
+        report["apu_upload_timeline"] = upload_timeline.as_json(emulator.timing().frame);
     }
     std::fs::write(report_path, serde_json::to_string_pretty(&report)?)
         .with_context(|| format!("failed to write run report to {}", report_path.display()))?;
@@ -2144,8 +2148,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        AudioProbeSummary, UploadProbeTimeline, build_apu_io_activity_report, parse_controller_events,
-        parse_wram_watch_addresses, resolve_state_path,
+        AudioProbeSummary, UploadProbeTimeline, build_apu_io_activity_report,
+        parse_controller_events, parse_wram_watch_addresses, resolve_state_path,
         sanitize_file_stem, write_frame_log_entry, write_pcm16_stereo_wav,
     };
 
@@ -2221,12 +2225,43 @@ mod tests {
         let mut writer = std::fs::File::create(&path).unwrap();
         let emulator = Emulator::default();
         write_frame_log_entry(
-            &mut writer, &emulator, 1, None, &[],
-            &AudioProbeSummary::default(), &UploadProbeTimeline::default(),
-        ).unwrap();
+            &mut writer,
+            &emulator,
+            1,
+            None,
+            &[],
+            &AudioProbeSummary::default(),
+            &UploadProbeTimeline::default(),
+        )
+        .unwrap();
         let record: serde_json::Value =
             serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         assert!(record.get("apu_upload_timeline").is_none());
+    }
+
+    #[test]
+    fn opt_in_frame_log_includes_upload_timeline_without_guest_data() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("opt-in.jsonl");
+        let mut writer = std::fs::File::create(&path).unwrap();
+        let mut emulator = Emulator::default();
+        emulator.enable_isolated_apu_upload_probe();
+        let timeline = UploadProbeTimeline::default();
+        write_frame_log_entry(
+            &mut writer,
+            &emulator,
+            1,
+            None,
+            &[],
+            &AudioProbeSummary::default(),
+            &timeline,
+        )
+        .unwrap();
+        let record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert!(record["apu_upload_timeline"].is_object());
+        assert!(record["apu_upload_timeline"]["first_accepted_frame"].is_null());
+        assert!(record["apu_upload_timeline"]["first_execution_frame"].is_null());
     }
 
     #[test]
@@ -2371,8 +2406,16 @@ mod tests {
         };
         let mut audio_run = AudioProbeSummary::default();
         audio_run.record_frame(1, &[0, 0, -100, 50]);
-        write_frame_log_entry(&mut writer, &emulator, 2, Some(&stall), &[], &audio_run, &UploadProbeTimeline::default())
-            .unwrap();
+        write_frame_log_entry(
+            &mut writer,
+            &emulator,
+            2,
+            Some(&stall),
+            &[],
+            &audio_run,
+            &UploadProbeTimeline::default(),
+        )
+        .unwrap();
         let record: serde_json::Value =
             serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         assert_eq!(record["schema"], "starbyte.frame_log.v1");

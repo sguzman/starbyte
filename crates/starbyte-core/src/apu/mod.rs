@@ -1305,7 +1305,8 @@ mod tests {
         let mut audio = Vec::new();
         let clocks = (21_477_272_u64 * 65).div_ceil(32_000);
         apu.append_dsp_audio(clocks, &mut audio);
-        assert!(audio.iter().any(|&sample| sample != 0) == false);
+        // Neither global direct volume nor echo volume was enabled.
+        assert!(audio.iter().all(|&sample| sample == 0));
         assert_eq!(apu.read_spc_ram(0x00f8), 0xa5);
         assert_eq!(apu.read_spc_ram(0x00f9), 0x5a);
         assert_ne!(apu.read_spc_ram(0x00fc), 0);

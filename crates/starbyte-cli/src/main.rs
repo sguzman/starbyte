@@ -1522,6 +1522,21 @@ fn build_apu_io_activity_report(emulator: &starbyte_core::Emulator) -> serde_jso
                 "halt_state": format!("{:?}", status.halt_state).to_ascii_lowercase(),
             });
         }
+        let samples = &emulator.audio_samples().samples;
+        let nonzero_pairs = samples
+            .chunks_exact(2)
+            .filter(|pair| pair[0] != 0 || pair[1] != 0)
+            .count();
+        let peak_absolute = samples
+            .iter()
+            .map(|sample| sample.unsigned_abs())
+            .max()
+            .unwrap_or(0);
+        report["isolated_ipl_upload"]["audio_frame"] = json!({
+            "stereo_pairs": samples.len() / 2,
+            "nonzero_pairs": nonzero_pairs,
+            "peak_absolute": peak_absolute,
+        });
     }
     report
 }

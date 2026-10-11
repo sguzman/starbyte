@@ -625,6 +625,13 @@ impl Apu {
         Ok(())
     }
 
+    /// Read the internal write-only TEST latch for opt-in diagnostics.
+    /// This is not a guest-visible MMIO read from $F0.
+    #[must_use]
+    pub const fn test_latch(&self) -> u8 {
+        self.spc_test
+    }
+
     /// Read one CPU-to-APU communication port byte.
     pub fn read_cpu_port(&self, port: usize) -> Result<u8> {
         self.cpu_to_apu_ports

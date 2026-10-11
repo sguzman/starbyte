@@ -176,13 +176,12 @@ fn audio_worker(receiver: Receiver<AudioMessage>, generation: Arc<AtomicU64>) {
         if let Some(output) = &device {
             // Device initialization can take time. Drop a frame that became
             // invalid while the worker was waiting for system audio.
-            if generation.load(Ordering::Acquire) == frame_generation
-                && frame_is_fresh(queued_at, Instant::now())
-            {
-                output.enqueue(&pcm);
-            } else {
+            let newest_generation = generation.load(Ordering::Acquire);
+            if newest_generation != frame_generation {
                 output.clear();
-                active_generation = generation.load(Ordering::Acquire);
+                active_generation = newest_generation;
+            } else if frame_is_fresh(queued_at, Instant::now()) {
+                output.enqueue(&pcm);
             }
         }
     }

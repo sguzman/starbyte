@@ -2267,15 +2267,20 @@ mod tests {
         assert_eq!(apu.read_apu_port(0).unwrap(), 0);
         assert_eq!(apu.read_spc_ram(0x3000), 0);
         assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 2);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_stored(), 1);
 
-        // TEST can be reenabled through the real SPC bus; the next IPL
-        // byte then uses the newly writable ordinary RAM again.
+        // TEST writes made by the executing SPC700 are ignored if PSW.P
+        // selects page one. Clear P before this direct SPC bus write; the
+        // earlier IPL transfer deliberately used the boot loader's clear P.
+        apu.spc700.psw &= !0x20;
         apu.write_spc_bus(0x00f0, 0x0a);
+        assert_eq!(apu.test_latch(), 0x0a);
         apu.write_cpu_port(1, 0x55).unwrap();
         apu.write_cpu_port(0, 1).unwrap();
         apu.step_master_cycles(6);
         assert_eq!(apu.read_spc_ram(0x3001), 0x55);
         assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 3);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_stored(), 2);
     }
 
     #[test]

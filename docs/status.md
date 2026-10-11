@@ -58,6 +58,12 @@ An **additional opt-in** diagnostic now advances uploaded SPC700 instructions al
 
 This is an experimental compatibility diagnostic, **not proof of genuine Super Mario World sound, hardware-accurate SPC/DSP timing, or Linux audio-device integration**. Proprietary sound-driver probes have not yet established an accepted game-specific audio trace.
 
+## IPL upload protocol ordering (October 11; CI not yet confirmed)
+
+The isolated, opt-in IPL transfer decoder now uses the SPC700 loader's **signed 8-bit CMP/BPL block-end comparison**, rather than treating every unexpected port-0 index as a block termination. A transfer retains its current byte and acknowledgement indices when it sees stale indices or commands more than 128 indices ahead; valid forward commands and index-wrap boundaries still work. Tests exercise the transfer decoder, the actual APU mailbox path, the exact 128-step signed comparison boundary, and a save-state restored after an ignored index. See [the SPC700 IPL protocol](https://snes.nesdev.org/wiki/Booting_the_SPC700) and [Anomie's documented IPL disassembly](https://github.com/gilligan/snesdev/blob/master/docs/spc700.txt).
+
+**Verification boundary:** these changes are committed, with synthetic tests added, but hosted CI completion and authentic commercial-ROM acceptance are **not** yet confirmed. The production bootstrap shortcut and silent commercial audio behavior remain unchanged. The next acceptance gate remains a complete observed real-ROM upload, verified SPC700 instruction progress, expected DSP register changes, and nonzero audio in the existing opt-in diagnostic.
+
 ## Post-run-529 audio correctness work (October 11; CI not yet confirmed)
 
 The subsequent audio work is **committed to `main` but does not yet have independently confirmed Ubuntu, Windows, formatting or Clippy results at the latest head**. Do not elevate these source-level regressions to the verified table until an exact-commit Actions run is inspected:

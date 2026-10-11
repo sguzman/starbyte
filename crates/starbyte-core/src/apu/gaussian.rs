@@ -63,7 +63,10 @@ mod tests {
     #[test]
     fn generated_coefficients_match_known_spc_gaussian_landmarks() {
         let table = coefficients();
-        assert_eq!((table[0], table[255], table[256], table[511]), (0, 370, 374, 1305));
+        assert_eq!(
+            (table[0], table[255], table[256], table[511]),
+            (0, 370, 374, 1305)
+        );
         assert!(table.windows(2).all(|pair| pair[0] <= pair[1]));
         for phase in 0..256 {
             let sum = i32::from(table[255 - phase])

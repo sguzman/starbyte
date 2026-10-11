@@ -1134,6 +1134,57 @@ mod tests {
     }
 
     #[test]
+    fn spc_dsp_soft_reset_blocks_rekey_until_cleared_through_mmio() {
+        let mut apu = Apu::default();
+        for (address, value) in [
+            (0x0200, 0), (0x0201, 3), (0x0202, 0), (0x0203, 3),
+            (0x0300, 0xc3),
+        ] {
+            apu.write_spc_ram(address, value);
+        }
+        for offset in 1..9 {
+            apu.write_spc_ram(0x0300 + offset, 0x77);
+        }
+        for (reg, value) in [
+            (0x5d, 2), (0x00, 0x7f), (0x01, 0x7f), (0x03, 0x10),
+            (0x07, 0x7f), (0x0c, 0x7f), (0x1c, 0x7f),
+        ] {
+            apu.write_spc_bus(0x00f2, reg);
+            apu.write_spc_bus(0x00f3, value);
+        }
+        apu.write_spc_bus(0x00f2, 0x4c);
+        apu.write_spc_bus(0x00f3, 1);
+        let mut audible = Vec::new();
+        apu.append_dsp_audio(21_477, &mut audible);
+        assert!(audible.iter().any(|&s| s > 1000));
+
+        apu.write_spc_bus(0x00f2, 0x6c);
+        apu.write_spc_bus(0x00f3, 0xa0); // FLG soft reset, echo write disabled.
+        apu.write_spc_bus(0x00f2, 0x4c);
+        apu.write_spc_bus(0x00f3, 1); // This KON must not override held reset.
+        let mut silenced = Vec::new();
+        apu.append_dsp_audio(21_477, &mut silenced);
+        assert!(silenced.iter().all(|&s| s == 0));
+        assert_eq!(apu.read_dsp_register(0x08), 0);
+        assert_eq!(apu.read_dsp_register(0x09), 0);
+
+        let state = serde_json::to_string(&apu).unwrap();
+        let mut resumed: Apu = serde_json::from_str(&state).unwrap();
+        for sound in [&mut apu, &mut resumed] {
+            sound.write_spc_bus(0x00f2, 0x6c);
+            sound.write_spc_bus(0x00f3, 0x20);
+            sound.write_spc_bus(0x00f2, 0x4c);
+            sound.write_spc_bus(0x00f3, 1);
+        }
+        let mut continuous = Vec::new();
+        let mut resumed_pcm = Vec::new();
+        apu.append_dsp_audio(21_477, &mut continuous);
+        resumed.append_dsp_audio(21_477, &mut resumed_pcm);
+        assert_eq!(continuous, resumed_pcm);
+        assert!(continuous.iter().any(|&s| s > 1000));
+    }
+
+    #[test]
     fn spc_dsp_mmio_configures_echo_and_writes_actual_spc_ram() {
         let mut apu = Apu::default();
         for (address, value) in [

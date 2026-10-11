@@ -484,9 +484,8 @@ impl Apu {
             0x00f0 | 0x00f1 => 0,
             0x00f3 => self.dsp.read_register(self.spc_ram[0x00f2]),
             0x00f4..=0x00f7 => self.cpu_to_apu_ports[usize::from(address - 0x00f4)],
-            // Timer targets are write-only MMIO, not RAM mirrors. IPL
-            // uploads can still change the underlying RAM bytes, but SPC
-            // instructions must see zero when reading these registers.
+            // Timer targets are write-only MMIO. Their writes still
+            // update underlying SPC RAM, but CPU reads return zero.
             0x00fa..=0x00fc => 0,
             0x00fd..=0x00ff => self.timers.read_and_clear(usize::from(address - 0x00fd)),
             0xffc0..=0xffff if self.ipl_overlay_enabled && self.ipl_rom.is_some() => {
@@ -511,15 +510,12 @@ impl Apu {
                     self.cpu_to_apu_ports[2..4].fill(0);
                 }
             }
-            // DSPADDR bit 7 selects a read-only mirror of $00-$7F.
-            // Keep the bit in $F2 for SPC700 reads, and ignore $F3
-            // writes while the mirror is selected.
-            0x00f2 => {} // DSPADDR latch is the RAM-backed $F2 byte.
+            // The high bit of the DSPADDR latch selects a read-only
+            // DSPDATA mirror; preserve that bit in RAM at $F2.
             0x00f3 if self.spc_ram[0x00f2] & 0x80 == 0 => {
                 self.dsp
                     .write_register(self.spc_ram[0x00f2], value, &self.spc_ram);
             }
-            0x00f3 => {}
             0x00f4..=0x00f7 => {
                 self.apu_to_cpu_ports[usize::from(address - 0x00f4)] = value;
             }
@@ -527,7 +523,9 @@ impl Apu {
                 self.timers
                     .write_target(usize::from(address - 0x00fa), value);
             }
-            0x00fd..=0x00ff => {} // Timer output hardware ignores writes.
+            // DSPADDR, read-only timer outputs, and unmapped locations
+            // require no hardware side effect. Their RAM bytes are still
+            // written below, as are all other MMIO overlay bytes.
             _ => {}
         }
         // The S-SMP sends every write to audio RAM, including writes to

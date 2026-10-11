@@ -233,8 +233,8 @@ impl Apu {
     /// Execute a single SPC700 instruction against its own RAM and MMIO bus.
     ///
     /// This path is available for isolated sound-driver regression tests.
-    /// Full cartridge runtime still uses the historical bootstrap boundary
-    /// until uploaded game sound drivers and missing SPC700 opcodes are ready.
+    /// Full cartridge runtime still uses the historical bootstrap boundary:
+    /// all 256 opcodes dispatch, but commercial driver timing is not validated.
     pub fn execute_spc_program_instruction(&mut self) -> Result<Vec<crate::bus::BusEvent>> {
         // The CPU needs independent read/write callbacks to the same bus.
         // Temporarily move it out so the callbacks can safely borrow the APU.
@@ -375,8 +375,9 @@ impl Apu {
     ///
     /// The production emulator deliberately retains its previous compatibility
     /// bootstrap until we can execute actual commercial sound drivers.
-    /// This decoder stores uploaded bytes in audio RAM but cannot run the
-    /// transferred program continuously. Do not enable it implicitly.
+    /// This decoder stores uploaded bytes in audio RAM; a separate explicit
+    /// host-clocked diagnostic can execute the program after handoff.
+    /// Neither path may be enabled implicitly for ordinary gameplay.
     pub fn enable_isolated_ipl_upload(&mut self) {
         self.ipl_upload = Some(IplUpload::default());
         self.host_clocked_spc_enabled = false;
@@ -442,9 +443,10 @@ impl Apu {
 
     /// Return the number of SNES DSP sample pairs due for this many NTSC master clocks.
     ///
-    /// The DSP itself is not yet emulated, so the current caller emits silence.
-    /// Retaining the fractional remainder avoids drift across CPU instructions,
-    /// frames, and save-state restoration. This does not run the SPC700.
+    /// The partial DSP uses this phase accumulator for sample-stepped BRR,
+    /// Gaussian filtering and echo/FIR synthesis. Retaining the fractional
+    /// remainder avoids drift across CPU instructions, frames, and snapshots.
+    /// This clock calculation does not run the SPC700.
     pub fn advance_dsp_sample_clock(&mut self, master_cycles: u64) -> usize {
         let numerator = u128::from(self.dsp_sample_phase)
             + u128::from(master_cycles) * u128::from(DSP_SAMPLE_RATE_HZ);
@@ -526,8 +528,9 @@ impl Apu {
 
     /// Append DSP-paced interleaved stereo output into one frame's buffer.
     ///
-    /// Current real-game output remains silent until SPC700 sound-program
-    /// execution and DSP register writes are connected to the runtime.
+    /// Ordinary commercial-ROM output remains silent because the default
+    /// runtime still uses a compatibility bootstrap. The opt-in host-clocked
+    /// sound driver can configure this DSP and produce synthetic PCM.
     pub fn append_dsp_audio(&mut self, master_cycles: u64, output: &mut Vec<i16>) {
         let pairs = self.advance_dsp_sample_clock(master_cycles);
         for _ in 0..pairs {

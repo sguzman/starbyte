@@ -197,6 +197,28 @@ mod tests {
     }
 
     #[test]
+    fn timer_zero_and_one_keep_shared_prescaler_phase_across_staggered_enables() {
+        let mut timers = SpcTimers::default();
+        timers.write_target(0, 1);
+        timers.write_target(1, 1);
+        timers.advance_spc_cycles(127);
+        timers.write_control(0b001);
+        timers.advance_spc_cycles(1);
+        assert_eq!(timers.read_and_clear(0), 1);
+        assert_eq!(timers.read_and_clear(1), 0);
+
+        // Enable timer 1 halfway to the next shared 128-cycle edge.
+        timers.write_control(0);
+        timers.advance_spc_cycles(63);
+        timers.write_control(0b010);
+        timers.advance_spc_cycles(64);
+        assert_eq!(timers.read_and_clear(1), 0);
+        timers.advance_spc_cycles(1);
+        assert_eq!(timers.read_and_clear(1), 1);
+        assert_eq!(timers.read_and_clear(0), 0);
+    }
+
+    #[test]
     fn changing_target_below_current_stage_waits_for_eight_bit_wrap() {
         let mut timers = SpcTimers::default();
         timers.write_target(0, 200);

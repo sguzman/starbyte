@@ -2041,9 +2041,27 @@ mod playback_tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        FRAME_INTERVAL, FrameClock, FramePerformance, Vec2, fit_game_size, is_compact_layout,
-        merged_gamepad_buttons, pressed_button_labels, record_recent_rom, write_png_screenshot,
+        FRAME_INTERVAL, FrameClock, FramePerformance, Vec2, audio_retry_ready, fit_game_size,
+        is_compact_layout, merged_gamepad_buttons, pressed_button_labels, record_recent_rom,
+        write_png_screenshot,
     };
+
+    #[test]
+    fn audio_open_retries_only_after_a_bounded_cooldown() {
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(10);
+        assert!(audio_retry_ready(None, now));
+        assert!(!audio_retry_ready(Some(deadline), now));
+        assert!(!audio_retry_ready(
+            Some(deadline),
+            now + Duration::from_secs(9),
+        ));
+        assert!(audio_retry_ready(Some(deadline), deadline));
+        assert!(audio_retry_ready(
+            Some(deadline),
+            now + Duration::from_secs(11),
+        ));
+    }
 
     #[test]
     fn frame_pacing_matches_ntsc_master_clock_ratio() {

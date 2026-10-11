@@ -2700,7 +2700,14 @@ mod accumulator_alu_tests {
             assert_eq!(cpu.psw, 0xA3, "MOV stores may not change flags");
             assert_eq!(cpu.pc, 0x8000 + len);
             assert_eq!(trace.len(), cycles);
-            assert_eq!(trace[trace.len() - 2].access, AccessKind::Read);
+            // MOV (X)+,A idles before writing instead of reading the
+            // destination (important for SPC read-to-clear timer ports).
+            let penultimate = if opcode == 0xAF {
+                AccessKind::Wait
+            } else {
+                AccessKind::Read
+            };
+            assert_eq!(trace[trace.len() - 2].access, penultimate);
             assert_eq!(trace.last().unwrap().access, AccessKind::Write);
             assert_eq!(trace.last().unwrap().address, u32::from(target));
         }
@@ -3544,7 +3551,10 @@ mod accumulator_alu_tests {
                 assert_eq!(cpu.pc, 0x8002);
                 assert_eq!(trace.len(), 5);
                 assert_eq!(trace[2].address, 0x01ff);
-                assert_eq!(trace[3].address, 0x0100);
+                // The word ALU has one internal wait between low/high reads.
+                assert_eq!(trace[3].access, AccessKind::Wait);
+                assert_eq!(trace[4].access, AccessKind::Read);
+                assert_eq!(trace[4].address, 0x0100);
                 assert_eq!(bytes[0x01ff], rhs as u8);
                 assert_eq!(bytes[0x0100], (rhs >> 8) as u8);
             }

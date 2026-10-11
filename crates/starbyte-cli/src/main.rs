@@ -249,6 +249,11 @@ struct RunArgs {
     #[arg(long, requires = "apu_upload_probe")]
     apu_execute_driver: bool,
 
+    /// Save the generated 32 kHz stereo PCM as a diagnostic WAV file.
+    /// Requires experimental sound-driver execution and no-save-ram.
+    #[arg(long, requires = "apu_execute_driver")]
+    audio_wav: Option<PathBuf>,
+
     /// One-based frame to record every CPU instruction and its bus events.
     #[arg(long, requires = "trace_out", value_parser = clap::value_parser!(u32).range(1..))]
     trace_frame: Option<u32>,
@@ -462,6 +467,7 @@ fn capabilities_manifest() -> serde_json::Value {
                 "optional_no_save_ram": "--no-save-ram",
                 "optional_apu_upload_probe": "--apu-upload-probe --no-save-ram (experimental IPL capture; no automatic sound execution)",
                 "optional_apu_execute_driver": "--apu-upload-probe --apu-execute-driver --no-save-ram (experimental uploaded SPC program clocked with 65816)",
+                "optional_audio_wav": "--audio-wav <explicit_path> --apu-upload-probe --apu-execute-driver --no-save-ram (generated 32kHz stereo WAV)",
                 "side_effects": "execute_local_rom_and_write_explicit_report"
             }
         ],
@@ -1010,6 +1016,10 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
                 .with_context(|| format!("failed to create frame log at {}", path.display()))
         })
         .transpose()?;
+    // Opt-in only; normal playback and reports do not accumulate PCM.
+    // Bound memory to five minutes of 32 kHz stereo samples.
+    const MAX_WAV_SAMPLES: usize = 32_000 * 2 * 60 * 5;
+    let mut audio_wav_samples = Vec::new();
     let mut saved_frame_images = 0_u32;
     let mut next_controller_event = 0_usize;
     for index in 0..args.frames {
@@ -1062,6 +1072,14 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
             )?;
         }
         step.with_context(|| format!("emulation failed at requested frame {}", index + 1))?;
+        if args.audio_wav.is_some() {
+            let samples = &emulator.audio_samples().samples;
+            anyhow::ensure!(
+                audio_wav_samples.len() + samples.len() <= MAX_WAV_SAMPLES,
+                "diagnostic WAV exceeds five minutes of stereo audio"
+            );
+            audio_wav_samples.extend_from_slice(samples);
+        }
         if let Some(dir) = args.frame_images_dir.as_deref()
             && saved_frame_images < args.max_frame_images
             && (index == 0 || (index + 1) % args.frame_image_every == 0)
@@ -1081,6 +1099,9 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
             .with_context(|| format!("failed to write save state to {}", path.display()))?;
     }
     maybe_write_screenshot(emulator.framebuffer(), args.screenshot.as_deref())?;
+    if let Some(path) = args.audio_wav.as_deref() {
+        write_pcm16_stereo_wav(path, &audio_wav_samples)?;
+    }
     maybe_write_run_report(
         &emulator,
         &args.rom,
@@ -1210,6 +1231,46 @@ fn ensure_parent_dir(path: &Path) -> Result<()> {
 
     std::fs::create_dir_all(parent)
         .with_context(|| format!("failed to create directory {}", parent.display()))
+}
+
+/// Write a self-contained little-endian RIFF/WAVE file with no added crates.
+/// The S-DSP produces signed 16-bit interleaved stereo at 32 kHz.
+fn write_pcm16_stereo_wav(path: &Path, samples: &[i16]) -> Result<()> {
+    anyhow::ensure!(samples.len() % 2 == 0, "WAV requires complete stereo pairs");
+    let data_size = samples
+        .len()
+        .checked_mul(std::mem::size_of::<i16>())
+        .and_then(|size| u32::try_from(size).ok())
+        .context("WAV data exceeds RIFF 32-bit size limit")?;
+    let riff_size = data_size.checked_add(36).context("WAV RIFF size overflow")?;
+    ensure_parent_dir(path)?;
+    let file = std::fs::File::create(path)
+        .with_context(|| format!("failed to create diagnostic WAV at {}", path.display()))?;
+    let mut output = std::io::BufWriter::new(file);
+    let mut header = [0_u8; 44];
+    header[0..4].copy_from_slice(b"RIFF");
+    header[4..8].copy_from_slice(&riff_size.to_le_bytes());
+    header[8..12].copy_from_slice(b"WAVE");
+    header[12..16].copy_from_slice(b"fmt ");
+    header[16..20].copy_from_slice(&16_u32.to_le_bytes());
+    header[20..22].copy_from_slice(&1_u16.to_le_bytes()); // PCM.
+    header[22..24].copy_from_slice(&2_u16.to_le_bytes()); // Stereo.
+    header[24..28].copy_from_slice(&32_000_u32.to_le_bytes());
+    header[28..32].copy_from_slice(&(32_000_u32 * 4).to_le_bytes());
+    header[32..34].copy_from_slice(&4_u16.to_le_bytes());
+    header[34..36].copy_from_slice(&16_u16.to_le_bytes());
+    header[36..40].copy_from_slice(b"data");
+    header[40..44].copy_from_slice(&data_size.to_le_bytes());
+    output.write_all(&header)?;
+    for chunk in samples.chunks(2048) {
+        let mut bytes = Vec::with_capacity(chunk.len() * 2);
+        for sample in chunk {
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        output.write_all(&bytes)?;
+    }
+    output.flush()?;
+    Ok(())
 }
 
 fn maybe_write_screenshot(

@@ -1615,6 +1615,8 @@ fn build_apu_io_activity_report(emulator: &starbyte_core::Emulator) -> serde_jso
             "phase": format!("{:?}", upload.phase()).to_ascii_lowercase(),
             "bytes_written": upload.bytes_written(),
             "blocks_finished": upload.blocks_finished(),
+            "ignored_tokens": upload.ignored_tokens(),
+            "expected_index": upload.expected_index(),
             "entrypoint": upload.entrypoint(),
         });
         if let Some(status) = emulator.isolated_apu_spc700_status() {

@@ -937,6 +937,59 @@ mod tests {
     }
 
     #[test]
+    fn spc_dsp_mmio_configures_echo_and_writes_actual_spc_ram() {
+        let mut apu = Apu::default();
+        for (address, value) in [
+            (0x0200, 0x00),
+            (0x0201, 0x03),
+            (0x0202, 0x00),
+            (0x0203, 0x03),
+            (0x0300, 0xc3),
+        ] {
+            apu.write_spc_ram(address, value);
+        }
+        for offset in 1..9 {
+            apu.write_spc_ram(0x0300 + offset, 0x77);
+        }
+        for (register, value) in [
+            (0x5d, 0x02),
+            (0x00, 0x7f),
+            (0x01, 0x7f),
+            (0x03, 0x10),
+            (0x07, 0x7f),
+            (0x0c, 0x00), // Mute direct path but keep echo send.
+            (0x1c, 0x00),
+            (0x2c, 0x7f),
+            (0x3c, 0x7f),
+            (0x4d, 0x01), // EON voice 0.
+            (0x0f, 0x7f), // FIR tap 0.
+            (0x6d, 0x50), // ESA $5000.
+            (0x7d, 0x01), // 512 stereo-frame delay.
+            (0x6c, 0x00), // Permit echo writes.
+            (0x4c, 0x01), // KON voice 0.
+        ] {
+            apu.write_spc_bus(0x00f2, register);
+            apu.write_spc_bus(0x00f3, value);
+        }
+        let mut samples = Vec::new();
+        // Include 513 DSP sample periods with a one-sample rounding cushion.
+        let clocks = (u64::from(21_477_272_u32) * 514).div_ceil(32_000);
+        apu.append_dsp_audio(clocks, &mut samples);
+        assert!(samples.len() >= 513 * 2);
+        assert!(samples[..512 * 2].iter().all(|&s| s == 0));
+        assert!(samples[512 * 2..].iter().any(|&s| s > 1000));
+        assert_ne!(apu.read_spc_ram(0x5000), 0);
+        assert_eq!(apu.read_dsp_register(0x4d), 0x01);
+        // Software disables writes without suppressing playback of the
+        // already populated SPC echo ring.
+        apu.write_spc_bus(0x00f2, 0x6c);
+        apu.write_spc_bus(0x00f3, 0x20);
+        let old = apu.read_spc_ram(0x5004);
+        apu.append_dsp_audio(21_477_272 / 32, &mut samples);
+        assert_eq!(apu.read_spc_ram(0x5004), old);
+    }
+
+    #[test]
     fn synthetic_spc700_arithmetic_program_configures_dsp_and_produces_audio() {
         let mut apu = Apu::default();
         // Copyright-free SPC sample directory and filter-zero looping BRR.

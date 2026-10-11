@@ -33,6 +33,12 @@ fn coefficients() -> &'static [i16; 512] {
     })
 }
 
+/// Initialize the exact coefficient table before playback starts, so
+/// the first keyed-on voice never pays the trigonometric setup cost.
+pub(super) fn prewarm() {
+    let _ = coefficients();
+}
+
 /// Interpolate four consecutive decoded BRR samples at a 12-bit pitch phase.
 ///
 /// The first three independently shifted terms wrap as a signed 16-bit
@@ -68,6 +74,16 @@ mod tests {
             (0, 370, 374, 1305)
         );
         assert!(table.windows(2).all(|pair| pair[0] <= pair[1]));
+        // Whole-table fingerprints catch subtle one-LSB math regressions,
+        // including the 512-entry S-DSP Gaussian reference curve.
+        let sum: i32 = table.iter().map(|&value| i32::from(value)).sum();
+        let weighted_sum: i64 = table
+            .iter()
+            .enumerate()
+            .map(|(index, &value)| (index as i64 + 1) * i64::from(value))
+            .sum();
+        assert_eq!(sum, 262_146);
+        assert_eq!(weighted_sum, 101_691_301);
         for phase in 0..256 {
             let sum = i32::from(table[255 - phase])
                 + i32::from(table[511 - phase])

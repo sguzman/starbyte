@@ -929,6 +929,33 @@ mod tests {
     }
 
     #[test]
+    fn executed_spc700_opcodes_obey_test_ram_write_protection() {
+        let mut apu = Apu::default();
+        apu.reset();
+        // An original SPC700 program:
+        // MOV $F0,#$00; MOV A,#$99; MOV !$2200,A;
+        // MOV $F0,#$0A; MOV !$2200,A.
+        let program = [
+            0x8f, 0x00, 0xf0, 0xe8, 0x99, 0xc5, 0x00, 0x22,
+            0x8f, 0x0a, 0xf0, 0xc5, 0x00, 0x22,
+        ];
+        for (index, value) in program.into_iter().enumerate() {
+            apu.write_spc_ram(0x0400 + index as u16, value);
+        }
+        apu.spc700.load_state(0x0400, 0, 0, 0, 0xef, 0x02);
+        for _ in 0..3 {
+            apu.execute_spc_program_instruction().unwrap();
+        }
+        assert_eq!(apu.read_spc_ram(0x2200), 0);
+        assert_eq!(apu.read_spc_ram(0x00f0), 0);
+        for _ in 0..2 {
+            apu.execute_spc_program_instruction().unwrap();
+        }
+        assert_eq!(apu.read_spc_ram(0x2200), 0x99);
+        assert_eq!(apu.read_spc_ram(0x00f0), 0x0a);
+    }
+
+    #[test]
     fn spc_test_inhibits_echo_ram_storage_without_stopping_pcm_or_dsp_clock() {
         let mut apu = Apu::default();
         for (address, value) in [

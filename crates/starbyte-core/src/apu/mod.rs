@@ -482,7 +482,7 @@ impl Apu {
                     self.spc700_steps = 0;
                     self.host_clocked_spc_phase = 0;
                     self.host_clocked_spc_credit = 0;
-                    self.spc700.load_state(address, 0, 0, 0, 0, 0xef, 0x02);
+                    self.spc700.load_state(address, 0, 0, 0, 0xef, 0x02);
                 }
                 _ => {}
             }

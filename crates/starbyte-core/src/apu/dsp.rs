@@ -57,6 +57,9 @@ pub struct Dsp {
 
 impl Default for Dsp {
     fn default() -> Self {
+        // Prepare the exact Gaussian table while the APU is constructed,
+        // rather than on the first live BRR voice's audio callback.
+        gaussian::prewarm();
         let mut registers = vec![0; REGISTER_COUNT];
         // The synthetic/default mixer starts unmuted but must not overwrite
         // SPC low RAM with echo before a sound driver configures echo space.

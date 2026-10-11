@@ -508,6 +508,97 @@ mod tests {
     }
 
     #[test]
+    fn spc_ram_echo_delay_and_fir_replay_after_512_stereo_samples() {
+        let (mut dsp, mut ram) = looping_sample();
+        // Keep the dry output silent. Route voice zero only to the echo
+        // write buffer at $5000, with a one-unit (512-frame) delay.
+        dsp.write_register(0x0c, 0, &ram);
+        dsp.write_register(0x1c, 0, &ram);
+        dsp.write_register(0x2c, 0x7f, &ram);
+        dsp.write_register(0x3c, 0x7f, &ram);
+        dsp.write_register(0x4d, 1, &ram);
+        dsp.write_register(0x0f, 0x7f, &ram); // FIR newest-sample tap.
+        dsp.write_register(0x6d, 0x50, &ram); // ESA $5000.
+        dsp.write_register(0x7d, 1, &ram); // 2048 echo bytes = 512 pairs.
+        dsp.write_register(0x6c, 0, &ram); // Permit echo RAM writes.
+        dsp.write_register(0x4c, 1, &ram);
+        for _ in 0..512 {
+            assert_eq!(dsp.next_stereo_pair(&mut ram), (0, 0));
+        }
+        assert_ne!(&ram[0x5000..0x5004], &[0; 4]);
+        let echoed = dsp.next_stereo_pair(&mut ram);
+        assert!(echoed.0 > 1000, "echo must replay earlier voice output");
+        assert_eq!(echoed.0, echoed.1);
+        assert_eq!(dsp.echo_offset, 4);
+    }
+
+    #[test]
+    fn echo_write_inhibit_still_allows_read_and_fir_output() {
+        let (mut dsp, mut ram) = looping_sample();
+        ram[0x5000..0x5004].copy_from_slice(&[0x10, 0x27, 0x10, 0x27]);
+        dsp.write_register(0x6d, 0x50, &ram);
+        dsp.write_register(0x7d, 1, &ram);
+        dsp.write_register(0x0f, 0x7f, &ram);
+        dsp.write_register(0x2c, 0x7f, &ram);
+        dsp.write_register(0x3c, 0x7f, &ram);
+        // Default FLG bit 5 inhibits echo writes, but not reads.
+        let echoed = dsp.next_stereo_pair(&mut ram);
+        assert!(echoed.0 > 1000);
+        assert_eq!(echoed.0, echoed.1);
+        assert_eq!(&ram[0x5000..0x5004], &[0x10, 0x27, 0x10, 0x27]);
+    }
+
+    #[test]
+    fn echo_signed_feedback_and_negative_fir_are_visible_in_spc_ram() {
+        let (mut dsp, mut ram) = looping_sample();
+        ram[0x6000..0x6004].copy_from_slice(&[0x10, 0x27, 0x10, 0x27]);
+        dsp.write_register(0x6d, 0x60, &ram);
+        dsp.write_register(0x7d, 1, &ram);
+        dsp.write_register(0x0f, 0xc0, &ram); // Negative FIR coefficient.
+        dsp.write_register(0x2c, 0x7f, &ram);
+        dsp.write_register(0x3c, 0x7f, &ram);
+        dsp.write_register(0x0d, 0x40, &ram); // Positive echo feedback.
+        dsp.write_register(0x6c, 0, &ram);
+        let output = dsp.next_stereo_pair(&mut ram);
+        assert!(output.0 < -1000);
+        assert_eq!(output.0, output.1);
+        let stored = i16::from_le_bytes([ram[0x6000], ram[0x6001]]);
+        assert!(stored < -1000, "feedback should write signed filtered echo");
+        assert_eq!(stored, i16::from_le_bytes([ram[0x6002], ram[0x6003]]));
+    }
+
+    #[test]
+    fn echo_fir_history_and_spc_ram_resume_exactly_after_save() {
+        let (mut dsp, mut ram) = looping_sample();
+        dsp.write_register(0x4d, 1, &ram);
+        dsp.write_register(0x0f, 0x7f, &ram);
+        dsp.write_register(0x1f, 0x20, &ram); // FIR history tap 1.
+        dsp.write_register(0x6d, 0x50, &ram);
+        dsp.write_register(0x7d, 1, &ram);
+        dsp.write_register(0x2c, 0x7f, &ram);
+        dsp.write_register(0x3c, 0x7f, &ram);
+        dsp.write_register(0x6c, 0, &ram);
+        dsp.write_register(0x4c, 1, &ram);
+        for _ in 0..519 {
+            dsp.next_stereo_pair(&mut ram);
+        }
+        let snapshot = serde_json::to_string(&dsp).unwrap();
+        let mut restored: Dsp = serde_json::from_str(&snapshot).unwrap();
+        let mut resumed_ram = ram.clone();
+        for _ in 0..256 {
+            assert_eq!(
+                dsp.next_stereo_pair(&mut ram),
+                restored.next_stereo_pair(&mut resumed_ram)
+            );
+        }
+        assert_eq!(ram, resumed_ram);
+        assert_eq!(
+            serde_json::to_value(&dsp).unwrap(),
+            serde_json::to_value(&restored).unwrap()
+        );
+    }
+
+    #[test]
     fn brr_filters_preserve_signed_integer_rounding_for_small_history() {
         for filter in [2_u8, 3] {
             let mut ram = vec![0_u8; 65_536];

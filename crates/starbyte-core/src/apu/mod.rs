@@ -1471,6 +1471,49 @@ mod tests {
     }
 
     #[test]
+    fn isolated_ipl_upload_rejects_stale_port_zero_commands_without_losing_bytes() {
+        let mut apu = Apu::default();
+        apu.reset();
+        apu.enable_isolated_ipl_upload();
+        for (port, value) in [(1, 1), (2, 0), (3, 4), (0, 0xcc)] {
+            apu.write_cpu_port(port, value).unwrap();
+        }
+        apu.step_master_cycles(6);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0xcc);
+
+        let program = [0xe8, 0x42, 0xc4, 0xf4]; // MOV A,#$42; MOV $F4,A.
+        for (index, byte) in program.into_iter().take(3).enumerate() {
+            apu.write_cpu_port(1, byte).unwrap();
+            apu.write_cpu_port(0, index as u8).unwrap();
+            apu.step_master_cycles(6);
+            assert_eq!(apu.read_apu_port(0).unwrap(), index as u8);
+        }
+        // With expected index 3, stale token 1 and forward token 132
+        // must neither acknowledge nor terminate the sound-driver block.
+        for invalid in [1, 132] {
+            apu.write_cpu_port(1, 0xff).unwrap();
+            apu.write_cpu_port(0, invalid).unwrap();
+            apu.step_master_cycles(6);
+            assert_eq!(apu.read_apu_port(0).unwrap(), 2);
+            assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 3);
+            assert!(apu.isolated_spc700_status().is_none());
+        }
+        apu.write_cpu_port(1, program[3]).unwrap();
+        apu.write_cpu_port(0, 3).unwrap();
+        apu.step_master_cycles(6);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 3);
+        for (index, byte) in program.into_iter().enumerate() {
+            assert_eq!(apu.read_spc_ram(0x0400 + index as u16), byte);
+        }
+        for (port, value) in [(1, 0), (2, 0), (3, 4), (0, 5)] {
+            apu.write_cpu_port(port, value).unwrap();
+        }
+        apu.step_master_cycles(6);
+        assert_eq!(apu.isolated_spc700_status().unwrap().pc, 0x0400);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 4);
+    }
+
+    #[test]
     fn isolated_uploaded_sound_program_configures_dsp_and_produces_audio() {
         let mut apu = Apu::default();
         apu.reset();

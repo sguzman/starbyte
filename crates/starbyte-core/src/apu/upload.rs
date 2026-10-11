@@ -152,9 +152,16 @@ impl IplUpload {
                 if token == self.expected_index {
                     return self.write_byte(token, cpu_ports[1], spc_ports, ram);
                 }
-                // A different index is the IPL's block-end marker. The
-                // expected index is consumed by data, not by this command.
-                // Repeated acknowledgements are ignored by last_port0.
+                // The real IPL compares Y (the expected byte index) to
+                // the CPU's port-0 token and takes the block-end path only
+                // when the 8-bit subtraction has its sign bit set. A stale
+                // token, or one too far ahead, is not a block boundary.
+                // This comparison wraps across $FF->$00 like SPC700 CMP.
+                if self.expected_index.wrapping_sub(token) & 0x80 == 0 {
+                    return UploadEvent::None;
+                }
+                // The expected index is consumed by data, not this
+                // command. Repeated port-0 values are already ignored.
                 self.blocks_finished = self.blocks_finished.saturating_add(1);
                 let address = u16::from_le_bytes([cpu_ports[2], cpu_ports[3]]);
                 spc_ports[0] = token;
@@ -313,6 +320,62 @@ mod tests {
         assert_eq!(&h.ram[0x4000..0x4002], &[0xcc, 0xdd]);
         assert_eq!(h.transfer.blocks_finished(), 2);
         assert_eq!(h.transfer.bytes_written(), 4);
+    }
+
+    #[test]
+    fn stale_and_too_far_ahead_indices_do_not_terminate_an_ipl_block() {
+        let mut h = Harness::new();
+        h.kick(0x1200);
+        h.send_byte(0, 0x11, 0x1200);
+        h.send_byte(1, 0x22, 0x1201);
+        h.send_byte(2, 0x33, 0x1202);
+        // Expected index is now 3; a stale index and a forward token
+        // 129 ahead are both rejected by the IPL's signed CMP.
+        h.cpu[1] = 1;
+        h.cpu[2] = 0;
+        h.cpu[3] = 0x40;
+        assert_eq!(h.send(1), UploadEvent::None);
+        assert_eq!(h.send(132), UploadEvent::None);
+        assert_eq!(h.transfer.phase(), UploadPhase::Receiving);
+        assert_eq!(h.transfer.blocks_finished(), 0);
+        assert_eq!(h.spc[0], 2);
+
+        // The next expected byte remains acceptable after invalid tokens.
+        h.send_byte(3, 0x44, 0x1203);
+        assert_eq!(h.transfer.bytes_written(), 4);
+        assert_eq!(&h.ram[0x1200..0x1204], &[0x11, 0x22, 0x33, 0x44]);
+        // A valid forward marker (expected=4, token=6) starts a new block.
+        assert_eq!(
+            h.send(6),
+            UploadEvent::NextBlock {
+                destination: 0x4000
+            }
+        );
+        assert_eq!(h.transfer.blocks_finished(), 1);
+        h.send_byte(0, 0x55, 0x4000);
+    }
+
+    #[test]
+    fn ipl_block_marker_signed_comparison_wraps_at_index_ff() {
+        let mut h = Harness::new();
+        h.kick(0x3000);
+        for n in 0..=253_u16 {
+            h.send_byte(n as u8, n as u8, 0x3000 + n);
+        }
+        // Expected index is $FE. Token $FD is stale, while $00 is
+        // forward by two with wrapped subtraction ($FE-$00) negative.
+        h.cpu[1] = 1;
+        h.cpu[2] = 0;
+        h.cpu[3] = 0x40;
+        assert_eq!(h.send(252), UploadEvent::None);
+        assert_eq!(
+            h.send(0),
+            UploadEvent::NextBlock {
+                destination: 0x4000
+            }
+        );
+        assert_eq!(h.transfer.blocks_finished(), 1);
+        h.send_byte(0, 0x77, 0x4000);
     }
 
     #[test]

@@ -1058,6 +1058,66 @@ mod tests {
     }
 
     #[test]
+    fn gaussian_pcm_matches_across_cpu_sized_clock_chunks_and_apu_restore() {
+        let mut whole = Apu::default();
+        for (address, byte) in [
+            (0x0200, 0x00),
+            (0x0201, 0x03),
+            (0x0202, 0x09),
+            (0x0203, 0x03),
+            (0x0300, 0xc0),
+            (0x0309, 0xc3),
+        ] {
+            whole.write_spc_ram(address, byte);
+        }
+        for offset in 1..9 {
+            whole.write_spc_ram(0x0300 + offset, 0x44);
+            whole.write_spc_ram(0x0309 + offset, 0xcc);
+        }
+        for (register, byte) in [
+            (0x5d, 0x02),
+            (0x00, 0x7f),
+            (0x01, 0x7f),
+            (0x02, 0x00),
+            (0x03, 0x08), // Half-sample fractional pitch.
+            (0x07, 0x7f),
+            (0x0c, 0x7f),
+            (0x1c, 0x7f),
+            (0x4c, 0x01),
+        ] {
+            whole.write_dsp_register(register, byte);
+        }
+        let mut chunked = whole.clone();
+        let mut all_audio = Vec::new();
+        let mut pieces = Vec::new();
+        const TOTAL_CLOCKS: u64 = 357_368;
+        whole.append_dsp_audio(TOTAL_CLOCKS, &mut all_audio);
+        chunked.append_dsp_audio(12_345, &mut pieces);
+        // Serializing during the initial positive sample, including a
+        // fractional DSP clock and Gaussian window, must not alter output.
+        let saved = serde_json::to_string(&chunked).unwrap();
+        let mut chunked: Apu = serde_json::from_str(&saved).unwrap();
+        let mut remaining = TOTAL_CLOCKS - 12_345;
+        let steps = [1, 7, 41, 233, 1001, 4096];
+        let mut i = 0;
+        while remaining > 0 {
+            let next = remaining.min(steps[i % steps.len()]);
+            chunked.append_dsp_audio(next, &mut pieces);
+            remaining -= next;
+            i += 1;
+        }
+        assert_eq!(all_audio, pieces);
+        assert!(all_audio.iter().any(|&sample| sample > 1000));
+        assert!(all_audio.iter().any(|&sample| sample < -1000));
+        assert_eq!(whole.dsp_sample_phase, chunked.dsp_sample_phase);
+        assert_eq!(
+            serde_json::to_value(&whole.dsp).unwrap(),
+            serde_json::to_value(&chunked.dsp).unwrap()
+        );
+        assert_eq!(whole.spc_ram, chunked.spc_ram);
+    }
+
+    #[test]
     fn sample_clock_produces_exactly_32k_pairs_per_ntsc_second() {
         let mut apu = Apu::default();
         assert_eq!(apu.advance_dsp_sample_clock(21_477_272), 32_000);

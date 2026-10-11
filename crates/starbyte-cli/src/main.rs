@@ -2149,7 +2149,7 @@ mod tests {
 
     use super::{
         AudioProbeSummary, UploadProbeTimeline, build_apu_io_activity_report,
-        parse_controller_events, parse_wram_watch_addresses, resolve_state_path,
+        maybe_write_run_report, parse_controller_events, parse_wram_watch_addresses, resolve_state_path,
         sanitize_file_stem, write_frame_log_entry, write_pcm16_stereo_wav,
     };
 
@@ -2262,6 +2262,48 @@ mod tests {
         assert!(record["apu_upload_timeline"].is_object());
         assert!(record["apu_upload_timeline"]["first_accepted_frame"].is_null());
         assert!(record["apu_upload_timeline"]["first_execution_frame"].is_null());
+    }
+
+    #[test]
+    fn final_report_emits_upload_timeline_only_in_explicit_probe_mode() {
+        let dir = tempdir().unwrap();
+        let report_path = dir.path().join("report.json");
+        let rom = PathBuf::from("fixture.sfc");
+        let mut emulator = Emulator::default();
+        let audio = AudioProbeSummary::default();
+        let timeline = UploadProbeTimeline::default();
+
+        maybe_write_run_report(
+            &emulator,
+            &rom,
+            0,
+            None,
+            None,
+            Some(&report_path),
+            &audio,
+            &timeline,
+        )
+        .unwrap();
+        let ordinary: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
+        assert!(ordinary.get("apu_upload_timeline").is_none());
+
+        emulator.enable_isolated_apu_upload_probe();
+        maybe_write_run_report(
+            &emulator,
+            &rom,
+            0,
+            None,
+            None,
+            Some(&report_path),
+            &audio,
+            &timeline,
+        )
+        .unwrap();
+        let opted_in: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
+        assert!(opted_in["apu_upload_timeline"].is_object());
+        assert!(opted_in["apu_upload_timeline"]["first_handoff_frame"].is_null());
     }
 
     #[test]

@@ -58,6 +58,22 @@ pub struct ApuStatus {
     pub spc700_steps: u64,
 }
 
+/// Execution progress for a sound program handed off by an opt-in IPL upload.
+///
+/// Absent until the transfer selects an entrypoint; production bootstrap
+/// placeholder steps must never masquerade as sound-driver execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IsolatedSpc700Status {
+    /// Current sound-CPU instruction address.
+    pub pc: u16,
+    /// Cumulative interpreted sound-CPU cycles since handoff.
+    pub cycles: u64,
+    /// Successfully dispatched instructions since handoff.
+    pub instructions: u64,
+    /// Running, sleeping, or stopped.
+    pub halt_state: Spc700HaltState,
+}
+
 /// Minimal APU wrapper used to establish timing and communication boundaries early.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Apu {
@@ -278,6 +294,18 @@ impl Apu {
     #[must_use]
     pub fn isolated_ipl_upload(&self) -> Option<&IplUpload> {
         self.ipl_upload.as_ref()
+    }
+
+    /// Sound CPU state after isolated IPL entrypoint handoff, if any.
+    #[must_use]
+    pub fn isolated_spc700_status(&self) -> Option<IsolatedSpc700Status> {
+        self.ipl_upload.as_ref()?.entrypoint()?;
+        Some(IsolatedSpc700Status {
+            pc: self.spc700.pc,
+            cycles: self.spc700.cycles(),
+            instructions: self.spc700_steps,
+            halt_state: self.spc700.halt_state(),
+        })
     }
 
     /// Advance placeholder APU work for a number of master cycles.
@@ -963,6 +991,7 @@ mod tests {
 
         apu.enable_isolated_ipl_upload();
         assert!(!apu.status().using_builtin_bootstrap);
+        assert!(apu.isolated_spc700_status().is_none());
         for (port, value) in [(1, 1), (2, 0x00), (3, 0x04), (0, 0xcc)] {
             apu.write_cpu_port(port, value).unwrap();
         }
@@ -985,6 +1014,11 @@ mod tests {
         apu.step_master_cycles(6);
         assert_eq!(apu.read_apu_port(0).unwrap(), 5);
         assert_eq!(apu.spc700.pc, 0x0400);
+        let status = apu.isolated_spc700_status().unwrap();
+        assert_eq!(status.pc, 0x0400);
+        assert_eq!(status.instructions, 0);
+        assert_eq!(status.cycles, 0);
+        assert_eq!(status.halt_state, Spc700HaltState::Running);
         assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 4);
         assert_eq!(
             apu.isolated_ipl_upload().unwrap().entrypoint(),
@@ -997,6 +1031,11 @@ mod tests {
         assert_eq!(apu.status().spc700_steps, 0);
         apu.execute_spc_program_instruction().unwrap();
         apu.execute_spc_program_instruction().unwrap();
+        let status = apu.isolated_spc700_status().unwrap();
+        assert_eq!(status.pc, 0x0404);
+        assert_eq!(status.instructions, 2);
+        assert!(status.cycles >= 2);
+        assert_eq!(status.halt_state, Spc700HaltState::Running);
         assert_eq!(apu.read_apu_port(0).unwrap(), 0x42);
 
         let saved = serde_json::to_string(&apu).unwrap();

@@ -996,6 +996,45 @@ mod tests {
     }
 
     #[test]
+    fn indirect_y_pointer_reads_clear_timer_after_load_idle_not_store_idle() {
+        let mut apu = Apu::default();
+        apu.reset();
+        apu.write_spc_bus(0x00fc, 1);
+        apu.write_spc_bus(0x00f1, 4);
+        apu.step_master_cycles(336);
+        apu.write_spc_ram(0x0000, 0x04); // Wrapped high byte of dp $FF.
+        apu.write_spc_ram(0x0406, 0x67); // (timer low $01, high $04) + Y=5.
+        let mut verify = apu.clone();
+        assert_eq!(verify.read_spc_bus(0x00ff), 1);
+
+        for (opcode, read_phase, idle_phase) in [
+            (0xf7_u8, 3_usize, 2_usize), // MOV A,[dp]+Y
+            (0xd7_u8, 2_usize, 4_usize), // MOV [dp]+Y,A
+        ] {
+            let mut state = apu.clone();
+            state.write_spc_ram(0x0400, opcode);
+            state.write_spc_ram(0x0401, 0xff);
+            state.spc700.load_state(0x0400, 0x24, 0, 5, 0xef, 0x02);
+            let trace = state.execute_spc_program_instruction().unwrap();
+            assert_eq!(trace.len(), if opcode == 0xf7 { 6 } else { 7 });
+            assert_eq!(trace[idle_phase].access, crate::bus::AccessKind::Wait);
+            assert_eq!(trace[read_phase].address, 0x00ff);
+            assert_eq!(trace[read_phase].access, crate::bus::AccessKind::Read);
+            assert_eq!(trace[read_phase].value, 1);
+            assert_eq!(trace[read_phase + 1].address, 0x0000);
+            assert_eq!(trace[read_phase + 1].access, crate::bus::AccessKind::Read);
+            assert_eq!(state.read_spc_bus(0x00ff), 0);
+            if opcode == 0xf7 {
+                assert_eq!(state.spc700.a, 0x67);
+                assert_eq!(state.read_spc_ram(0x0406), 0x67);
+            } else {
+                assert_eq!(state.spc700.a, 0x24);
+                assert_eq!(state.read_spc_ram(0x0406), 0x24);
+            }
+        }
+    }
+
+    #[test]
     fn spc_test_and_control_read_zero_through_bus_and_spc700_opcodes() {
         let mut apu = Apu::default();
         // Emulated RAM contents are not readable through write-only MMIO.

@@ -58,6 +58,10 @@ An **additional opt-in** diagnostic now advances uploaded SPC700 instructions al
 
 This is an experimental compatibility diagnostic, **not proof of genuine Super Mario World sound, hardware-accurate SPC/DSP timing, or Linux audio-device integration**. Proprietary sound-driver probes have not yet established an accepted game-specific audio trace.
 
+## Run-wide audio observability (October 11; CI not yet confirmed)
+
+Headless `starbyte-cli run --report-json` now includes an additive `audio_run` object that counts 32 kHz stereo sample pairs across **all completed frames**, nonzero pairs, peak absolute sample magnitude, and the first one-based requested frame with nonzero PCM (or null when all sampled frames were silent). This complements, rather than replaces, the opt-in `apu_io_activity.isolated_ipl_upload.audio_frame` snapshot, which still describes only the final frame. The accumulator needs no WAV file or multi-frame PCM buffer and cannot turn silent commercial audio into working music. A pure unit regression exercises short audio followed by a silent final frame, signed -32768 peak, and always-silent runs. See [automation diagnostics](automation.md). Latest-commit hosted CI is not confirmed.
+
 ## IPL-to-MMIO replay and zero-marker fall-through (October 11; CI not yet confirmed)
 
 An isolated IPL upload copies sound-program bytes through the SPC700 memory bus, **not just into a detached RAM array**. The APU now replays upload bytes in the $F0-$FF MMIO range through the corresponding hardware handlers as well as the RAM backing. This enables an IPL transfer directly targeting $F2/$F3 to select and write actual DSP registers, and preserves the documented overwrite of port-0 byte acknowledgements when an IPL store targets output mailbox $F4. New tests exercise these effects at the isolated APU boundary and using actual 65816 instructions over $2140-$2143 with save-state continuation.

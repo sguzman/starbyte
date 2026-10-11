@@ -64,6 +64,8 @@ Two more read/write sequencing errors in the standalone SPC700 interpreter are c
 
 Opcode `$FA` (`MOV dp,dp`) now reads the source **before fetching the destination offset**. The earlier implementation fetched both operands before reading the source. The opcode still takes five cycles and **never reads the destination**. The source-level regression checks every bus-event address; the APU regression exercises timer 2's read-to-clear `$FF` as source and transfers that value to regular audio RAM `$20`.
 
+`TSET1` (`$0E`) and `TCLR1` (`$4E`) also perform two consecutive **real reads of their absolute target address**, then a write. The previous interpreter inserted an idle slot in place of the second read. The corrected bus trace keeps the first-read value for arithmetic and the write, but a read-to-clear timer output returns its value on the first read and zero on the second. An APU regression checks both reads and the final store to timer-output address `$FF`.
+
 References: [Anomie's SPC700 opcode/bus notes](https://github.com/gilligan/snesdev/blob/master/docs/spc700.txt), [Near's SPC700 cycle-breakdown discussion](https://forums.nesdev.org/viewtopic.php?start=75&t=16140), and the [independent cycle-by-cycle SPC700 conformance implementation](https://github.com/gufranco/sony-spc700-python). These source comparisons are not a substitute for running Starbyte's own CI or commercial-game audio probes.
 
 ## SPC700 word-instruction bus-cycle fidelity (October 11; CI not yet confirmed)

@@ -335,6 +335,12 @@ impl Apu {
     /// separately by `step_master_cycles` and `append_dsp_audio`, so this
     /// method must not clock either a second time.
     pub fn execute_host_clocked_spc(&mut self, master_cycles: u64) -> Result<usize> {
+        // A prior large host quantum can leave positive instruction credit
+        // after the 4096-instruction safety cap. A zero-time query must
+        // never spend that backlog or change the sound CPU state.
+        if master_cycles == 0 {
+            return Ok(0);
+        }
         if !self.host_clocked_spc_enabled
             || self
                 .ipl_upload
@@ -1545,6 +1551,9 @@ mod tests {
             capped.execute_host_clocked_spc(21_477_272 * 8).unwrap(),
             4096
         );
+        assert_eq!(capped.isolated_spc700_status().unwrap().instructions, 4096);
+        // Backlogged cycles cannot silently execute on a zero-time call.
+        assert_eq!(capped.execute_host_clocked_spc(0).unwrap(), 0);
         assert_eq!(capped.isolated_spc700_status().unwrap().instructions, 4096);
 
         let mut host_audio = Vec::new();

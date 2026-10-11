@@ -50,6 +50,9 @@ pub struct IplUpload {
     last_port0: Option<u8>,
     /// Accepted IPL data bytes, including writes blocked by SMP TEST.
     bytes_written: u64,
+    /// Bytes actually written to SPC RAM, excluding TEST-gated ordinary RAM.
+    #[serde(default)]
+    bytes_stored: u64,
     /// Number of completed upload blocks.
     blocks_finished: u64,
     /// Last requested sound-program entrypoint.
@@ -67,6 +70,7 @@ impl Default for IplUpload {
             expected_index: 0,
             last_port0: None,
             bytes_written: 0,
+            bytes_stored: 0,
             blocks_finished: 0,
             entrypoint: None,
             ignored_tokens: 0,
@@ -90,6 +94,13 @@ impl IplUpload {
     #[must_use]
     pub const fn bytes_written(&self) -> u64 {
         self.bytes_written
+    }
+
+    /// Accepted payload bytes that were actually stored in SPC RAM. TEST
+    /// write protection may make this smaller than bytes_written().
+    #[must_use]
+    pub const fn bytes_stored(&self) -> u64 {
+        self.bytes_stored
     }
 
     /// Number of completed blocks, including the last block before entry.
@@ -239,6 +250,7 @@ impl IplUpload {
         let address = self.destination;
         if ram_writable || (0x00f0..=0x00ff).contains(&address) {
             ram[usize::from(address)] = value;
+            self.bytes_stored = self.bytes_stored.saturating_add(1);
         }
         self.destination = address.wrapping_add(1);
         self.expected_index = token.wrapping_add(1);
@@ -520,6 +532,7 @@ mod tests {
         );
         assert_eq!(h.ram[0x3000], 0);
         assert_eq!(h.transfer.bytes_written(), 1);
+        assert_eq!(h.transfer.bytes_stored(), 0);
         assert_eq!(h.transfer.expected_index(), 1);
         h.cpu[1] = 0x77;
         h.cpu[0] = 1;
@@ -532,6 +545,41 @@ mod tests {
         );
         assert_eq!(h.ram[0x3001], 0x77);
         assert_eq!(h.transfer.bytes_written(), 2);
+        assert_eq!(h.transfer.bytes_stored(), 1);
+    }
+
+    #[test]
+    fn stored_bytes_include_mmio_overlay_even_when_test_blocks_ordinary_ram() {
+        let mut h = Harness::new();
+        h.kick(0x00ef);
+        h.cpu[1] = 0x23;
+        h.cpu[0] = 0;
+        assert_eq!(
+            h.transfer
+                .observe_with_ram_writes(h.cpu, &mut h.spc, &mut h.ram, false),
+            UploadEvent::ByteWritten {
+                address: 0x00ef,
+                value: 0x23,
+            }
+        );
+        h.cpu[0] = 1;
+        h.cpu[1] = 0x56;
+        assert_eq!(
+            h.transfer
+                .observe_with_ram_writes(h.cpu, &mut h.spc, &mut h.ram, false),
+            UploadEvent::ByteWritten {
+                address: 0x00f0,
+                value: 0x56,
+            }
+        );
+        assert_eq!(h.ram[0x00ef], 0);
+        assert_eq!(h.ram[0x00f0], 0x56);
+        assert_eq!(h.transfer.bytes_written(), 2);
+        assert_eq!(h.transfer.bytes_stored(), 1);
+        let serialized = serde_json::to_string(&h.transfer).unwrap();
+        let restored: IplUpload = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(restored.bytes_stored(), 1);
+        assert_eq!(restored.bytes_written(), 2);
     }
 
     #[test]

@@ -80,10 +80,6 @@ pub struct SystemBus {
     /// instruction by blindly replaying stale CPU-side register contents.
     #[serde(default)]
     pending_apu_port_writes: u8,
-    /// Full ordered mailbox writes, including repeated writes within DMA.
-    /// Earlier snapshots without this field fall back to the bit mask.
-    #[serde(default)]
-    pending_apu_port_events: Vec<(u8, u8)>,
     apu_to_cpu_io: Vec<u8>,
     dma: DmaController,
     timing: TimingState,
@@ -119,7 +115,6 @@ impl Default for SystemBus {
             ppu: Ppu::default(),
             cpu_to_apu_io: vec![0; APU_IO_PORT_COUNT],
             pending_apu_port_writes: 0,
-            pending_apu_port_events: Vec::new(),
             apu_to_cpu_io: vec![0; APU_IO_PORT_COUNT],
             dma: DmaController::default(),
             timing: TimingState::default(),
@@ -164,7 +159,6 @@ impl SystemBus {
         self.ppu = Ppu::default();
         self.cpu_to_apu_io.fill(0);
         self.pending_apu_port_writes = 0;
-        self.pending_apu_port_events.clear();
         self.apu_to_cpu_io.fill(0);
         self.dma = DmaController::default();
         self.timing = TimingState::default();
@@ -352,32 +346,18 @@ impl SystemBus {
         }
     }
 
-    /// Replay CPU mailbox writes in bus order, preserving repeated tokens
-    /// from DMA bursts within a single 65816 instruction. The CPU's cached
-    /// last-written byte is not a new event when SPC CONTROL clears a latch.
+    /// Replay only CPU mailbox writes made since the previous synchronization.
+    ///
+    /// SPC700 CONTROL may independently clear its input latches. Replaying
+    /// all four last-written CPU bytes every 65816 instruction would
+    /// immediately undo that hardware clear, preventing real sound drivers
+    /// from safely exchanging commands with the main CPU.
     pub fn sync_apu_ports_to_runtime(&mut self, apu: &mut Apu) {
         let pending = self.pending_apu_port_writes;
         self.pending_apu_port_writes = 0;
-        let events = std::mem::take(&mut self.pending_apu_port_events);
-        if events.is_empty() {
-            // Older save states persisted only the four-bit dirty mask.
-            for port in 0..APU_IO_PORT_COUNT {
-                if pending & (1 << port) != 0 {
-                    let _ = apu.write_cpu_port(port, self.cpu_to_apu_io[port]);
-                }
-            }
-            // Old snapshots cannot reconstruct write order. Restore the
-            // complete four-port image before observing port zero, as the
-            // pre-event-queue bridge did at its next master-clock tick.
-            if pending & 1 != 0 {
-                apu.poll_ipl_upload();
-            }
-        } else {
-            for (port, value) in events {
-                let _ = apu.write_cpu_port(usize::from(port), value);
-                if port == 0 {
-                    apu.poll_ipl_upload();
-                }
+        for port in 0..APU_IO_PORT_COUNT {
+            if pending & (1 << port) != 0 {
+                let _ = apu.write_cpu_port(port, self.cpu_to_apu_io[port]);
             }
         }
     }
@@ -788,7 +768,6 @@ impl SystemBus {
                     self.observability.apu_port_write_counts[port].saturating_add(1);
                 self.cpu_to_apu_io[port] = value;
                 self.pending_apu_port_writes |= 1 << port;
-                self.pending_apu_port_events.push((port as u8, value));
                 Some(())
             }
             0x2180 => {
@@ -1204,79 +1183,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_dirty_mask_replays_full_ipl_port_image_before_token_zero() {
-        let mut bus = SystemBus::default();
-        let mut apu = Apu::default();
-        apu.reset();
-        apu.enable_isolated_ipl_upload();
-        for (port, value) in [(1, 1), (2, 0), (3, 4), (0, 0xcc)] {
-            bus.write(0x002140 + port as u32, value);
-        }
-        // Old snapshots had no event queue. On load, all four last-written
-        // bytes must be forwarded before the IPL observes kick token $CC.
-        let mut saved = serde_json::to_value(&bus).unwrap();
-        saved
-            .as_object_mut()
-            .unwrap()
-            .remove("pending_apu_port_events");
-        let mut legacy: SystemBus = serde_json::from_value(saved).unwrap();
-        legacy.sync_apu_ports_to_runtime(&mut apu);
-        assert_eq!(apu.read_apu_port(0).unwrap(), 0xcc);
-        assert_eq!(
-            apu.isolated_ipl_upload().unwrap().phase(),
-            crate::apu::upload::UploadPhase::AwaitFirstByte
-        );
-        legacy.sync_apu_ports_to_runtime(&mut apu);
-        assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 0);
-    }
-
-    #[test]
-    fn cpu_apu_port_sync_preserves_multiple_ipl_tokens_in_one_bus_burst() {
-        let mut bus = SystemBus::default();
-        let mut apu = Apu::default();
-        apu.reset();
-        apu.enable_isolated_ipl_upload();
-        // One simulated DMA burst configures and starts a transfer, then
-        // sends two data bytes with distinct port-zero tokens. The old
-        // per-port dirty mask collapsed all of these writes into a single
-        // final port snapshot and never accepted the IPL kick.
-        for (address, value) in [
-            (0x2141, 1),
-            (0x2142, 0),
-            (0x2143, 4),
-            (0x2140, 0xcc),
-            (0x2141, 0xe8),
-            (0x2140, 0),
-            (0x2141, 0x42),
-            (0x2140, 1),
-        ] {
-            bus.write(address, value);
-        }
-        let state = serde_json::to_string(&bus).unwrap();
-        let mut resumed: SystemBus = serde_json::from_str(&state).unwrap();
-        let mut cloned_apu = apu.clone();
-        for (system, sound) in [(&mut bus, &mut apu), (&mut resumed, &mut cloned_apu)] {
-            system.sync_apu_ports_to_runtime(sound);
-            assert_eq!(sound.read_spc_ram(0x0400), 0xe8);
-            assert_eq!(sound.read_spc_ram(0x0401), 0x42);
-            assert_eq!(sound.isolated_ipl_upload().unwrap().bytes_written(), 2);
-            assert_eq!(sound.read_apu_port(0).unwrap(), 1);
-            assert_eq!(system.cpu_to_apu_ports()[0], 1);
-            system.sync_apu_ports_to_runtime(sound);
-            assert_eq!(sound.isolated_ipl_upload().unwrap().bytes_written(), 2);
-        }
-        assert_eq!(
-            serde_json::to_value(&apu).unwrap(),
-            serde_json::to_value(&cloned_apu).unwrap()
-        );
-
-        // Old serialized buses had a mask but no ordered event queue.
-        let mut legacy = serde_json::to_value(&bus).unwrap();
-        legacy.as_object_mut().unwrap().remove("pending_apu_port_events");
-        assert!(serde_json::from_value::<SystemBus>(legacy).is_ok());
-    }
-
-    #[test]
     fn apu_port_sync_replays_only_new_cpu_writes_after_spc_input_clear() {
         let mut bus = SystemBus::default();
         let mut apu = Apu::default();
@@ -1645,47 +1551,6 @@ mod tests {
 
         assert_eq!(bus.read(0x004300), 0x8F);
         assert_eq!(bus.read(0x00430A), 0x55);
-    }
-
-    #[test]
-    fn dma_to_apu_port_zero_preserves_each_ipl_token_in_order() {
-        let mut bus = SystemBus::default();
-        bus.install_cartridge(make_cart(Mapper::LoRom));
-        let mut apu = Apu::default();
-        apu.reset();
-        apu.enable_isolated_ipl_upload();
-
-        // CPU handshakes with the sound IPL before the DMA block.
-        for (port, value) in [(1, 1), (2, 0), (3, 4), (0, 0xcc)] {
-            bus.write(0x002140 + port as u32, value);
-        }
-        bus.sync_apu_ports_to_runtime(&mut apu);
-        assert_eq!(apu.read_apu_port(0).unwrap(), 0xcc);
-
-        // $2141 holds the data byte. DMA channel zero writes the two
-        // consecutive index tokens $00 and $01 to fixed B-bus $2140.
-        bus.write(0x002141, 0xe8);
-        bus.write(0x7e0000, 0);
-        bus.write(0x7e0001, 1);
-        bus.write(0x004300, 0); // Mode 0, one fixed B-bus register.
-        bus.write(0x004301, 0x40); // $2140 = APU input port zero.
-        bus.write(0x004302, 0);
-        bus.write(0x004303, 0);
-        bus.write(0x004304, 0x7e);
-        bus.write(0x004305, 2);
-        bus.write(0x004306, 0);
-        bus.write(0x00420b, 1);
-
-        // The old four-bit dirty mask forwarded only the final index one;
-        // the IPL was waiting for index zero and wrote nothing.
-        bus.sync_apu_ports_to_runtime(&mut apu);
-        assert_eq!(bus.dma_transferred_bytes(), 2);
-        assert_eq!(apu.read_spc_ram(0x0400), 0xe8);
-        assert_eq!(apu.read_spc_ram(0x0401), 0xe8);
-        assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 2);
-        assert_eq!(apu.read_apu_port(0).unwrap(), 1);
-        bus.sync_apu_ports_to_runtime(&mut apu);
-        assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 2);
     }
 
     #[test]

@@ -794,6 +794,100 @@ mod tests {
     }
 
     #[test]
+    fn synthetic_cpu_uploads_three_spc_blocks_and_runs_dsp_audio() {
+        let mut sound_driver = Vec::new();
+        for (reg, value) in [
+            (0x5d, 0x02),
+            (0x00, 0x7f),
+            (0x01, 0x7f),
+            (0x03, 0x10),
+            (0x07, 0x7f),
+            (0x0c, 0x7f),
+            (0x1c, 0x7f),
+            (0x4c, 0x01),
+        ] {
+            sound_driver.extend_from_slice(&[0x8f, reg, 0xf2, 0x8f, value, 0xf3]);
+        }
+        sound_driver.extend_from_slice(&[0x2f, 0xfe]); // Bounded BRA loop.
+
+        let mut cpu_code = Vec::new();
+        let mut write_port = |port: u8, value: u8| {
+            cpu_code.extend_from_slice(&[0xa9, value, 0x8d, 0x40 + port, 0x21]);
+        };
+        // IPL handshake, first block at $0200: BRR directory entry.
+        write_port(1, 1);
+        write_port(2, 0);
+        write_port(3, 2);
+        write_port(0, 0xcc);
+        for (index, byte) in [0, 3, 0, 3].into_iter().enumerate() {
+            write_port(1, byte);
+            write_port(0, index as u8);
+        }
+        // Next block at $0300: original loopable BRR sample.
+        write_port(1, 1);
+        write_port(2, 0);
+        write_port(3, 3);
+        write_port(0, 5);
+        for (index, byte) in [0xc3, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77]
+            .into_iter()
+            .enumerate()
+        {
+            write_port(1, byte);
+            write_port(0, index as u8);
+        }
+        // Third block at $0400: sound driver using $F2/$F3 DSP MMIO.
+        write_port(1, 1);
+        write_port(2, 0);
+        write_port(3, 4);
+        write_port(0, 10);
+        for (index, byte) in sound_driver.iter().copied().enumerate() {
+            write_port(1, byte);
+            write_port(0, index as u8);
+        }
+        write_port(1, 0);
+        write_port(2, 0);
+        write_port(3, 4);
+        write_port(0, sound_driver.len() as u8 + 1);
+
+        let instruction_count = cpu_code.len() / 5 * 2;
+        let mut rom = rom_bytes();
+        rom[0x7ffc] = 0;
+        rom[0x7ffd] = 0x80;
+        rom[..cpu_code.len()].copy_from_slice(&cpu_code);
+        let mut emulator = Emulator::default();
+        emulator.load_rom(Cartridge::from_bytes(rom, None).unwrap());
+        emulator.enable_isolated_apu_upload_probe();
+        for _ in 0..instruction_count {
+            emulator.step_instruction().unwrap();
+        }
+        let upload = emulator.isolated_apu_upload().unwrap();
+        assert_eq!(upload.blocks_finished(), 3);
+        assert_eq!(upload.bytes_written(), (4 + 9 + sound_driver.len()) as u64);
+        assert_eq!(upload.entrypoint(), Some(0x0400));
+        assert_eq!(emulator.apu.spc700.pc, 0x0400);
+        assert_eq!(emulator.apu.read_spc_ram(0x0200), 0);
+        assert_eq!(emulator.apu.read_spc_ram(0x0201), 3);
+        assert_eq!(emulator.apu.read_spc_ram(0x0300), 0xc3);
+        for (index, byte) in sound_driver.iter().copied().enumerate() {
+            assert_eq!(emulator.apu.read_spc_ram(0x0400 + index as u16), byte);
+        }
+
+        let mut samples = Vec::new();
+        assert_eq!(
+            emulator
+                .apu
+                .run_isolated_uploaded_spc_program(400, &mut samples)
+                .unwrap(),
+            400
+        );
+        assert_eq!(emulator.apu.read_dsp_register(0x5d), 2);
+        assert_eq!(emulator.apu.read_dsp_register(0x4c), 1);
+        assert!(samples.len() >= 30);
+        assert!(samples.iter().any(|sample| *sample > 1_000));
+        assert!(samples.chunks_exact(2).all(|pair| pair[0] == pair[1]));
+    }
+
+    #[test]
     fn rejects_unknown_save_state_version() {
         let state = r#"{"version":999,"cpu":{"registers":{"a":0,"x":0,"y":0,"s":0,"d":0,"pc":0,"pbr":0,"dbr":0,"p":0,"emulation":false},"cycles":0},"apu":{"spc700":{"pc":0,"a":0,"x":0,"y":0,"sp":0,"psw":0,"cycles":0},"cpu_to_apu_ports":[0,0,0,0],"apu_to_cpu_ports":[0,0,0,0],"ipl_rom":null,"configured_ipl_path":null,"spc700_steps":0},"system":{"cartridge":null,"save_ram":[],"wram":[],"ppu":{"registers":[],"cgram":[],"cgram_address":0,"cgram_high_byte":false},"cpu_to_apu_io":[0,0,0,0],"apu_to_cpu_io":[0,0,0,0],"dma":{"channels":[{"control":0,"b_bus_address":0,"a_bus_address":0,"a_bus_bank":0,"byte_count":0,"indirect_address":0,"hdma_table_address":0,"hdma_data_address":0,"hdma_line_counter":0,"hdma_active":false,"hdma_repeat":false},{"control":0,"b_bus_address":0,"a_bus_address":0,"a_bus_bank":0,"byte_count":0,"indirect_address":0,"hdma_table_address":0,"hdma_data_address":0,"hdma_line_counter":0,"hdma_active":false,"hdma_repeat":false},{"control":0,"b_bus_address":0,"a_bus_address":0,"a_bus_bank":0,"byte_count":0,"indirect_address":0,"hdma_table_address":0,"hdma_data_address":0,"hdma_line_counter":0,"hdma_active":false,"hdma_repeat":false},{"control":0,"b_bus_address":0,"a_bus_address":0,"a_bus_bank":0,"byte_count":0,"indirect_address":0,"hdma_table_address":0,"hdma_data_address":0,"hdma_line_counter":0,"hdma_active":false,"hdma_repeat":false},{"control":0,"b_bus_address":0,"a_bus_address":0,"a_bus_bank":0,"byte_count":0,"indirect_address":0,"hdma_table_address":0,"hdma_data_address":0,"hdma_line_counter":0,"hdma_active":false,"hdma_repeat":false},{"control":0,"b_bus_address":0,"a_bus_address":0,"a_bus_bank":0,"byte_count":0,"indirect_address":0,"hdma_table_address":0,"hdma_data_address":0,"hdma_line_counter":0,"hdma_active":false,"hdma_repeat":false},{"control":0,"b_bus_address":0,"a_bus_address":0,"a_bus_bank":0,"byte_count":0,"indirect_address":0,"hdma_table_address":0,"hdma_data_address":0,"hdma_line_counter":0,"hdma_active":false,"hdma_repeat":false},{"control":0,"b_bus_address":0,"a_bus_address":0,"a_bus_bank":0,"byte_count":0,"indirect_address":0,"hdma_table_address":0,"hdma_data_address":0,"hdma_line_counter":0,"hdma_active":false,"hdma_repeat":false}],"dma_enable_mask":0,"hdma_enable_mask":0,"transfer_count":0},"timing":{"master_clock":0,"scanline":0,"dot":0,"frame":0},"open_bus":0,"nmitimen":0,"rdnmi":false,"timeup":false,"joypad":{"controller1":{"b":false,"y":false,"select":false,"start":false,"up":false,"down":false,"left":false,"right":false,"a":false,"x":false,"l":false,"r":false},"latch_line":false,"latched1":0,"shift1":0},"wram_address":0}}"#;
         let mut emulator = Emulator::default();

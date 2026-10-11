@@ -839,7 +839,7 @@ mod tests {
     }
 
     #[test]
-    fn movw_store_does_not_read_or_clear_timer_output_through_spc_bus() {
+    fn movw_store_dummy_low_read_clears_timer_output_through_spc_bus() {
         let mut apu = Apu::default();
         apu.reset();
         apu.write_spc_bus(0x00fc, 1); // Timer 2 target: one divider tick.
@@ -848,20 +848,21 @@ mod tests {
         let mut peek = apu.clone();
         assert_eq!(peek.read_spc_bus(0x00ff), 1);
 
-        // MOVW $FF,YA writes timer output $FF and page-wrapped $00,
-        // but does not read the timer's read-to-clear output. Writing
-        // this read-only register must leave the output counter intact.
+        // MOVW $FF,YA. The low destination address $FF is the timer 2
+        // read-to-clear output. On real SMP the store first reads it,
+        // then writes the low byte, then stores Y to wrapped $00.
         for (index, byte) in [0xda, 0xff].into_iter().enumerate() {
             apu.write_spc_ram(0x0400 + index as u16, byte);
         }
         apu.spc700.load_state(0x0400, 0x55, 0, 0x77, 0xef, 0x02);
         let trace = apu.execute_spc_program_instruction().unwrap();
-        assert_eq!(trace.len(), 4);
+        assert_eq!(trace.len(), 5);
         assert_eq!(trace[2].address, 0x00ff);
-        assert_eq!(trace[2].access, crate::bus::AccessKind::Write);
-        assert_eq!(trace[3].address, 0x0000);
+        assert_eq!(trace[2].access, crate::bus::AccessKind::Read);
+        assert_eq!(trace[2].value, 1);
         assert_eq!(trace[3].access, crate::bus::AccessKind::Write);
-        assert_eq!(apu.read_spc_bus(0x00ff), 1);
+        assert_eq!(trace[3].address, 0x00ff);
+        assert_eq!(trace[4].address, 0x0000);
         assert_eq!(apu.read_spc_bus(0x00ff), 0);
         assert_eq!(apu.read_spc_ram(0x00ff), 0x55);
         assert_eq!(apu.read_spc_ram(0x0000), 0x77);

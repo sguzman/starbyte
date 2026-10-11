@@ -869,6 +869,42 @@ mod tests {
     }
 
     #[test]
+    fn spc_mov_x_increment_does_not_clear_timer_but_mov_x_store_does() {
+        let mut apu = Apu::default();
+        apu.reset();
+        apu.write_spc_bus(0x00fc, 1); // Timer 2: one prescaler tick.
+        apu.write_spc_bus(0x00f1, 4); // Enable timer 2.
+        apu.step_master_cycles(336);
+        let mut timer_probe = apu.clone();
+        assert_eq!(timer_probe.read_spc_bus(0x00ff), 1);
+
+        for (opcode, expected_output, expected_x) in [
+            (0xaf_u8, 1_u8, 0_u8),
+            (0xc6_u8, 0_u8, 0xff_u8),
+        ] {
+            let mut state = apu.clone();
+            state.write_spc_ram(0x0400, opcode);
+            state.spc700.load_state(0x0400, 0x55, 0xff, 0, 0xef, 0x02);
+            let trace = state.execute_spc_program_instruction().unwrap();
+            assert_eq!(trace.len(), 4);
+            assert_eq!(
+                trace[2].access,
+                if opcode == 0xaf {
+                    crate::bus::AccessKind::Wait
+                } else {
+                    crate::bus::AccessKind::Read
+                }
+            );
+            assert_eq!(trace[3].address, 0x00ff);
+            assert_eq!(trace[3].access, crate::bus::AccessKind::Write);
+            assert_eq!(state.read_spc_ram(0x00ff), 0x55);
+            assert_eq!(state.spc700.x, expected_x);
+            assert_eq!(state.read_spc_bus(0x00ff), expected_output);
+            assert_eq!(state.read_spc_bus(0x00ff), 0);
+        }
+    }
+
+    #[test]
     fn spc_test_and_control_read_zero_through_bus_and_spc700_opcodes() {
         let mut apu = Apu::default();
         // Emulated RAM contents are not readable through write-only MMIO.

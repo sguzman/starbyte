@@ -1392,6 +1392,23 @@ mod tests {
 
         let mut host_clocked = apu.clone();
         host_clocked.enable_isolated_host_clocked_driver().unwrap();
+
+        // Zero host time must never execute an opcode, and disarming a
+        // diagnostic snapshot must prevent later unexpected execution.
+        let mut gated = host_clocked.clone();
+        assert_eq!(gated.execute_host_clocked_spc(0).unwrap(), 0);
+        assert_eq!(gated.execute_host_clocked_spc(1).unwrap(), 0);
+        assert_eq!(gated.isolated_spc700_status().unwrap().instructions, 0);
+        gated.disable_isolated_host_clocked_driver();
+        assert_eq!(gated.execute_host_clocked_spc(100_000).unwrap(), 0);
+        assert_eq!(gated.isolated_spc700_status().unwrap().instructions, 0);
+
+        // Huge external time advances must never run an unbounded sound
+        // loop in one host step; the scheduler caps each call at 4096.
+        let mut capped = host_clocked.clone();
+        assert_eq!(capped.execute_host_clocked_spc(21_477_272 * 8).unwrap(), 4096);
+        assert_eq!(capped.isolated_spc700_status().unwrap().instructions, 4096);
+
         let mut host_audio = Vec::new();
         for _ in 0..500 {
             host_clocked.step_master_cycles(256);

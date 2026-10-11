@@ -967,7 +967,13 @@ mod tests {
         let clocked_status = host_clocked.isolated_apu_spc700_status().unwrap();
         assert!(clocked_status.instructions > 100);
         assert_eq!(host_clocked.apu.read_dsp_register(0x4c), 1);
-        assert!(host_clocked.audio_samples().samples.iter().any(|v| *v > 1000));
+        assert!(
+            host_clocked
+                .audio_samples()
+                .samples
+                .iter()
+                .any(|v| *v > 1000)
+        );
         assert!(
             host_clocked
                 .apu

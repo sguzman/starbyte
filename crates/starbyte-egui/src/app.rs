@@ -35,11 +35,6 @@ const FRAME_INTERVAL: Duration = Duration::from_nanos(16_639_357);
 const GUI_FRAME_TIMEOUT: Duration = Duration::from_millis(1_500);
 const COMPACT_LAYOUT_WIDTH: f32 = 960.0;
 
-/// Bound device-open retries without penalizing silent emulation.
-fn audio_retry_ready(retry_after: Option<Instant>, now: Instant) -> bool {
-    retry_after.is_none_or(|deadline| now >= deadline)
-}
-
 fn is_compact_layout(width: f32, height: f32) -> bool {
     width < COMPACT_LAYOUT_WIDTH || height < 640.0
 }
@@ -113,7 +108,6 @@ pub struct StarbyteApp {
     cache_root: PathBuf,
     session: FrontendSession,
     audio_output: Option<AudioOutput>,
-    audio_retry_after: Option<Instant>,
     worker: AppWorker,
     library_snapshot: LibrarySnapshot,
     framebuffer_texture: Option<TextureHandle>,
@@ -220,7 +214,6 @@ impl StarbyteApp {
             cache_root,
             session,
             audio_output: None,
-            audio_retry_after: None,
             worker,
             library_snapshot: cached_snapshot.unwrap_or_else(empty_snapshot),
             framebuffer_texture: None,
@@ -574,20 +567,11 @@ impl StarbyteApp {
         if samples.is_empty() || samples.len() % 2 != 0 {
             return;
         }
-        if self.audio_output.is_none()
-            && samples.iter().any(|&sample| sample != 0)
-            && audio_retry_ready(self.audio_retry_after, Instant::now())
-        {
-            match AudioOutput::open_default() {
-                Ok(output) => {
-                    self.audio_output = Some(output);
-                    self.audio_retry_after = None;
-                }
+        if self.audio_output.is_none() && samples.iter().any(|&sample| sample != 0) {
+            match AudioOutput::start() {
+                Ok(output) => self.audio_output = Some(output),
                 Err(error) => {
-                    warn!("desktop audio unavailable (video remains playable): {error}");
-                    // A newly attached headset or restored PipeWire/ALSA
-                    // device should recover without restarting the game.
-                    self.audio_retry_after = Some(Instant::now() + Duration::from_secs(10));
+                    warn!("could not start desktop audio thread (video remains playable): {error}");
                 }
             }
         }
@@ -2041,27 +2025,9 @@ mod playback_tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        FRAME_INTERVAL, FrameClock, FramePerformance, Vec2, audio_retry_ready, fit_game_size,
-        is_compact_layout, merged_gamepad_buttons, pressed_button_labels, record_recent_rom,
-        write_png_screenshot,
+        FRAME_INTERVAL, FrameClock, FramePerformance, Vec2, fit_game_size, is_compact_layout,
+        merged_gamepad_buttons, pressed_button_labels, record_recent_rom, write_png_screenshot,
     };
-
-    #[test]
-    fn audio_open_retries_only_after_a_bounded_cooldown() {
-        let now = Instant::now();
-        let deadline = now + Duration::from_secs(10);
-        assert!(audio_retry_ready(None, now));
-        assert!(!audio_retry_ready(Some(deadline), now));
-        assert!(!audio_retry_ready(
-            Some(deadline),
-            now + Duration::from_secs(9),
-        ));
-        assert!(audio_retry_ready(Some(deadline), deadline));
-        assert!(audio_retry_ready(
-            Some(deadline),
-            now + Duration::from_secs(11),
-        ));
-    }
 
     #[test]
     fn frame_pacing_matches_ntsc_master_clock_ratio() {

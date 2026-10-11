@@ -167,10 +167,20 @@ impl Dsp {
         let noise_sample = (self.noise_lfsr << 1) as i16;
         let mut left = 0_i64;
         let mut right = 0_i64;
+        // PMON modulates voice N's pitch with voice N-1's envelope-scaled
+        // output, not with its raw BRR sample. Voice zero ignores PMON.
+        let mut previous_voice_output = 0_i16;
         for index in 0..VOICE_COUNT {
             let base = index * 16;
             let pitch = (u16::from(self.registers[base + 3] & 0x3f) << 8)
                 | u16::from(self.registers[base + 2]);
+            let pitch = if index > 0 && self.registers[0x2d] & (1 << index) != 0 {
+                let modulation =
+                    ((i32::from(previous_voice_output) >> 5) * i32::from(pitch)) >> 10;
+                (i32::from(pitch) + modulation).clamp(0, 0x7fff) as u16
+            } else {
+                pitch
+            };
             let adsr1 = self.registers[base + 5];
             let adsr2 = self.registers[base + 6];
             let gain = self.registers[base + 7];
@@ -186,6 +196,7 @@ impl Dsp {
                 ram,
                 &self.registers,
             );
+            previous_voice_output = sample;
             left += i64::from(sample) * i64::from(self.registers[base] as i8);
             right += i64::from(sample) * i64::from(self.registers[base + 1] as i8);
             self.registers[base + 8] = (self.voices[index].envelope >> 4) as u8;
@@ -539,6 +550,66 @@ mod tests {
         assert_eq!(dsp.voices[0].envelope, baseline);
         dsp.next_stereo_pair(&ram);
         assert_eq!(dsp.voices[0].envelope, baseline - 0x20);
+    }
+
+    #[test]
+    fn pitch_modulation_uses_previous_enveloped_voice_output() {
+        let (mut base, ram) = looping_sample();
+        // The two voices use the same positive BRR source. Voice one's pitch
+        // is half a sample per DSP tick without PMON.
+        base.write_register(0x12, 0, &ram);
+        base.write_register(0x13, 0x08, &ram);
+        base.write_register(0x17, 0x7f, &ram);
+        base.write_register(0x4c, 0b11, &ram);
+        let mut modulated = base.clone();
+        modulated.write_register(0x2d, 0b10, &ram);
+        let mut ignored_voice_zero = base.clone();
+        ignored_voice_zero.write_register(0x2d, 0b01, &ram);
+
+        for _ in 0..64 {
+            let reference = base.next_stereo_pair(&ram);
+            modulated.next_stereo_pair(&ram);
+            assert_eq!(ignored_voice_zero.next_stereo_pair(&ram), reference);
+        }
+        // The higher effective pitch advances voice one farther through BRR
+        // samples, but voice zero is unaffected.
+        assert_eq!(base.voices[0].index, modulated.voices[0].index);
+        assert_eq!(base.voices[0].fraction, modulated.voices[0].fraction);
+        assert_ne!(base.voices[1].fraction, modulated.voices[1].fraction);
+        assert_eq!(base.voices[1].fraction, ignored_voice_zero.voices[1].fraction);
+    }
+
+    #[test]
+    fn negative_previous_voice_slows_pmon_and_state_survives_save() {
+        let (mut base, mut ram) = looping_sample();
+        // One negative BRR voice modulates a distinct positive second voice.
+        ram[0x300] = 0xc3;
+        ram[0x301..0x309].fill(0x88);
+        ram[0x204] = 0x00;
+        ram[0x205] = 0x04;
+        ram[0x206] = 0x00;
+        ram[0x207] = 0x04;
+        ram[0x400] = 0xc3;
+        ram[0x401..0x409].fill(0x77);
+        base.write_register(0x12, 0, &ram);
+        base.write_register(0x13, 0x08, &ram);
+        base.write_register(0x14, 1, &ram);
+        base.write_register(0x17, 0x7f, &ram);
+        base.write_register(0x4c, 0b11, &ram);
+
+        let mut modulated = base.clone();
+        modulated.write_register(0x2d, 0b10, &ram);
+        base.next_stereo_pair(&ram);
+        modulated.next_stereo_pair(&ram);
+        assert!(modulated.voices[1].fraction < base.voices[1].fraction);
+
+        let saved = serde_json::to_string(&modulated).unwrap();
+        let mut restored: Dsp = serde_json::from_str(&saved).unwrap();
+        for _ in 0..100 {
+            assert_eq!(modulated.next_stereo_pair(&ram), restored.next_stereo_pair(&ram));
+        }
+        assert_eq!(modulated.voices[1].index, restored.voices[1].index);
+        assert_eq!(modulated.voices[1].fraction, restored.voices[1].fraction);
     }
 
     #[test]

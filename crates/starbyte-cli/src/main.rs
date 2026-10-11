@@ -1617,6 +1617,7 @@ fn build_apu_io_activity_report(emulator: &starbyte_core::Emulator) -> serde_jso
 
     let mut report = json!({
         "cpu_to_apu_ports": emulator.cpu_to_apu_ports(),
+        "apu_input_latch_ports": emulator.apu_input_latch_ports(),
         "apu_to_cpu_ports": emulator.apu_to_cpu_ports(),
         "cpu_read_counts": cpu_read_counts,
         "cpu_write_counts": cpu_write_counts,

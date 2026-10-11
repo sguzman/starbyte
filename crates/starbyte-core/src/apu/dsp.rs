@@ -1295,20 +1295,26 @@ mod tests {
     #[test]
     fn pmon_high_positive_outx_cannot_skip_eighth_brr_sample() {
         let (mut dsp, mut ram) = looping_sample();
-        // Voice zero's positive BRR waveform feeds a nearly doubled
-        // $3FFF pitch into voice one. Its last-fraction carry pushes the
-        // raw sum above $7FFF, but the DSP clamps interpolation position.
+        // The base BRR test sample is not loud enough to guarantee the
+        // saturation boundary. Drive voice zero with deterministic positive
+        // NON instead: its $7FF fixed GAIN produces a near-full-scale
+        // positive OUTX regardless of Gaussian startup/BRR history.
+        // Voice one still decodes real BRR under PMON.
+        dsp.noise_lfsr = 0x3fff;
+        dsp.write_register(0x3d, 0b01, &ram);
+        dsp.write_register(0x07, 0x7f, &ram);
         dsp.write_register(0x12, 0xff, &ram);
         dsp.write_register(0x13, 0x3f, &ram);
         dsp.write_register(0x17, 0x7f, &ram);
         dsp.write_register(0x2d, 0b10, &ram);
         dsp.write_register(0x4c, 0b11, &ram);
-        for _ in 0..6 {
-            dsp.next_stereo_pair(&mut ram);
-        }
         dsp.voices[1].index = 0;
         dsp.voices[1].fraction = 0x0fff;
         dsp.next_stereo_pair(&mut ram);
+        // Nonzero modulation must really reach the saturation limit;
+        // otherwise this test would merely reassert an ordinary pitch.
+        let prev_sample = i32::from(dsp.read_register(0x09) as i8) << 8;
+        assert!(prev_sample > 16_384);
         assert_eq!(dsp.voices[1].index, 7);
         assert_eq!(dsp.voices[1].fraction, 0x0fff);
     }

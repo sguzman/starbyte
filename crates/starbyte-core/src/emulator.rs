@@ -781,6 +781,24 @@ mod tests {
     }
 
     #[test]
+    fn production_apu_timing_still_uses_original_single_host_quantum() {
+        let mut emulator = Emulator::default();
+        let mut reference = emulator.apu.clone();
+        let mut expected_pcm = Vec::new();
+        let clocks = 21_477_u64;
+        reference.step_master_cycles(clocks);
+        reference.append_dsp_audio(clocks, &mut expected_pcm);
+
+        assert!(!emulator.apu.isolated_host_clocked_driver_enabled());
+        emulator.advance_apu_for_cpu_step(clocks).unwrap();
+        assert_eq!(emulator.pending_audio.samples, expected_pcm);
+        assert_eq!(
+            serde_json::to_value(&emulator.apu).unwrap(),
+            serde_json::to_value(&reference).unwrap()
+        );
+    }
+
+    #[test]
     fn opt_in_spc_timer_poll_receives_time_before_end_of_cpu_quantum() {
         let mut emulator = Emulator::default();
         emulator.apu.reset();

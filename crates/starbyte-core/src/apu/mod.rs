@@ -1201,6 +1201,26 @@ mod tests {
             host_clocked.execute_host_clocked_spc(256).unwrap();
             host_clocked.append_dsp_audio(256, &mut host_audio);
         }
+        let mut resumed_host = apu.clone();
+        resumed_host.enable_isolated_host_clocked_driver().unwrap();
+        let mut resumed_host_audio = Vec::new();
+        for _ in 0..137 {
+            resumed_host.step_master_cycles(256);
+            resumed_host.execute_host_clocked_spc(256).unwrap();
+            resumed_host.append_dsp_audio(256, &mut resumed_host_audio);
+        }
+        let state = serde_json::to_string(&resumed_host).unwrap();
+        let mut resumed_host: Apu = serde_json::from_str(&state).unwrap();
+        for _ in 137..500 {
+            resumed_host.step_master_cycles(256);
+            resumed_host.execute_host_clocked_spc(256).unwrap();
+            resumed_host.append_dsp_audio(256, &mut resumed_host_audio);
+        }
+        assert_eq!(host_audio, resumed_host_audio);
+        assert_eq!(
+            serde_json::to_value(&host_clocked).unwrap(),
+            serde_json::to_value(&resumed_host).unwrap()
+        );
         let host_status = host_clocked.isolated_spc700_status().unwrap();
         assert!(host_status.instructions > 100);
         assert_eq!(host_clocked.read_dsp_register(0x4c), 1);

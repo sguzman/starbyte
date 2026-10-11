@@ -416,17 +416,19 @@ mod tests {
         for filter in [2_u8, 3] {
             let mut ram = vec![0_u8; 65_536];
             ram[0x300] = filter << 2;
-            // For prior=6 and half-prior=3, two_ago=1, the hardware rounds
-            // each shifted term before summing: both filters produce 4,
-            // whereas collapsing their fractional coefficients produces 5.
-            let mut voice = super::Voice {
-                address: 0x300,
-                previous: 3,
-                older: 1,
-                ..super::Voice::default()
-            };
-            voice.decode_block(&ram);
-            assert_eq!(voice.samples[0], 8, "BRR filter {filter}");
+            // For prior=6 and two_ago=1, each shift is rounded before
+            // summation: sample +8, versus the simplified coefficient's +10.
+            // Mirrored negative history similarly yields -12 versus -10.
+            for (previous, older, expected) in [(3, 1, 8), (-3, -1, -12)] {
+                let mut voice = super::Voice {
+                    address: 0x300,
+                    previous,
+                    older,
+                    ..super::Voice::default()
+                };
+                voice.decode_block(&ram);
+                assert_eq!(voice.samples[0], expected, "BRR filter {filter}");
+            }
         }
     }
 

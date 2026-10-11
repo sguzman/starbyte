@@ -441,6 +441,9 @@ fn isolated_upload_probe_requires_no_save_ram_and_reports_explicit_mode() {
         0
     );
     assert!(report["apu_io_activity"]["isolated_ipl_upload"]["entrypoint"].is_null());
+    assert!(report["apu_io_activity"]["isolated_ipl_upload"]
+        .get("spc700_execution")
+        .is_none());
     assert!(report["save_ram_path"].is_null());
     assert!(!dir.path().join("sample.srm").exists());
 }
@@ -496,6 +499,10 @@ fn headless_upload_probe_captures_real_cpu_mailbox_transfer_in_run_report() {
     assert_eq!(upload["bytes_written"], 4);
     assert_eq!(upload["blocks_finished"], 1);
     assert_eq!(upload["entrypoint"], 0x0400);
+    assert_eq!(upload["spc700_execution"]["pc"], 0x0400);
+    assert_eq!(upload["spc700_execution"]["instructions"], 0);
+    assert_eq!(upload["spc700_execution"]["cycles"], 0);
+    assert_eq!(upload["spc700_execution"]["halt_state"], "running");
     assert!(report["save_ram_path"].is_null());
 
     Command::cargo_bin("starbyte")

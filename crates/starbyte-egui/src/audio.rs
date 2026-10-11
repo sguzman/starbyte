@@ -22,9 +22,15 @@ const CHANNELS: u16 = 2;
 /// A bounded producer backlog; excess frames are discarded, never blocked.
 const MAX_PENDING_FRAMES: usize = 6;
 const AUDIO_RETRY_DELAY: Duration = Duration::from_secs(10);
+/// A slow device open must never replay seconds-old game audio.
+const MAX_FRAME_AGE: Duration = Duration::from_millis(150);
 
 enum AudioMessage {
-    Frame { generation: u64, pcm: Vec<i16> },
+    Frame {
+        generation: u64,
+        queued_at: Instant,
+        pcm: Vec<i16>,
+    },
     Clear,
 }
 
@@ -57,6 +63,7 @@ impl AudioOutput {
         }
         let _ = self.sender.try_send(AudioMessage::Frame {
             generation: self.generation.load(Ordering::Acquire),
+            queued_at: Instant::now(),
             pcm: samples.to_vec(),
         });
     }
@@ -122,6 +129,10 @@ fn retry_ready(retry_after: Option<Instant>, now: Instant) -> bool {
     retry_after.is_none_or(|deadline| now >= deadline)
 }
 
+fn frame_is_fresh(queued_at: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(queued_at) <= MAX_FRAME_AGE
+}
+
 fn audio_worker(receiver: Receiver<AudioMessage>, generation: Arc<AtomicU64>) {
     let mut device: Option<PlaybackDevice> = None;
     let mut retry_after: Option<Instant> = None;
@@ -138,12 +149,13 @@ fn audio_worker(receiver: Receiver<AudioMessage>, generation: Arc<AtomicU64>) {
 
         let AudioMessage::Frame {
             generation: frame_generation,
+            queued_at,
             pcm,
         } = message
         else {
             continue;
         };
-        if frame_generation != active_generation {
+        if frame_generation != active_generation || !frame_is_fresh(queued_at, Instant::now()) {
             continue;
         }
         if device.is_none()
@@ -164,7 +176,9 @@ fn audio_worker(receiver: Receiver<AudioMessage>, generation: Arc<AtomicU64>) {
         if let Some(output) = &device {
             // Device initialization can take time. Drop a frame that became
             // invalid while the worker was waiting for system audio.
-            if generation.load(Ordering::Acquire) == frame_generation {
+            if generation.load(Ordering::Acquire) == frame_generation
+                && frame_is_fresh(queued_at, Instant::now())
+            {
                 output.enqueue(&pcm);
             } else {
                 output.clear();
@@ -216,7 +230,9 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use super::{AudioOutput, pcm16_stereo_to_float, retry_ready, speaker_test_tone};
+    use super::{
+        AudioOutput, frame_is_fresh, pcm16_stereo_to_float, retry_ready, speaker_test_tone,
+    };
 
     #[test]
     fn stereo_conversion_preserves_channel_order_and_signed_full_scale() {
@@ -259,6 +275,15 @@ mod tests {
         let after = output.generation.load(Ordering::Acquire);
         assert_eq!(after, before + 1);
         output.enqueue(&[0, 0]);
+    }
+
+    #[test]
+    fn delayed_audio_frames_are_expired_before_hardware_queueing() {
+        let t0 = Instant::now();
+        assert!(frame_is_fresh(t0, t0));
+        assert!(frame_is_fresh(t0, t0 + Duration::from_millis(150)));
+        assert!(!frame_is_fresh(t0, t0 + Duration::from_millis(151)));
+        assert!(!frame_is_fresh(t0, t0 + Duration::from_secs(2)));
     }
 
     #[test]

@@ -1271,6 +1271,50 @@ mod tests {
     }
 
     #[test]
+    fn echo_writes_spare_f8_f9_after_real_spc_mmio_configuration() {
+        let mut apu = Apu::default();
+        for (address, value) in [
+            (0x0200, 0),
+            (0x0201, 3),
+            (0x0202, 0),
+            (0x0203, 3),
+            (0x0300, 0xc3),
+        ] {
+            apu.write_spc_ram(address, value);
+        }
+        for offset in 1..9 {
+            apu.write_spc_ram(0x0300 + offset, 0x77);
+        }
+        apu.write_spc_bus(0x00f8, 0xa5);
+        apu.write_spc_bus(0x00f9, 0x5a);
+        for (register, value) in [
+            (0x5d, 2),
+            (0x00, 0x7f),
+            (0x01, 0x7f),
+            (0x03, 0x10),
+            (0x07, 0x7f),
+            (0x4d, 1),
+            (0x6d, 0),
+            (0x7d, 1),
+            (0x6c, 0),
+            (0x4c, 1),
+        ] {
+            apu.write_spc_bus(0x00f2, register);
+            apu.write_spc_bus(0x00f3, value);
+        }
+        let mut audio = Vec::new();
+        let clocks = (21_477_272_u64 * 65).div_ceil(32_000);
+        apu.append_dsp_audio(clocks, &mut audio);
+        assert!(audio.iter().any(|&sample| sample != 0) == false);
+        assert_eq!(apu.read_spc_ram(0x00f8), 0xa5);
+        assert_eq!(apu.read_spc_ram(0x00f9), 0x5a);
+        assert_ne!(apu.read_spc_ram(0x00fc), 0);
+        // These are regular SMP RAM bytes for software writes.
+        apu.write_spc_bus(0x00f8, 0x42);
+        assert_eq!(apu.read_spc_ram(0x00f8), 0x42);
+    }
+
+    #[test]
     fn synthetic_spc700_arithmetic_program_configures_dsp_and_produces_audio() {
         let mut apu = Apu::default();
         // Copyright-free SPC sample directory and filter-zero looping BRR.

@@ -275,8 +275,15 @@ impl Emulator {
                 }
             }
         }
+        // Restored APU data is not permission to enable experimental host
+        // execution in an ordinary GUI or CLI session. Only a caller that
+        // explicitly enabled the probe may keep it active through a load.
+        let host_driver_was_opted_in = self.apu.isolated_host_clocked_driver_enabled();
         self.cpu = state.cpu;
         self.apu = state.apu;
+        if !host_driver_was_opted_in {
+            self.apu.disable_isolated_host_clocked_driver();
+        }
         self.system = state.system;
         self.system.sync_apu_ports_from_runtime(&self.apu);
         Ok(())
@@ -980,6 +987,25 @@ mod tests {
                 .run_isolated_uploaded_spc_program(1, &mut Vec::new())
                 .is_err()
         );
+    }
+
+    #[test]
+    fn loading_diagnostic_state_cannot_enable_host_sound_without_explicit_opt_in() {
+        let mut diagnostic = Emulator::default();
+        diagnostic.load_rom(Cartridge::from_bytes(rom_bytes(), None).unwrap());
+        diagnostic.enable_isolated_apu_driver_probe().unwrap();
+        assert!(diagnostic.apu.isolated_host_clocked_driver_enabled());
+        let saved = diagnostic.save_state().unwrap();
+
+        let mut ordinary = Emulator::default();
+        ordinary.load_state(&saved).unwrap();
+        assert!(!ordinary.apu.isolated_host_clocked_driver_enabled());
+        assert!(ordinary.isolated_apu_upload().is_some());
+
+        let mut opted_in = Emulator::default();
+        opted_in.enable_isolated_apu_driver_probe().unwrap();
+        opted_in.load_state(&saved).unwrap();
+        assert!(opted_in.apu.isolated_host_clocked_driver_enabled());
     }
 
     #[test]

@@ -1409,7 +1409,10 @@ mod tests {
         // Huge external time advances must never run an unbounded sound
         // loop in one host step; the scheduler caps each call at 4096.
         let mut capped = host_clocked.clone();
-        assert_eq!(capped.execute_host_clocked_spc(21_477_272 * 8).unwrap(), 4096);
+        assert_eq!(
+            capped.execute_host_clocked_spc(21_477_272 * 8).unwrap(),
+            4096
+        );
         assert_eq!(capped.isolated_spc700_status().unwrap().instructions, 4096);
 
         let mut host_audio = Vec::new();

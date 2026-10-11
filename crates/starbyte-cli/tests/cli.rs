@@ -717,6 +717,32 @@ fn cli_uploaded_spc_driver_generates_nonzero_stereo_wav_from_synthetic_rom() {
     );
     assert!(pcm.iter().any(|sample| *sample != 0));
     assert!(!dir.path().join("three-block-audio.srm").exists());
+
+    // Two-frame WAV output must concatenate successive DSP frames rather
+    // than retain only the last frame from the emulator's transient buffer.
+    let two_frame_wav = dir.path().join("output/audio-two-frames.wav");
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "run",
+            rom.to_str().unwrap(),
+            "--frames",
+            "2",
+            "--no-save-ram",
+            "--apu-upload-probe",
+            "--apu-execute-driver",
+            "--audio-wav",
+            two_frame_wav.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let combined = fs::read(two_frame_wav).unwrap();
+    assert!(combined.len() > bytes.len());
+    assert_eq!(&combined[44..bytes.len()], &bytes[44..]);
+    assert_eq!(
+        u32::from_le_bytes(combined[40..44].try_into().unwrap()) as usize,
+        combined.len() - 44
+    );
 }
 
 #[test]

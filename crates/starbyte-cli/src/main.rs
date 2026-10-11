@@ -238,6 +238,12 @@ struct RunArgs {
     #[arg(long)]
     no_save_ram: bool,
 
+    /// Experimental SPC700 IPL mailbox capture, replacing bootstrap shortcuts
+    /// for this run only. Does not automatically execute game sound drivers.
+    /// Requires --no-save-ram to prevent altering existing game saves.
+    #[arg(long, requires = "no_save_ram", conflicts_with = "load_state")]
+    apu_upload_probe: bool,
+
     /// One-based frame to record every CPU instruction and its bus events.
     #[arg(long, requires = "trace_out", value_parser = clap::value_parser!(u32).range(1..))]
     trace_frame: Option<u32>,
@@ -978,6 +984,9 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
     emulator.load_rom(cartridge);
     maybe_load_save_ram(&mut emulator, save_ram_path.as_deref())?;
     maybe_load_state(&mut emulator, load_state_path.as_deref())?;
+    if args.apu_upload_probe {
+        emulator.enable_isolated_apu_upload_probe();
+    }
     if let Some(controller) = args.controller1.as_deref() {
         emulator.set_controller1(parse_controller_state(controller)?);
     }
@@ -1483,12 +1492,21 @@ fn build_apu_io_activity_report(emulator: &starbyte_core::Emulator) -> serde_jso
         cpu_write_counts.insert(label, json!(observability.apu_port_write_counts()[port]));
     }
 
-    json!({
+    let mut report = json!({
         "cpu_to_apu_ports": emulator.cpu_to_apu_ports(),
         "apu_to_cpu_ports": emulator.apu_to_cpu_ports(),
         "cpu_read_counts": cpu_read_counts,
         "cpu_write_counts": cpu_write_counts,
-    })
+    });
+    if let Some(upload) = emulator.isolated_apu_upload() {
+        report["isolated_ipl_upload"] = json!({
+            "phase": format!("{:?}", upload.phase()).to_ascii_lowercase(),
+            "bytes_written": upload.bytes_written(),
+            "blocks_finished": upload.blocks_finished(),
+            "entrypoint": upload.entrypoint(),
+        });
+    }
+    report
 }
 
 fn framebuffer_hash(framebuffer: &starbyte_core::ppu::FrameBuffer) -> u64 {

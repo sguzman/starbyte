@@ -1050,7 +1050,7 @@ mod tests {
             (0x2c, 0x7f),
             (0x3c, 0x7f),
             (0x4d, 0x01), // EON voice 0.
-            (0x0f, 0x7f), // FIR tap 0.
+            (0x7f, 0x7f), // FIR7: newest echo sample.
             (0x6d, 0x50), // ESA $5000.
             (0x7d, 0x01), // 512 stereo-frame delay.
             (0x6c, 0x00), // Permit echo writes.

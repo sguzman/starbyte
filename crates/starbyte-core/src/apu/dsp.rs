@@ -743,14 +743,11 @@ mod tests {
         let registers = [0_u8; 128];
         // Direct GAIN 1 sets envelope=16; (-2 * 16) >> 11 is -1,
         // and the DSP's low-bit mask makes the output -2, not zero.
-        let (negative, _) =
-            voice.clock(0, 0, 0, 0, 1, 0, Some(-2), &[], &registers);
+        let (negative, _) = voice.clock(0, 0, 0, 0, 1, 0, Some(-2), &[], &registers);
         assert_eq!(negative, -2);
-        let (positive, _) =
-            voice.clock(0, 0, 0, 0, 1, 0, Some(2), &[], &registers);
+        let (positive, _) = voice.clock(0, 0, 0, 0, 1, 0, Some(2), &[], &registers);
         assert_eq!(positive, 0);
-        let (loud, _) =
-            voice.clock(0, 0, 0, 0, 0x7f, 0, Some(-16_384), &[], &registers);
+        let (loud, _) = voice.clock(0, 0, 0, 0, 0x7f, 0, Some(-16_384), &[], &registers);
         assert!(loud < -1000);
         assert_eq!(loud & 1, 0);
     }

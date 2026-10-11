@@ -437,10 +437,11 @@ impl Apu {
             self.spc700_steps = self.spc700_steps.saturating_add(dummy_steps);
         }
         if let Some(upload) = self.ipl_upload.as_mut() {
-            let event = upload.observe(
+            let event = upload.observe_with_ram_writes(
                 self.cpu_to_apu_ports,
                 &mut self.apu_to_cpu_ports,
                 &mut self.spc_ram,
+                self.spc_test & 0x02 != 0,
             );
             match event {
                 UploadEvent::ByteWritten { address, value }
@@ -1975,6 +1976,43 @@ mod tests {
         assert_eq!(apu.read_dsp_register(0x0c), 0x5a);
         assert_eq!(apu.read_spc_ram(0x00f3), 0x5a);
         assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 256);
+    }
+
+    #[test]
+    fn isolated_ipl_upload_respects_test_ram_protection_after_mmio_block() {
+        let mut apu = Apu::default();
+        apu.reset();
+        apu.enable_isolated_ipl_upload();
+        // Program TEST=$00 directly through the original IPL bus.
+        for (port, value) in [(1, 1), (2, 0xf0), (3, 0), (0, 0xcc)] {
+            apu.write_cpu_port(port, value).unwrap();
+        }
+        apu.step_master_cycles(6);
+        apu.write_cpu_port(1, 0).unwrap();
+        apu.write_cpu_port(0, 0).unwrap();
+        apu.step_master_cycles(6);
+        assert_eq!(apu.read_spc_ram(0x00f0), 0);
+
+        // New block at $3000, index zero should acknowledge but not store.
+        for (port, value) in [(1, 1), (2, 0), (3, 0x30), (0, 2)] {
+            apu.write_cpu_port(port, value).unwrap();
+        }
+        apu.step_master_cycles(6);
+        apu.write_cpu_port(1, 0x77).unwrap();
+        apu.write_cpu_port(0, 0).unwrap();
+        apu.step_master_cycles(6);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0);
+        assert_eq!(apu.read_spc_ram(0x3000), 0);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 2);
+
+        // TEST can be reenabled through the real SPC bus; the next IPL
+        // byte then uses the newly writable ordinary RAM again.
+        apu.write_spc_bus(0x00f0, 0x0a);
+        apu.write_cpu_port(1, 0x55).unwrap();
+        apu.write_cpu_port(0, 1).unwrap();
+        apu.step_master_cycles(6);
+        assert_eq!(apu.read_spc_ram(0x3001), 0x55);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 3);
     }
 
     #[test]

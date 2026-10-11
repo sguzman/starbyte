@@ -221,11 +221,20 @@ impl Dsp {
                 &self.registers,
             );
             previous_voice_output = sample;
-            left += i64::from(sample) * i64::from(self.registers[base] as i8);
-            right += i64::from(sample) * i64::from(self.registers[base + 1] as i8);
+            // The DSP applies each signed voice volume before adding it to
+            // the main and echo accumulators. Both accumulators saturate to
+            // 16 bits after every voice, not just after all eight voices.
+            // Keeping excess precision here can turn loud, cancelling
+            // voices into clipping that does not occur on the hardware.
+            let voice_left =
+                (i64::from(sample) * i64::from(self.registers[base] as i8)) >> 7;
+            let voice_right =
+                (i64::from(sample) * i64::from(self.registers[base + 1] as i8)) >> 7;
+            left = i64::from(clamp_i16(left + voice_left));
+            right = i64::from(clamp_i16(right + voice_right));
             if self.registers[0x4d] & (1 << index) != 0 {
-                echo_left += i64::from(sample) * i64::from(self.registers[base] as i8);
-                echo_right += i64::from(sample) * i64::from(self.registers[base + 1] as i8);
+                echo_left = i64::from(clamp_i16(echo_left + voice_left));
+                echo_right = i64::from(clamp_i16(echo_right + voice_right));
             }
             self.registers[base + 8] = (self.voices[index].envelope >> 4) as u8;
             self.registers[base + 9] = (i32::from(sample) >> 8) as u8;
@@ -236,10 +245,9 @@ impl Dsp {
         // DSP volume multipliers are signed fixed-point shifts, including
         // their negative rounding. Truncating Rust integer division loses
         // low-amplitude negative samples and changes the echo-send signal.
-        let left = ((left >> 7) * i64::from(self.registers[0x0c] as i8)) >> 7;
-        let right = ((right >> 7) * i64::from(self.registers[0x1c] as i8)) >> 7;
-        let (left, right) =
-            self.process_echo(ram, [left, right], [echo_left >> 7, echo_right >> 7]);
+        let left = (left * i64::from(self.registers[0x0c] as i8)) >> 7;
+        let right = (right * i64::from(self.registers[0x1c] as i8)) >> 7;
+        let (left, right) = self.process_echo(ram, [left, right], [echo_left, echo_right]);
         if self.registers[0x6c] & 0x40 != 0 {
             (0, 0)
         } else {
@@ -550,6 +558,25 @@ mod tests {
         dsp.write_register(0x3d, 1, &ram);
         dsp.write_register(0x4c, 1, &ram);
         assert_eq!(dsp.next_stereo_pair(&mut ram), (-1, 0));
+    }
+
+    #[test]
+    fn multiple_voices_saturate_in_order_before_master_volume() {
+        let (mut dsp, mut ram) = looping_sample();
+        // NON has a fixed negative sample while the initial LFSR rate is
+        // zero. Three negative voice volumes saturate the positive mix;
+        // a fourth positive volume then subtracts from that saturated
+        // value. Summing unbounded voice products first would clip to
+        // full scale instead of yielding a small positive output.
+        for index in 0..4 {
+            let base = (index * 16) as u8;
+            dsp.write_register(base, if index < 3 { 0x80 } else { 0x7f }, &ram);
+            dsp.write_register(base + 1, 0, &ram);
+            dsp.write_register(base + 7, 0x7f, &ram);
+        }
+        dsp.write_register(0x3d, 0x0f, &ram); // NON on four voices.
+        dsp.write_register(0x4c, 0x0f, &ram);
+        assert_eq!(dsp.next_stereo_pair(&mut ram), (505, 0));
     }
 
     #[test]

@@ -463,7 +463,10 @@ impl Apu {
                     // including byte zero implicitly after a zero-valued
                     // block marker. The decoder has already copied RAM;
                     // replay the MMIO side effect (including DSP writes).
-                    self.write_spc_bus(address, value);
+                    // Boot IPL executes in direct page zero regardless
+                    // of any stale interpreter PSW in the host harness.
+                    // TEST writes must see the boot loader's clear P flag.
+                    self.write_spc_bus_with_psw(address, value, 0x02);
                 }
                 UploadEvent::EntryPoint { address } => {
                     // The driver was uploaded but is NOT automatically
@@ -2036,6 +2039,9 @@ mod tests {
     fn isolated_ipl_upload_respects_test_ram_protection_after_mmio_block() {
         let mut apu = Apu::default();
         apu.reset();
+        // The IPL's boot-time P flag is clear even if the independent
+        // interpreted SPC700 state was previously in direct-page one.
+        apu.spc700.psw |= 0x20;
         apu.enable_isolated_ipl_upload();
         // Program TEST=$00 directly through the original IPL bus.
         for (port, value) in [(1, 1), (2, 0xf0), (3, 0), (0, 0xcc)] {

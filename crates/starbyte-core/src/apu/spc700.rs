@@ -2251,6 +2251,59 @@ mod accumulator_alu_tests {
     }
 
     #[test]
+    fn all_256_opcodes_match_hardware_reference_cycle_count_ranges() {
+        // Baseline cycles from the Nintendo SPC700 manual's 256-opcode
+        // table (C-4 through C-20), independently transcribed into
+        // sony-spc700-python/conformance/hardware.json.
+        // Hardware bus recordings supersede its known MOVW dp,YA $DA
+        // four-cycle manual erratum: the actual store takes five.
+        // Conditional branches take exactly two additional cycles.
+        const MIN_CYCLES: [usize; 256] = [
+             2,  8,  4,  5,  3,  4,  3,  6,  2,  6,  5,  4,  5,  4,  6,  8,
+             2,  8,  4,  5,  4,  5,  5,  6,  5,  5,  6,  5,  2,  2,  4,  6,
+             2,  8,  4,  5,  3,  4,  3,  6,  2,  6,  5,  4,  5,  4,  5,  4,
+             2,  8,  4,  5,  4,  5,  5,  6,  5,  5,  6,  5,  2,  2,  3,  8,
+             2,  8,  4,  5,  3,  4,  3,  6,  2,  6,  4,  4,  5,  4,  6,  6,
+             2,  8,  4,  5,  4,  5,  5,  6,  5,  5,  4,  5,  2,  2,  4,  3,
+             2,  8,  4,  5,  3,  4,  3,  6,  2,  6,  4,  4,  5,  4,  5,  5,
+             2,  8,  4,  5,  4,  5,  5,  6,  5,  5,  5,  5,  2,  2,  3,  6,
+             2,  8,  4,  5,  3,  4,  3,  6,  2,  6,  5,  4,  5,  2,  4,  5,
+             2,  8,  4,  5,  4,  5,  5,  6,  5,  5,  5,  5,  2,  2, 12,  5,
+             3,  8,  4,  5,  3,  4,  3,  6,  2,  6,  4,  4,  5,  2,  4,  4,
+             2,  8,  4,  5,  4,  5,  5,  6,  5,  5,  5,  5,  2,  2,  3,  4,
+             3,  8,  4,  5,  4,  5,  4,  7,  2,  5,  6,  4,  5,  2,  4,  9,
+             2,  8,  4,  5,  5,  6,  6,  7,  4,  5,  5,  5,  2,  2,  6,  3,
+             2,  8,  4,  5,  3,  4,  3,  6,  2,  4,  5,  3,  4,  3,  4,  3,
+             2,  8,  4,  5,  4,  5,  5,  6,  3,  4,  5,  4,  2,  2,  4,  3,
+        ];
+        for opcode in 0_u8..=255 {
+            for (a, psw, x, y, operand) in [
+                (0x40, 0x01, 3, 5, 0),
+                (0x80, 0xff, 0xff, 0xff, 0xff),
+                (0, 0, 0, 0, 0x7f),
+            ] {
+                let (cpu, trace, _) =
+                    run_indexed(opcode, &[operand, operand], a, psw, x, y, &[]);
+                let baseline = MIN_CYCLES[usize::from(opcode)];
+                let conditional = opcode & 0x0f == 0x03
+                    || matches!(
+                        opcode,
+                        0x10 | 0x30 | 0x50 | 0x70 | 0x90 | 0xb0 | 0xd0 | 0xf0
+                            | 0x2e | 0xde | 0x6e | 0xfe
+                    );
+                let actual = trace.len();
+                assert!(
+                    actual == baseline || (conditional && actual == baseline + 2),
+                    "SPC700 opcode {opcode:02X} with PSW={psw:02X} and operand {operand:02X}: \
+                     {actual} bus cycles, reference {baseline}{}",
+                    if conditional { " or +2 when taken" } else { "" }
+                );
+                assert_eq!(cpu.cycles(), actual as u64);
+            }
+        }
+    }
+
+    #[test]
     fn immediate_alu_updates_flags_for_carry_halfcarry_and_signed_overflow() {
         for (opcode, a, rhs, initial_psw, expected_a, expected_nzcvh) in [
             (0x08, 0xF0, 0x0F, 0x00, 0xFF, 0x80),

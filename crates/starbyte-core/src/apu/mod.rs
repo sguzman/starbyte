@@ -409,6 +409,9 @@ impl Apu {
     /// Neither path may be enabled implicitly for ordinary gameplay.
     pub fn enable_isolated_ipl_upload(&mut self) {
         self.ipl_upload = Some(IplUpload::default());
+        // A fresh upload must not inherit sub-cycle sound-CPU time from an
+        // earlier standalone diagnostic on the same APU instance.
+        self.isolated_spc_master_phase = 0;
         self.host_clocked_spc_enabled = false;
         self.host_clocked_spc_phase = 0;
         self.host_clocked_spc_credit = 0;
@@ -2130,6 +2133,35 @@ mod tests {
         apu.append_dsp_audio(214_773, &mut samples);
         assert!(samples.iter().any(|&value| value > 1000));
         assert!(samples.chunks_exact(2).all(|pair| pair[0] == pair[1]));
+    }
+
+    #[test]
+    fn new_isolated_upload_discards_previous_standalone_cpu_clock_fraction() {
+        let mut apu = Apu::default();
+        apu.enable_isolated_ipl_upload();
+        for (port, value) in [(1, 1), (2, 0), (3, 4), (0, 0xcc)] {
+            apu.write_cpu_port(port, value).unwrap();
+        }
+        apu.step_master_cycles(6);
+        apu.write_cpu_port(1, 0).unwrap(); // NOP, two SPC700 cycles.
+        apu.write_cpu_port(0, 0).unwrap();
+        apu.step_master_cycles(6);
+        for (port, value) in [(1, 0), (2, 0), (3, 4), (0, 2)] {
+            apu.write_cpu_port(port, value).unwrap();
+        }
+        apu.step_master_cycles(6);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().entrypoint(), Some(0x0400));
+
+        let mut pcm = Vec::new();
+        assert_eq!(apu.run_isolated_uploaded_spc_program(1, &mut pcm).unwrap(), 1);
+        assert_ne!(apu.isolated_spc_master_phase, 0);
+        assert_eq!(apu.isolated_spc700_status().unwrap().instructions, 1);
+
+        apu.enable_isolated_ipl_upload();
+        assert_eq!(apu.isolated_spc_master_phase, 0);
+        assert!(apu.isolated_spc700_status().is_none());
+        assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 0);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().entrypoint(), None);
     }
 
     #[test]

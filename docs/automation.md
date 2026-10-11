@@ -56,8 +56,8 @@ cargo run --release -p starbyte-cli -- run /path/to/game.sfc --frames 1 \
 To advance the uploaded sound program alongside 65816 master clocks **only in this diagnostic run**, additionally pass `--apu-execute-driver`. This switch requires `--apu-upload-probe`, which itself requires `--no-save-ram`; state loading remains disallowed. The scheduler uses a persisted fractional sound-CPU clock and a bounded, signed instruction-cycle credit. It does not also clock timers or synthesize extra samples; the ordinary emulator frame already advances those. After handoff, the `spc700_execution` report exposes actual instructions and cycles rather than placeholder clock steps.
 
 ```sh
-cargo run --release -p starbyte-cli -- run /path/to/game.sfc --frames 1 \\
-  --no-save-ram --apu-upload-probe --apu-execute-driver \\
+cargo run --release -p starbyte-cli -- run /path/to/game.sfc --frames 1 \
+  --no-save-ram --apu-upload-probe --apu-execute-driver \
   --frame-log /tmp/starbyte-sound-driver.jsonl
 ```
 

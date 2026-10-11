@@ -175,8 +175,7 @@ impl Dsp {
             let pitch = (u16::from(self.registers[base + 3] & 0x3f) << 8)
                 | u16::from(self.registers[base + 2]);
             let pitch = if index > 0 && self.registers[0x2d] & (1 << index) != 0 {
-                let modulation =
-                    ((i32::from(previous_voice_output) >> 5) * i32::from(pitch)) >> 10;
+                let modulation = ((i32::from(previous_voice_output) >> 5) * i32::from(pitch)) >> 10;
                 (i32::from(pitch) + modulation).clamp(0, 0x7fff) as u16
             } else {
                 pitch
@@ -576,7 +575,10 @@ mod tests {
         assert_eq!(base.voices[0].index, modulated.voices[0].index);
         assert_eq!(base.voices[0].fraction, modulated.voices[0].fraction);
         assert_ne!(base.voices[1].fraction, modulated.voices[1].fraction);
-        assert_eq!(base.voices[1].fraction, ignored_voice_zero.voices[1].fraction);
+        assert_eq!(
+            base.voices[1].fraction,
+            ignored_voice_zero.voices[1].fraction
+        );
     }
 
     #[test]
@@ -606,7 +608,10 @@ mod tests {
         let saved = serde_json::to_string(&modulated).unwrap();
         let mut restored: Dsp = serde_json::from_str(&saved).unwrap();
         for _ in 0..100 {
-            assert_eq!(modulated.next_stereo_pair(&ram), restored.next_stereo_pair(&ram));
+            assert_eq!(
+                modulated.next_stereo_pair(&ram),
+                restored.next_stereo_pair(&ram)
+            );
         }
         assert_eq!(modulated.voices[1].index, restored.voices[1].index);
         assert_eq!(modulated.voices[1].fraction, restored.voices[1].fraction);

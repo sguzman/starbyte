@@ -356,10 +356,16 @@ impl Voice {
                 2 => decoded + ((self.previous * 61) >> 5) - ((self.older * 15) >> 4),
                 _ => decoded + ((self.previous * 115) >> 6) - ((self.older * 13) >> 4),
             };
-            let output = predicted.clamp(-16384, 16383);
-            self.samples[i] = (output << 1) as i16;
+            // The BRR filter saturates to signed 16 bits *before* the
+            // hardware's extra left shift. That shift then wraps as i16;
+            // clamping to 15 bits instead changes loud/filtered waveforms.
+            let clipped = predicted.clamp(i32::from(i16::MIN), i32::from(i16::MAX));
+            let sample = (clipped * 2) as i16;
+            self.samples[i] = sample;
             self.older = self.previous;
-            self.previous = output;
+            // Subsequent filters consume the wrapped decoded sample, not
+            // the unwrapped or initially clipped intermediate value.
+            self.previous = i32::from(sample) >> 1;
         }
     }
 }
@@ -399,6 +405,27 @@ mod tests {
         dsp.write_register(0x0c, 0x7f, &ram);
         dsp.write_register(0x1c, 0x7f, &ram);
         (dsp, ram)
+    }
+
+    #[test]
+    fn brr_filtered_samples_wrap_after_signed_saturation() {
+        let mut ram = vec![0_u8; 65_536];
+        ram[0x300] = 0x08; // Zero BRR nibbles, filter 2.
+        let mut voice = super::Voice {
+            address: 0x300,
+            previous: 15_000,
+            ..super::Voice::default()
+        };
+        voice.decode_block(&ram);
+        let predicted = (15_000 * 61) >> 5;
+        let wrapped = (predicted * 2) as i16;
+        assert!(wrapped < 0);
+        assert_eq!(voice.samples[0], wrapped);
+        // Filter history must contain the signed, *wrapped* sample. Otherwise
+        // the next BRR sample has the wrong predictor sign.
+        assert!(voice.samples[1] > 0);
+        assert_eq!(voice.older, i32::from(voice.samples[14]) >> 1);
+        assert_eq!(voice.previous, i32::from(voice.samples[15]) >> 1);
     }
 
     #[test]

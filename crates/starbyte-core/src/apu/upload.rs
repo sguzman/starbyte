@@ -379,6 +379,52 @@ mod tests {
     }
 
     #[test]
+    fn ipl_accepts_forward_128_marker_at_wrapped_index_zero() {
+        let mut h = Harness::new();
+        h.kick(0x2000);
+        // After 256 data bytes, the next expected index is $00.
+        for index in 0..256_u16 {
+            h.send_byte(index as u8, index as u8, 0x2000 + index);
+        }
+        h.cpu[1] = 1;
+        h.cpu[2] = 0;
+        h.cpu[3] = 0x40;
+        // CMP $00-$80 = $80 sets N, which takes the IPL block end.
+        assert_eq!(
+            h.send(0x80),
+            UploadEvent::NextBlock {
+                destination: 0x4000
+            }
+        );
+        assert_eq!(h.transfer.blocks_finished(), 1);
+        assert_eq!(h.transfer.bytes_written(), 256);
+        h.send_byte(0, 0x55, 0x4000);
+    }
+
+    #[test]
+    fn ignored_index_retains_upload_state_across_serialization() {
+        let mut h = Harness::new();
+        h.kick(0x2200);
+        h.send_byte(0, 0x41, 0x2200);
+        h.send_byte(1, 0x42, 0x2201);
+        h.cpu[1] = 1;
+        h.cpu[2] = 0;
+        h.cpu[3] = 0x40;
+        assert_eq!(h.send(0), UploadEvent::None);
+        let state = serde_json::to_string(&h.transfer).unwrap();
+        h.transfer = serde_json::from_str(&state).unwrap();
+        assert_eq!(h.send(0), UploadEvent::None);
+        assert_eq!(h.spc[0], 1);
+        assert_eq!(
+            h.send(3),
+            UploadEvent::NextBlock {
+                destination: 0x4000
+            }
+        );
+        assert_eq!(&h.ram[0x2200..0x2202], &[0x41, 0x42]);
+    }
+
+    #[test]
     fn mid_transfer_serialization_keeps_expected_ack_index() {
         let mut h = Harness::new();
         h.kick(0x5000);

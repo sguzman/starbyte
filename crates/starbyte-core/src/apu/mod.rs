@@ -1599,6 +1599,37 @@ mod tests {
     }
 
     #[test]
+    fn isolated_ipl_upload_to_output_mailboxes_clobbers_the_index_ack() {
+        let mut apu = Apu::default();
+        apu.reset();
+        apu.enable_isolated_ipl_upload();
+        for (port, value) in [(1, 1), (2, 0xf4), (3, 0), (0, 0xcc)] {
+            apu.write_cpu_port(port, value).unwrap();
+        }
+        apu.step_master_cycles(6);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0xcc);
+
+        // IPL first acknowledges index zero on SPC port 0, then its
+        // MOV [$00]+Y,A writes to $F4, overwriting that acknowledgement.
+        apu.write_cpu_port(1, 0x42).unwrap();
+        apu.write_cpu_port(0, 0).unwrap();
+        apu.step_master_cycles(6);
+        assert_eq!(apu.read_spc_ram(0x00f4), 0x42);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0x42);
+        assert_eq!(apu.read_spc_bus(0x00f4), 0); // CPU input was zero.
+
+        // Writing to $F5 changes output port 1, while the ordinary
+        // byte-index acknowledgement remains visible on output port 0.
+        apu.write_cpu_port(1, 0x53).unwrap();
+        apu.write_cpu_port(0, 1).unwrap();
+        apu.step_master_cycles(6);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 1);
+        assert_eq!(apu.read_apu_port(1).unwrap(), 0x53);
+        assert_eq!(apu.read_spc_ram(0x00f5), 0x53);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 2);
+    }
+
+    #[test]
     fn isolated_ipl_zero_block_marker_writes_implicit_byte_through_dsp_mmio() {
         let mut apu = Apu::default();
         apu.reset();

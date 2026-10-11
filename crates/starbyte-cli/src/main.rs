@@ -1242,7 +1242,9 @@ fn write_pcm16_stereo_wav(path: &Path, samples: &[i16]) -> Result<()> {
         .checked_mul(std::mem::size_of::<i16>())
         .and_then(|size| u32::try_from(size).ok())
         .context("WAV data exceeds RIFF 32-bit size limit")?;
-    let riff_size = data_size.checked_add(36).context("WAV RIFF size overflow")?;
+    let riff_size = data_size
+        .checked_add(36)
+        .context("WAV RIFF size overflow")?;
     ensure_parent_dir(path)?;
     let file = std::fs::File::create(path)
         .with_context(|| format!("failed to create diagnostic WAV at {}", path.display()))?;
@@ -2002,7 +2004,10 @@ mod tests {
         let bytes = std::fs::read(&wav).unwrap();
         assert_eq!(bytes.len(), 52);
         assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 44);
-        assert_eq!(u32::from_le_bytes(bytes[28..32].try_into().unwrap()), 128_000);
+        assert_eq!(
+            u32::from_le_bytes(bytes[28..32].try_into().unwrap()),
+            128_000
+        );
         assert_eq!(u32::from_le_bytes(bytes[40..44].try_into().unwrap()), 8);
         assert_eq!(&bytes[44..52], &[0x00, 0x80, 0xff, 0xff, 0, 0, 0xff, 0x7f]);
         assert!(write_pcm16_stereo_wav(&wav, &[100]).is_err());

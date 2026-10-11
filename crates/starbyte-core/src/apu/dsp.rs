@@ -1234,33 +1234,13 @@ mod tests {
         // $7FFF. With a nearly complete fractional sample already due,
         // hardware clamps the *accumulator*, not the pitch register.
         dsp.voices[0].fraction = 0x0fff;
-        let _ = dsp.voices[0].clock(
-            0,
-            0x7fff,
-            0,
-            0,
-            0x7f,
-            0,
-            None,
-            &ram,
-            &dsp.registers,
-        );
+        let _ = dsp.voices[0].clock(0, 0x7fff, 0, 0, 0x7f, 0, None, &ram, &dsp.registers);
         assert_eq!(dsp.voices[0].index, 7);
         assert_eq!(dsp.voices[0].fraction, 0x0fff);
 
         // Ordinary unmodulated pitch retains exact one-sample stepping.
         dsp.write_register(0x4c, 1, &ram);
-        let _ = dsp.voices[0].clock(
-            0,
-            0x1000,
-            0,
-            0,
-            0x7f,
-            0,
-            None,
-            &ram,
-            &dsp.registers,
-        );
+        let _ = dsp.voices[0].clock(0, 0x1000, 0, 0, 0x7f, 0, None, &ram, &dsp.registers);
         assert_eq!(dsp.voices[0].index, 1);
         assert_eq!(dsp.voices[0].fraction, 0);
     }

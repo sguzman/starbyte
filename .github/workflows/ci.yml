@@ -8,6 +8,8 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux dependencies
@@ -22,6 +24,18 @@ jobs:
           name: starbyte-resolved-cargo-lock
           path: Cargo.lock
           retention-days: 1
+      # One-shot publishing step. Remove immediately after the generated
+      # audio dependency lockfile has been committed.
+      - name: Persist Cargo-generated audio lockfile
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.event.head_commit.message == 'build: persist generated audio lockfile'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Cargo.lock
+          if ! git diff --cached --quiet; then
+            git commit -m 'build: lock Cargo audio dependencies'
+            git push origin HEAD:main
+          fi
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy

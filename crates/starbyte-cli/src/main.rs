@@ -1626,6 +1626,7 @@ fn build_apu_io_activity_report(emulator: &starbyte_core::Emulator) -> serde_jso
         report["isolated_ipl_upload"] = json!({
             "phase": format!("{:?}", upload.phase()).to_ascii_lowercase(),
             "bytes_written": upload.bytes_written(),
+            "bytes_stored": upload.bytes_stored(),
             "blocks_finished": upload.blocks_finished(),
             "ignored_tokens": upload.ignored_tokens(),
             "expected_index": upload.expected_index(),
@@ -2090,6 +2091,7 @@ mod tests {
             true
         );
         assert_eq!(report["isolated_ipl_upload"]["bytes_written"], 0);
+        assert_eq!(report["isolated_ipl_upload"]["bytes_stored"], 0);
     }
 
     #[test]

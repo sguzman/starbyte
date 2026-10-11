@@ -1249,10 +1249,8 @@ impl Spc700 {
         let dp = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
         let low_address = self.direct_page_address(dp);
         let high_address = self.direct_page_address(dp.wrapping_add(1));
-        // MOVW dp,YA is a five-cycle read-modify-write on the low
-        // destination byte, followed by a high-byte write. Its dummy
-        // low read can trigger MMIO side effects.
-        self.push_read_trace(read, trace, low_address);
+        // MOVW dp,YA is a four-cycle store: opcode, dp operand,
+        // low write, high write. It does not read the destination.
         self.push_write_trace(write, trace, low_address, self.a);
         self.push_write_trace(write, trace, high_address, self.y);
         self.pc = self.pc.wrapping_add(2);
@@ -3044,7 +3042,7 @@ mod accumulator_alu_tests {
     }
 
     #[test]
-    fn movw_word_load_store_follow_five_cycle_smp_bus_order() {
+    fn movw_load_takes_five_cycles_but_store_takes_four_without_dummy_read() {
         let (cpu, trace, _) = run_indexed(
             0xba, &[0xff], 0, 0x31, 0, 0,
             &[(0x01ff, 0x66), (0x0100, 0x88)],
@@ -3061,15 +3059,12 @@ mod accumulator_alu_tests {
             0xda, &[0xff], 0x12, 0x31, 0, 0x34,
             &[(0x01ff, 0xa5), (0x0100, 0x5a)],
         );
-        assert_eq!(cpu.cycles(), 5);
-        assert_eq!(trace.len(), 5);
-        assert_eq!(trace[2].access, AccessKind::Read);
+        assert_eq!(cpu.cycles(), 4);
+        assert_eq!(trace.len(), 4);
+        assert_eq!(trace[2].access, AccessKind::Write);
         assert_eq!(trace[2].address, 0x01ff);
-        assert_eq!(trace[2].value, 0xa5);
         assert_eq!(trace[3].access, AccessKind::Write);
-        assert_eq!(trace[3].address, 0x01ff);
-        assert_eq!(trace[4].access, AccessKind::Write);
-        assert_eq!(trace[4].address, 0x0100);
+        assert_eq!(trace[3].address, 0x0100);
         assert_eq!(&[bytes[0x01ff], bytes[0x0100]], &[0x12, 0x34]);
     }
 

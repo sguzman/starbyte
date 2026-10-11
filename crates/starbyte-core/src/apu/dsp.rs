@@ -25,6 +25,10 @@ const ENVELOPE_OFFSETS: [u16; 32] = [
     536, 0, 1040, 536, 0, 1040, 536, 0, 1040, 0, 0,
 ];
 
+const fn initial_noise_seed() -> u16 {
+    0x4000
+}
+
 fn envelope_rate_ready(rate: u8, counter: u16) -> bool {
     let period = ENVELOPE_PERIODS[usize::from(rate)];
     period != 0 && (counter + ENVELOPE_OFFSETS[usize::from(rate)]) % period == 0
@@ -37,6 +41,9 @@ pub struct Dsp {
     /// Shared rate-table phase. Older save states resume at phase zero.
     #[serde(default)]
     envelope_counter: u16,
+    /// Shared 15-bit noise LFSR. The sound chip powers on with seed $4000.
+    #[serde(default = "initial_noise_seed")]
+    noise_lfsr: u16,
 }
 
 impl Default for Dsp {
@@ -45,6 +52,7 @@ impl Default for Dsp {
             registers: vec![0; REGISTER_COUNT],
             voices: vec![Voice::default(); VOICE_COUNT],
             envelope_counter: 0,
+            noise_lfsr: initial_noise_seed(),
         }
     }
 }
@@ -150,6 +158,13 @@ impl Dsp {
         } else {
             self.envelope_counter - 1
         };
+        // SNES NON uses one common 15-bit Fibonacci LFSR for all voices.
+        // FLG bits 0..4 select its clock rate from the envelope table.
+        if envelope_rate_ready(self.registers[0x6c] & 0x1f, self.envelope_counter) {
+            let feedback = (self.noise_lfsr ^ (self.noise_lfsr >> 1)) & 1;
+            self.noise_lfsr = (self.noise_lfsr >> 1) | (feedback << 14);
+        }
+        let noise_sample = (self.noise_lfsr << 1) as i16;
         let mut left = 0_i64;
         let mut right = 0_i64;
         for index in 0..VOICE_COUNT {
@@ -159,6 +174,7 @@ impl Dsp {
             let adsr1 = self.registers[base + 5];
             let adsr2 = self.registers[base + 6];
             let gain = self.registers[base + 7];
+            let noise = (self.registers[0x3d] & (1 << index) != 0).then_some(noise_sample);
             let sample = self.voices[index].clock(
                 index,
                 pitch,
@@ -166,6 +182,7 @@ impl Dsp {
                 adsr2,
                 gain,
                 self.envelope_counter,
+                noise,
                 ram,
                 &self.registers,
             );
@@ -212,6 +229,7 @@ impl Voice {
         adsr2: u8,
         gain: u8,
         counter: u16,
+        noise: Option<i16>,
         ram: &[u8],
         registers: &[u8],
     ) -> i16 {
@@ -221,7 +239,8 @@ impl Voice {
 
         self.advance_envelope(adsr1, adsr2, gain, counter);
 
-        let result = (i32::from(self.samples[self.index]) * self.envelope / 2048) as i16;
+        let waveform = noise.unwrap_or(self.samples[self.index]);
+        let result = (i32::from(waveform) * self.envelope / 2048) as i16;
         self.fraction += u32::from(pitch);
         while self.fraction >= PITCH_UNIT && self.active {
             self.fraction -= PITCH_UNIT;
@@ -520,6 +539,63 @@ mod tests {
         assert_eq!(dsp.voices[0].envelope, baseline);
         dsp.next_stereo_pair(&ram);
         assert_eq!(dsp.voices[0].envelope, baseline - 0x20);
+    }
+
+    #[test]
+    fn noise_lfsr_uses_shared_clock_and_serializes_without_reset() {
+        let (mut dsp, ram) = looping_sample();
+        dsp.write_register(0x4c, 1, &ram);
+        dsp.write_register(0x3d, 1, &ram); // NON voice 0.
+        dsp.write_register(0x6c, 0x1f, &ram); // Highest noise clock rate.
+        assert_eq!(dsp.noise_lfsr, 0x4000);
+        let first = dsp.next_stereo_pair(&ram);
+        assert_eq!(dsp.noise_lfsr, 0x2000);
+        assert!(first.0 > 0);
+        assert_eq!(first.0, first.1);
+        dsp.next_stereo_pair(&ram);
+        assert_eq!(dsp.noise_lfsr, 0x1000);
+
+        let snapshot = serde_json::to_string(&dsp).unwrap();
+        let mut restored: Dsp = serde_json::from_str(&snapshot).unwrap();
+        for _ in 0..128 {
+            assert_eq!(dsp.next_stereo_pair(&ram), restored.next_stereo_pair(&ram));
+            assert_eq!(dsp.noise_lfsr, restored.noise_lfsr);
+        }
+        assert_ne!(dsp.noise_lfsr, 0x4000);
+    }
+
+    #[test]
+    fn noise_rate_zero_holds_lfsr_while_non_toggles_waveform() {
+        let (mut dsp, ram) = looping_sample();
+        dsp.write_register(0x4c, 1, &ram);
+        dsp.write_register(0x6c, 0, &ram); // Rate zero never clocks LFSR.
+        dsp.write_register(0x3d, 1, &ram);
+        let noise_output = dsp.next_stereo_pair(&ram);
+        for _ in 0..4096 {
+            let _ = dsp.next_stereo_pair(&ram);
+        }
+        assert_eq!(dsp.noise_lfsr, 0x4000);
+        assert!(noise_output.0 < 0); // Signed 15-bit $4000.
+        dsp.write_register(0x3d, 0, &ram);
+        let sample_output = dsp.next_stereo_pair(&ram);
+        assert!(sample_output.0 > 0); // Original positive BRR sample.
+        assert_eq!(sample_output.0, sample_output.1);
+    }
+
+    #[test]
+    fn two_non_voices_share_the_same_noise_waveform() {
+        let (mut dsp, ram) = looping_sample();
+        dsp.write_register(0x10, 0x7f, &ram);
+        dsp.write_register(0x11, 0, &ram);
+        dsp.write_register(0x13, 0x10, &ram);
+        dsp.write_register(0x17, 0x7f, &ram);
+        dsp.write_register(0x3d, 0b11, &ram);
+        dsp.write_register(0x6c, 0x1f, &ram);
+        dsp.write_register(0x4c, 0b11, &ram);
+        let both = dsp.next_stereo_pair(&ram);
+        assert!(both.0 > 0);
+        assert!(both.1 > 0);
+        assert_eq!(both.0, both.1 * 2);
     }
 
     #[test]

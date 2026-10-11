@@ -1,6 +1,7 @@
 //! Native Wayland-first `egui` desktop frontend for Starbyte.
 
 mod app;
+mod audio;
 mod logging;
 mod worker;
 

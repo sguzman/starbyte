@@ -460,6 +460,7 @@ fn headless_upload_probe_captures_real_cpu_mailbox_transfer_in_run_report() {
     let rom = dir.path().join("upload-fixture.sfc");
     let probe_report = dir.path().join("probe.json");
     let driver_report = dir.path().join("driver.json");
+    let wav_path = dir.path().join("synthesized-audio.wav");
     let default_report = dir.path().join("default.json");
     write_test_rom(&rom);
 
@@ -499,6 +500,24 @@ fn headless_upload_probe_captures_real_cpu_mailbox_transfer_in_run_report() {
         ])
         .assert()
         .success();
+    // A WAV file is not available without the separate, explicit execution
+    // gate: transport-only probes must never write diagnostic sound.
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "run",
+            rom.to_str().unwrap(),
+            "--frames",
+            "0",
+            "--no-save-ram",
+            "--apu-upload-probe",
+            "--audio-wav",
+            wav_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+    assert!(!wav_path.exists());
+
     let report: serde_json::Value =
         serde_json::from_slice(&fs::read(&probe_report).unwrap()).unwrap();
     let upload = &report["apu_io_activity"]["isolated_ipl_upload"];
@@ -522,6 +541,8 @@ fn headless_upload_probe_captures_real_cpu_mailbox_transfer_in_run_report() {
             "--no-save-ram",
             "--apu-upload-probe",
             "--apu-execute-driver",
+            "--audio-wav",
+            wav_path.to_str().unwrap(),
             "--report-json",
             driver_report.to_str().unwrap(),
         ])
@@ -543,6 +564,22 @@ fn headless_upload_probe_captures_real_cpu_mailbox_transfer_in_run_report() {
     );
     assert_eq!(driver_status["audio_frame"]["nonzero_pairs"], 0);
     assert_eq!(driver_status["audio_frame"]["peak_absolute"], 0);
+    let wav = fs::read(&wav_path).unwrap();
+    assert_eq!(&wav[0..4], b"RIFF");
+    assert_eq!(&wav[8..12], b"WAVE");
+    assert_eq!(&wav[12..16], b"fmt ");
+    assert_eq!(u16::from_le_bytes(wav[20..22].try_into().unwrap()), 1);
+    assert_eq!(u16::from_le_bytes(wav[22..24].try_into().unwrap()), 2);
+    assert_eq!(u32::from_le_bytes(wav[24..28].try_into().unwrap()), 32_000);
+    assert_eq!(u16::from_le_bytes(wav[34..36].try_into().unwrap()), 16);
+    assert_eq!(&wav[36..40], b"data");
+    let payload_bytes = u32::from_le_bytes(wav[40..44].try_into().unwrap());
+    assert_eq!(wav.len(), 44 + payload_bytes as usize);
+    assert_eq!(
+        payload_bytes as u64,
+        driver_status["audio_frame"]["stereo_pairs"].as_u64().unwrap() * 4
+    );
+    assert!(wav[44..].iter().all(|byte| *byte == 0));
     assert!(
         driver_status["spc700_execution"]["cycles"]
             .as_u64()

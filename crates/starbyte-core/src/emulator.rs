@@ -830,7 +830,8 @@ mod tests {
         // Independent reference performs the six-clock APU sequence by
         // hand. The emulator helper must agree on exact serialized state,
         // stereo sample bytes, timer output, and instruction count.
-        let mut reference = emulator.apu.clone();
+        let initial_apu = emulator.apu.clone();
+        let mut reference = initial_apu.clone();
         let mut expected_pcm = Vec::new();
         for _ in 0..333 {
             reference.step_master_cycles(6);
@@ -849,6 +850,23 @@ mod tests {
             serde_json::to_value(&reference).unwrap()
         );
         assert!(emulator.isolated_apu_spc700_status().unwrap().instructions > 4);
+
+        // Splitting at an exact six-master-clock boundary and restoring
+        // the sound subsystem midway must keep timer/driver/sample phases.
+        let mut partial = Emulator::default();
+        partial.apu = initial_apu;
+        partial.advance_apu_for_cpu_step(1_002).unwrap();
+        let snapshot = serde_json::to_string(&partial.apu).unwrap();
+        let mut restored = Emulator::default();
+        restored.apu = serde_json::from_str(&snapshot).unwrap();
+        restored.advance_apu_for_cpu_step(998).unwrap();
+        let mut combined_pcm = partial.pending_audio.samples;
+        combined_pcm.extend_from_slice(&restored.pending_audio.samples);
+        assert_eq!(combined_pcm, emulator.pending_audio.samples);
+        assert_eq!(
+            serde_json::to_value(&restored.apu).unwrap(),
+            serde_json::to_value(&emulator.apu).unwrap()
+        );
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Audio processing unit bootstrap boundary.
 
 pub mod dsp;
+mod gaussian;
 pub mod spc700;
 mod timers;
 pub mod upload;

@@ -86,7 +86,7 @@ impl Spc700 {
         if self.halt_state != Spc700HaltState::Running {
             // Surface one bounded idle event instead of repeatedly fetching
             // the next opcode. Interrupt wakeup is not connected to runtime.
-            self.cycles = 1;
+            self.cycles = self.cycles.saturating_add(1);
             return Ok(vec![BusEvent {
                 address: u32::from(self.pc),
                 value: 0,
@@ -235,7 +235,7 @@ impl Spc700 {
             }),
         }?;
 
-        self.cycles = trace.len() as u64;
+        self.cycles = self.cycles.saturating_add(trace.len() as u64);
         Ok(trace)
     }
 
@@ -3281,6 +3281,35 @@ mod accumulator_alu_tests {
 #[cfg(test)]
 mod placeholder_tests {
     use super::Spc700;
+
+    #[test]
+    fn real_instruction_cycles_accumulate_across_multi_step_execution_and_sleep() {
+        let mut cpu = Spc700::default();
+        cpu.load_state(0x8000, 0, 0, 0, 0xef, 0);
+        let mut ram = vec![0_u8; 65_536];
+        ram[0x8000] = 0x00; // NOP (2 cycles)
+        ram[0x8001] = 0x00; // NOP (2 cycles)
+        ram[0x8002] = 0xef; // SLEEP (3 cycles)
+        for (pc, cycles) in [
+            (0x8001_u16, 2_u64),
+            (0x8002, 4),
+            (0x8003, 7),
+            (0x8003, 8), // halted: one bounded idle cycle
+        ] {
+            cpu.step_with_memory(
+                |address| ram[usize::from(address)],
+                |_, _| panic!("NOP and SLEEP must not write memory"),
+            )
+            .unwrap();
+            assert_eq!(cpu.pc, pc);
+            assert_eq!(cpu.cycles(), cycles);
+        }
+        let saved = serde_json::to_string(&cpu).unwrap();
+        let restored: Spc700 = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.cycles(), 8);
+        cpu.load_state(0x8000, 0, 0, 0, 0xef, 0);
+        assert_eq!(cpu.cycles(), 0);
+    }
 
     #[test]
     fn bulk_dummy_clock_matches_individual_steps_across_pc_wrap() {

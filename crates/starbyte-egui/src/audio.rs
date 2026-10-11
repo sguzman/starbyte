@@ -40,7 +40,9 @@ impl AudioOutput {
         let (sender, receiver) = mpsc::sync_channel(MAX_PENDING_FRAMES);
         let generation = Arc::new(AtomicU64::new(0));
         let shared_generation = Arc::clone(&generation);
-        thread::Builder::new()
+        // The GUI must not join this thread: the bounded channel owns its
+        // lifecycle and disconnects when the last AudioOutput is dropped.
+        let _audio_thread = thread::Builder::new()
             .name("starbyte-audio".to_owned())
             .spawn(move || audio_worker(receiver, shared_generation))
             .context("could not spawn background audio thread")?;

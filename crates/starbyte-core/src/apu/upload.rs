@@ -507,9 +507,16 @@ mod tests {
         h.kick(0x3000);
         h.cpu[1] = 0x44;
         assert_eq!(
-            h.transfer
-                .observe_with_ram_writes([0, h.cpu[1], h.cpu[2], h.cpu[3]], &mut h.spc, &mut h.ram, false),
-            UploadEvent::ByteWritten { address: 0x3000, value: 0x44 }
+            h.transfer.observe_with_ram_writes(
+                [0, h.cpu[1], h.cpu[2], h.cpu[3]],
+                &mut h.spc,
+                &mut h.ram,
+                false,
+            ),
+            UploadEvent::ByteWritten {
+                address: 0x3000,
+                value: 0x44,
+            }
         );
         assert_eq!(h.ram[0x3000], 0);
         assert_eq!(h.transfer.bytes_written(), 1);
@@ -518,7 +525,10 @@ mod tests {
         h.cpu[0] = 1;
         assert_eq!(
             h.transfer.observe_with_ram_writes(h.cpu, &mut h.spc, &mut h.ram, true),
-            UploadEvent::ByteWritten { address: 0x3001, value: 0x77 }
+            UploadEvent::ByteWritten {
+                address: 0x3001,
+                value: 0x77,
+            }
         );
         assert_eq!(h.ram[0x3001], 0x77);
         assert_eq!(h.transfer.bytes_written(), 2);

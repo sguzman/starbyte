@@ -115,6 +115,16 @@ impl IplUpload {
         self.entrypoint
     }
 
+    /// Next SPC RAM address awaiting data, or none before a block begins
+    /// and after sound-program handoff. No uploaded content is exposed.
+    #[must_use]
+    pub const fn next_ram_address(&self) -> Option<u16> {
+        match self.phase {
+            UploadPhase::AwaitFirstByte | UploadPhase::Receiving => Some(self.destination),
+            UploadPhase::Ready | UploadPhase::Executable => None,
+        }
+    }
+
     /// Number of distinct invalid port-0 tokens, excluding unchanged polls.
     #[must_use]
     pub const fn ignored_tokens(&self) -> u64 {
@@ -294,6 +304,7 @@ mod tests {
             self.cpu[3] = hi;
             assert_eq!(self.send(0xcc), UploadEvent::KickAccepted);
             assert_eq!(self.spc[0], 0xcc);
+            assert_eq!(self.transfer.next_ram_address(), Some(destination));
         }
 
         fn send_byte(&mut self, token: u8, value: u8, address: u16) {
@@ -348,6 +359,7 @@ mod tests {
         assert_eq!(h.send(4), UploadEvent::EntryPoint { address: 0x0200 });
         assert_eq!(&h.ram[0x200..0x203], &[0xe8, 0x42, 0x6f]);
         assert_eq!(h.transfer.phase(), UploadPhase::Executable);
+        assert_eq!(h.transfer.next_ram_address(), None);
         assert_eq!(h.transfer.entrypoint(), Some(0x0200));
         assert_eq!(h.transfer.bytes_written(), 3);
         assert_eq!(h.transfer.blocks_finished(), 1);
@@ -514,6 +526,7 @@ mod tests {
         assert_eq!(&h.ram[0x5000..0x5003], &[0x8f, 0xaa, 0xf4]);
         assert_eq!(h.transfer.bytes_written(), 3);
         assert_eq!(h.transfer.phase(), UploadPhase::Receiving);
+        assert_eq!(h.transfer.next_ram_address(), Some(0x5003));
     }
 
     #[test]

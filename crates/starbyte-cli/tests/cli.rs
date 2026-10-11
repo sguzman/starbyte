@@ -441,9 +441,11 @@ fn isolated_upload_probe_requires_no_save_ram_and_reports_explicit_mode() {
         0
     );
     assert!(report["apu_io_activity"]["isolated_ipl_upload"]["entrypoint"].is_null());
-    assert!(report["apu_io_activity"]["isolated_ipl_upload"]
-        .get("spc700_execution")
-        .is_none());
+    assert!(
+        report["apu_io_activity"]["isolated_ipl_upload"]
+            .get("spc700_execution")
+            .is_none()
+    );
     assert!(report["save_ram_path"].is_null());
     assert!(!dir.path().join("sample.srm").exists());
 }

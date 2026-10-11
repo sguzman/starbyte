@@ -434,12 +434,15 @@ impl Apu {
             );
             match event {
                 UploadEvent::ByteWritten { address, value }
-                    if (0x00f0..=0x00ff).contains(&address) =>
+                | UploadEvent::NextBlockWithByte {
+                    destination: address,
+                    value,
+                } if (0x00f0..=0x00ff).contains(&address) =>
                 {
-                    // The real IPL stores bytes with MOV [$00]+Y,A, which
-                    // goes through the SPC bus. The isolated decoder has
-                    // already copied the RAM byte; replay its MMIO side
-                    // effect here too (including DSPADDR/DSPDATA writes).
+                    // The real IPL stores bytes with MOV [$00]+Y,A,
+                    // including byte zero implicitly after a zero-valued
+                    // block marker. The decoder has already copied RAM;
+                    // replay the MMIO side effect (including DSP writes).
                     self.write_spc_bus(address, value);
                 }
                 UploadEvent::EntryPoint { address } => {
@@ -1593,6 +1596,47 @@ mod tests {
         let restored: Apu = serde_json::from_str(&saved).unwrap();
         assert_eq!(restored.isolated_ipl_upload().unwrap().bytes_written(), 4);
         assert_eq!(restored.read_spc_ram(0x0402), 0xc4);
+    }
+
+    #[test]
+    fn isolated_ipl_zero_block_marker_writes_implicit_byte_through_dsp_mmio() {
+        let mut apu = Apu::default();
+        apu.reset();
+        apu.enable_isolated_ipl_upload();
+        for (port, value) in [(1, 1), (2, 0), (3, 0x20), (0, 0xcc)] {
+            apu.write_cpu_port(port, value).unwrap();
+        }
+        apu.step_master_cycles(6);
+        // A block of 254 bytes leaves the next token at $FE, so
+        // command token zero is a valid signed forward marker.
+        for index in 0..254_u16 {
+            apu.write_cpu_port(1, 0x40).unwrap();
+            apu.write_cpu_port(0, index as u8).unwrap();
+            apu.step_master_cycles(6);
+        }
+        assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 254);
+
+        // Port 1's nonzero block mode (here $0C) becomes data byte zero
+        // immediately when the marker is zero, selecting DSPADDR $0C.
+        for (port, value) in [(1, 0x0c), (2, 0xf2), (3, 0), (0, 0)] {
+            apu.write_cpu_port(port, value).unwrap();
+        }
+        apu.step_master_cycles(6);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().blocks_finished(), 1);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 255);
+        assert_eq!(apu.read_spc_ram(0x00f2), 0x0c);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0);
+
+        // A repeated $00 is not another byte. The next token must be $01.
+        apu.write_cpu_port(1, 0x5a).unwrap();
+        apu.write_cpu_port(0, 0).unwrap();
+        apu.step_master_cycles(6);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 255);
+        apu.write_cpu_port(0, 1).unwrap();
+        apu.step_master_cycles(6);
+        assert_eq!(apu.read_dsp_register(0x0c), 0x5a);
+        assert_eq!(apu.read_spc_ram(0x00f3), 0x5a);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 256);
     }
 
     #[test]

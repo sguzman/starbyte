@@ -445,19 +445,6 @@ impl Apu {
             self.spc700.advance_placeholder_steps(dummy_steps);
             self.spc700_steps = self.spc700_steps.saturating_add(dummy_steps);
         }
-        if self.ipl_upload.is_some() {
-            self.poll_ipl_upload();
-        } else {
-            self.advance_bootstrap_handshake();
-        }
-    }
-
-    /// Consume the currently latched CPU ports without advancing APU clocks.
-    ///
-    /// Called at most once per CPU port-zero write when several mailbox
-    /// writes happen during a single 65816/DMA instruction. The normal
-    /// per-quantum poll remains, but repeated tokens are idempotent.
-    pub(crate) fn poll_ipl_upload(&mut self) {
         if let Some(upload) = self.ipl_upload.as_mut() {
             let event = upload.observe_with_ram_writes(
                 self.cpu_to_apu_ports,
@@ -492,6 +479,8 @@ impl Apu {
                 }
                 _ => {}
             }
+        } else {
+            self.advance_bootstrap_handshake();
         }
     }
 

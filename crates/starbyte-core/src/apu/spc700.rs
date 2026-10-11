@@ -2025,8 +2025,10 @@ impl Spc700 {
         let offset = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
         let address = self.direct_page_address(offset);
         let old = self.push_read_trace(read, trace, address);
-        let displacement = self.push_read_trace(read, trace, self.pc.wrapping_add(2)) as i8;
+        // BBS/BBC spend their internal cycle before fetching the
+        // branch displacement, not after it.
         self.push_wait_trace(trace);
+        let displacement = self.push_read_trace(read, trace, self.pc.wrapping_add(2)) as i8;
         let mask = 1_u8 << (opcode >> 5);
         let condition = (old & mask != 0) == (opcode & 0x10 == 0);
         let next_pc = self.pc.wrapping_add(3);
@@ -2065,8 +2067,8 @@ impl Spc700 {
                     offset
                 });
                 let value = self.push_read_trace(read, trace, address);
-                let displacement = self.push_read_trace(read, trace, self.pc.wrapping_add(2)) as i8;
                 self.push_wait_trace(trace);
+                let displacement = self.push_read_trace(read, trace, self.pc.wrapping_add(2)) as i8;
                 (self.a != value, displacement, self.pc.wrapping_add(3))
             }
             0x6E => {
@@ -2078,9 +2080,11 @@ impl Spc700 {
                 (value != 0, displacement, self.pc.wrapping_add(3))
             }
             0xFE => {
+                // DBNZ Y performs a throwaway read of its displacement,
+                // idles, then fetches the displacement again.
+                self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                self.push_wait_trace(trace);
                 let displacement = self.push_read_trace(read, trace, self.pc.wrapping_add(1)) as i8;
-                self.push_wait_trace(trace);
-                self.push_wait_trace(trace);
                 self.y = self.y.wrapping_sub(1);
                 (self.y != 0, displacement, self.pc.wrapping_add(2))
             }

@@ -202,13 +202,13 @@ impl Emulator {
         let master_cycles = (trace.len() as u64)
             .max(1)
             .saturating_mul(CPU_BUS_CYCLE_MASTER_CYCLES);
-        self.apu.step_master_cycles(master_cycles);
-        // Never run commercial sound programs implicitly: only the explicit
-        // host-clocked probe spends CPU master-clock time on SPC instructions.
-        self.apu.execute_host_clocked_spc(master_cycles)?;
+        // In the explicit sound-driver probe, clock SPC instructions and
+        // DSP samples in small host quanta rather than granting a full 65816
+        // instruction's timer credit before the sound CPU gets to run.
+        // Production gameplay does not execute commercial SPC programs.
+        self.advance_apu_for_cpu_step(master_cycles)?;
         self.system.sync_apu_ports_from_runtime(&self.apu);
         self.system.advance_master_clocks(master_cycles);
-        self.append_audio_samples(master_cycles);
         Ok(trace)
     }
 
@@ -440,6 +440,32 @@ impl Emulator {
     /// Re-render the current system state into the framebuffer.
     pub fn refresh_framebuffer(&mut self) {
         self.system.render_frame(&mut self.frame_buffer);
+    }
+
+    /// Advance the optional sound-driver probe alongside DSP/timer clocks.
+    ///
+    /// A whole host CPU instruction can span several SPC instruction times.
+    /// Clocking its timers up front and synthesizing its PCM only at the end
+    /// lets uploaded sound drivers observe future timer events and changes
+    /// the audible ordering of DSP register writes. Interleave at the existing
+    /// six-master-clock bus quantum only for an explicitly enabled probe.
+    /// The 65816 bus operations themselves remain instruction-atomic, so this
+    /// is not a claim of exact CPU/SPC bus arbitration or DSP phase timing.
+    fn advance_apu_for_cpu_step(&mut self, master_cycles: u64) -> Result<()> {
+        if !self.apu.isolated_host_clocked_driver_enabled() {
+            self.apu.step_master_cycles(master_cycles);
+            self.append_audio_samples(master_cycles);
+            return Ok(());
+        }
+        let mut remaining = master_cycles;
+        while remaining > 0 {
+            let clocks = remaining.min(CPU_BUS_CYCLE_MASTER_CYCLES);
+            self.apu.step_master_cycles(clocks);
+            self.apu.execute_host_clocked_spc(clocks)?;
+            self.append_audio_samples(clocks);
+            remaining -= clocks;
+        }
+        Ok(())
     }
 
     fn append_audio_samples(&mut self, master_cycles: u64) {

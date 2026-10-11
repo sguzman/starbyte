@@ -1581,7 +1581,18 @@ mod tests {
         assert_eq!(apu.read_dsp_register(0x4c), 0);
 
         let mut pcm = Vec::new();
-        for _ in 0..5000 {
+        // The driver has time to set timer2 and its volume registers, but
+        // fewer than 1024 SPC cycles elapse: timer target 64 cannot have
+        // completed, so KON and generated audio must remain silent.
+        for _ in 0..20 {
+            apu.step_master_cycles(256);
+            apu.execute_host_clocked_spc(256).unwrap();
+            apu.append_dsp_audio(256, &mut pcm);
+        }
+        assert_eq!(apu.read_dsp_register(0x4c), 0);
+        assert!(pcm.iter().all(|&sample| sample == 0));
+
+        for _ in 20..5000 {
             apu.step_master_cycles(256);
             apu.execute_host_clocked_spc(256).unwrap();
             apu.append_dsp_audio(256, &mut pcm);

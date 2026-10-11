@@ -535,7 +535,12 @@ fn headless_upload_probe_captures_real_cpu_mailbox_transfer_in_run_report() {
     assert_eq!(driver_status["spc700_execution"]["pc"], 0x0404);
     assert_eq!(driver_status["spc700_execution"]["instructions"], 2);
     assert_eq!(driver_status["spc700_execution"]["halt_state"], "sleeping");
-    assert!(driver_status["audio_frame"]["stereo_pairs"].as_u64().unwrap() > 0);
+    assert!(
+        driver_status["audio_frame"]["stereo_pairs"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
     assert_eq!(driver_status["audio_frame"]["nonzero_pairs"], 0);
     assert_eq!(driver_status["audio_frame"]["peak_absolute"], 0);
     assert!(

@@ -434,16 +434,18 @@ impl Spc700 {
                 (rhs, 3)
             }
             0x17 => {
-                // [dp]+Y: indirect pointer comes from unindexed direct
-                // page, then Y indexes the 16-bit effective address.
+                // [dp]+Y loads idle before fetching either pointer byte,
+                // unlike the corresponding MOV [dp]+Y,A store, which
+                // idles after reading both pointer bytes. This placement
+                // matters for SPC MMIO reads and exact sound-driver traces.
                 let offset = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
+                self.push_wait_trace(trace);
                 let low = self.push_read_trace(read, trace, self.direct_page_address(offset));
                 let high = self.push_read_trace(
                     read,
                     trace,
                     self.direct_page_address(offset.wrapping_add(1)),
                 );
-                self.push_wait_trace(trace);
                 let effective = u16::from_le_bytes([low, high]).wrapping_add(u16::from(self.y));
                 let rhs = self.push_read_trace(read, trace, effective);
                 (rhs, 2)
@@ -2412,6 +2414,53 @@ mod accumulator_alu_tests {
                 assert!(trace.iter().any(|event| event.access == AccessKind::Read));
             }
         }
+    }
+
+    #[test]
+    fn indirect_y_reads_wait_before_page_wrapped_pointer_but_store_waits_after() {
+        // All six accumulator ALU operations, plus MOV A,[dp]+Y, use
+        // the same six-cycle bus sequence. MOV [dp]+Y,A uses seven cycles
+        // and places the idle between pointer reads and destination access.
+        for opcode in [0x17_u8, 0x37, 0x57, 0x77, 0x97, 0xb7, 0xf7] {
+            let (_, trace, _) = run_indexed(
+                opcode,
+                &[0xff],
+                0x35,
+                0x21,
+                3,
+                5,
+                &[(0x01ff, 0x40), (0x0100, 0x12), (0x1245, 0x55)],
+            );
+            assert_eq!(trace.len(), 6, "opcode {opcode:02X}");
+            assert_eq!(trace[0].address, 0x8000);
+            assert_eq!(trace[1].address, 0x8001);
+            assert_eq!(trace[2].access, AccessKind::Wait, "opcode {opcode:02X}");
+            assert_eq!(trace[3].address, 0x01ff);
+            assert_eq!(trace[3].access, AccessKind::Read);
+            assert_eq!(trace[4].address, 0x0100);
+            assert_eq!(trace[4].access, AccessKind::Read);
+            assert_eq!(trace[5].address, 0x1245);
+            assert_eq!(trace[5].access, AccessKind::Read);
+        }
+
+        let (_, trace, bytes) = run_indexed(
+            0xd7,
+            &[0xff],
+            0x35,
+            0x21,
+            3,
+            5,
+            &[(0x01ff, 0x40), (0x0100, 0x12), (0x1245, 0x55)],
+        );
+        assert_eq!(trace.len(), 7);
+        assert_eq!(trace[2].address, 0x01ff);
+        assert_eq!(trace[3].address, 0x0100);
+        assert_eq!(trace[4].access, AccessKind::Wait);
+        assert_eq!(trace[5].address, 0x1245);
+        assert_eq!(trace[5].access, AccessKind::Read);
+        assert_eq!(trace[6].address, 0x1245);
+        assert_eq!(trace[6].access, AccessKind::Write);
+        assert_eq!(bytes[0x1245], 0x35);
     }
 
     #[test]

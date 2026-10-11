@@ -572,7 +572,10 @@ mod tests {
         for _ in 0..32_767 {
             let state = usize::from(dsp.noise_lfsr);
             assert_ne!(state, 0);
-            assert!(!visited[state], "LFSR repeated before completing full period");
+            assert!(
+                !visited[state],
+                "LFSR repeated before completing full period"
+            );
             visited[state] = true;
             dsp.next_stereo_pair(&[]);
         }

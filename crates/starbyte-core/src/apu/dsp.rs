@@ -334,7 +334,10 @@ impl Voice {
         // including values in the previous BRR block. NON overrides the
         // interpolated waveform, not its envelope.
         let waveform = noise.unwrap_or_else(|| self.interpolated_waveform());
-        let result = (i32::from(waveform) * self.envelope / 2048) as i16;
+        // The S-DSP uses a signed arithmetic shift, not truncating integer
+        // division. Its output sample also clears the low bit before PMON,
+        // OUTX and channel-volume processing.
+        let result = (((i32::from(waveform) * self.envelope) >> 11) as i16) & !1;
         let mut ended_block = false;
         self.fraction += u32::from(pitch);
         while self.fraction >= PITCH_UNIT && self.active {
@@ -729,6 +732,27 @@ mod tests {
         assert!(first > 1000);
         assert!(second > 1000);
         assert!(third < -1000);
+    }
+
+    #[test]
+    fn voice_signed_envelope_uses_arithmetic_shift_and_even_output_bits() {
+        let mut voice = super::Voice {
+            active: true,
+            ..super::Voice::default()
+        };
+        let registers = [0_u8; 128];
+        // Direct GAIN 1 sets envelope=16; (-2 * 16) >> 11 is -1,
+        // and the DSP's low-bit mask makes the output -2, not zero.
+        let (negative, _) =
+            voice.clock(0, 0, 0, 0, 1, 0, Some(-2), &[], &registers);
+        assert_eq!(negative, -2);
+        let (positive, _) =
+            voice.clock(0, 0, 0, 0, 1, 0, Some(2), &[], &registers);
+        assert_eq!(positive, 0);
+        let (loud, _) =
+            voice.clock(0, 0, 0, 0, 0x7f, 0, Some(-16_384), &[], &registers);
+        assert!(loud < -1000);
+        assert_eq!(loud & 1, 0);
     }
 
     #[test]

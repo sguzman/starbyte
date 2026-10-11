@@ -203,6 +203,9 @@ impl Emulator {
             .max(1)
             .saturating_mul(CPU_BUS_CYCLE_MASTER_CYCLES);
         self.apu.step_master_cycles(master_cycles);
+        // Never run commercial sound programs implicitly: only the explicit
+        // host-clocked probe spends CPU master-clock time on SPC instructions.
+        self.apu.execute_host_clocked_spc(master_cycles)?;
         self.system.sync_apu_ports_from_runtime(&self.apu);
         self.system.advance_master_clocks(master_cycles);
         self.append_audio_samples(master_cycles);
@@ -305,6 +308,14 @@ impl Emulator {
     pub fn enable_isolated_apu_upload_probe(&mut self) {
         self.apu.enable_isolated_ipl_upload();
         self.system.sync_apu_ports_from_runtime(&self.apu);
+    }
+
+    /// Execute an uploaded sound driver alongside CPU steps for opt-in
+    /// diagnostics only. The ordinary upload probe and desktop runtime stay
+    /// transport-only and keep the existing compatibility bootstrap.
+    pub fn enable_isolated_apu_driver_probe(&mut self) -> Result<()> {
+        self.enable_isolated_apu_upload_probe();
+        self.apu.enable_isolated_host_clocked_driver()
     }
 
     /// Read the explicitly enabled sound-driver upload progress, if any.
@@ -868,6 +879,9 @@ mod tests {
         rom[0x7ffc] = 0;
         rom[0x7ffd] = 0x80;
         rom[..cpu_code.len()].copy_from_slice(&cpu_code);
+        let mut host_clocked_rom = rom.clone();
+        // Stable no-op CPU loop after IPL handoff while sound CPU executes.
+        host_clocked_rom[cpu_code.len()..cpu_code.len() + 2].copy_from_slice(&[0x80, 0xfe]);
         let mut emulator = Emulator::default();
         emulator.load_rom(Cartridge::from_bytes(rom, None).unwrap());
         emulator.enable_isolated_apu_upload_probe();
@@ -934,6 +948,32 @@ mod tests {
         assert!(samples.len() >= 30);
         assert!(samples.iter().any(|sample| *sample > 1_000));
         assert!(samples.chunks_exact(2).all(|pair| pair[0] == pair[1]));
+
+        // The exact same host-side upload can optionally drive SPC execution
+        // on CPU master clocks; production mode never enables this.
+        let mut host_clocked = Emulator::default();
+        host_clocked.load_rom(Cartridge::from_bytes(host_clocked_rom, None).unwrap());
+        host_clocked.enable_isolated_apu_driver_probe().unwrap();
+        for _ in 0..instruction_count {
+            host_clocked.step_instruction().unwrap();
+        }
+        assert_eq!(
+            host_clocked.isolated_apu_upload().unwrap().entrypoint(),
+            Some(0x0400)
+        );
+        for _ in 0..10_000 {
+            host_clocked.step_instruction().unwrap();
+        }
+        let clocked_status = host_clocked.isolated_apu_spc700_status().unwrap();
+        assert!(clocked_status.instructions > 100);
+        assert_eq!(host_clocked.apu.read_dsp_register(0x4c), 1);
+        assert!(host_clocked.audio_samples().samples.iter().any(|v| *v > 1000));
+        assert!(
+            host_clocked
+                .apu
+                .run_isolated_uploaded_spc_program(1, &mut Vec::new())
+                .is_err()
+        );
     }
 
     #[test]

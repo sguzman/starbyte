@@ -566,7 +566,7 @@ impl StarbyteApp {
     /// A missing device must never prevent a game from playing.
     fn enqueue_current_audio(&mut self) {
         let samples = &self.session.emulator().audio_samples().samples;
-        if samples.is_empty() || !samples.len().is_multiple_of(2) {
+        if samples.is_empty() || samples.len() % 2 != 0 {
             return;
         }
         if self.audio_output.is_none()

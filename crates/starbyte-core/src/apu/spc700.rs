@@ -1124,12 +1124,14 @@ impl Spc700 {
     {
         let offset = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
         let low = self.push_read_trace(read, trace, self.direct_page_address(offset));
+        // ADDW/SUBW have one internal cycle between the low and high
+        // reads; this matters when an IO register is the high byte.
+        self.push_wait_trace(trace);
         let high = self.push_read_trace(
             read,
             trace,
             self.direct_page_address(offset.wrapping_add(1)),
         );
-        self.push_wait_trace(trace);
         let rhs = u16::from_le_bytes([low, high]);
         let lhs = u16::from_le_bytes([self.a, self.y]);
         let subtract = opcode == 0x9A;
@@ -1179,21 +1181,36 @@ impl Spc700 {
         let low_addr = self.direct_page_address(offset);
         let high_addr = self.direct_page_address(offset.wrapping_add(1));
         let low = self.push_read_trace(read, trace, low_addr);
-        let high = self.push_read_trace(read, trace, high_addr);
-        let previous = u16::from_le_bytes([low, high]);
         if opcode == 0x5A {
+            let high = self.push_read_trace(read, trace, high_addr);
+            let previous = u16::from_le_bytes([low, high]);
             let ya = u16::from_le_bytes([self.a, self.y]);
             self.update_nz_word_flags(ya.wrapping_sub(previous));
             self.psw = (self.psw & !0x01) | u8::from(ya >= previous);
         } else {
-            let value = if opcode == 0x3A {
-                previous.wrapping_add(1)
+            // INCW/DECW are read-low, write-low, read-high, write-high.
+            // A read-only MMIO high byte can change between these cycles;
+            // reading both bytes before either write is not the real bus.
+            let increase = opcode == 0x3A;
+            let next_low = if increase {
+                low.wrapping_add(1)
             } else {
-                previous.wrapping_sub(1)
+                low.wrapping_sub(1)
             };
-            self.push_write_trace(write, trace, low_addr, value as u8);
-            self.push_write_trace(write, trace, high_addr, (value >> 8) as u8);
-            self.update_nz_word_flags(value);
+            self.push_write_trace(write, trace, low_addr, next_low);
+            let high = self.push_read_trace(read, trace, high_addr);
+            let carry_or_borrow = if increase { low == 0xff } else { low == 0 };
+            let next_high = if carry_or_borrow {
+                if increase {
+                    high.wrapping_add(1)
+                } else {
+                    high.wrapping_sub(1)
+                }
+            } else {
+                high
+            };
+            self.push_write_trace(write, trace, high_addr, next_high);
+            self.update_nz_word_flags(u16::from_le_bytes([next_low, next_high]));
         }
         self.pc = self.pc.wrapping_add(2);
         Ok(())
@@ -1210,6 +1227,8 @@ impl Spc700 {
     {
         let dp = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
         self.a = self.push_read_trace(read, trace, self.direct_page_address(dp));
+        // The five-cycle MOVW load waits between its two byte reads.
+        self.push_wait_trace(trace);
         self.y = self.push_read_trace(read, trace, self.direct_page_address(dp.wrapping_add(1)));
         self.update_nz_word_flags(u16::from_le_bytes([self.a, self.y]));
         self.pc = self.pc.wrapping_add(2);
@@ -1230,6 +1249,10 @@ impl Spc700 {
         let dp = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
         let low_address = self.direct_page_address(dp);
         let high_address = self.direct_page_address(dp.wrapping_add(1));
+        // MOVW dp,YA is a five-cycle read-modify-write on the low
+        // destination byte, followed by a high-byte write. Its dummy
+        // low read can trigger MMIO side effects.
+        self.push_read_trace(read, trace, low_address);
         self.push_write_trace(write, trace, low_address, self.a);
         self.push_write_trace(write, trace, high_address, self.y);
         self.pc = self.pc.wrapping_add(2);
@@ -3011,10 +3034,57 @@ mod accumulator_alu_tests {
             assert_eq!(cpu.psw & 0x80 != 0, after & 0x8000 != 0);
             assert_eq!(cpu.psw & 0x02 != 0, after == 0);
             assert_eq!(trace.len(), 6);
-            assert_eq!(trace[4].access, AccessKind::Write);
-            assert_eq!(trace[4].address, 0x01ff);
+            assert_eq!(trace[3].access, AccessKind::Write);
+            assert_eq!(trace[3].address, 0x01ff);
+            assert_eq!(trace[4].access, AccessKind::Read);
+            assert_eq!(trace[4].address, 0x0100);
             assert_eq!(trace[5].access, AccessKind::Write);
             assert_eq!(trace[5].address, 0x0100);
+        }
+    }
+
+    #[test]
+    fn movw_word_load_store_follow_five_cycle_smp_bus_order() {
+        let (cpu, trace, _) = run_indexed(
+            0xba, &[0xff], 0, 0x31, 0, 0,
+            &[(0x01ff, 0x66), (0x0100, 0x88)],
+        );
+        assert_eq!(u16::from_le_bytes([cpu.a, cpu.y]), 0x8866);
+        assert_eq!(trace.len(), 5);
+        assert_eq!(cpu.cycles(), 5);
+        assert_eq!(trace[2].address, 0x01ff);
+        assert_eq!(trace[2].access, AccessKind::Read);
+        assert_eq!(trace[3].access, AccessKind::Wait);
+        assert_eq!(trace[4].address, 0x0100);
+
+        let (cpu, trace, bytes) = run_indexed(
+            0xda, &[0xff], 0x12, 0x31, 0, 0x34,
+            &[(0x01ff, 0xa5), (0x0100, 0x5a)],
+        );
+        assert_eq!(cpu.cycles(), 5);
+        assert_eq!(trace.len(), 5);
+        assert_eq!(trace[2].access, AccessKind::Read);
+        assert_eq!(trace[2].address, 0x01ff);
+        assert_eq!(trace[2].value, 0xa5);
+        assert_eq!(trace[3].access, AccessKind::Write);
+        assert_eq!(trace[3].address, 0x01ff);
+        assert_eq!(trace[4].access, AccessKind::Write);
+        assert_eq!(trace[4].address, 0x0100);
+        assert_eq!(&[bytes[0x01ff], bytes[0x0100]], &[0x12, 0x34]);
+    }
+
+    #[test]
+    fn word_alu_reads_high_byte_after_internal_cycle() {
+        for opcode in [0x7a_u8, 0x9a] {
+            let (_, trace, _) = run_indexed(
+                opcode, &[0xff], 0x12, 0x31, 0, 0x34,
+                &[(0x01ff, 0x55), (0x0100, 0x66)],
+            );
+            assert_eq!(trace.len(), 5);
+            assert_eq!(trace[2].address, 0x01ff);
+            assert_eq!(trace[3].access, AccessKind::Wait);
+            assert_eq!(trace[4].address, 0x0100);
+            assert_eq!(trace[4].access, AccessKind::Read);
         }
     }
 

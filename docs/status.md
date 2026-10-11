@@ -10,6 +10,10 @@ The SPC700 interpreter now **recognizes all 256 opcode values**, including the p
 
 A bounded **opt-in isolated** SPC700 program runner has also been added to the APU code. It requires a completed sound-program upload/entrypoint, executes at most the requested number of instructions, uses fractional SPC700-to-NTSC clock conversion, advances timers and synthesizes DSP samples into a local buffer. An original synthetic IPL fixture configures a BRR-playing DSP voice through uploaded SPC700 instructions. This path is **not switched on for commercial ROM emulation**; its own hosted regression result must be checked against the latest commit. The production APU still uses its bootstrap shortcut and placeholder clock, and **Super Mario World audio remains unverified/silent**. No Linux speaker backend is connected.
 
+The **full synthetic CPU-to-audio path** now has an additional integration regression: an original 65816 ROM issues real `$2140-$2143` bus writes to upload three SPC blocks (BRR directory, waveform, sound-driver instructions), hands off execution and produces nonzero stereo samples through the partial DSP. Linux, Windows and lint passed in [run 420](https://github.com/sguzman/starbyte/actions/runs/38099827012). Another synthetic fixture verifies mailbox acknowledgements read back by the 65816 itself. This validates transport wiring; it does **not** verify copyrighted commercial sound-program timing or actual Linux speaker output.
+
+An explicit headless `run --apu-upload-probe --no-save-ram` diagnostic replaces the production bootstrap shim **only for that opt-in run** and exposes `apu_io_activity.isolated_ipl_upload` progress in frame/final JSON reports. It can cause real ROMs to stall and does not execute commercial audio automatically. The regular emulator and GUI keep the existing compatibility path by default; a separate [automation guide](automation.md) documents its behavior and limitations.
+
 ## What exists today
 
 | Area | Implementation and evidence | Remaining uncertainty |

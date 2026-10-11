@@ -321,7 +321,11 @@ impl Apu {
     /// method must not clock either a second time.
     pub fn execute_host_clocked_spc(&mut self, master_cycles: u64) -> Result<usize> {
         if !self.host_clocked_spc_enabled
-            || self.ipl_upload.as_ref().and_then(IplUpload::entrypoint).is_none()
+            || self
+                .ipl_upload
+                .as_ref()
+                .and_then(IplUpload::entrypoint)
+                .is_none()
             || self.spc700.halt_state() != Spc700HaltState::Running
         {
             return Ok(0);
@@ -331,9 +335,9 @@ impl Apu {
             + u128::from(master_cycles) * u128::from(SPC700_CLOCK_HZ);
         self.host_clocked_spc_phase = (numerator % u128::from(NTSC_MASTER_CLOCK_HZ)) as u64;
         let new_cycles = numerator / u128::from(NTSC_MASTER_CLOCK_HZ);
-        self.host_clocked_spc_credit = self.host_clocked_spc_credit.saturating_add(
-            i64::try_from(new_cycles).unwrap_or(i64::MAX),
-        );
+        self.host_clocked_spc_credit = self
+            .host_clocked_spc_credit
+            .saturating_add(i64::try_from(new_cycles).unwrap_or(i64::MAX));
 
         // Host frame stalls are independently guarded. Bound a single master
         // clock quantum as well to prevent an accidentally huge time advance

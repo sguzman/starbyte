@@ -441,11 +441,14 @@ mod tests {
         );
         assert_eq!(h.transfer.blocks_finished(), 1);
         assert_eq!(h.transfer.bytes_written(), 255);
+        assert_eq!(h.transfer.bytes_stored(), 255);
         assert_eq!(h.ram[0x4000], 1);
         // The first byte is already consumed; a repeated index zero is
         // not a second transfer. The next legitimate index is one.
         assert_eq!(h.send(0), UploadEvent::None);
+        assert_eq!(h.transfer.bytes_stored(), 255);
         h.send_byte(1, 0x77, 0x4001);
+        assert_eq!(h.transfer.bytes_stored(), 256);
     }
 
     #[test]
@@ -580,6 +583,15 @@ mod tests {
         let restored: IplUpload = serde_json::from_str(&serialized).unwrap();
         assert_eq!(restored.bytes_stored(), 1);
         assert_eq!(restored.bytes_written(), 2);
+
+        // Existing on-disk snapshots predate this optional counter. They
+        // must continue loading without pretending historical writes were
+        // observed by the newly introduced field.
+        let mut legacy = serde_json::to_value(&h.transfer).unwrap();
+        legacy.as_object_mut().unwrap().remove("bytes_stored");
+        let legacy: IplUpload = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy.bytes_written(), 2);
+        assert_eq!(legacy.bytes_stored(), 0);
     }
 
     #[test]

@@ -781,6 +781,59 @@ mod tests {
     }
 
     #[test]
+    fn opt_in_spc_timer_poll_receives_time_before_end_of_cpu_quantum() {
+        let mut emulator = Emulator::default();
+        emulator.apu.reset();
+        emulator.apu.enable_isolated_ipl_upload();
+        emulator.apu.enable_isolated_host_clocked_driver().unwrap();
+
+        // Timer2 target one, enable timer2, poll its read-and-clear $FF,
+        // and acknowledge the first nonzero tick in SPC output port $F4.
+        // If all 2,000 master cycles advance *before* the SPC instructions,
+        // the timer is still disabled at that time and no tick can arrive.
+        let sound_program = [
+            0x8f, 1, 0xfc, 0x8f, 4, 0xf1, 0xe4, 0xff, 0xf0, 0xfc, 0xc4, 0xf4, 0x2f, 0xfe,
+        ];
+        for (port, value) in [(1, 1), (2, 0), (3, 4), (0, 0xcc)] {
+            emulator.apu.write_cpu_port(port, value).unwrap();
+        }
+        emulator.apu.step_master_cycles(6);
+        for (index, byte) in sound_program.into_iter().enumerate() {
+            emulator.apu.write_cpu_port(1, byte).unwrap();
+            emulator.apu.write_cpu_port(0, index as u8).unwrap();
+            emulator.apu.step_master_cycles(6);
+        }
+        for (port, value) in [(1, 0), (2, 0), (3, 4), (0, 15)] {
+            emulator.apu.write_cpu_port(port, value).unwrap();
+        }
+        emulator.apu.step_master_cycles(6);
+        assert_eq!(emulator.isolated_apu_upload().unwrap().entrypoint(), Some(0x0400));
+
+        // Independent reference performs the six-clock APU sequence by
+        // hand. The emulator helper must agree on exact serialized state,
+        // stereo sample bytes, timer output, and instruction count.
+        let mut reference = emulator.apu.clone();
+        let mut expected_pcm = Vec::new();
+        for _ in 0..333 {
+            reference.step_master_cycles(6);
+            reference.execute_host_clocked_spc(6).unwrap();
+            reference.append_dsp_audio(6, &mut expected_pcm);
+        }
+        reference.step_master_cycles(2);
+        reference.execute_host_clocked_spc(2).unwrap();
+        reference.append_dsp_audio(2, &mut expected_pcm);
+
+        emulator.advance_apu_for_cpu_step(2_000).unwrap();
+        assert_eq!(emulator.apu.read_apu_port(0).unwrap(), 1);
+        assert_eq!(emulator.pending_audio.samples, expected_pcm);
+        assert_eq!(
+            serde_json::to_value(&emulator.apu).unwrap(),
+            serde_json::to_value(&reference).unwrap()
+        );
+        assert!(emulator.isolated_apu_spc700_status().unwrap().instructions > 4);
+    }
+
+    #[test]
     fn pending_cpu_apu_port_write_is_not_lost_across_emulator_save_state() {
         let mut rom = rom_bytes();
         rom[0x7ffc] = 0;

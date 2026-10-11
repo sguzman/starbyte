@@ -12,6 +12,7 @@ use image::ImageReader;
 use tracing::{debug, info, warn};
 
 use crate::{
+    audio::AudioOutput,
     logging::SharedLogBuffer,
     worker::{AppWorker, WorkerCommand, WorkerCommandKind, WorkerEvent},
 };
@@ -106,6 +107,8 @@ pub struct StarbyteApp {
     config: RuntimeConfig,
     cache_root: PathBuf,
     session: FrontendSession,
+    audio_output: Option<AudioOutput>,
+    audio_unavailable: bool,
     worker: AppWorker,
     library_snapshot: LibrarySnapshot,
     framebuffer_texture: Option<TextureHandle>,
@@ -211,6 +214,8 @@ impl StarbyteApp {
             config,
             cache_root,
             session,
+            audio_output: None,
+            audio_unavailable: false,
             worker,
             library_snapshot: cached_snapshot.unwrap_or_else(empty_snapshot),
             framebuffer_texture: None,
@@ -333,7 +338,10 @@ impl StarbyteApp {
                     job_id,
                     entry,
                     rom_path,
-                } => match self.session.load_rom(&rom_path) {
+                } => match {
+                    self.clear_audio();
+                    self.session.load_rom(&rom_path)
+                } {
                     Ok(()) => {
                         self.loaded_game_id = Some(entry.game_id.clone());
                         let _ = self.session.set_active_cheats(&entry.cheats);
@@ -554,7 +562,38 @@ impl StarbyteApp {
         }
     }
 
+    /// Start the host audio device only after DSP synthesis produces sound.
+    /// A missing device must never prevent a game from playing.
+    fn enqueue_current_audio(&mut self) {
+        let samples = &self.session.emulator().audio_samples().samples;
+        if samples.is_empty() || !samples.len().is_multiple_of(2) {
+            return;
+        }
+        if self.audio_output.is_none()
+            && !self.audio_unavailable
+            && samples.iter().any(|&sample| sample != 0)
+        {
+            match AudioOutput::open_default() {
+                Ok(output) => self.audio_output = Some(output),
+                Err(error) => {
+                    warn!("desktop audio unavailable (video remains playable): {error}");
+                    self.audio_unavailable = true;
+                }
+            }
+        }
+        if let Some(output) = &self.audio_output {
+            output.enqueue(samples);
+        }
+    }
+
+    fn clear_audio(&self) {
+        if let Some(output) = &self.audio_output {
+            output.clear();
+        }
+    }
+
     fn record_playback_error(&mut self, error: &str) {
+        self.clear_audio();
         warn!("emulation stopped: {error}");
         let message = format!("Emulation stopped: {error}");
         self.status_line = message.clone();
@@ -571,6 +610,7 @@ impl StarbyteApp {
             Ok(()) => {
                 self.frame_performance.record(started.elapsed());
                 self.refresh_framebuffer(ctx);
+                self.enqueue_current_audio();
                 self.status_line = self.session.snapshot().status_line();
             }
             Err(error) => self.record_playback_error(&error.to_string()),
@@ -600,6 +640,7 @@ impl StarbyteApp {
                 return;
             }
         };
+        self.clear_audio();
         match self.session.load_rom(&resolved) {
             Ok(()) => {
                 let matching = self
@@ -726,6 +767,9 @@ impl StarbyteApp {
                     .clicked()
                 {
                     self.is_playing = !self.is_playing;
+                    if !self.is_playing {
+                        self.clear_audio();
+                    }
                     self.frame_clock.reset(Instant::now());
                 }
                 if ui.button("Quick Save (F5)").clicked() {
@@ -826,6 +870,9 @@ impl StarbyteApp {
                 .clicked()
             {
                 self.is_playing = !self.is_playing;
+                if !self.is_playing {
+                    self.clear_audio();
+                }
                 self.frame_clock.reset(Instant::now());
             }
             if ui
@@ -1281,6 +1328,7 @@ impl StarbyteApp {
     fn quick_load(&mut self, ctx: &egui::Context) {
         match self.session.quick_load() {
             Ok(()) => {
+                self.clear_audio();
                 self.refresh_framebuffer(ctx);
                 self.frame_clock.reset(Instant::now());
                 self.status_line = "Quick save restored (F8).".to_owned();
@@ -1299,6 +1347,7 @@ impl StarbyteApp {
     fn load_persistent_slot(&mut self, slot: u8, ctx: &egui::Context) {
         match self.session.load_state_slot(slot) {
             Ok(()) => {
+                self.clear_audio();
                 self.refresh_framebuffer(ctx);
                 self.frame_clock.reset(Instant::now());
                 self.status_line = format!("Restored disk slot {slot}.");

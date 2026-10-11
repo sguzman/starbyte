@@ -1631,6 +1631,14 @@ fn build_apu_io_activity_report(emulator: &starbyte_core::Emulator) -> serde_jso
             "expected_index": upload.expected_index(),
             "entrypoint": upload.entrypoint(),
         });
+        // TEST is write-only guest MMIO, but its internal latch can
+        // distinguish write-protected sample RAM from a silent driver.
+        // Exposed only when isolated IPL diagnostics were enabled.
+        let test_latch = emulator.isolated_apu_test_latch();
+        report["isolated_ipl_upload"]["smp_test"] = json!({
+            "latch": test_latch,
+            "ram_writable": test_latch.is_some_and(|value| value & 0x02 != 0),
+        });
         // Compact read-only DSP view for distinguishing incomplete driver
         // setup, held mute/reset, zero master volume and missing key-on.
         // Never include sample RAM, waveform bytes or user ROM content.

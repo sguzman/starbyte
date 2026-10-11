@@ -735,6 +735,32 @@ mod tests {
     }
 
     #[test]
+    fn disabled_spc_timer_prescaler_phase_survives_apu_save_and_enable() {
+        let mut apu = Apu::default();
+        apu.write_spc_bus(0x00fc, 1); // TIMER2 increments every 16 SPC cycles.
+        // Exactly 15 SPC cycles have elapsed at 315 NTSC master clocks.
+        // The prescaler must advance even though the timer is disabled.
+        apu.step_master_cycles(315);
+        let saved = serde_json::to_string(&apu).unwrap();
+        let mut resumed: Apu = serde_json::from_str(&saved).unwrap();
+
+        for state in [&mut apu, &mut resumed] {
+            state.write_spc_bus(0x00f1, 0b100);
+            state.step_master_cycles(20);
+            assert_eq!(state.read_spc_bus(0x00ff), 0);
+            state.step_master_cycles(1);
+            // The first stage-1 edge occurs one SPC cycle after enable,
+            // rather than waiting for a new 16-cycle prescaler period.
+            assert_eq!(state.read_spc_bus(0x00ff), 1);
+            assert_eq!(state.read_spc_bus(0x00ff), 0);
+        }
+        assert_eq!(
+            serde_json::to_value(&apu).unwrap(),
+            serde_json::to_value(&resumed).unwrap()
+        );
+    }
+
+    #[test]
     fn spc_control_clears_only_selected_cpu_input_ports() {
         let mut apu = Apu::default();
         for index in 0..4 {

@@ -1,11 +1,10 @@
-//! Partial SNES S-DSP voice mixer: BRR block decoding and fixed-gain playback.
+//! Partial SNES S-DSP voice mixer and BRR synthesis engine.
 //!
-//! The DSP consumes SPC700 audio RAM, not the main SNES CPU memory bus. This
-//! implementation supports directory-based BRR samples, pitch stepping, signed
-//! channel/master volumes, direct GAIN, sample end/loop flags, and a bounded
-//! preliminary ADSR/release envelope. Gaussian interpolation, exact envelope
-//! rate tables, noise, echo, pitch modulation and hardware pipeline latency
-//! still need work. Never describe this as complete or bit-exact DSP audio.
+//! This DSP consumes SPC700 audio RAM, not the SNES main CPU bus. It handles
+//! directory-based BRR samples, pitch stepping and PMON, signed channel/master
+//! volume, timed ADSR/GAIN envelopes, NON shared noise, and key-on/off/loop
+//! state. Gaussian interpolation, echo/FIR processing and exact multi-phase
+//! hardware pipeline latency still need work. This is not bit-exact DSP audio.
 
 use serde::{Deserialize, Serialize};
 
@@ -275,8 +274,8 @@ impl Voice {
         result
     }
 
-    /// Rate-controlled ADSR and GAIN. Noise, interpolation and DSP hardware
-    /// pipeline latency are separate outstanding fidelity tasks.
+    /// Rate-controlled ADSR and GAIN. Gaussian interpolation, echo and
+    /// hardware pipeline timing are separate outstanding fidelity tasks.
     fn advance_envelope(&mut self, adsr1: u8, adsr2: u8, gain: u8, counter: u16) {
         if self.releasing {
             // SPC release is fixed at -8 per output sample, not rate-table

@@ -890,6 +890,34 @@ mod tests {
     }
 
     #[test]
+    fn legacy_dsp_snapshot_without_edl_latch_recovers_current_ring() {
+        let (mut dsp, mut ram) = looping_sample();
+        dsp.write_register(0x6d, 0x50, &ram);
+        dsp.write_register(0x7d, 1, &ram);
+        for _ in 0..17 {
+            dsp.next_stereo_pair(&mut ram);
+        }
+        assert_eq!(dsp.echo_offset, 68);
+
+        // Pre-EDL-latching saves do not contain echo_delay_bytes. Rebuild
+        // the active size from the readable EDL register on first use,
+        // preserving the serialized RAM address/offset and echo history.
+        let mut snapshot = serde_json::to_value(&dsp).unwrap();
+        snapshot.as_object_mut().unwrap().remove("echo_delay_bytes");
+        let mut old: Dsp = serde_json::from_value(snapshot).unwrap();
+        let mut old_ram = ram.clone();
+        assert_eq!(old.echo_delay_bytes, 0);
+        assert_eq!(
+            dsp.next_stereo_pair(&mut ram),
+            old.next_stereo_pair(&mut old_ram)
+        );
+        assert_eq!(dsp.echo_offset, 72);
+        assert_eq!(old.echo_offset, 72);
+        assert_eq!(old.echo_delay_bytes, 2048);
+        assert_eq!(ram, old_ram);
+    }
+
+    #[test]
     fn edl_zero_reuses_only_one_stereo_echo_word() {
         let (mut dsp, mut ram) = looping_sample();
         dsp.write_register(0x7d, 0, &ram);

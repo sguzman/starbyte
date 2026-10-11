@@ -742,6 +742,51 @@ mod tests {
     }
 
     #[test]
+    fn cpu_port_clear_survives_unrelated_65816_instructions_and_repeated_same_value() {
+        let mut rom = rom_bytes();
+        rom[0x7ffc] = 0;
+        rom[0x7ffd] = 0x80;
+        // LDA #$66; STA $2140; NOP; LDA #$66; STA $2140; NOP.
+        rom[..11].copy_from_slice(&[
+            0xa9, 0x66, 0x8d, 0x40, 0x21, 0xea, 0xa9, 0x66, 0x8d, 0x40, 0x21,
+        ]);
+        rom[11] = 0xea;
+        let mut emulator = Emulator::default();
+        emulator.load_rom(Cartridge::from_bytes(rom, None).unwrap());
+        emulator.step_instruction().unwrap();
+        emulator.step_instruction().unwrap();
+        assert_eq!(emulator.apu.read_cpu_port(0).unwrap(), 0x66);
+
+        // The sound CPU clears the incoming mailbox. Merely executing a
+        // 65816 NOP must never resurrect its earlier $2140 write.
+        emulator.apu.write_spc_bus(0x00f1, 0x10);
+        assert_eq!(emulator.apu.read_cpu_port(0).unwrap(), 0);
+        let checkpoint = emulator.save_state().unwrap();
+        let mut restored = Emulator::default();
+        restored.load_state(&checkpoint).unwrap();
+        emulator.step_instruction().unwrap();
+        restored.step_instruction().unwrap();
+        assert_eq!(emulator.apu.read_cpu_port(0).unwrap(), 0);
+        assert_eq!(restored.apu.read_cpu_port(0).unwrap(), 0);
+
+        // An explicit second CPU write of the same byte *must* be observed.
+        for _ in 0..2 {
+            emulator.step_instruction().unwrap();
+            restored.step_instruction().unwrap();
+        }
+        assert_eq!(emulator.apu.read_cpu_port(0).unwrap(), 0x66);
+        assert_eq!(restored.apu.read_cpu_port(0).unwrap(), 0x66);
+        assert_eq!(
+            serde_json::to_value(&emulator.apu).unwrap(),
+            serde_json::to_value(&restored.apu).unwrap()
+        );
+        assert_eq!(
+            emulator.system_observability().apu_port_write_counts()[0],
+            2
+        );
+    }
+
+    #[test]
     fn cpu_program_uploads_spc_driver_through_real_mailbox_bus_and_runs_it() {
         use crate::apu::spc700::Spc700HaltState;
 

@@ -2055,7 +2055,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        AudioProbeSummary, parse_controller_events, parse_wram_watch_addresses, resolve_state_path,
+        AudioProbeSummary, build_apu_io_activity_report, parse_controller_events,
+        parse_wram_watch_addresses, resolve_state_path,
         sanitize_file_stem, write_frame_log_entry, write_pcm16_stereo_wav,
     };
 
@@ -2073,6 +2074,22 @@ mod tests {
         rom[base + 0x1E] = 0xFF;
         rom[base + 0x1F] = 0x00;
         Cartridge::from_bytes(rom, Some(PathBuf::from("C:/ROMs/test game.sfc"))).unwrap()
+    }
+
+    #[test]
+    fn smp_test_telemetry_is_only_visible_in_explicit_ipl_reports() {
+        let mut emulator = Emulator::default();
+        let default_report = build_apu_io_activity_report(&emulator);
+        assert!(default_report.get("isolated_ipl_upload").is_none());
+
+        emulator.enable_isolated_apu_upload_probe();
+        let report = build_apu_io_activity_report(&emulator);
+        assert_eq!(report["isolated_ipl_upload"]["smp_test"]["latch"], 0x0a);
+        assert_eq!(
+            report["isolated_ipl_upload"]["smp_test"]["ram_writable"],
+            true
+        );
+        assert_eq!(report["isolated_ipl_upload"]["bytes_written"], 0);
     }
 
     #[test]

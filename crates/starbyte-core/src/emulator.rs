@@ -755,6 +755,36 @@ mod tests {
     }
 
     #[test]
+    fn pending_cpu_apu_port_write_is_not_lost_across_emulator_save_state() {
+        let mut rom = rom_bytes();
+        rom[0x7ffc] = 0;
+        rom[0x7ffd] = 0x80;
+        rom[0] = 0xea; // NOP; the CPU never explicitly writes a port.
+        let mut emulator = Emulator::default();
+        emulator.load_rom(Cartridge::from_bytes(rom, None).unwrap());
+
+        // A frontend or DMA source may write a port between 65816 steps.
+        // Saving before the next step must preserve its pending write event.
+        emulator.host_write_u8(0x002142, 0x5a);
+        let checkpoint = emulator.save_state().unwrap();
+        let mut restored = Emulator::default();
+        restored.load_state(&checkpoint).unwrap();
+        assert_eq!(restored.apu_input_latch_ports()[2], 0);
+
+        emulator.step_instruction().unwrap();
+        restored.step_instruction().unwrap();
+        assert_eq!(emulator.apu_input_latch_ports()[2], 0x5a);
+        assert_eq!(restored.apu_input_latch_ports()[2], 0x5a);
+
+        // On another idle instruction, clearing by SPC must persist; a
+        // stale last-written 65816 mirror is not a new write event.
+        restored.apu.write_spc_bus(0x00f1, 0x20);
+        restored.step_instruction().unwrap();
+        assert_eq!(restored.apu_input_latch_ports()[2], 0);
+        assert_eq!(restored.cpu_to_apu_ports()[2], 0x5a);
+    }
+
+    #[test]
     fn cpu_port_clear_survives_unrelated_65816_instructions_and_repeated_same_value() {
         let mut rom = rom_bytes();
         rom[0x7ffc] = 0;

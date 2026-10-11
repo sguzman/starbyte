@@ -1021,6 +1021,7 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
     const MAX_WAV_SAMPLES: usize = 32_000 * 2 * 60 * 5;
     let mut audio_wav_samples = Vec::new();
     let mut audio_run = AudioProbeSummary::default();
+    let mut upload_timeline = UploadProbeTimeline::default();
     let mut saved_frame_images = 0_u32;
     let mut next_controller_event = 0_usize;
     for index in 0..args.frames {
@@ -1059,6 +1060,17 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
         // A failing probe still emits the totals from earlier good frames.
         if step.is_ok() {
             audio_run.record_frame(index + 1, &emulator.audio_samples().samples);
+            if let Some(upload) = emulator.isolated_apu_upload() {
+                upload_timeline.record_frame(
+                    index + 1,
+                    upload.bytes_written(),
+                    upload.bytes_stored(),
+                    upload.entrypoint(),
+                    emulator
+                        .isolated_apu_spc700_status()
+                        .map(|status| status.instructions),
+                );
+            }
         }
         if let Some(file) = frame_log.as_mut() {
             write_frame_log_entry(
@@ -1068,6 +1080,7 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
                 step.as_ref().err(),
                 &watched_wram_addresses,
                 &audio_run,
+                &upload_timeline,
             )?;
         }
         if args.trace_frame == Some(index + 1) {
@@ -1117,6 +1130,7 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
         save_state_path.as_deref(),
         args.report_json.as_deref(),
         &audio_run,
+        &upload_timeline,
     )?;
 
     let apu_status = emulator.apu_status();
@@ -1350,6 +1364,7 @@ fn write_frame_log_entry(
     error: Option<&starbyte_core::error::Error>,
     watched_wram_addresses: &[u32],
     audio_run: &AudioProbeSummary,
+    upload_timeline: &UploadProbeTimeline,
 ) -> Result<()> {
     let frame = emulator.framebuffer();
     let cpu = emulator.cpu_registers();
@@ -1364,7 +1379,7 @@ fn write_frame_log_entry(
                 .map(|value| (format!("{address:06X}"), value))
         })
         .collect::<std::collections::BTreeMap<_, _>>();
-    let report = json!({
+    let mut report = json!({
         "schema": "starbyte.frame_log.v1",
         "requested_frame": requested_frame,
         "completed_frame": emulator.timing().frame,
@@ -1407,6 +1422,10 @@ fn write_frame_log_entry(
         "apu_steps": emulator.apu_status().spc700_steps,
         "wram_watch": wram_watch,
     });
+    if emulator.isolated_apu_upload().is_some() {
+        report["apu_upload_timeline"] =
+            upload_timeline.as_json(emulator.timing().frame);
+    }
     serde_json::to_writer(&mut *writer, &report)?;
     writer.write_all(b"\n")?;
     writer.flush()?;
@@ -1452,6 +1471,69 @@ impl AudioProbeSummary {
     }
 }
 
+/// Frame-level milestones observed during explicitly requested IPL diagnostics.
+///
+/// All timestamps refer to completed frames. A failed frame never fabricates
+/// progress; the opt-in frame log retains the last confirmed milestones.
+/// No sound-program bytes, ROM data, or user filesystem paths are collected.
+#[derive(Debug, Clone, Copy, Default)]
+struct UploadProbeTimeline {
+    last_accepted_bytes: u64,
+    last_stored_bytes: u64,
+    last_driver_instructions: u64,
+    first_accepted_frame: Option<u32>,
+    last_accepted_frame: Option<u32>,
+    last_stored_frame: Option<u32>,
+    first_handoff_frame: Option<u32>,
+    first_execution_frame: Option<u32>,
+    last_execution_frame: Option<u32>,
+}
+
+impl UploadProbeTimeline {
+    fn record_frame(
+        &mut self,
+        frame: u32,
+        accepted_bytes: u64,
+        stored_bytes: u64,
+        entrypoint: Option<u16>,
+        driver_instructions: Option<u64>,
+    ) {
+        if accepted_bytes > self.last_accepted_bytes {
+            self.first_accepted_frame.get_or_insert(frame);
+            self.last_accepted_frame = Some(frame);
+        }
+        if stored_bytes > self.last_stored_bytes {
+            self.last_stored_frame = Some(frame);
+        }
+        if entrypoint.is_some() {
+            self.first_handoff_frame.get_or_insert(frame);
+        }
+        if let Some(instructions) = driver_instructions {
+            if instructions > self.last_driver_instructions {
+                self.first_execution_frame.get_or_insert(frame);
+                self.last_execution_frame = Some(frame);
+            }
+            self.last_driver_instructions = instructions;
+        }
+        self.last_accepted_bytes = accepted_bytes;
+        self.last_stored_bytes = stored_bytes;
+    }
+
+    fn as_json(&self, completed_frame: u32) -> serde_json::Value {
+        json!({
+            "first_accepted_frame": self.first_accepted_frame,
+            "last_accepted_frame": self.last_accepted_frame,
+            "frames_since_accepted": self.last_accepted_frame.map(|frame| completed_frame.saturating_sub(frame)),
+            "last_stored_frame": self.last_stored_frame,
+            "frames_since_stored": self.last_stored_frame.map(|frame| completed_frame.saturating_sub(frame)),
+            "first_handoff_frame": self.first_handoff_frame,
+            "first_execution_frame": self.first_execution_frame,
+            "last_execution_frame": self.last_execution_frame,
+            "frames_since_execution": self.last_execution_frame.map(|frame| completed_frame.saturating_sub(frame)),
+        })
+    }
+}
+
 fn maybe_write_run_report(
     emulator: &starbyte_core::Emulator,
     rom: &Path,
@@ -1460,6 +1542,7 @@ fn maybe_write_run_report(
     save_state_path: Option<&Path>,
     report_path: Option<&Path>,
     audio_run: &AudioProbeSummary,
+    upload_timeline: &UploadProbeTimeline,
 ) -> Result<()> {
     let Some(report_path) = report_path else {
         return Ok(());
@@ -1482,7 +1565,7 @@ fn maybe_write_run_report(
     let center_pixel = pixels
         .get(center_offset..center_offset + 4)
         .map_or_else(Vec::new, |value| value.to_vec());
-    let report = json!({
+    let mut report = json!({
         "schema": "starbyte.run_report.v1",
         "rom": rom.display().to_string(),
         "frames": frames,
@@ -1509,6 +1592,10 @@ fn maybe_write_run_report(
         "save_ram_path": save_ram_path.map(|path| path.display().to_string()),
         "save_state_path": save_state_path.map(|path| path.display().to_string()),
     });
+    if emulator.isolated_apu_upload().is_some() {
+        report["apu_upload_timeline"] =
+            upload_timeline.as_json(emulator.timing().frame);
+    }
     std::fs::write(report_path, serde_json::to_string_pretty(&report)?)
         .with_context(|| format!("failed to write run report to {}", report_path.display()))?;
     Ok(())
@@ -2057,7 +2144,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        AudioProbeSummary, build_apu_io_activity_report, parse_controller_events,
+        AudioProbeSummary, UploadProbeTimeline, build_apu_io_activity_report, parse_controller_events,
         parse_wram_watch_addresses, resolve_state_path,
         sanitize_file_stem, write_frame_log_entry, write_pcm16_stereo_wav,
     };
@@ -2094,6 +2181,52 @@ mod tests {
         assert_eq!(report["isolated_ipl_upload"]["bytes_written"], 0);
         assert_eq!(report["isolated_ipl_upload"]["bytes_stored"], 0);
         assert_eq!(report["isolated_ipl_upload"]["next_ram_address"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn opt_in_ipl_timeline_distinguishes_acknowledged_storage_and_driver_progress() {
+        let mut timeline = UploadProbeTimeline::default();
+        timeline.record_frame(1, 0, 0, None, None);
+        assert!(timeline.as_json(1)["first_accepted_frame"].is_null());
+        assert!(timeline.as_json(1)["frames_since_execution"].is_null());
+
+        // Bytes can be acknowledged while TEST blocks the RAM store.
+        timeline.record_frame(2, 3, 0, None, None);
+        timeline.record_frame(3, 3, 0, None, None);
+        let paused = timeline.as_json(3);
+        assert_eq!(paused["first_accepted_frame"], 2);
+        assert_eq!(paused["frames_since_accepted"], 1);
+        assert!(paused["last_stored_frame"].is_null());
+
+        timeline.record_frame(4, 4, 1, Some(0x0400), Some(0));
+        let handed_off = timeline.as_json(4);
+        assert_eq!(handed_off["last_stored_frame"], 4);
+        assert_eq!(handed_off["first_handoff_frame"], 4);
+        assert!(handed_off["first_execution_frame"].is_null());
+
+        timeline.record_frame(5, 4, 1, Some(0x0400), Some(12));
+        timeline.record_frame(6, 4, 1, Some(0x0400), Some(12));
+        let stopped = timeline.as_json(6);
+        assert_eq!(stopped["first_execution_frame"], 5);
+        assert_eq!(stopped["last_execution_frame"], 5);
+        assert_eq!(stopped["frames_since_execution"], 1);
+        assert_eq!(stopped["frames_since_accepted"], 2);
+        assert_eq!(stopped["frames_since_stored"], 2);
+    }
+
+    #[test]
+    fn upload_timeline_is_absent_without_explicit_ipl_mode() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("normal.jsonl");
+        let mut writer = std::fs::File::create(&path).unwrap();
+        let emulator = Emulator::default();
+        write_frame_log_entry(
+            &mut writer, &emulator, 1, None, &[],
+            &AudioProbeSummary::default(), &UploadProbeTimeline::default(),
+        ).unwrap();
+        let record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert!(record.get("apu_upload_timeline").is_none());
     }
 
     #[test]
@@ -2213,6 +2346,7 @@ mod tests {
             None,
             &[0x7E0100, 0x7E0094],
             &AudioProbeSummary::default(),
+            &UploadProbeTimeline::default(),
         )
         .unwrap();
         let record: serde_json::Value =
@@ -2237,7 +2371,7 @@ mod tests {
         };
         let mut audio_run = AudioProbeSummary::default();
         audio_run.record_frame(1, &[0, 0, -100, 50]);
-        write_frame_log_entry(&mut writer, &emulator, 2, Some(&stall), &[], &audio_run)
+        write_frame_log_entry(&mut writer, &emulator, 2, Some(&stall), &[], &audio_run, &UploadProbeTimeline::default())
             .unwrap();
         let record: serde_json::Value =
             serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();

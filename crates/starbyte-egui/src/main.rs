@@ -176,6 +176,37 @@ fn discover_snes_library(config: &mut RuntimeConfig, home: &std::path::Path) -> 
 }
 
 #[cfg(test)]
+mod speaker_cli_tests {
+    use clap::Parser;
+
+    use super::Args;
+
+    #[test]
+    fn no_rom_speaker_probe_requires_explicit_opt_in() {
+        let probe = Args::try_parse_from(["starbyte-egui", "--speaker-test"]).unwrap();
+        assert!(probe.speaker_test);
+        assert!(probe.rom.is_none());
+        assert!(!probe.demo);
+
+        let normal = Args::try_parse_from(["starbyte-egui"]).unwrap();
+        assert!(!normal.speaker_test);
+    }
+
+    #[test]
+    fn speaker_probe_cannot_be_combined_with_game_or_demo_mode() {
+        assert!(
+            Args::try_parse_from(["starbyte-egui", "--speaker-test", "--demo"]).is_err()
+        );
+        assert!(
+            Args::try_parse_from([
+                "starbyte-egui", "--speaker-test", "--rom", "game.sfc"
+            ])
+            .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
 mod library_discovery_tests {
     use super::{RuntimeConfig, discover_snes_library};
 

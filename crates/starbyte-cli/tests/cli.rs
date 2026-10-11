@@ -455,6 +455,7 @@ fn headless_upload_probe_captures_real_cpu_mailbox_transfer_in_run_report() {
     let dir = tempdir().unwrap();
     let rom = dir.path().join("upload-fixture.sfc");
     let probe_report = dir.path().join("probe.json");
+    let driver_report = dir.path().join("driver.json");
     let default_report = dir.path().join("default.json");
     write_test_rom(&rom);
 
@@ -506,6 +507,31 @@ fn headless_upload_probe_captures_real_cpu_mailbox_transfer_in_run_report() {
     assert_eq!(upload["spc700_execution"]["cycles"], 0);
     assert_eq!(upload["spc700_execution"]["halt_state"], "running");
     assert!(report["save_ram_path"].is_null());
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "run",
+            rom.to_str().unwrap(),
+            "--frames",
+            "1",
+            "--no-save-ram",
+            "--apu-upload-probe",
+            "--apu-execute-driver",
+            "--report-json",
+            driver_report.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let driver: serde_json::Value =
+        serde_json::from_slice(&fs::read(&driver_report).unwrap()).unwrap();
+    let driver_status = &driver["apu_io_activity"]["isolated_ipl_upload"];
+    assert_eq!(driver_status["phase"], "executable");
+    assert_eq!(driver_status["entrypoint"], 0x0400);
+    assert_eq!(driver_status["spc700_execution"]["pc"], 0x0404);
+    assert_eq!(driver_status["spc700_execution"]["instructions"], 2);
+    assert_eq!(driver_status["spc700_execution"]["halt_state"], "sleeping");
+    assert!(driver_status["spc700_execution"]["cycles"].as_u64().unwrap() > 0);
 
     Command::cargo_bin("starbyte")
         .unwrap()

@@ -826,6 +826,60 @@ mod tests {
     }
 
     #[test]
+    fn cpu_ipl_upload_to_dsp_registers_updates_apu_and_survives_snapshot() {
+        let mut rom = rom_bytes();
+        rom[0x7ffc] = 0;
+        rom[0x7ffd] = 0x80;
+        let mut program = Vec::new();
+        let mut write_port = |port: u8, value: u8| {
+            program.extend_from_slice(&[0xa9, value, 0x8d, 0x40 + port, 0x21]);
+        };
+        // Original 65816 instructions drive the real $2140-$2143 bus,
+        // then use the IPL to write SPC DSPADDR followed by DSPDATA.
+        write_port(1, 1);
+        write_port(2, 0xf2);
+        write_port(3, 0);
+        write_port(0, 0xcc);
+        write_port(1, 0x0c); // Master volume left register.
+        write_port(0, 0);    // Upload first byte at SPC $F2.
+        let before_second_byte = program.len() / 5 * 2;
+        write_port(1, 0x55);
+        write_port(0, 1); // Upload second byte at SPC $F3.
+        let total_instructions = program.len() / 5 * 2;
+        rom[..program.len()].copy_from_slice(&program);
+
+        let mut emulator = Emulator::default();
+        emulator.load_rom(Cartridge::from_bytes(rom, None).unwrap());
+        emulator.enable_isolated_apu_upload_probe();
+        for _ in 0..before_second_byte {
+            emulator.step_instruction().unwrap();
+        }
+        assert_eq!(emulator.apu.read_spc_ram(0x00f2), 0x0c);
+        assert_eq!(emulator.apu.read_dsp_register(0x0c), 0);
+        assert_eq!(emulator.isolated_apu_upload().unwrap().bytes_written(), 1);
+
+        let state = emulator.save_state().unwrap();
+        let mut restored = Emulator::default();
+        restored.load_state(&state).unwrap();
+        for _ in before_second_byte..total_instructions {
+            emulator.step_instruction().unwrap();
+            restored.step_instruction().unwrap();
+        }
+        for machine in [&emulator, &restored] {
+            assert_eq!(machine.apu.read_spc_ram(0x00f2), 0x0c);
+            assert_eq!(machine.apu.read_spc_ram(0x00f3), 0x55);
+            assert_eq!(machine.apu.read_dsp_register(0x0c), 0x55);
+            assert_eq!(machine.isolated_apu_upload().unwrap().bytes_written(), 2);
+            assert_eq!(machine.apu_to_cpu_ports()[0], 1);
+        }
+        assert_eq!(
+            serde_json::to_value(&emulator.apu).unwrap(),
+            serde_json::to_value(&restored.apu).unwrap()
+        );
+        assert!(Emulator::default().apu.isolated_ipl_upload().is_none());
+    }
+
+    #[test]
     fn synthetic_cpu_uploads_three_spc_blocks_and_runs_dsp_audio() {
         let mut sound_driver = Vec::new();
         for (reg, value) in [

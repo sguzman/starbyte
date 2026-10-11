@@ -91,6 +91,11 @@ mod tests {
 
     #[test]
     fn interpolation_preserves_signed_wrap_and_clamp_order() {
+        // The first three weighted terms are wrapped to signed 16 bits
+        // before tap four is added. Full-scale negative BRR can therefore
+        // become positive at the exact Gaussian overshoot boundary.
+        assert_eq!(interpolate([i16::MIN; 4], 0), 32_752);
+        assert!(interpolate([-24_576; 4], 0) < 0);
         let loud = interpolate([30_000; 4], 0);
         assert_eq!(loud & 1, 0);
         assert!(loud <= i16::MAX);

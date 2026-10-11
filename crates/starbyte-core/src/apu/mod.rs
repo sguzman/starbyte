@@ -980,6 +980,17 @@ mod tests {
         assert!(samples[512 * 2..].iter().any(|&s| s > 1000));
         assert_ne!(apu.read_spc_ram(0x5000), 0);
         assert_eq!(apu.read_dsp_register(0x4d), 0x01);
+        let snapshot = serde_json::to_string(&apu).unwrap();
+        let mut restored: Apu = serde_json::from_str(&snapshot).unwrap();
+        let mut after = Vec::new();
+        let mut after_restore = Vec::new();
+        apu.append_dsp_audio(214_772, &mut after);
+        restored.append_dsp_audio(214_772, &mut after_restore);
+        assert_eq!(after, after_restore);
+        assert_eq!(
+            serde_json::to_value(&apu).unwrap(),
+            serde_json::to_value(&restored).unwrap()
+        );
         // Software disables writes without suppressing playback of the
         // already populated SPC echo ring.
         apu.write_spc_bus(0x00f2, 0x6c);

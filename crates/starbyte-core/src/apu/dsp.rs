@@ -1266,6 +1266,27 @@ mod tests {
     }
 
     #[test]
+    fn pmon_high_positive_outx_cannot_skip_eighth_brr_sample() {
+        let (mut dsp, mut ram) = looping_sample();
+        // Voice zero's positive BRR waveform feeds a nearly doubled
+        // $3FFF pitch into voice one. Its last-fraction carry pushes the
+        // raw sum above $7FFF, but the DSP clamps interpolation position.
+        dsp.write_register(0x12, 0xff, &ram);
+        dsp.write_register(0x13, 0x3f, &ram);
+        dsp.write_register(0x17, 0x7f, &ram);
+        dsp.write_register(0x2d, 0b10, &ram);
+        dsp.write_register(0x4c, 0b11, &ram);
+        for _ in 0..6 {
+            dsp.next_stereo_pair(&mut ram);
+        }
+        dsp.voices[1].index = 0;
+        dsp.voices[1].fraction = 0x0fff;
+        dsp.next_stereo_pair(&mut ram);
+        assert_eq!(dsp.voices[1].index, 7);
+        assert_eq!(dsp.voices[1].fraction, 0x0fff);
+    }
+
+    #[test]
     fn looping_brr_voice_generates_sample_data_and_stereo_volume() {
         let (mut dsp, mut ram) = looping_sample();
         assert_eq!(dsp.next_stereo_pair(&mut ram), (0, 0));

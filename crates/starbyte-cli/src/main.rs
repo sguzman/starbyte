@@ -1506,6 +1506,14 @@ fn build_apu_io_activity_report(emulator: &starbyte_core::Emulator) -> serde_jso
             "blocks_finished": upload.blocks_finished(),
             "entrypoint": upload.entrypoint(),
         });
+        if let Some(status) = emulator.isolated_apu_spc700_status() {
+            report["isolated_ipl_upload"]["spc700_execution"] = json!({
+                "pc": status.pc,
+                "instructions": status.instructions,
+                "cycles": status.cycles,
+                "halt_state": format!("{:?}", status.halt_state).to_ascii_lowercase(),
+            });
+        }
     }
     report
 }

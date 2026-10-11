@@ -453,7 +453,7 @@ impl Apu {
     pub fn status(&self) -> ApuStatus {
         ApuStatus {
             has_ipl_rom: self.ipl_rom.is_some(),
-            using_builtin_bootstrap: self.ipl_rom.is_none(),
+            using_builtin_bootstrap: self.ipl_rom.is_none() && self.ipl_upload.is_none(),
             configured_ipl_path: self.configured_ipl_path.clone(),
             spc700_steps: self.spc700_steps,
         }
@@ -962,6 +962,7 @@ mod tests {
         assert_eq!(apu.read_apu_port(0).unwrap(), 0xaa);
 
         apu.enable_isolated_ipl_upload();
+        assert!(!apu.status().using_builtin_bootstrap);
         for (port, value) in [(1, 1), (2, 0x00), (3, 0x04), (0, 0xcc)] {
             apu.write_cpu_port(port, value).unwrap();
         }

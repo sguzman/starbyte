@@ -58,6 +58,12 @@ An **additional opt-in** diagnostic now advances uploaded SPC700 instructions al
 
 This is an experimental compatibility diagnostic, **not proof of genuine Super Mario World sound, hardware-accurate SPC/DSP timing, or Linux audio-device integration**. Proprietary sound-driver probes have not yet established an accepted game-specific audio trace.
 
+## DSP echo-delay register boundary timing (October 11; CI not yet confirmed)
+
+The S-DSP echo ring now **latches `EDL` only at the beginning of an echo-buffer traversal**, rather than allowing a mid-ring register write to change the active buffer length immediately. The CPU-visible `EDL` register updates on write, but the previous latched delay remains effective until the ring wraps. The internal latched size is serialized for exact save-state continuation; old save states lacking this field fall back to the current register until a natural boundary. `EDL=0` still writes exactly one four-byte stereo echo word. Direct DSP regressions check both delay directions, zero-length semantics and save-state restoration; an APU-level test verifies the same deferred effect through SPC700 DSPADDR/DSPDATA writes, NTSC master-clock accumulation and a sentinel placed in the next echo RAM page. This follows [Anomie's S-DSP EDL errata](https://gist.github.com/nyanpasu64/a0d916ce6924912a7116682bf778e9a0) and [SNESdev's echo-buffer description](https://snes.nesdev.org/wiki/S-DSP_registers).
+
+**Verification:** the implementation and tests are committed. This models sample-boundary latching, not all 32 internal S-DSP pipeline phases; latest Linux/Windows CI completion and authentic game audio remain unverified.
+
 ## DSP echo special RAM protection (October 11; CI not yet confirmed)
 
 The S-DSP echo writer now skips SPC RAM addresses `$00F8` and `$00F9`. Those two bytes remain ordinary writable RAM to the SPC700 bus, but are protected from DSP echo buffer writes even when the echo ring spans the first 256 bytes. The regression covers both direct DSP synthesis and APU-configured DSP voice/echo activity, including writes immediately beside the protected range. This behavior is documented by [Anomie's SPC700 register reference](https://github.com/gilligan/snesdev/blob/master/docs/spc700.txt); it does not establish wider echo or CPU/DSP cycle accuracy.

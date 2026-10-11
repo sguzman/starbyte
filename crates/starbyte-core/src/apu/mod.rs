@@ -541,7 +541,7 @@ enum BootstrapState {
 
 #[cfg(test)]
 mod tests {
-    use super::{Apu, SPC700_IPL_ROM_LEN};
+    use super::{Apu, SPC700_IPL_ROM_LEN, Spc700HaltState};
 
     #[test]
     fn installs_valid_ipl_rom() {

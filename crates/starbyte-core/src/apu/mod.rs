@@ -1574,7 +1574,10 @@ mod tests {
             apu.write_cpu_port(port, value).unwrap();
         }
         apu.step_master_cycles(6);
-        assert_eq!(apu.isolated_ipl_upload().unwrap().entrypoint(), Some(0x0400));
+        assert_eq!(
+            apu.isolated_ipl_upload().unwrap().entrypoint(),
+            Some(0x0400)
+        );
         assert_eq!(apu.read_dsp_register(0x4c), 0);
 
         let mut pcm = Vec::new();
@@ -1596,10 +1599,8 @@ mod tests {
         let mut continuous = Vec::new();
         let mut resumed = Vec::new();
         for _ in 0..100 {
-            for (sound_apu, samples) in [
-                (&mut apu, &mut continuous),
-                (&mut restored, &mut resumed),
-            ] {
+            for (sound_apu, samples) in [(&mut apu, &mut continuous), (&mut restored, &mut resumed)]
+            {
                 sound_apu.step_master_cycles(256);
                 sound_apu.execute_host_clocked_spc(256).unwrap();
                 sound_apu.append_dsp_audio(256, samples);

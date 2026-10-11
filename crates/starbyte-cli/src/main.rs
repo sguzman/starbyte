@@ -244,6 +244,11 @@ struct RunArgs {
     #[arg(long, requires = "no_save_ram", conflicts_with = "load_state")]
     apu_upload_probe: bool,
 
+    /// Execute the uploaded SPC sound program on CPU master clocks after
+    /// handoff. Experimental, isolated, and never enabled for normal play.
+    #[arg(long, requires = "apu_upload_probe")]
+    apu_execute_driver: bool,
+
     /// One-based frame to record every CPU instruction and its bus events.
     #[arg(long, requires = "trace_out", value_parser = clap::value_parser!(u32).range(1..))]
     trace_frame: Option<u32>,
@@ -456,6 +461,7 @@ fn capabilities_manifest() -> serde_json::Value {
                 "optional_controller1_events": "--controller1-events <frame:buttons;frame:none>",
                 "optional_no_save_ram": "--no-save-ram",
                 "optional_apu_upload_probe": "--apu-upload-probe --no-save-ram (experimental IPL capture; no automatic sound execution)",
+                "optional_apu_execute_driver": "--apu-upload-probe --apu-execute-driver --no-save-ram (experimental uploaded SPC program clocked with 65816)",
                 "side_effects": "execute_local_rom_and_write_explicit_report"
             }
         ],
@@ -985,7 +991,9 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
     emulator.load_rom(cartridge);
     maybe_load_save_ram(&mut emulator, save_ram_path.as_deref())?;
     maybe_load_state(&mut emulator, load_state_path.as_deref())?;
-    if args.apu_upload_probe {
+    if args.apu_execute_driver {
+        emulator.enable_isolated_apu_driver_probe()?;
+    } else if args.apu_upload_probe {
         emulator.enable_isolated_apu_upload_probe();
     }
     if let Some(controller) = args.controller1.as_deref() {

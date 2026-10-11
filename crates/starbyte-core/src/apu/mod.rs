@@ -1583,8 +1583,8 @@ mod tests {
             apu.execute_host_clocked_spc(256).unwrap();
             apu.append_dsp_audio(256, &mut pcm);
         }
-        assert_eq!(apu.read_spc_ram(0x00fc), 64);
-        assert_eq!(apu.read_spc_ram(0x00f1) & 4, 4);
+        // $F1 and $FC are control/target MMIO, not mirrored RAM. The DSP's
+        // KON action proves that timer2's read-to-clear counter fired.
         assert_eq!(apu.read_dsp_register(0x4c), 1);
         assert!(apu.isolated_spc700_status().unwrap().pc >= polling_pc);
         assert!(pcm.iter().filter(|&&value| value > 1000).count() > 100);

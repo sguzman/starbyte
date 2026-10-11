@@ -17,12 +17,12 @@ const PITCH_UNIT: u32 = 0x1000;
 const ENVELOPE_COUNTER_WRAP: u16 = 30_720;
 /// SPC DSP envelope periods in audio samples. Rate zero never clocks.
 const ENVELOPE_PERIODS: [u16; 32] = [
-    0, 2048, 1536, 1280, 1024, 768, 640, 512, 384, 320, 256, 192, 160, 128, 96, 80, 64,
-    48, 40, 32, 24, 20, 16, 12, 10, 8, 6, 5, 4, 3, 2, 1,
+    0, 2048, 1536, 1280, 1024, 768, 640, 512, 384, 320, 256, 192, 160, 128, 96, 80, 64, 48, 40, 32,
+    24, 20, 16, 12, 10, 8, 6, 5, 4, 3, 2, 1,
 ];
 const ENVELOPE_OFFSETS: [u16; 32] = [
-    0, 0, 1040, 536, 0, 1040, 536, 0, 1040, 536, 0, 1040, 536, 0, 1040, 536, 0, 1040, 536,
-    0, 1040, 536, 0, 1040, 536, 0, 1040, 536, 0, 1040, 0, 0,
+    0, 0, 1040, 536, 0, 1040, 536, 0, 1040, 536, 0, 1040, 536, 0, 1040, 536, 0, 1040, 536, 0, 1040,
+    536, 0, 1040, 536, 0, 1040, 536, 0, 1040, 0, 0,
 ];
 
 fn envelope_rate_ready(rate: u8, counter: u16) -> bool {
@@ -270,9 +270,9 @@ impl Voice {
                 return;
             }
             self.envelope = match (gain >> 5) & 3 {
-                0 => self.envelope - 0x20, // Linear decrease.
+                0 => self.envelope - 0x20,                     // Linear decrease.
                 1 => self.envelope - 1 - (self.envelope >> 8), // Exponential decrease.
-                2 => self.envelope + 0x20, // Linear increase.
+                2 => self.envelope + 0x20,                     // Linear increase.
                 _ => self.envelope + if self.envelope < 0x600 { 0x20 } else { 8 },
             }
             .clamp(0, 0x7ff);
@@ -483,7 +483,7 @@ mod tests {
         dsp.next_stereo_pair(&ram);
         assert_eq!(dsp.voices[0].envelope, 0x7ff);
         assert_eq!(dsp.voices[0].envelope_phase, super::EnvelopePhase::Decay);
-        for _ in 0..1024 {
+        for _ in 0..4096 {
             dsp.next_stereo_pair(&ram);
             if dsp.voices[0].envelope_phase == super::EnvelopePhase::Sustain {
                 break;

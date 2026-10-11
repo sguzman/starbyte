@@ -230,10 +230,13 @@ impl Dsp {
                 self.registers[0x7c] |= 1 << index;
             }
         }
-        let left = (left / 128) * i64::from(self.registers[0x0c] as i8) / 128;
-        let right = (right / 128) * i64::from(self.registers[0x1c] as i8) / 128;
+        // DSP volume multipliers are signed fixed-point shifts, including
+        // their negative rounding. Truncating Rust integer division loses
+        // low-amplitude negative samples and changes the echo-send signal.
+        let left = ((left >> 7) * i64::from(self.registers[0x0c] as i8)) >> 7;
+        let right = ((right >> 7) * i64::from(self.registers[0x1c] as i8)) >> 7;
         let (left, right) =
-            self.process_echo(ram, [left, right], [echo_left / 128, echo_right / 128]);
+            self.process_echo(ram, [left, right], [echo_left >> 7, echo_right >> 7]);
         if self.registers[0x6c] & 0x40 != 0 {
             (0, 0)
         } else {
@@ -276,9 +279,9 @@ impl Dsp {
         for channel in 0..2 {
             let echo_volume =
                 i64::from(self.registers[if channel == 0 { 0x2c } else { 0x3c }] as i8);
-            output[channel] = clamp_i16(main[channel] + filtered[channel] * echo_volume / 128);
+            output[channel] = clamp_i16(main[channel] + ((filtered[channel] * echo_volume) >> 7));
             if self.registers[0x6c] & 0x20 == 0 {
-                let sample = clamp_i16(send[channel] + filtered[channel] * feedback / 128) & !1;
+                let sample = clamp_i16(send[channel] + ((filtered[channel] * feedback) >> 7)) & !1;
                 let [low, high] = sample.to_le_bytes();
                 let sample_address = address.wrapping_add((channel * 2) as u16);
                 write_ram(ram, sample_address, low);
@@ -522,6 +525,39 @@ mod tests {
         dsp.write_register(0x0c, 0x7f, &ram);
         dsp.write_register(0x1c, 0x7f, &ram);
         (dsp, ram)
+    }
+
+    #[test]
+    fn negative_low_level_main_mix_uses_signed_arithmetic_shift() {
+        let (mut dsp, mut ram) = looping_sample();
+        // NON starts at -32768. Direct GAIN 1 produces a -256 voice output;
+        // VOL(L)=1 yields -2 after the voice >>7, and MVOL(L)=1 yields -1.
+        // Integer division toward zero would incorrectly turn -2 / 128 into 0.
+        dsp.write_register(0x00, 1, &ram);
+        dsp.write_register(0x01, 0, &ram);
+        dsp.write_register(0x0c, 1, &ram);
+        dsp.write_register(0x1c, 0, &ram);
+        dsp.write_register(0x07, 1, &ram);
+        dsp.write_register(0x3d, 1, &ram);
+        dsp.write_register(0x4c, 1, &ram);
+        assert_eq!(dsp.next_stereo_pair(&mut ram), (-1, 0));
+    }
+
+    #[test]
+    fn negative_echo_volume_and_feedback_round_toward_negative_infinity() {
+        let (mut dsp, mut ram) = looping_sample();
+        // A preloaded tiny negative echo input, routed through tap zero,
+        // reaches negative fixed-point scaling before the final output clamp.
+        ram[0x6000..0x6004].copy_from_slice(&[0xfe, 0xff, 0xfe, 0xff]);
+        dsp.write_register(0x6d, 0x60, &ram);
+        dsp.write_register(0x7d, 1, &ram);
+        dsp.write_register(0x0f, 0x7f, &ram);
+        dsp.write_register(0x2c, 1, &ram);
+        dsp.write_register(0x3c, 1, &ram);
+        dsp.write_register(0x0d, 1, &ram);
+        dsp.write_register(0x6c, 0, &ram);
+        assert_eq!(dsp.next_stereo_pair(&mut ram), (-1, -1));
+        assert_eq!(&ram[0x6000..0x6004], &[0xfe, 0xff, 0xfe, 0xff]);
     }
 
     #[test]

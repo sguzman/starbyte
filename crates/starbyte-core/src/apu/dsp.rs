@@ -207,12 +207,19 @@ impl Dsp {
             self.noise_lfsr = (self.noise_lfsr >> 1) | (feedback << 14);
         }
         let noise_sample = (self.noise_lfsr << 1) as i16;
-        // Reset is a held state, not a one-time command. A KON issued
-        // while FLG.7 remains set must not produce a sounding voice.
-        if self.registers[0x6c] & 0x80 != 0 {
-            for voice in &mut self.voices {
+        // Soft reset and KOFF are held controls, not one-time events.
+        // A KON cannot sound a voice while its KOFF bit remains asserted,
+        // even if the key-on write occurred after the key-off write.
+        // Hardware polls these latches on internal sample phases; this
+        // mixer applies the held controls at its next stereo sample.
+        let soft_reset = self.registers[0x6c] & 0x80 != 0;
+        let key_off = self.registers[0x5c];
+        for (index, voice) in self.voices.iter_mut().enumerate() {
+            if soft_reset || key_off & (1 << index) != 0 {
                 voice.releasing = true;
-                voice.envelope = 0;
+                if soft_reset {
+                    voice.envelope = 0;
+                }
             }
         }
         let mut left = 0_i64;
@@ -580,6 +587,45 @@ mod tests {
         dsp.write_register(0x0c, 0x7f, &ram);
         dsp.write_register(0x1c, 0x7f, &ram);
         (dsp, ram)
+    }
+
+    #[test]
+    fn held_koff_blocks_rekey_only_for_selected_voice_until_cleared() {
+        let (mut dsp, mut ram) = looping_sample();
+        dsp.write_register(0x17, 0x7f, &ram); // Voice 1 direct gain.
+        dsp.write_register(0x10, 0x7f, &ram);
+        dsp.write_register(0x11, 0x7f, &ram);
+        dsp.write_register(0x13, 0x10, &ram);
+
+        // KOFF bit zero remains asserted during both key-on commands.
+        // Voice 1 is unaffected and must remain audible.
+        dsp.write_register(0x5c, 0b01, &ram);
+        dsp.write_register(0x4c, 0b11, &ram);
+        let sample = dsp.next_stereo_pair(&mut ram);
+        assert!(sample.0 > 1000, "voice 1 should remain audible");
+        assert!(!dsp.voices[0].active);
+        assert!(dsp.voices[1].active);
+        assert_eq!(dsp.read_register(0x08), 0);
+        assert_eq!(dsp.read_register(0x5c), 0b01);
+
+        // Restoring mid-held KOFF must preserve the inhibition.
+        let saved = serde_json::to_string(&dsp).unwrap();
+        let mut restored: Dsp = serde_json::from_str(&saved).unwrap();
+        let mut restored_ram = ram.clone();
+        dsp.write_register(0x4c, 0b01, &ram);
+        restored.write_register(0x4c, 0b01, &restored_ram);
+        assert_eq!(
+            dsp.next_stereo_pair(&mut ram),
+            restored.next_stereo_pair(&mut restored_ram)
+        );
+        assert!(!dsp.voices[0].active);
+        assert!(!restored.voices[0].active);
+
+        // Clearing KOFF allows the next KON to create an audible note.
+        dsp.write_register(0x5c, 0, &ram);
+        dsp.write_register(0x4c, 0b01, &ram);
+        assert!(dsp.next_stereo_pair(&mut ram).0 > 1000);
+        assert!(dsp.voices[0].active);
     }
 
     #[test]

@@ -43,15 +43,30 @@ pub struct Dsp {
     /// Shared 15-bit noise LFSR. The sound chip powers on with seed $4000.
     #[serde(default = "initial_noise_seed")]
     noise_lfsr: u16,
+    /// Echo ring offset is expressed in bytes, relative to ESA.
+    #[serde(default)]
+    echo_offset: u16,
+    /// Eight stereo samples, newest at echo_history_index - 1.
+    #[serde(default)]
+    echo_history: [[i16; 2]; 8],
+    #[serde(default)]
+    echo_history_index: usize,
 }
 
 impl Default for Dsp {
     fn default() -> Self {
+        let mut registers = vec![0; REGISTER_COUNT];
+        // The synthetic/default mixer starts unmuted but must not overwrite
+        // SPC low RAM with echo before a sound driver configures echo space.
+        registers[0x6c] = 0x20;
         Self {
-            registers: vec![0; REGISTER_COUNT],
+            registers,
             voices: vec![Voice::default(); VOICE_COUNT],
             envelope_counter: 0,
             noise_lfsr: initial_noise_seed(),
+            echo_offset: 0,
+            echo_history: [[0; 2]; 8],
+            echo_history_index: 0,
         }
     }
 }
@@ -149,7 +164,7 @@ impl Dsp {
     /// The host calls this only when the APU's fractional master clock
     /// indicates that a sample is due.
     #[must_use]
-    pub fn next_stereo_pair(&mut self, ram: &[u8]) -> (i16, i16) {
+    pub fn next_stereo_pair(&mut self, ram: &mut [u8]) -> (i16, i16) {
         // The S-DSP clock decrements its common envelope counter once per
         // output sample. All eight voices share this phase.
         self.envelope_counter = if self.envelope_counter == 0 {
@@ -166,6 +181,8 @@ impl Dsp {
         let noise_sample = (self.noise_lfsr << 1) as i16;
         let mut left = 0_i64;
         let mut right = 0_i64;
+        let mut echo_left = 0_i64;
+        let mut echo_right = 0_i64;
         // PMON modulates voice N's pitch with voice N-1's envelope-scaled
         // output, not with its raw BRR sample. Voice zero ignores PMON.
         let mut previous_voice_output = 0_i16;
@@ -197,18 +214,88 @@ impl Dsp {
             previous_voice_output = sample;
             left += i64::from(sample) * i64::from(self.registers[base] as i8);
             right += i64::from(sample) * i64::from(self.registers[base + 1] as i8);
+            if self.registers[0x4d] & (1 << index) != 0 {
+                echo_left += i64::from(sample) * i64::from(self.registers[base] as i8);
+                echo_right += i64::from(sample) * i64::from(self.registers[base + 1] as i8);
+            }
             self.registers[base + 8] = (self.voices[index].envelope >> 4) as u8;
             self.registers[base + 9] = (i32::from(sample) >> 8) as u8;
             if ended_block {
                 self.registers[0x7c] |= 1 << index;
             }
         }
-        if self.registers[0x6c] & 0x40 != 0 {
-            return (0, 0);
-        }
         let left = (left / 128) * i64::from(self.registers[0x0c] as i8) / 128;
         let right = (right / 128) * i64::from(self.registers[0x1c] as i8) / 128;
-        (clamp_i16(left), clamp_i16(right))
+        let (left, right) = self.process_echo(
+            ram,
+            [left, right],
+            [echo_left / 128, echo_right / 128],
+        );
+        if self.registers[0x6c] & 0x40 != 0 {
+            (0, 0)
+        } else {
+            (left, right)
+        }
+    }
+
+    /// Echo reads and writes SPC RAM at ESA with EDL-selected ring length.
+    /// FIR runs on eight historical 16-bit stereo samples; echo effects are
+    /// not yet precisely synchronized to the S-DSP 32-cycle pipeline.
+    fn process_echo(
+        &mut self,
+        ram: &mut [u8],
+        main: [i64; 2],
+        send: [i64; 2],
+    ) -> (i16, i16) {
+        let address = (u16::from(self.registers[0x6d]) << 8)
+            .wrapping_add(self.echo_offset);
+        let recent = [
+            i16::from_le_bytes([
+                read_ram(ram, address),
+                read_ram(ram, address.wrapping_add(1)),
+            ]),
+            i16::from_le_bytes([
+                read_ram(ram, address.wrapping_add(2)),
+                read_ram(ram, address.wrapping_add(3)),
+            ]),
+        ];
+        let pos = self.echo_history_index;
+        self.echo_history[pos] = [recent[0] >> 1, recent[1] >> 1];
+
+        let mut filtered = [0_i64; 2];
+        for tap in 0..8 {
+            let history = self.echo_history[(pos + 8 - tap) % 8];
+            let coefficient = i64::from(self.registers[0x0f + tap * 16] as i8);
+            for channel in 0..2 {
+                filtered[channel] += (i64::from(history[channel]) * coefficient) >> 6;
+            }
+        }
+        let filtered = [
+            i64::from(clamp_i16(filtered[0])) & !1,
+            i64::from(clamp_i16(filtered[1])) & !1,
+        ];
+        let feedback = i64::from(self.registers[0x0d] as i8);
+        let mut output = [0_i16; 2];
+        for channel in 0..2 {
+            let echo_volume = i64::from(
+                self.registers[if channel == 0 { 0x2c } else { 0x3c }] as i8,
+            );
+            output[channel] =
+                clamp_i16(main[channel] + filtered[channel] * echo_volume / 128);
+            if self.registers[0x6c] & 0x20 == 0 {
+                let sample = clamp_i16(send[channel] + filtered[channel] * feedback / 128) & !1;
+                let [low, high] = sample.to_le_bytes();
+                let sample_address = address.wrapping_add((channel * 2) as u16);
+                write_ram(ram, sample_address, low);
+                write_ram(ram, sample_address.wrapping_add(1), high);
+            }
+        }
+
+        self.echo_history_index = (pos + 1) % 8;
+        let delay_bytes = u16::from(self.registers[0x7d] & 0x0f) * 2048;
+        let delay_bytes = delay_bytes.max(4);
+        self.echo_offset = (self.echo_offset + 4) % delay_bytes;
+        (output[0], output[1])
     }
 
     fn key_on(&mut self, index: usize, ram: &[u8]) {
@@ -381,6 +468,12 @@ fn read_ram(ram: &[u8], address: u16) -> u8 {
     ram.get(usize::from(address)).copied().unwrap_or(0)
 }
 
+fn write_ram(ram: &mut [u8], address: u16, value: u8) {
+    if let Some(slot) = ram.get_mut(usize::from(address)) {
+        *slot = value;
+    }
+}
+
 fn read_word(ram: &[u8], address: u16) -> u16 {
     u16::from(read_ram(ram, address)) | (u16::from(read_ram(ram, address.wrapping_add(1))) << 8)
 }
@@ -458,11 +551,11 @@ mod tests {
 
     #[test]
     fn looping_brr_voice_generates_sample_data_and_stereo_volume() {
-        let (mut dsp, ram) = looping_sample();
-        assert_eq!(dsp.next_stereo_pair(&ram), (0, 0));
+        let (mut dsp, mut ram) = looping_sample();
+        assert_eq!(dsp.next_stereo_pair(&mut ram), (0, 0));
         dsp.write_register(0x4c, 1, &ram);
         for _ in 0..64 {
-            let (left, right) = dsp.next_stereo_pair(&ram);
+            let (left, right) = dsp.next_stereo_pair(&mut ram);
             assert!(left > 1000);
             assert_eq!(left, right);
         }
@@ -488,7 +581,7 @@ mod tests {
         dsp.write_register(0x17, 0x7f, &ram);
         dsp.write_register(0x4c, 0b10, &ram);
         for _ in 0..48 {
-            let (left, right) = dsp.next_stereo_pair(&ram);
+            let (left, right) = dsp.next_stereo_pair(&mut ram);
             assert!(left < -1000, "voice one must retain its own loop source");
             assert_eq!(right, 0);
         }
@@ -497,20 +590,20 @@ mod tests {
 
     #[test]
     fn looping_voice_endx_is_latched_cleared_and_reasserted_at_next_loop() {
-        let (mut dsp, ram) = looping_sample();
+        let (mut dsp, mut ram) = looping_sample();
         dsp.write_register(0x4c, 1, &ram);
         for _ in 0..15 {
-            dsp.next_stereo_pair(&ram);
+            dsp.next_stereo_pair(&mut ram);
         }
         assert_eq!(dsp.read_register(0x7c) & 1, 0);
-        dsp.next_stereo_pair(&ram);
+        dsp.next_stereo_pair(&mut ram);
         assert_eq!(dsp.read_register(0x7c) & 1, 1);
         dsp.write_register(0x7c, 0xff, &ram);
         assert_eq!(dsp.read_register(0x7c) & 1, 0);
-        dsp.next_stereo_pair(&ram);
+        dsp.next_stereo_pair(&mut ram);
         assert_eq!(dsp.read_register(0x7c) & 1, 0);
         for _ in 0..15 {
-            dsp.next_stereo_pair(&ram);
+            dsp.next_stereo_pair(&mut ram);
         }
         assert_eq!(dsp.read_register(0x7c) & 1, 1);
     }
@@ -521,14 +614,14 @@ mod tests {
         ram[0x300] = 0xc1; // End without loop.
         dsp.write_register(0x4c, 1, &ram);
         for _ in 0..16 {
-            assert!(dsp.next_stereo_pair(&ram).0 > 0);
+            assert!(dsp.next_stereo_pair(&mut ram).0 > 0);
         }
-        assert_eq!(dsp.next_stereo_pair(&ram), (0, 0));
+        assert_eq!(dsp.next_stereo_pair(&mut ram), (0, 0));
         assert_eq!(dsp.read_register(0x7c) & 1, 1);
         dsp.write_register(0x7c, 0xff, &ram);
         assert_eq!(dsp.read_register(0x7c), 0);
         for _ in 0..24 {
-            dsp.next_stereo_pair(&ram);
+            dsp.next_stereo_pair(&mut ram);
         }
         assert_eq!(
             dsp.read_register(0x7c),
@@ -539,64 +632,64 @@ mod tests {
 
     #[test]
     fn key_off_releases_and_global_mute_silences() {
-        let (mut dsp, ram) = looping_sample();
+        let (mut dsp, mut ram) = looping_sample();
         dsp.write_register(0x4c, 1, &ram);
         dsp.write_register(0x6c, 0x40, &ram);
-        assert_eq!(dsp.next_stereo_pair(&ram), (0, 0));
+        assert_eq!(dsp.next_stereo_pair(&mut ram), (0, 0));
         dsp.write_register(0x6c, 0x00, &ram);
-        assert!(dsp.next_stereo_pair(&ram).0 > 0);
+        assert!(dsp.next_stereo_pair(&mut ram).0 > 0);
         dsp.write_register(0x5c, 1, &ram);
         for _ in 0..300 {
-            let _ = dsp.next_stereo_pair(&ram);
+            let _ = dsp.next_stereo_pair(&mut ram);
         }
-        assert_eq!(dsp.next_stereo_pair(&ram), (0, 0));
+        assert_eq!(dsp.next_stereo_pair(&mut ram), (0, 0));
     }
 
     #[test]
     fn envelope_rate_table_and_gain_modes_follow_shared_sample_clock() {
-        let (mut dsp, ram) = looping_sample();
+        let (mut dsp, mut ram) = looping_sample();
         dsp.write_register(0x4c, 1, &ram);
         assert_eq!(dsp.voices[0].envelope, 0);
 
         // Direct GAIN always applies immediately, independent of rate.
-        dsp.next_stereo_pair(&ram);
+        dsp.next_stereo_pair(&mut ram);
         assert_eq!(dsp.voices[0].envelope, 0x7f0);
         dsp.write_register(0x07, 0x9f, &ram); // GAIN linear down, rate 31.
-        dsp.next_stereo_pair(&ram);
+        dsp.next_stereo_pair(&mut ram);
         assert_eq!(dsp.voices[0].envelope, 0x7d0);
         dsp.write_register(0x07, 0xbf, &ram); // Exponential down, rate 31.
-        dsp.next_stereo_pair(&ram);
+        dsp.next_stereo_pair(&mut ram);
         assert_eq!(dsp.voices[0].envelope, 0x7d0 - 1 - (0x7d0 >> 8));
         dsp.write_register(0x07, 0xdf, &ram); // Linear up, rate 31.
         let before = dsp.voices[0].envelope;
-        dsp.next_stereo_pair(&ram);
+        dsp.next_stereo_pair(&mut ram);
         assert_eq!(dsp.voices[0].envelope, before + 0x20);
         dsp.write_register(0x07, 0xff, &ram); // Bent increase, rate 31.
         let before = dsp.voices[0].envelope;
-        dsp.next_stereo_pair(&ram);
+        dsp.next_stereo_pair(&mut ram);
         assert_eq!(dsp.voices[0].envelope, before + 8);
         dsp.write_register(0x07, 0x80, &ram); // Rate zero: never updates.
         let before = dsp.voices[0].envelope;
         for _ in 0..64 {
-            dsp.next_stereo_pair(&ram);
+            dsp.next_stereo_pair(&mut ram);
         }
         assert_eq!(dsp.voices[0].envelope, before);
     }
 
     #[test]
     fn adsr_attack_decay_sustain_are_rate_controlled_and_serializable() {
-        let (mut dsp, ram) = looping_sample();
+        let (mut dsp, mut ram) = looping_sample();
         dsp.write_register(0x05, 0xff, &ram); // Attack 15, decay 7.
         dsp.write_register(0x06, 0x00, &ram); // Sustain level 0, rate disabled.
         dsp.write_register(0x4c, 1, &ram);
         assert_eq!(dsp.voices[0].envelope_phase, super::EnvelopePhase::Attack);
-        dsp.next_stereo_pair(&ram);
+        dsp.next_stereo_pair(&mut ram);
         assert_eq!(dsp.voices[0].envelope, 0x400);
-        dsp.next_stereo_pair(&ram);
+        dsp.next_stereo_pair(&mut ram);
         assert_eq!(dsp.voices[0].envelope, 0x7ff);
         assert_eq!(dsp.voices[0].envelope_phase, super::EnvelopePhase::Decay);
         for _ in 0..4096 {
-            dsp.next_stereo_pair(&ram);
+            dsp.next_stereo_pair(&mut ram);
             if dsp.voices[0].envelope_phase == super::EnvelopePhase::Sustain {
                 break;
             }
@@ -604,7 +697,7 @@ mod tests {
         assert_eq!(dsp.voices[0].envelope_phase, super::EnvelopePhase::Sustain);
         let frozen = dsp.voices[0].envelope;
         for _ in 0..64 {
-            dsp.next_stereo_pair(&ram);
+            dsp.next_stereo_pair(&mut ram);
         }
         assert_eq!(dsp.voices[0].envelope, frozen);
 
@@ -613,7 +706,7 @@ mod tests {
         dsp.write_register(0x06, 0x1f, &ram); // Enable rapid sustain decay.
         resumed.write_register(0x06, 0x1f, &ram);
         for _ in 0..128 {
-            assert_eq!(dsp.next_stereo_pair(&ram), resumed.next_stereo_pair(&ram));
+            assert_eq!(dsp.next_stereo_pair(&mut ram), resumed.next_stereo_pair(&mut ram));
         }
         assert_eq!(dsp.voices[0].envelope, resumed.voices[0].envelope);
         assert!(dsp.voices[0].envelope < frozen);
@@ -621,22 +714,22 @@ mod tests {
 
     #[test]
     fn slow_gain_rate_obeys_period_and_is_independent_of_audio_chunking() {
-        let (mut dsp, ram) = looping_sample();
+        let (mut dsp, mut ram) = looping_sample();
         dsp.write_register(0x4c, 1, &ram);
-        dsp.next_stereo_pair(&ram); // Initialize direct GAIN.
+        dsp.next_stereo_pair(&mut ram); // Initialize direct GAIN.
         dsp.write_register(0x07, 0x81, &ram); // Linear down at rate 1 (2048 ticks).
         let baseline = dsp.voices[0].envelope;
         for _ in 0..2046 {
-            dsp.next_stereo_pair(&ram);
+            dsp.next_stereo_pair(&mut ram);
         }
         assert_eq!(dsp.voices[0].envelope, baseline);
-        dsp.next_stereo_pair(&ram);
+        dsp.next_stereo_pair(&mut ram);
         assert_eq!(dsp.voices[0].envelope, baseline - 0x20);
     }
 
     #[test]
     fn pitch_modulation_uses_previous_enveloped_voice_output() {
-        let (mut base, ram) = looping_sample();
+        let (mut base, mut ram) = looping_sample();
         // The two voices use the same positive BRR source. Voice one's pitch
         // is half a sample per DSP tick without PMON.
         base.write_register(0x12, 0, &ram);
@@ -649,9 +742,9 @@ mod tests {
         ignored_voice_zero.write_register(0x2d, 0b01, &ram);
 
         for _ in 0..64 {
-            let reference = base.next_stereo_pair(&ram);
-            modulated.next_stereo_pair(&ram);
-            assert_eq!(ignored_voice_zero.next_stereo_pair(&ram), reference);
+            let reference = base.next_stereo_pair(&mut ram);
+            modulated.next_stereo_pair(&mut ram);
+            assert_eq!(ignored_voice_zero.next_stereo_pair(&mut ram), reference);
         }
         // The higher effective pitch advances voice one farther through BRR
         // samples, but voice zero is unaffected.
@@ -684,16 +777,16 @@ mod tests {
 
         let mut modulated = base.clone();
         modulated.write_register(0x2d, 0b10, &ram);
-        base.next_stereo_pair(&ram);
-        modulated.next_stereo_pair(&ram);
+        base.next_stereo_pair(&mut ram);
+        modulated.next_stereo_pair(&mut ram);
         assert!(modulated.voices[1].fraction < base.voices[1].fraction);
 
         let saved = serde_json::to_string(&modulated).unwrap();
         let mut restored: Dsp = serde_json::from_str(&saved).unwrap();
         for _ in 0..100 {
             assert_eq!(
-                modulated.next_stereo_pair(&ram),
-                restored.next_stereo_pair(&ram)
+                modulated.next_stereo_pair(&mut ram),
+                restored.next_stereo_pair(&mut ram)
             );
         }
         assert_eq!(modulated.voices[1].index, restored.voices[1].index);
@@ -702,22 +795,22 @@ mod tests {
 
     #[test]
     fn noise_lfsr_uses_shared_clock_and_serializes_without_reset() {
-        let (mut dsp, ram) = looping_sample();
+        let (mut dsp, mut ram) = looping_sample();
         dsp.write_register(0x4c, 1, &ram);
         dsp.write_register(0x3d, 1, &ram); // NON voice 0.
         dsp.write_register(0x6c, 0x1f, &ram); // Highest noise clock rate.
         assert_eq!(dsp.noise_lfsr, 0x4000);
-        let first = dsp.next_stereo_pair(&ram);
+        let first = dsp.next_stereo_pair(&mut ram);
         assert_eq!(dsp.noise_lfsr, 0x2000);
         assert!(first.0 > 0);
         assert_eq!(first.0, first.1);
-        dsp.next_stereo_pair(&ram);
+        dsp.next_stereo_pair(&mut ram);
         assert_eq!(dsp.noise_lfsr, 0x1000);
 
         let snapshot = serde_json::to_string(&dsp).unwrap();
         let mut restored: Dsp = serde_json::from_str(&snapshot).unwrap();
         for _ in 0..128 {
-            assert_eq!(dsp.next_stereo_pair(&ram), restored.next_stereo_pair(&ram));
+            assert_eq!(dsp.next_stereo_pair(&mut ram), restored.next_stereo_pair(&mut ram));
             assert_eq!(dsp.noise_lfsr, restored.noise_lfsr);
         }
         assert_ne!(dsp.noise_lfsr, 0x4000);
@@ -736,7 +829,7 @@ mod tests {
                 "LFSR repeated before completing full period"
             );
             visited[state] = true;
-            dsp.next_stereo_pair(&[]);
+            dsp.next_stereo_pair(&mut []);
         }
         assert_eq!(dsp.noise_lfsr, 0x4000);
         assert!(!visited[0]);
@@ -744,25 +837,25 @@ mod tests {
 
     #[test]
     fn noise_rate_zero_holds_lfsr_while_non_toggles_waveform() {
-        let (mut dsp, ram) = looping_sample();
+        let (mut dsp, mut ram) = looping_sample();
         dsp.write_register(0x4c, 1, &ram);
         dsp.write_register(0x6c, 0, &ram); // Rate zero never clocks LFSR.
         dsp.write_register(0x3d, 1, &ram);
-        let noise_output = dsp.next_stereo_pair(&ram);
+        let noise_output = dsp.next_stereo_pair(&mut ram);
         for _ in 0..4096 {
-            let _ = dsp.next_stereo_pair(&ram);
+            let _ = dsp.next_stereo_pair(&mut ram);
         }
         assert_eq!(dsp.noise_lfsr, 0x4000);
         assert!(noise_output.0 < 0); // Signed 15-bit $4000.
         dsp.write_register(0x3d, 0, &ram);
-        let sample_output = dsp.next_stereo_pair(&ram);
+        let sample_output = dsp.next_stereo_pair(&mut ram);
         assert!(sample_output.0 > 0); // Original positive BRR sample.
         assert_eq!(sample_output.0, sample_output.1);
     }
 
     #[test]
     fn two_non_voices_share_the_same_noise_waveform() {
-        let (mut dsp, ram) = looping_sample();
+        let (mut dsp, mut ram) = looping_sample();
         dsp.write_register(0x10, 0x7f, &ram);
         dsp.write_register(0x11, 0, &ram);
         dsp.write_register(0x13, 0x10, &ram);
@@ -770,7 +863,7 @@ mod tests {
         dsp.write_register(0x3d, 0b11, &ram);
         dsp.write_register(0x6c, 0x1f, &ram);
         dsp.write_register(0x4c, 0b11, &ram);
-        let both = dsp.next_stereo_pair(&ram);
+        let both = dsp.next_stereo_pair(&mut ram);
         assert!(both.0 > 0);
         assert!(both.1 > 0);
         // Integer master-volume scaling rounds twice; allow two LSBs.
@@ -779,15 +872,15 @@ mod tests {
 
     #[test]
     fn dsp_state_serializes_across_sample_boundaries() {
-        let (mut dsp, ram) = looping_sample();
+        let (mut dsp, mut ram) = looping_sample();
         dsp.write_register(0x4c, 1, &ram);
         for _ in 0..5 {
-            let _ = dsp.next_stereo_pair(&ram);
+            let _ = dsp.next_stereo_pair(&mut ram);
         }
         let state = serde_json::to_string(&dsp).unwrap();
         let mut resumed: Dsp = serde_json::from_str(&state).unwrap();
         for _ in 0..50 {
-            assert_eq!(dsp.next_stereo_pair(&ram), resumed.next_stereo_pair(&ram));
+            assert_eq!(dsp.next_stereo_pair(&mut ram), resumed.next_stereo_pair(&mut ram));
         }
     }
 }

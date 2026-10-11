@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument};
 
-use crate::apu::{Apu, ApuStatus, AudioFrame};
+use crate::apu::{Apu, ApuStatus, AudioFrame, upload::IplUpload};
 use crate::bus::{Bus, BusEvent};
 use crate::cartridge::Cartridge;
 use crate::cpu_65816::Cpu65816;
@@ -294,6 +294,23 @@ impl Emulator {
     /// Load the configured user-supplied SPC700 IPL ROM if present.
     pub fn load_apu_ipl_rom(&mut self) -> Result<bool> {
         self.apu.load_configured_ipl_rom()
+    }
+
+    /// Opt into isolated SPC IPL transfer capture for diagnostic runs.
+    ///
+    /// Must be enabled after loading a ROM and before executing it. This
+    /// replaces the fake bootstrap handshakes only in the current instance;
+    /// it does not automatically run an uploaded game sound driver.
+    /// Regular desktop and CLI playback must leave this disabled.
+    pub fn enable_isolated_apu_upload_probe(&mut self) {
+        self.apu.enable_isolated_ipl_upload();
+        self.system.sync_apu_ports_from_runtime(&self.apu);
+    }
+
+    /// Read the explicitly enabled sound-driver upload progress, if any.
+    #[must_use]
+    pub fn isolated_apu_upload(&self) -> Option<&IplUpload> {
+        self.apu.isolated_ipl_upload()
     }
 
     /// Host-side write access used by bootstrap tests and regression fixtures.
@@ -736,7 +753,7 @@ mod tests {
 
         let mut emulator = Emulator::default();
         emulator.load_rom(cart);
-        emulator.apu.enable_isolated_ipl_upload();
+        emulator.enable_isolated_apu_upload_probe();
         assert_eq!(emulator.apu_to_cpu_ports()[0], 0xaa);
         for _ in 0..instructions {
             emulator.step_instruction().unwrap();

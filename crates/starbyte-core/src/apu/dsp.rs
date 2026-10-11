@@ -226,10 +226,8 @@ impl Dsp {
             // 16 bits after every voice, not just after all eight voices.
             // Keeping excess precision here can turn loud, cancelling
             // voices into clipping that does not occur on the hardware.
-            let voice_left =
-                (i64::from(sample) * i64::from(self.registers[base] as i8)) >> 7;
-            let voice_right =
-                (i64::from(sample) * i64::from(self.registers[base + 1] as i8)) >> 7;
+            let voice_left = (i64::from(sample) * i64::from(self.registers[base] as i8)) >> 7;
+            let voice_right = (i64::from(sample) * i64::from(self.registers[base + 1] as i8)) >> 7;
             left = i64::from(clamp_i16(left + voice_left));
             right = i64::from(clamp_i16(right + voice_right));
             if self.registers[0x4d] & (1 << index) != 0 {

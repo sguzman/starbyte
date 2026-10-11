@@ -183,7 +183,7 @@ impl Dsp {
             let adsr2 = self.registers[base + 6];
             let gain = self.registers[base + 7];
             let noise = (self.registers[0x3d] & (1 << index) != 0).then_some(noise_sample);
-            let sample = self.voices[index].clock(
+            let (sample, ended_block) = self.voices[index].clock(
                 index,
                 pitch,
                 adsr1,
@@ -199,7 +199,7 @@ impl Dsp {
             right += i64::from(sample) * i64::from(self.registers[base + 1] as i8);
             self.registers[base + 8] = (self.voices[index].envelope >> 4) as u8;
             self.registers[base + 9] = (i32::from(sample) >> 8) as u8;
-            if !self.voices[index].active && self.voices[index].header & 1 != 0 {
+            if ended_block {
                 self.registers[0x7c] |= 1 << index;
             }
         }
@@ -241,15 +241,16 @@ impl Voice {
         noise: Option<i16>,
         ram: &[u8],
         registers: &[u8],
-    ) -> i16 {
+    ) -> (i16, bool) {
         if !self.active {
-            return 0;
+            return (0, false);
         }
 
         self.advance_envelope(adsr1, adsr2, gain, counter);
 
         let waveform = noise.unwrap_or(self.samples[self.index]);
         let result = (i32::from(waveform) * self.envelope / 2048) as i16;
+        let mut ended_block = false;
         self.fraction += u32::from(pitch);
         while self.fraction >= PITCH_UNIT && self.active {
             self.fraction -= PITCH_UNIT;
@@ -257,6 +258,8 @@ impl Voice {
             if self.index == BRR_SAMPLES_PER_BLOCK {
                 self.index = 0;
                 if self.header & 1 != 0 {
+                    // ENDX records the BRR end event even for looping voices.
+                    ended_block = true;
                     if self.header & 2 == 0 {
                         self.active = false;
                         break;
@@ -271,7 +274,7 @@ impl Voice {
                 self.decode_block(ram);
             }
         }
-        result
+        (result, ended_block)
     }
 
     /// Rate-controlled ADSR and GAIN. Gaussian interpolation, echo and
@@ -463,7 +466,7 @@ mod tests {
             assert!(left > 1000);
             assert_eq!(left, right);
         }
-        assert_eq!(dsp.read_register(0x7c), 0);
+        assert_eq!(dsp.read_register(0x7c), 1);
     }
 
     #[test]
@@ -489,7 +492,27 @@ mod tests {
             assert!(left < -1000, "voice one must retain its own loop source");
             assert_eq!(right, 0);
         }
-        assert_eq!(dsp.read_register(0x7c) & 0b10, 0);
+        assert_eq!(dsp.read_register(0x7c) & 0b10, 0b10);
+    }
+
+    #[test]
+    fn looping_voice_endx_is_latched_cleared_and_reasserted_at_next_loop() {
+        let (mut dsp, ram) = looping_sample();
+        dsp.write_register(0x4c, 1, &ram);
+        for _ in 0..15 {
+            dsp.next_stereo_pair(&ram);
+        }
+        assert_eq!(dsp.read_register(0x7c) & 1, 0);
+        dsp.next_stereo_pair(&ram);
+        assert_eq!(dsp.read_register(0x7c) & 1, 1);
+        dsp.write_register(0x7c, 0xff, &ram);
+        assert_eq!(dsp.read_register(0x7c) & 1, 0);
+        dsp.next_stereo_pair(&ram);
+        assert_eq!(dsp.read_register(0x7c) & 1, 0);
+        for _ in 0..15 {
+            dsp.next_stereo_pair(&ram);
+        }
+        assert_eq!(dsp.read_register(0x7c) & 1, 1);
     }
 
     #[test]

@@ -35,6 +35,14 @@ fn envelope_rate_ready(rate: u8, counter: u16) -> bool {
     period != 0 && (counter + ENVELOPE_OFFSETS[usize::from(rate)]) % period == 0
 }
 
+/// Both ADSR and exponential GAIN decrement before calculating their
+/// exponential step. Shifting the original envelope over-decays at exact
+/// $100 boundaries and changes sustained note amplitude.
+fn exponential_envelope_decrease(envelope: i32) -> i32 {
+    let decremented = envelope - 1;
+    (decremented - (decremented >> 8)).max(0)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Dsp {
     registers: Vec<u8>,
@@ -450,7 +458,7 @@ impl Voice {
             }
             self.envelope = match (gain >> 5) & 3 {
                 0 => self.envelope - 0x20,                     // Linear decrease.
-                1 => self.envelope - 1 - (self.envelope >> 8), // Exponential decrease.
+                1 => exponential_envelope_decrease(self.envelope), // Exponential decrease.
                 2 => self.envelope + 0x20,                     // Linear increase.
                 _ => self.envelope + if self.envelope < 0x600 { 0x20 } else { 8 },
             }
@@ -475,7 +483,7 @@ impl Voice {
                 }
             }
             EnvelopePhase::Decay | EnvelopePhase::Sustain => {
-                self.envelope = (self.envelope - 1 - (self.envelope >> 8)).max(0);
+                self.envelope = exponential_envelope_decrease(self.envelope);
                 if self.envelope_phase == EnvelopePhase::Decay
                     && (self.envelope >> 8) <= i32::from(adsr2 >> 5)
                 {
@@ -1265,6 +1273,35 @@ mod tests {
             let _ = dsp.next_stereo_pair(&mut ram);
         }
         assert_eq!(dsp.next_stereo_pair(&mut ram), (0, 0));
+    }
+
+    #[test]
+    fn exponential_gain_and_adsr_decrement_before_shifting_at_0x100_boundaries() {
+        use super::{EnvelopePhase, Voice, exponential_envelope_decrease};
+
+        // Each exact $100 boundary is one unit louder than the previous
+        // implementation: $400 -> $3FC, $100 -> $0FF. Both paths must
+        // agree and cannot decay below zero.
+        for (before, after) in [(0, 0), (1, 0), (0x100, 0xff), (0x400, 0x3fc)] {
+            assert_eq!(exponential_envelope_decrease(before), after);
+            let mut gain_voice = Voice {
+                active: true,
+                envelope: before,
+                ..Voice::default()
+            };
+            gain_voice.advance_envelope(0, 0, 0xbf, 0);
+            assert_eq!(gain_voice.envelope, after, "GAIN, env={before:#x}");
+
+            let mut adsr_voice = Voice {
+                active: true,
+                envelope: before,
+                envelope_phase: EnvelopePhase::Decay,
+                ..Voice::default()
+            };
+            // ADSR1=$FF selects rate 30 for decay. Counter zero ticks.
+            adsr_voice.advance_envelope(0xff, 0, 0, 0);
+            assert_eq!(adsr_voice.envelope, after, "ADSR, env={before:#x}");
+        }
     }
 
     #[test]

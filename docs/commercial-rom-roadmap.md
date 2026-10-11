@@ -25,14 +25,14 @@ This document tracks the compatibility push from bootstrap/test ROM behavior tow
 - [x] Optional commercial boot instruction traces can now be emitted as explicit debugging artifacts without coupling debugger UI into the core.
 - [x] Core emulator regression tests still pass after the current bootstrap CPU/APU changes.
 
-Current live blocker:
-Phase 1 is complete. The remaining acceptance gate is **real-game visual evidence** from Phase 3: commercial boot PPU activity has been observed historically, but actual non-placeholder SMW title-screen output has **not** been verified here. Synthetic PPU regressions must not be mistaken for this milestone.
+Current remaining acceptance gates (October 10, 2026):
+Real-ROM headless evidence now includes **Super Mario World title/menu display, colored overworld, Yoshi's Island 2 gameplay, movement, jumping, scoring, death/life decrement and recovery**, up to a 3,575-frame scripted probe, as recorded in [status](status.md). Phase 3 visual bring-up and important Phase 4/5 gameplay milestones are therefore no longer blocked. This is **partial gameplay only**: native Hyprland GUI acceptance, durable checked-in compatibility fixtures, other commercial games and authentic sound-driver execution/audio output remain open. Hosted synthetic CI does not replace these acceptance tests.
 
 ### General PPU work completed since the original roadmap
 
 The Mode 0/1 software renderer now handles prioritized BG/OBJ composition, Mode 1 BG3 high-priority layers, 8×8 and 16×16 characters, BG map/character VRAM word base addresses, screen-anchored mosaic, brightness/forced blank, corrected CGRAM RGB channels, sequential VRAM/OAM/CGRAM read ports, and VMAIN write/read increments and VRAM remapping. Sprite X/Y coordinate and character-index wrapping also have synthetic regression coverage. All checks through `6b0ec7fd` passed hosted Linux/Windows tests and lint.
 
-**Still missing or unverified:** commercial SMW boot pixels, title/menu input transitions, first gameplay, native Wayland game sessions, SPC/DSP audio playback, per-scanline sprite limits, complete PPU modes, window masks/color math, raster timing and selected DMA/HDMA behavior. The Phase 3/4/5 milestone boxes remain open until real ROM evidence exists.
+**Still missing or unverified:** native Wayland game sessions, SPC/DSP sound-driver playback and host audio, other commercial titles, per-scanline sprite limits, complete PPU modes, and selected PPU/DMA/raster timing behavior. Real-ROM headless title/menu/overworld/level evidence now exists as detailed in [status](status.md); it should not be conflated with completed hardware accuracy or live desktop QA.
 
 ## Phase 1: CPU And APU Bootstrap Viability
 
@@ -63,26 +63,26 @@ framebuffer signature or sampled-region checks
 
 - [x] Replace the current synthetic stripe renderer with VRAM-backed rendering behavior.
 - [x] Implement CPU-visible VRAM address and data access needed for commercial setup code.
-- [ ] Implement tile/tilemap-backed BG rendering for the minimum modes SMW uses during boot and title flow.
+- [x] Implement tile/tilemap-backed BG rendering for the minimum modes SMW uses during boot and title flow (headless SMW imagery observed).
 - [x] Preserve CGRAM-backed palette output through the renderer.
 - [x] Respect screen enable and forced-blank behavior in a way that matches commercial boot sequencing.
-- [ ] Implement enough scroll and screen-base behavior to produce non-placeholder title/boot visuals.
-- [ ] Reach a verified non-black, non-placeholder SMW boot frame in headless artifacts and the GUI.
+- [x] Implement enough scroll and screen-base behavior to produce non-placeholder title/boot visuals and in-level camera movement.
+- [x] Reach a verified non-black, non-placeholder SMW boot frame in headless artifacts. **Native GUI acceptance remains open separately.**
 - [x] Keep existing synthetic PPU tests green or replace them with stronger VRAM/tile-backed tests.
 
 ## Phase 4: Title Screen And Menu Interaction
 
-- [ ] Advance from visible boot output to a stable title-screen or attract-mode state.
-- [ ] Confirm that controller input changes title or menu state deterministically.
-- [ ] Add milestone checks for input-driven progression rather than only frame advancement.
+- [x] Advance from visible boot output to a stable title-screen or attract-mode state in headless ROM probes.
+- [x] Confirm that scripted controller input advances SMW through menus and welcome flow in headless ROM probes.
+- [x] Capture input-driven overworld/level progression with game-mode and movement evidence beyond frame counts.
 - [ ] Support any remaining MMIO, DMA, HDMA, or timing behavior required for title/menu flow.
 - [ ] Verify the GUI can load SMW and remain stable through title/menu interaction.
 
 ## Phase 5: First Gameplay
 
-- [ ] Reach a first controllable gameplay scene in `Super Mario World` without ROM-specific hacks.
-- [ ] Verify that directional and face-button input changes gameplay state in a reproducible way.
-- [ ] Support any additional sprite, background, or timing behavior needed for first gameplay.
+- [x] Reach a first controllable gameplay scene in `Super Mario World` without ROM-specific hacks (Yoshi's Island 2).
+- [x] Verify directional motion, camera scrolling and B-triggered jumps in a scripted ROM probe.
+- [x] Support enough sprite, background and timing behavior to render the verified initial gameplay segment; broader fidelity remains open.
 - [ ] Capture a regression artifact for first-gameplay entry so future work can detect regressions quickly.
 
 ## Phase 6: Generalization Beyond SMW

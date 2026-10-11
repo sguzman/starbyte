@@ -927,6 +927,9 @@ mod tests {
         assert_eq!(apu.read_spc_bus(0x00f3) & 1, 1);
         apu.write_spc_bus(0x00f3, 0xff);
         assert_eq!(apu.read_spc_bus(0x00f3) & 1, 0);
+        // Re-key-on starts BRR sample zero; otherwise this exact test
+        // duration can straddle an unrelated previous loop boundary.
+        apu.write_dsp_register(0x4c, 1);
         apu.append_dsp_audio(1_000, &mut audio);
         assert_eq!(apu.read_spc_bus(0x00f3) & 1, 0);
         apu.append_dsp_audio(21_477, &mut audio);

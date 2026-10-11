@@ -2873,6 +2873,10 @@ mod accumulator_alu_tests {
                 assert!(trace.iter().any(|event| {
                     event.access == AccessKind::Read && event.address == u32::from(address)
                 }));
+                let idle = if opcode == 0xde { 4 } else { 3 };
+                assert_eq!(trace[idle].access, AccessKind::Wait);
+                assert_eq!(trace[idle + 1].address, 0x8002);
+                assert_eq!(trace[idle + 1].access, AccessKind::Read);
             }
         }
     }
@@ -2914,6 +2918,11 @@ mod accumulator_alu_tests {
             assert_eq!(cpu.y, previous.wrapping_sub(1));
             assert_eq!(cpu.pc, if taken { 0x8000 } else { 0x8002 });
             assert_eq!(trace.len(), if taken { 6 } else { 4 });
+            assert_eq!(trace[1].address, 0x8001);
+            assert_eq!(trace[1].access, AccessKind::Read);
+            assert_eq!(trace[2].access, AccessKind::Wait);
+            assert_eq!(trace[3].address, 0x8001);
+            assert_eq!(trace[3].access, AccessKind::Read);
             assert_eq!(cpu.psw, 0x31);
         }
     }
@@ -3015,6 +3024,9 @@ mod accumulator_alu_tests {
                 assert_eq!(bytes[0x01ff], value);
                 assert_eq!(trace[2].address, 0x01ff);
                 assert_eq!(trace[2].access, AccessKind::Read);
+                assert_eq!(trace[3].access, AccessKind::Wait);
+                assert_eq!(trace[4].address, 0x8002);
+                assert_eq!(trace[4].access, AccessKind::Read);
             }
         }
     }

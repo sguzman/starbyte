@@ -249,6 +249,10 @@ impl Apu {
         // The CPU needs independent read/write callbacks to the same bus.
         // Temporarily move it out so the callbacks can safely borrow the APU.
         let mut cpu = std::mem::take(&mut self.spc700);
+        // A subsequent poll of a SLEEP/STOP CPU is an idle bus cycle, not
+        // another successfully dispatched instruction. Count the opcode
+        // that enters standby, but never count its later idle probes.
+        let was_running = cpu.halt_state() == Spc700HaltState::Running;
         // The moved-out APU CPU is only a placeholder while this opcode
         // executes. The TEST MMIO latch must observe the *active* CPU's
         // direct-page flag, not that placeholder's default PSW.
@@ -265,7 +269,7 @@ impl Apu {
         );
         let mut apu = bus.borrow_mut();
         apu.spc700 = cpu;
-        if result.is_ok() {
+        if result.is_ok() && was_running {
             apu.spc700_steps = apu.spc700_steps.saturating_add(1);
         }
         result
@@ -767,6 +771,32 @@ mod tests {
         assert_eq!(apu.read_cpu_port(0).unwrap(), 0x12);
         assert_eq!(apu.read_apu_port(3).unwrap(), 0x34);
         assert_eq!(apu.status().spc700_steps, 2);
+    }
+
+    #[test]
+    fn stopped_and_sleeping_spc_idle_polls_do_not_count_as_instructions() {
+        for (opcode, expected_halt) in [
+            (0xff, Spc700HaltState::Stopped),
+            (0xef, Spc700HaltState::Sleeping),
+        ] {
+            let mut apu = Apu::default();
+            apu.write_spc_ram(0x0400, opcode);
+            apu.spc700.load_state(0x0400, 0, 0, 0, 0xef, 0x02);
+            let dispatched = apu.execute_spc_program_instruction().unwrap();
+            assert!(!dispatched.is_empty());
+            assert_eq!(apu.spc700.halt_state(), expected_halt);
+            assert_eq!(apu.status().spc700_steps, 1);
+            assert_eq!(apu.spc700.pc, 0x0401);
+
+            let cycles_after_halt = apu.spc700.cycles();
+            for _ in 0..5 {
+                let idle = apu.execute_spc_program_instruction().unwrap();
+                assert_eq!(idle.len(), 1);
+                assert_eq!(apu.spc700.pc, 0x0401);
+            }
+            assert_eq!(apu.spc700.cycles(), cycles_after_halt + 5);
+            assert_eq!(apu.status().spc700_steps, 1);
+        }
     }
 
     #[test]

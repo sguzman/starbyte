@@ -473,6 +473,9 @@ impl Apu {
     /// separate work.
     pub fn read_spc_bus(&mut self, address: u16) -> u8 {
         match address {
+            // TEST and CONTROL are write-only MMIO. Reading the SPC bus
+            // must not expose any underlying RAM bytes at these addresses.
+            0x00f0 | 0x00f1 => 0,
             0x00f3 => self.dsp.read_register(self.spc_ram[0x00f2]),
             0x00f4..=0x00f7 => self.cpu_to_apu_ports[usize::from(address - 0x00f4)],
             // Timer targets are write-only MMIO, not RAM mirrors. IPL
@@ -762,6 +765,31 @@ mod tests {
             serde_json::to_value(&apu).unwrap(),
             serde_json::to_value(&resumed).unwrap()
         );
+    }
+
+    #[test]
+    fn spc_test_and_control_read_zero_through_bus_and_spc700_opcodes() {
+        let mut apu = Apu::default();
+        // Emulated RAM contents are not readable through write-only MMIO.
+        apu.write_spc_ram(0x00f0, 0xab);
+        apu.write_spc_ram(0x00f1, 0xcd);
+        assert_eq!(apu.read_spc_bus(0x00f0), 0);
+        assert_eq!(apu.read_spc_bus(0x00f1), 0);
+
+        // MOV A,$F0; MOV $20,A; MOV A,$F1; MOV $21,A.
+        let program = [0xe4, 0xf0, 0xc4, 0x20, 0xe4, 0xf1, 0xc4, 0x21];
+        for (offset, byte) in program.into_iter().enumerate() {
+            apu.write_spc_ram(0x0400 + offset as u16, byte);
+        }
+        apu.spc700.load_state(0x0400, 0x7f, 0, 0, 0xef, 0);
+        for _ in 0..4 {
+            apu.execute_spc_program_instruction().unwrap();
+        }
+        assert_eq!(apu.spc700.pc, 0x0408);
+        assert_eq!(apu.read_spc_ram(0x0020), 0);
+        assert_eq!(apu.read_spc_ram(0x0021), 0);
+        assert_eq!(apu.read_spc_ram(0x00f0), 0xab);
+        assert_eq!(apu.read_spc_ram(0x00f1), 0xcd);
     }
 
     #[test]

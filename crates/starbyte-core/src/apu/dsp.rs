@@ -527,6 +527,14 @@ mod tests {
         assert_eq!(dsp.read_register(0x7c) & 1, 1);
         dsp.write_register(0x7c, 0xff, &ram);
         assert_eq!(dsp.read_register(0x7c), 0);
+        for _ in 0..24 {
+            dsp.next_stereo_pair(&ram);
+        }
+        assert_eq!(
+            dsp.read_register(0x7c),
+            0,
+            "stopped voices must not recreate ENDX after a software clear"
+        );
     }
 
     #[test]

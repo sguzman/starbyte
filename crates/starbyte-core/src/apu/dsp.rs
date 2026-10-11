@@ -349,11 +349,16 @@ impl Voice {
             } else {
                 0
             };
+            // Preserve the DSP's integer operation order. Combining these
+            // filter terms into rational coefficients changes rounding for
+            // small positive/negative samples, even when algebraically equal.
+            let prior = self.previous * 2;
+            let two_ago = self.older;
             let predicted = match filter {
                 0 => decoded,
-                1 => decoded + ((self.previous * 15) >> 4),
-                2 => decoded + ((self.previous * 61) >> 5) - ((self.older * 15) >> 4),
-                _ => decoded + ((self.previous * 115) >> 6) - ((self.older * 13) >> 4),
+                1 => decoded + (prior >> 1) + ((-prior) >> 5),
+                2 => decoded + prior - two_ago + (two_ago >> 4) + ((-3 * prior) >> 6),
+                _ => decoded + prior - two_ago + ((-13 * prior) >> 7) + ((3 * two_ago) >> 4),
             };
             // The BRR filter saturates to signed 16 bits *before* the
             // hardware's extra left shift. That shift then wraps as i16;
@@ -404,6 +409,25 @@ mod tests {
         dsp.write_register(0x0c, 0x7f, &ram);
         dsp.write_register(0x1c, 0x7f, &ram);
         (dsp, ram)
+    }
+
+    #[test]
+    fn brr_filters_preserve_signed_integer_rounding_for_small_history() {
+        for filter in [2_u8, 3] {
+            let mut ram = vec![0_u8; 65_536];
+            ram[0x300] = filter << 2;
+            // For prior=6 and half-prior=3, two_ago=1, the hardware rounds
+            // each shifted term before summing: both filters produce 4,
+            // whereas collapsing their fractional coefficients produces 5.
+            let mut voice = super::Voice {
+                address: 0x300,
+                previous: 3,
+                older: 1,
+                ..super::Voice::default()
+            };
+            voice.decode_block(&ram);
+            assert_eq!(voice.samples[0], 8, "BRR filter {filter}");
+        }
     }
 
     #[test]

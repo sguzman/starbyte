@@ -475,6 +475,10 @@ impl Apu {
         match address {
             0x00f3 => self.dsp.read_register(self.spc_ram[0x00f2]),
             0x00f4..=0x00f7 => self.cpu_to_apu_ports[usize::from(address - 0x00f4)],
+            // Timer targets are write-only MMIO, not RAM mirrors. IPL
+            // uploads can still change the underlying RAM bytes, but SPC
+            // instructions must see zero when reading these registers.
+            0x00fa..=0x00fc => 0,
             0x00fd..=0x00ff => self.timers.read_and_clear(usize::from(address - 0x00fd)),
             0xffc0..=0xffff if self.ipl_overlay_enabled && self.ipl_rom.is_some() => {
                 self.ipl_rom.as_ref().unwrap()[usize::from(address - 0xffc0)]
@@ -758,6 +762,22 @@ mod tests {
             serde_json::to_value(&apu).unwrap(),
             serde_json::to_value(&resumed).unwrap()
         );
+    }
+
+    #[test]
+    fn spc_timer_target_reads_are_zero_even_with_nonzero_underlying_ram() {
+        let mut apu = Apu::default();
+        for address in 0x00fa..=0x00fc {
+            apu.write_spc_ram(address, 0xa5);
+            apu.write_spc_bus(address, 3);
+            assert_eq!(apu.read_spc_bus(address), 0);
+            assert_eq!(apu.read_spc_ram(address), 0xa5);
+        }
+        apu.write_spc_bus(0x00f1, 0b111);
+        apu.step_master_cycles(100_000);
+        // The real timer still runs despite the write-only target read.
+        assert_ne!(apu.read_spc_bus(0x00fd), 0);
+        assert_ne!(apu.read_spc_bus(0x00ff), 0);
     }
 
     #[test]

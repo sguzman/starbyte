@@ -1,51 +1,109 @@
-//! Best-effort desktop audio output for the emulator's 32 kHz stereo PCM.
+//! Bounded, nonblocking desktop playback for synthesized 32 kHz stereo PCM.
 //!
-//! Starbyte does not require an audio device to play. The output is created
-//! only when real nonzero PCM arrives, and never enables the experimental
-//! SPC700 driver in an ordinary emulation session.
+//! Sound device initialization and Rodio queueing run on a dedicated worker;
+//! they must not freeze the egui event loop or enable commercial SPC execution.
+
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+        mpsc::{self, Receiver, SyncSender},
+    },
+    thread,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result};
 use rodio::{OutputStream, OutputStreamBuilder, Sink, buffer::SamplesBuffer};
+use tracing::warn;
 
 const DSP_SAMPLE_RATE: u32 = 32_000;
 const CHANNELS: u16 = 2;
-/// Roughly six NTSC frames of headroom; stale sound must never accumulate
-/// seconds of latency if the GUI or the game runs ahead of the audio device.
+/// A bounded producer backlog; excess frames are discarded, never blocked.
 const MAX_PENDING_FRAMES: usize = 6;
+const AUDIO_RETRY_DELAY: Duration = Duration::from_secs(10);
 
+enum AudioMessage {
+    Frame { generation: u64, pcm: Vec<i16> },
+    Clear,
+}
+
+/// The UI owns only a bounded nonblocking sender, never a device or mixer.
+/// Dropping the last sender allows the audio worker to shut down naturally.
 pub struct AudioOutput {
-    // The stream must remain alive for as long as the sink is playing.
-    _stream: OutputStream,
-    sink: Sink,
+    sender: SyncSender<AudioMessage>,
+    generation: Arc<AtomicU64>,
 }
 
 impl AudioOutput {
-    pub fn open_default() -> Result<Self> {
+    pub fn start() -> Result<Self> {
+        let (sender, receiver) = mpsc::sync_channel(MAX_PENDING_FRAMES);
+        let generation = Arc::new(AtomicU64::new(0));
+        let shared_generation = Arc::clone(&generation);
+        thread::Builder::new()
+            .name("starbyte-audio".to_owned())
+            .spawn(move || audio_worker(receiver, shared_generation))
+            .context("could not spawn background audio thread")?;
+        Ok(Self { sender, generation })
+    }
+
+    /// Bounded try-send: full queues lose stale audio rather than blocking
+    /// the UI or accumulating seconds of sound latency.
+    pub fn enqueue(&self, samples: &[i16]) {
+        if samples.is_empty() || samples.len() % 2 != 0 {
+            return;
+        }
+        let _ = self.sender.try_send(AudioMessage::Frame {
+            generation: self.generation.load(Ordering::Acquire),
+            pcm: samples.to_vec(),
+        });
+    }
+
+    /// Mark every queued frame stale immediately, and wake an idle worker.
+    /// Unlike a blocking send, this cannot freeze the UI on pause/ROM load.
+    pub fn clear(&self) {
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        let _ = self.sender.try_send(AudioMessage::Clear);
+    }
+
+    /// A standalone speaker probe. It uses original synthetic samples rather
+    /// than ROM data and never starts the production emulator or window.
+    pub fn test_speakers() -> Result<()> {
+        let output = PlaybackDevice::open_default()?;
+        output.enqueue(&speaker_test_tone());
+        thread::sleep(Duration::from_millis(350));
+        Ok(())
+    }
+}
+
+/// Keep the mixer sink alive before releasing its backing output stream.
+struct PlaybackDevice {
+    sink: Sink,
+    _stream: OutputStream,
+}
+
+impl PlaybackDevice {
+    fn open_default() -> Result<Self> {
         let mut stream = OutputStreamBuilder::open_default_stream()
             .context("could not open a desktop audio output device")?;
         stream.log_on_drop(false);
         let sink = Sink::connect_new(stream.mixer());
         Ok(Self {
-            _stream: stream,
             sink,
+            _stream: stream,
         })
     }
 
-    /// Queue one emulator frame without blocking for playback. Rodio converts
-    /// 32 kHz stereo to the physical device format on its audio thread.
-    pub fn enqueue(&self, samples: &[i16]) {
+    fn enqueue(&self, samples: &[i16]) {
         let Some(pcm) = pcm16_stereo_to_float(samples) else {
             return;
         };
-        // If rendering falls behind output for any reason, discard stale
-        // buffers instead of making game sound increasingly delayed.
+        // Skip old individual buffers without clearing the live sink.
         let excess = self
             .sink
             .len()
             .saturating_sub(MAX_PENDING_FRAMES.saturating_sub(1));
         for _ in 0..excess {
-            // Skipping stale queued frames is nonblocking; clearing the
-            // entire sink here could pause the GUI during normal playback.
             self.sink.skip_one();
         }
         self.sink
@@ -53,25 +111,69 @@ impl AudioOutput {
         self.sink.play();
     }
 
-    /// A standalone speaker smoke test. It uses synthesized samples rather
-    /// than a commercial ROM and does not change the production APU path.
-    pub fn test_speakers() -> Result<()> {
-        let output = Self::open_default()?;
-        output.enqueue(&speaker_test_tone());
-        // Allow the output stream to consume the quarter-second tone before
-        // its owner is dropped. This is invoked only by an explicit CLI flag.
-        std::thread::sleep(std::time::Duration::from_millis(350));
-        Ok(())
-    }
-
-    /// Drop queued audio on pause, state restore, cartridge change, or error.
-    pub fn clear(&self) {
+    fn clear(&self) {
         self.sink.clear();
     }
 }
 
+fn retry_ready(retry_after: Option<Instant>, now: Instant) -> bool {
+    retry_after.is_none_or(|deadline| now >= deadline)
+}
+
+fn audio_worker(receiver: Receiver<AudioMessage>, generation: Arc<AtomicU64>) {
+    let mut device: Option<PlaybackDevice> = None;
+    let mut retry_after: Option<Instant> = None;
+    let mut active_generation = generation.load(Ordering::Acquire);
+
+    for message in receiver {
+        let newest_generation = generation.load(Ordering::Acquire);
+        if newest_generation != active_generation {
+            if let Some(output) = &device {
+                output.clear();
+            }
+            active_generation = newest_generation;
+        }
+
+        let AudioMessage::Frame {
+            generation: frame_generation,
+            pcm,
+        } = message
+        else {
+            continue;
+        };
+        if frame_generation != active_generation {
+            continue;
+        }
+        if device.is_none()
+            && pcm.iter().any(|&sample| sample != 0)
+            && retry_ready(retry_after, Instant::now())
+        {
+            match PlaybackDevice::open_default() {
+                Ok(output) => {
+                    device = Some(output);
+                    retry_after = None;
+                }
+                Err(error) => {
+                    warn!("desktop audio unavailable (video remains playable): {error}");
+                    retry_after = Some(Instant::now() + AUDIO_RETRY_DELAY);
+                }
+            }
+        }
+        if let Some(output) = &device {
+            // Device initialization can take time. Drop a frame that became
+            // invalid while the worker was waiting for system audio.
+            if generation.load(Ordering::Acquire) == frame_generation {
+                output.enqueue(&pcm);
+            } else {
+                output.clear();
+                active_generation = generation.load(Ordering::Acquire);
+            }
+        }
+    }
+}
+
 /// Return interleaved stereo floats in [-1, 1], or nothing for an empty or
-/// malformed frame. Conversion is deterministic and independent of hardware.
+/// malformed frame. Conversion is deterministic and hardware-independent.
 fn pcm16_stereo_to_float(samples: &[i16]) -> Option<Vec<f32>> {
     if samples.is_empty() || samples.len() % 2 != 0 {
         return None;
@@ -84,8 +186,7 @@ fn pcm16_stereo_to_float(samples: &[i16]) -> Option<Vec<f32>> {
     )
 }
 
-/// Copyright-free, low-amplitude stereo sine burst with short fades.
-/// Audio hardware is not needed to validate its length and channel layout.
+/// Original low-volume stereo sine burst with short fade-in and fade-out.
 fn speaker_test_tone() -> Vec<i16> {
     const TONE_HZ: f32 = 440.0;
     const TONE_FRAMES: usize = DSP_SAMPLE_RATE as usize / 4;
@@ -108,7 +209,12 @@ fn speaker_test_tone() -> Vec<i16> {
 
 #[cfg(test)]
 mod tests {
-    use super::{pcm16_stereo_to_float, speaker_test_tone};
+    use std::{
+        sync::atomic::Ordering,
+        time::{Duration, Instant},
+    };
+
+    use super::{AudioOutput, pcm16_stereo_to_float, retry_ready, speaker_test_tone};
 
     #[test]
     fn stereo_conversion_preserves_channel_order_and_signed_full_scale() {
@@ -140,5 +246,26 @@ mod tests {
         assert!(pcm16_stereo_to_float(&[1]).is_none());
         assert!(pcm16_stereo_to_float(&[1, 2, 3]).is_none());
         assert_eq!(pcm16_stereo_to_float(&[0, 0]), Some(vec![0.0, 0.0]));
+    }
+
+    #[test]
+    fn queue_invalidation_does_not_need_a_working_speaker() {
+        let output = AudioOutput::start().unwrap();
+        let before = output.generation.load(Ordering::Acquire);
+        output.enqueue(&[0, 0]);
+        output.clear();
+        let after = output.generation.load(Ordering::Acquire);
+        assert_eq!(after, before + 1);
+        output.enqueue(&[0, 0]);
+    }
+
+    #[test]
+    fn device_retries_respect_cooldown() {
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(10);
+        assert!(retry_ready(None, now));
+        assert!(!retry_ready(Some(deadline), now));
+        assert!(!retry_ready(Some(deadline), now + Duration::from_secs(9)));
+        assert!(retry_ready(Some(deadline), deadline));
     }
 }

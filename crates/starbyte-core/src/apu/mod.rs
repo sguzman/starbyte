@@ -514,7 +514,7 @@ impl Apu {
             // DSPADDR bit 7 selects a read-only mirror of $00-$7F.
             // Keep the bit in $F2 for SPC700 reads, and ignore $F3
             // writes while the mirror is selected.
-            0x00f2 => self.spc_ram[0x00f2] = value,
+            0x00f2 => {} // DSPADDR latch is the RAM-backed $F2 byte.
             0x00f3 if self.spc_ram[0x00f2] & 0x80 == 0 => {
                 self.dsp
                     .write_register(self.spc_ram[0x00f2], value, &self.spc_ram);
@@ -527,9 +527,15 @@ impl Apu {
                 self.timers
                     .write_target(usize::from(address - 0x00fa), value);
             }
-            0x00fd..=0x00ff => {} // Timer output counters are read-only.
-            _ => self.write_spc_ram(address, value),
+            0x00fd..=0x00ff => {} // Timer output hardware ignores writes.
+            _ => {}
         }
+        // The S-SMP sends every write to audio RAM, including writes to
+        // MMIO overlays. Readback still uses the register handlers above:
+        // TEST/CONTROL/targets read zero, timer outputs read-and-clear,
+        // and mailboxes have independent input/output latches. DSP echo
+        // and other RAM clients can nevertheless observe these bytes.
+        self.write_spc_ram(address, value);
     }
 
     /// Write an S-DSP register directly (normally through SPC700 $F2/$F3).
@@ -805,7 +811,7 @@ mod tests {
             apu.write_spc_ram(address, 0xa5);
             apu.write_spc_bus(address, 3);
             assert_eq!(apu.read_spc_bus(address), 0);
-            assert_eq!(apu.read_spc_ram(address), 0xa5);
+            assert_eq!(apu.read_spc_ram(address), 3);
         }
         apu.write_spc_bus(0x00f1, 0b111);
         apu.step_master_cycles(100_000);
@@ -850,6 +856,32 @@ mod tests {
 
         apu.write_spc_bus(0x0300, 0x7b);
         assert_eq!(apu.read_spc_bus(0x0300), 0x7b);
+    }
+
+    #[test]
+    fn spc_mmio_writes_also_update_underlying_audio_ram() {
+        let mut apu = Apu::default();
+        // Read and write views are intentionally separate. The DSP and
+        // ordinary RAM accessors must see each byte placed on the bus.
+        for (address, value) in [
+            (0x00f0, 0x0a), // TEST: behavior beyond RAM mirroring not modeled.
+            (0x00f1, 0x00), // CONTROL hardware state.
+            (0x00f2, 0x1d), // DSPADDR selects unused DSP register.
+            (0x00f3, 0x53), // DSPDATA, also written into SPC RAM.
+            (0x00f4, 0x62), // Output mailbox (CPU still sees the latch).
+            (0x00fa, 0x07), // Timer target is write-only.
+            (0x00fd, 0xe7), // Timer output is read-only, but RAM is written.
+        ] {
+            apu.write_spc_bus(address, value);
+            assert_eq!(apu.read_spc_ram(address), value);
+        }
+        assert_eq!(apu.read_spc_bus(0x00f0), 0);
+        assert_eq!(apu.read_spc_bus(0x00f1), 0);
+        assert_eq!(apu.read_spc_bus(0x00fa), 0);
+        assert_eq!(apu.read_spc_bus(0x00fd), 0);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0x62);
+        // Port input is independent of the echoed RAM/output latch.
+        assert_eq!(apu.read_spc_bus(0x00f4), 0);
     }
 
     #[test]

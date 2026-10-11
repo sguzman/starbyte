@@ -35,6 +35,11 @@ const fn ipl_overlay_default() -> bool {
     true
 }
 
+const fn spc_test_default() -> u8 {
+    // SPC TEST powers up with RAM writes enabled.
+    0x0a
+}
+
 fn blank_spc_ram() -> Vec<u8> {
     vec![0; SPC_RAM_BYTES]
 }
@@ -111,6 +116,9 @@ pub struct Apu {
     /// Sound-CPU timer registers and their fractional master-clock phase.
     #[serde(default)]
     timers: SpcTimers,
+    /// SPC TEST register. Bit 1 gates ordinary RAM and DSP echo writes.
+    #[serde(default = "spc_test_default")]
+    spc_test: u8,
     /// SPC700 CONTROL bit 7: read the optional IPL from $FFC0-$FFFF.
     #[serde(default = "ipl_overlay_default")]
     ipl_overlay_enabled: bool,
@@ -137,6 +145,7 @@ impl Default for Apu {
             spc_ram: blank_spc_ram(),
             dsp: Dsp::default(),
             timers: SpcTimers::default(),
+            spc_test: spc_test_default(),
             ipl_overlay_enabled: true,
             ipl_upload: None,
         }
@@ -172,6 +181,7 @@ impl Apu {
         self.spc_ram.fill(0);
         self.dsp.reset();
         self.timers = SpcTimers::default();
+        self.spc_test = spc_test_default();
         self.ipl_overlay_enabled = true;
         if let Some(upload) = self.ipl_upload.as_mut() {
             upload.reset();
@@ -512,6 +522,12 @@ impl Apu {
     /// Write the SPC700 RAM/MMIO bus, including indirect DSP register access.
     pub fn write_spc_bus(&mut self, address: u16, value: u8) {
         match address {
+            0x00f0 => {
+                // TEST bit 1 controls whether normal SPC RAM and the DSP
+                // echo buffer can be written. Do not emulate the unsafe
+                // processor-speed and undocumented clock-test modes here.
+                self.spc_test = value;
+            }
             0x00f1 => {
                 self.ipl_overlay_enabled = value & 0x80 != 0;
                 self.timers.write_control(value);
@@ -542,12 +558,12 @@ impl Apu {
             // written below, as are all other MMIO overlay bytes.
             _ => {}
         }
-        // The S-SMP sends every write to audio RAM, including writes to
-        // MMIO overlays. Readback still uses the register handlers above:
-        // TEST/CONTROL/targets read zero, timer outputs read-and-clear,
-        // and mailboxes have independent input/output latches. DSP echo
-        // and other RAM clients can nevertheless observe these bytes.
-        self.write_spc_ram(address, value);
+        // TEST bit 1 disables ordinary RAM writes, but the $F0-$FF
+        // MMIO window remains writable (including its underlying RAM).
+        // DSP echo storage is gated independently at sample time.
+        if self.spc_test & 0x02 != 0 || (0x00f0..=0x00ff).contains(&address) {
+            self.write_spc_ram(address, value);
+        }
     }
 
     /// Write an S-DSP register directly (normally through SPC700 $F2/$F3).
@@ -570,7 +586,9 @@ impl Apu {
     pub fn append_dsp_audio(&mut self, master_cycles: u64, output: &mut Vec<i16>) {
         let pairs = self.advance_dsp_sample_clock(master_cycles);
         for _ in 0..pairs {
-            let (left, right) = self.dsp.next_stereo_pair(&mut self.spc_ram);
+            let (left, right) = self
+                .dsp
+                .next_stereo_pair_with_ram_writes(&mut self.spc_ram, self.spc_test & 0x02 != 0);
             output.push(left);
             output.push(right);
         }
@@ -868,6 +886,91 @@ mod tests {
 
         apu.write_spc_bus(0x0300, 0x7b);
         assert_eq!(apu.read_spc_bus(0x0300), 0x7b);
+    }
+
+    #[test]
+    fn spc_test_bit_one_gates_ordinary_ram_but_keeps_mmio_and_f8_f9_writable() {
+        let mut apu = Apu::default();
+        apu.reset();
+        apu.write_spc_bus(0x2200, 0x11);
+        assert_eq!(apu.read_spc_ram(0x2200), 0x11);
+
+        apu.write_spc_bus(0x00f0, 0x00);
+        assert_eq!(apu.read_spc_ram(0x00f0), 0);
+        assert_eq!(apu.read_spc_bus(0x00f0), 0); // TEST is write-only.
+        apu.write_spc_bus(0x2200, 0x99);
+        assert_eq!(apu.read_spc_ram(0x2200), 0x11);
+        apu.write_spc_bus(0x00f8, 0xa5);
+        apu.write_spc_bus(0x00f9, 0x5a);
+        assert_eq!(apu.read_spc_ram(0x00f8), 0xa5);
+        assert_eq!(apu.read_spc_ram(0x00f9), 0x5a);
+        apu.write_spc_bus(0x00f2, 0x0c);
+        apu.write_spc_bus(0x00f3, 0x55);
+        assert_eq!(apu.read_dsp_register(0x0c), 0x55);
+
+        let saved = serde_json::to_string(&apu).unwrap();
+        let mut restored: Apu = serde_json::from_str(&saved).unwrap();
+        restored.write_spc_bus(0x2200, 0x77);
+        assert_eq!(restored.read_spc_ram(0x2200), 0x11);
+        restored.write_spc_bus(0x00f0, 0x0a);
+        restored.write_spc_bus(0x2200, 0x77);
+        assert_eq!(restored.read_spc_ram(0x2200), 0x77);
+        restored.reset();
+        restored.write_spc_bus(0x2200, 0x42);
+        assert_eq!(restored.read_spc_ram(0x2200), 0x42);
+
+        // Old snapshots did not serialize the test latch. They must
+        // retain the power-on writable-RAM default on deserialization.
+        let mut legacy = serde_json::to_value(&apu).unwrap();
+        legacy.as_object_mut().unwrap().remove("spc_test");
+        let mut from_legacy: Apu = serde_json::from_value(legacy).unwrap();
+        from_legacy.write_spc_bus(0x2200, 0x66);
+        assert_eq!(from_legacy.read_spc_ram(0x2200), 0x66);
+    }
+
+    #[test]
+    fn spc_test_inhibits_echo_ram_storage_without_stopping_pcm_or_dsp_clock() {
+        let mut apu = Apu::default();
+        for (address, value) in [
+            (0x0200, 0), (0x0201, 3), (0x0202, 0), (0x0203, 3),
+            (0x0300, 0xc3),
+        ] {
+            apu.write_spc_ram(address, value);
+        }
+        for offset in 1..9 {
+            apu.write_spc_ram(0x0300 + offset, 0x77);
+        }
+        for (register, value) in [
+            (0x5d, 2), (0x00, 0x7f), (0x01, 0x7f),
+            (0x03, 0x10), (0x07, 0x7f),
+            (0x0c, 0x7f), (0x1c, 0x7f), (0x4d, 1),
+            (0x6d, 0x50), (0x7d, 1), (0x6c, 0), (0x4c, 1),
+        ] {
+            apu.write_spc_bus(0x00f2, register);
+            apu.write_spc_bus(0x00f3, value);
+        }
+        apu.write_spc_bus(0x00f0, 0);
+        let clocks = (21_477_272_u64 * 32).div_ceil(32_000);
+        let mut gated_pcm = Vec::new();
+        apu.append_dsp_audio(clocks, &mut gated_pcm);
+        assert!(gated_pcm.iter().any(|&sample| sample > 1000));
+        assert!((0x5000..0x5080).all(|addr| apu.read_spc_ram(addr) == 0));
+
+        let saved = serde_json::to_string(&apu).unwrap();
+        let mut restored: Apu = serde_json::from_str(&saved).unwrap();
+        for instance in [&mut apu, &mut restored] {
+            instance.write_spc_bus(0x00f0, 0x0a);
+        }
+        let mut a = Vec::new();
+        let mut b = Vec::new();
+        apu.append_dsp_audio(clocks, &mut a);
+        restored.append_dsp_audio(clocks, &mut b);
+        assert_eq!(a, b);
+        assert!((0x5080..0x5100).any(|addr| apu.read_spc_ram(addr) != 0));
+        assert_eq!(
+            serde_json::to_value(&apu).unwrap(),
+            serde_json::to_value(&restored).unwrap()
+        );
     }
 
     #[test]

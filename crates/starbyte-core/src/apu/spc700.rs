@@ -2161,6 +2161,21 @@ mod accumulator_alu_tests {
     }
 
     #[test]
+    fn every_spc700_opcode_dispatches_without_unsupported_opcode() {
+        // Exercise each of the 256 possible instruction bytes against a
+        // deterministic RAM snapshot. This only proves interpreter dispatch
+        // and absence of panics, not accuracy for any commercial sound driver.
+        for opcode in u8::MIN..=u8::MAX {
+            let (cpu, trace, _memory) =
+                run_indexed(opcode, &[0, 0], 0x40, 0x01, 3, 5, &[]);
+            assert!(!trace.is_empty(), "opcode {opcode:02X} has no bus trace");
+            assert_eq!(trace[0].value, opcode, "opcode {opcode:02X}");
+            assert_eq!(trace[0].access, AccessKind::Read);
+            assert_eq!(cpu.cycles(), trace.len() as u64);
+        }
+    }
+
+    #[test]
     fn immediate_alu_updates_flags_for_carry_halfcarry_and_signed_overflow() {
         for (opcode, a, rhs, initial_psw, expected_a, expected_nzcvh) in [
             (0x08, 0xF0, 0x0F, 0x00, 0xFF, 0x80),

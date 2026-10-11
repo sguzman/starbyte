@@ -39,8 +39,14 @@ impl AudioOutput {
         };
         // If rendering falls behind output for any reason, discard stale
         // buffers instead of making game sound increasingly delayed.
-        if self.sink.len() >= MAX_PENDING_FRAMES {
-            self.sink.clear();
+        let excess = self
+            .sink
+            .len()
+            .saturating_sub(MAX_PENDING_FRAMES.saturating_sub(1));
+        for _ in 0..excess {
+            // Skipping stale queued frames is nonblocking; clearing the
+            // entire sink here could pause the GUI during normal playback.
+            self.sink.skip_one();
         }
         self.sink
             .append(SamplesBuffer::new(CHANNELS, DSP_SAMPLE_RATE, pcm));

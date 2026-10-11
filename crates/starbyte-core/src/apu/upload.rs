@@ -54,6 +54,9 @@ pub struct IplUpload {
     blocks_finished: u64,
     /// Last requested sound-program entrypoint.
     entrypoint: Option<u16>,
+    /// Number of distinct out-of-sequence port-0 tokens ignored by IPL.
+    #[serde(default)]
+    ignored_tokens: u64,
 }
 
 impl Default for IplUpload {
@@ -66,6 +69,7 @@ impl Default for IplUpload {
             bytes_written: 0,
             blocks_finished: 0,
             entrypoint: None,
+            ignored_tokens: 0,
         }
     }
 }
@@ -98,6 +102,18 @@ impl IplUpload {
     #[must_use]
     pub const fn entrypoint(&self) -> Option<u16> {
         self.entrypoint
+    }
+
+    /// Number of distinct invalid port-0 tokens, excluding unchanged polls.
+    #[must_use]
+    pub const fn ignored_tokens(&self) -> u64 {
+        self.ignored_tokens
+    }
+
+    /// Expected byte index at the next stage of the IPL transfer.
+    #[must_use]
+    pub const fn expected_index(&self) -> u8 {
+        self.expected_index
     }
 
     /// Process one CPU mailbox snapshot, updating the SPC reply and RAM.
@@ -146,6 +162,7 @@ impl IplUpload {
             }
             UploadPhase::AwaitFirstByte => {
                 if token != 0 {
+                    self.ignored_tokens = self.ignored_tokens.saturating_add(1);
                     return UploadEvent::None;
                 }
                 self.phase = UploadPhase::Receiving;
@@ -161,6 +178,7 @@ impl IplUpload {
                 // token, or one too far ahead, is not a block boundary.
                 // This comparison wraps across $FF->$00 like SPC700 CMP.
                 if self.expected_index.wrapping_sub(token) & 0x80 == 0 {
+                    self.ignored_tokens = self.ignored_tokens.saturating_add(1);
                     return UploadEvent::None;
                 }
                 // The expected index is consumed by data, not this
@@ -354,6 +372,8 @@ mod tests {
         assert_eq!(h.send(132), UploadEvent::None);
         assert_eq!(h.transfer.phase(), UploadPhase::Receiving);
         assert_eq!(h.transfer.blocks_finished(), 0);
+        assert_eq!(h.transfer.ignored_tokens(), 2);
+        assert_eq!(h.transfer.expected_index(), 3);
         assert_eq!(h.spc[0], 2);
 
         // The next expected byte remains acceptable after invalid tokens.
@@ -433,9 +453,11 @@ mod tests {
         h.cpu[2] = 0;
         h.cpu[3] = 0x40;
         assert_eq!(h.send(0), UploadEvent::None);
+        assert_eq!(h.transfer.ignored_tokens(), 1);
         let state = serde_json::to_string(&h.transfer).unwrap();
         h.transfer = serde_json::from_str(&state).unwrap();
         assert_eq!(h.send(0), UploadEvent::None);
+        assert_eq!(h.transfer.ignored_tokens(), 1);
         assert_eq!(h.spc[0], 1);
         assert_eq!(
             h.send(3),

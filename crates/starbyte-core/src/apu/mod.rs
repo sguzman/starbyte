@@ -286,11 +286,15 @@ impl Apu {
         // of the legacy placeholder CPU step counter.
         self.timers.advance_master_cycles(master_cycles);
         // The production sound-CPU path is still a non-executing placeholder.
-        // Bulk clock advancement is equivalent to repeated dummy steps and
-        // avoids thousands of unnecessary function calls per video frame.
-        let dummy_steps = master_cycles / 6;
-        self.spc700.advance_placeholder_steps(dummy_steps);
-        self.spc700_steps = self.spc700_steps.saturating_add(dummy_steps);
+        // Never advance that fake PC in opt-in transfer/execution mode: once
+        // the upload hands off to the entrypoint, real SPC instructions own PC.
+        // Otherwise an unrelated CPU instruction could silently skip bytes
+        // of an uploaded driver before its first isolated execution.
+        if self.ipl_upload.is_none() {
+            let dummy_steps = master_cycles / 6;
+            self.spc700.advance_placeholder_steps(dummy_steps);
+            self.spc700_steps = self.spc700_steps.saturating_add(dummy_steps);
+        }
         if let Some(upload) = self.ipl_upload.as_mut() {
             let event = upload.observe(
                 self.cpu_to_apu_ports,
@@ -985,6 +989,11 @@ mod tests {
             apu.isolated_ipl_upload().unwrap().entrypoint(),
             Some(0x0400)
         );
+        // Host clocks after handoff must not fast-forward the real driver's
+        // PC through legacy placeholder advancement.
+        apu.step_master_cycles(600);
+        assert_eq!(apu.spc700.pc, 0x0400);
+        assert_eq!(apu.status().spc700_steps, 0);
         apu.execute_spc_program_instruction().unwrap();
         apu.execute_spc_program_instruction().unwrap();
         assert_eq!(apu.read_apu_port(0).unwrap(), 0x42);

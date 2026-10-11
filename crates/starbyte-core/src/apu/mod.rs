@@ -523,10 +523,13 @@ impl Apu {
     pub fn write_spc_bus(&mut self, address: u16, value: u8) {
         match address {
             0x00f0 => {
-                // TEST bit 1 controls whether normal SPC RAM and the DSP
-                // echo buffer can be written. Do not emulate the unsafe
-                // processor-speed and undocumented clock-test modes here.
-                self.spc_test = value;
+                // TEST responds to writes only with the SPC700 direct
+                // page flag (PSW.P) clear. Its RAM mirror is always
+                // written even if the hardware TEST latch ignores it.
+                // Leave unsafe wait-state/clock-test modes unmodeled.
+                if self.spc700.psw & 0x20 == 0 {
+                    self.spc_test = value;
+                }
             }
             0x00f1 => {
                 self.ipl_overlay_enabled = value & 0x80 != 0;
@@ -953,6 +956,31 @@ mod tests {
         }
         assert_eq!(apu.read_spc_ram(0x2200), 0x99);
         assert_eq!(apu.read_spc_ram(0x00f0), 0x0a);
+    }
+
+    #[test]
+    fn spc_test_latch_ignores_writes_with_direct_page_flag_set() {
+        let mut apu = Apu::default();
+        apu.reset();
+        apu.spc700.psw |= 0x20; // SETP.
+        apu.write_spc_bus(0x00f0, 0); // Invalid hardware TEST write.
+        assert_eq!(apu.read_spc_ram(0x00f0), 0);
+        apu.write_spc_bus(0x2200, 0x55);
+        assert_eq!(apu.read_spc_ram(0x2200), 0x55); // Still writable.
+
+        apu.spc700.psw &= !0x20; // CLRP.
+        apu.write_spc_bus(0x00f0, 0);
+        apu.write_spc_bus(0x2200, 0xaa);
+        assert_eq!(apu.read_spc_ram(0x2200), 0x55);
+
+        apu.spc700.psw |= 0x20;
+        apu.write_spc_bus(0x00f0, 0x0a); // Ignored until P is cleared.
+        apu.write_spc_bus(0x2201, 0xa5);
+        assert_eq!(apu.read_spc_ram(0x2201), 0);
+        apu.spc700.psw &= !0x20;
+        apu.write_spc_bus(0x00f0, 0x0a);
+        apu.write_spc_bus(0x2201, 0xa5);
+        assert_eq!(apu.read_spc_ram(0x2201), 0xa5);
     }
 
     #[test]

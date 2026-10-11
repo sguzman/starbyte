@@ -871,13 +871,35 @@ mod tests {
         let mut emulator = Emulator::default();
         emulator.load_rom(Cartridge::from_bytes(rom, None).unwrap());
         emulator.enable_isolated_apu_upload_probe();
-        for _ in 0..instruction_count {
+        let halfway = instruction_count / 2;
+        for _ in 0..halfway {
             emulator.step_instruction().unwrap();
+        }
+        let partial_upload = emulator.isolated_apu_upload().unwrap();
+        assert!(partial_upload.bytes_written() > 0);
+        assert!(partial_upload.entrypoint().is_none());
+
+        // Resume a save-state taken while the 65816 is still delivering
+        // sound-program bytes, not after the IPL has completed its handoff.
+        let snapshot = emulator.save_state().unwrap();
+        let mut resumed = Emulator::default();
+        resumed.load_state(&snapshot).unwrap();
+        for _ in halfway..instruction_count {
+            emulator.step_instruction().unwrap();
+            resumed.step_instruction().unwrap();
         }
         let upload = emulator.isolated_apu_upload().unwrap();
         assert_eq!(upload.blocks_finished(), 3);
         assert_eq!(upload.bytes_written(), (4 + 9 + sound_driver.len()) as u64);
         assert_eq!(upload.entrypoint(), Some(0x0400));
+        assert_eq!(
+            resumed.isolated_apu_upload().unwrap().entrypoint(),
+            Some(0x0400)
+        );
+        assert_eq!(
+            resumed.isolated_apu_upload().unwrap().bytes_written(),
+            upload.bytes_written()
+        );
         assert_eq!(emulator.apu.spc700.pc, 0x0400);
         assert_eq!(emulator.apu.read_spc_ram(0x0200), 0);
         assert_eq!(emulator.apu.read_spc_ram(0x0201), 3);
@@ -893,6 +915,19 @@ mod tests {
                 .run_isolated_uploaded_spc_program(400, &mut samples)
                 .unwrap(),
             400
+        );
+        let mut resumed_samples = Vec::new();
+        assert_eq!(
+            resumed
+                .apu
+                .run_isolated_uploaded_spc_program(400, &mut resumed_samples)
+                .unwrap(),
+            400
+        );
+        assert_eq!(resumed_samples, samples);
+        assert_eq!(
+            serde_json::to_value(&resumed.apu).unwrap(),
+            serde_json::to_value(&emulator.apu).unwrap()
         );
         assert_eq!(emulator.apu.read_dsp_register(0x5d), 2);
         assert_eq!(emulator.apu.read_dsp_register(0x4c), 1);

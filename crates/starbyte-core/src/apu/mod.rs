@@ -1077,13 +1077,39 @@ mod tests {
             );
         }
 
+        // Save and restore in the middle of DSP playback, deliberately
+        // splitting at an instruction count that leaves fractional clocks.
+        // This must preserve the SPC PC, DSP voice envelope/phase, IPL
+        // handoff, sound timers and both sample-clock remainders.
+        let mut resumed_run = apu.clone();
+        let mut resumed_audio = Vec::new();
+        assert_eq!(
+            resumed_run
+                .run_isolated_uploaded_spc_program(137, &mut resumed_audio)
+                .unwrap(),
+            137
+        );
+        let snapshot = serde_json::to_string(&resumed_run).unwrap();
+        let mut resumed_run: Apu = serde_json::from_str(&snapshot).unwrap();
+        assert_eq!(
+            resumed_run
+                .run_isolated_uploaded_spc_program(263, &mut resumed_audio)
+                .unwrap(),
+            263
+        );
+
         let executed = apu
             .run_isolated_uploaded_spc_program(400, &mut output)
             .unwrap();
         assert_eq!(executed, 400);
         assert_eq!(split_audio, output);
+        assert_eq!(resumed_audio, output);
         assert_eq!(
             serde_json::to_value(&split_run).unwrap(),
+            serde_json::to_value(&apu).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&resumed_run).unwrap(),
             serde_json::to_value(&apu).unwrap()
         );
         assert_eq!(apu.read_dsp_register(0x5d), 2);

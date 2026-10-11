@@ -364,10 +364,13 @@ impl SystemBus {
             for port in 0..APU_IO_PORT_COUNT {
                 if pending & (1 << port) != 0 {
                     let _ = apu.write_cpu_port(port, self.cpu_to_apu_io[port]);
-                    if port == 0 {
-                        apu.poll_ipl_upload();
-                    }
                 }
+            }
+            // Old snapshots cannot reconstruct write order. Restore the
+            // complete four-port image before observing port zero, as the
+            // pre-event-queue bridge did at its next master-clock tick.
+            if pending & 1 != 0 {
+                apu.poll_ipl_upload();
             }
         } else {
             for (port, value) in events {
@@ -1198,6 +1201,33 @@ mod tests {
         bus.write(0x7E0010, 0x5A);
 
         assert_eq!(bus.read(0x006000), 0x5A);
+    }
+
+    #[test]
+    fn legacy_dirty_mask_replays_full_ipl_port_image_before_token_zero() {
+        let mut bus = SystemBus::default();
+        let mut apu = Apu::default();
+        apu.reset();
+        apu.enable_isolated_ipl_upload();
+        for (port, value) in [(1, 1), (2, 0), (3, 4), (0, 0xcc)] {
+            bus.write(0x002140 + port as u32, value);
+        }
+        // Old snapshots had no event queue. On load, all four last-written
+        // bytes must be forwarded before the IPL observes kick token $CC.
+        let mut saved = serde_json::to_value(&bus).unwrap();
+        saved
+            .as_object_mut()
+            .unwrap()
+            .remove("pending_apu_port_events");
+        let mut legacy: SystemBus = serde_json::from_value(saved).unwrap();
+        legacy.sync_apu_ports_to_runtime(&mut apu);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0xcc);
+        assert_eq!(
+            apu.isolated_ipl_upload().unwrap().phase(),
+            crate::apu::upload::UploadPhase::AwaitFirstByte
+        );
+        legacy.sync_apu_ports_to_runtime(&mut apu);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 0);
     }
 
     #[test]

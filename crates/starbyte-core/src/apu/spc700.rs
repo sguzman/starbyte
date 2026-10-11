@@ -2161,6 +2161,39 @@ mod accumulator_alu_tests {
     }
 
     #[test]
+    fn interpreted_cycles_accumulate_through_instruction_and_standby_steps() {
+        let mut cpu = Spc700::default();
+        cpu.load_state(0x8000, 0, 0, 0, 0xef, 0);
+        let mut memory = vec![0_u8; 65_536];
+        memory[0x8000] = 0x00; // NOP: 2 cycles.
+        memory[0x8001] = 0xe8; // MOV A,#$42: 2 cycles.
+        memory[0x8002] = 0x42;
+        memory[0x8003] = 0xef; // SLEEP: 3 cycles.
+        let bus = RefCell::new(memory);
+        for expected in [2_u64, 4, 7, 8] {
+            cpu.step_with_memory(
+                |address| bus.borrow()[usize::from(address)],
+                |address, value| bus.borrow_mut()[usize::from(address)] = value,
+            )
+            .unwrap();
+            assert_eq!(cpu.cycles(), expected);
+        }
+        assert_eq!(cpu.a, 0x42);
+        assert_eq!(cpu.pc, 0x8004);
+
+        let snapshot = serde_json::to_string(&cpu).unwrap();
+        let mut restored: Spc700 = serde_json::from_str(&snapshot).unwrap();
+        assert_eq!(restored.cycles(), 8);
+        restored
+            .step_with_memory(
+                |address| bus.borrow()[usize::from(address)],
+                |address, value| bus.borrow_mut()[usize::from(address)] = value,
+            )
+            .unwrap();
+        assert_eq!(restored.cycles(), 9);
+    }
+
+    #[test]
     fn every_spc700_opcode_dispatches_without_unsupported_opcode() {
         // Exercise each of the 256 possible instruction bytes against a
         // deterministic RAM snapshot. This only proves interpreter dispatch

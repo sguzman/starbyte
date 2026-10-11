@@ -332,6 +332,9 @@ impl Apu {
             if let UploadEvent::EntryPoint { address } = event {
                 // The sound driver has been uploaded but is NOT being
                 // automatically executed by the production frame loop.
+                // Discard any earlier dummy-clock count. The opt-in status
+                // reports only instructions executed by the uploaded driver.
+                self.spc700_steps = 0;
                 self.spc700.load_state(address, 0, 0, 0, 0xef, 0x02);
             }
         } else {
@@ -988,6 +991,8 @@ mod tests {
         apu.reset();
         assert!(apu.isolated_ipl_upload().is_none());
         assert_eq!(apu.read_apu_port(0).unwrap(), 0xaa);
+        apu.step_master_cycles(60);
+        assert_eq!(apu.status().spc700_steps, 10);
 
         apu.enable_isolated_ipl_upload();
         assert!(!apu.status().using_builtin_bootstrap);

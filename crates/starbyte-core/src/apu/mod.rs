@@ -1316,6 +1316,54 @@ mod tests {
     }
 
     #[test]
+    fn apu_edl_change_waits_until_current_echo_ring_completes() {
+        let mut apu = Apu::default();
+        // The first EDL=1 ring covers $2000-$27FF. Place a sentinel
+        // at the start of the second 2 KiB page to catch early writes.
+        apu.write_spc_ram(0x2800, 0xa5);
+        apu.write_spc_ram(0x2801, 0x5a);
+        for (reg, value) in [(0x6d, 0x20), (0x7d, 1), (0x6c, 0)] {
+            apu.write_spc_bus(0x00f2, reg);
+            apu.write_spc_bus(0x00f3, value);
+        }
+
+        let clock_at = |samples: u64| (21_477_272_u64 * samples).div_ceil(32_000);
+        let mut audio = Vec::new();
+        apu.append_dsp_audio(clock_at(1), &mut audio);
+        apu.write_spc_bus(0x00f2, 0x7d);
+        apu.write_spc_bus(0x00f3, 2);
+        assert_eq!(apu.read_dsp_register(0x7d), 2);
+
+        // The current one-page ring still runs until its 512th sample.
+        apu.append_dsp_audio(clock_at(512) - clock_at(1), &mut audio);
+        assert_eq!(apu.read_spc_ram(0x2800), 0xa5);
+        assert_eq!(apu.read_spc_ram(0x2801), 0x5a);
+        let saved = serde_json::to_string(&apu).unwrap();
+        let mut resumed: Apu = serde_json::from_str(&saved).unwrap();
+
+        let mut later = Vec::new();
+        let mut later_restored = Vec::new();
+        let next_clocks = clock_at(1024) - clock_at(512);
+        apu.append_dsp_audio(next_clocks, &mut later);
+        resumed.append_dsp_audio(next_clocks, &mut later_restored);
+        assert_eq!(later, later_restored);
+        // The second 2 KiB region is not reached until sample 1025.
+        assert_eq!(apu.read_spc_ram(0x2800), 0xa5);
+        assert_eq!(resumed.read_spc_ram(0x2800), 0xa5);
+
+        let last = clock_at(1025) - clock_at(1024);
+        apu.append_dsp_audio(last, &mut later);
+        resumed.append_dsp_audio(last, &mut later_restored);
+        assert_eq!(apu.read_spc_ram(0x2800), 0);
+        assert_eq!(apu.read_spc_ram(0x2801), 0);
+        assert_eq!(later, later_restored);
+        assert_eq!(
+            serde_json::to_value(&apu).unwrap(),
+            serde_json::to_value(&resumed).unwrap()
+        );
+    }
+
+    #[test]
     fn synthetic_spc700_arithmetic_program_configures_dsp_and_produces_audio() {
         let mut apu = Apu::default();
         // Copyright-free SPC sample directory and filter-zero looping BRR.

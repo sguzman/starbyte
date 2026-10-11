@@ -1516,23 +1516,23 @@ impl UploadProbeTimeline {
         self.last_stored_bytes = stored_bytes;
     }
 
-    fn as_json(&self, completed_frame: u32) -> serde_json::Value {
+    fn as_json(&self, completed_frame: u64) -> serde_json::Value {
         json!({
             "first_accepted_frame": self.first_accepted_frame,
             "last_accepted_frame": self.last_accepted_frame,
             "frames_since_accepted": self
                 .last_accepted_frame
-                .map(|frame| completed_frame.saturating_sub(frame)),
+                .map(|frame| completed_frame.saturating_sub(u64::from(frame))),
             "last_stored_frame": self.last_stored_frame,
             "frames_since_stored": self
                 .last_stored_frame
-                .map(|frame| completed_frame.saturating_sub(frame)),
+                .map(|frame| completed_frame.saturating_sub(u64::from(frame))),
             "first_handoff_frame": self.first_handoff_frame,
             "first_execution_frame": self.first_execution_frame,
             "last_execution_frame": self.last_execution_frame,
             "frames_since_execution": self
                 .last_execution_frame
-                .map(|frame| completed_frame.saturating_sub(frame)),
+                .map(|frame| completed_frame.saturating_sub(u64::from(frame))),
         })
     }
 }

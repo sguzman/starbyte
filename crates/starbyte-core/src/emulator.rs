@@ -694,31 +694,43 @@ mod tests {
     fn cpu_program_uploads_spc_driver_through_real_mailbox_bus_and_runs_it() {
         use crate::apu::spc700::Spc700HaltState;
 
+        fn write_port(code: &mut Vec<u8>, instructions: &mut usize, port: u8, value: u8) {
+            // LDA #imm; STA $214x
+            code.extend_from_slice(&[0xa9, value, 0x8d, 0x40 + port, 0x21]);
+            *instructions += 2;
+        }
+
+        fn capture_ack(code: &mut Vec<u8>, instructions: &mut usize, slot: u8) {
+            // LDA $2140; STA $0010+slot, using canonical low WRAM.
+            code.extend_from_slice(&[0xad, 0x40, 0x21, 0x8d, 0x10 + slot, 0x00]);
+            *instructions += 2;
+        }
+
         let mut rom = rom_bytes();
         rom[0x7ffc] = 0x00;
         rom[0x7ffd] = 0x80;
-        // Original 65816 program: each write uses LDA #imm; STA $214x.
-        // This exercises the normal CPU -> SystemBus -> APU port sync path.
+        // Original 65816 ROM: exercise both directions of the actual
+        // CPU -> SystemBus -> APU mailbox, not host-side helper writes.
         let mut program = Vec::new();
-        let mut write_port = |port: u8, value: u8| {
-            program.extend_from_slice(&[0xa9, value, 0x8d, 0x40 + port, 0x21]);
-        };
-        write_port(1, 1);
-        write_port(2, 0);
-        write_port(3, 4);
-        write_port(0, 0xcc);
+        let mut instructions = 0;
+        write_port(&mut program, &mut instructions, 1, 1);
+        write_port(&mut program, &mut instructions, 2, 0);
+        write_port(&mut program, &mut instructions, 3, 4);
+        write_port(&mut program, &mut instructions, 0, 0xcc);
+        capture_ack(&mut program, &mut instructions, 0);
 
         // SPC700 program at $0400: MOV $F4,#$42; SLEEP.
         let sound_program = [0x8f, 0x42, 0xf4, 0xef];
         for (index, byte) in sound_program.into_iter().enumerate() {
-            write_port(1, byte);
-            write_port(0, index as u8);
+            write_port(&mut program, &mut instructions, 1, byte);
+            write_port(&mut program, &mut instructions, 0, index as u8);
+            capture_ack(&mut program, &mut instructions, (index + 1) as u8);
         }
-        write_port(1, 0);
-        write_port(2, 0);
-        write_port(3, 4);
-        write_port(0, 5); // End-of-block / entrypoint command.
-        let instruction_count = program.len() / 5 * 2;
+        write_port(&mut program, &mut instructions, 1, 0);
+        write_port(&mut program, &mut instructions, 2, 0);
+        write_port(&mut program, &mut instructions, 3, 4);
+        write_port(&mut program, &mut instructions, 0, 5);
+        capture_ack(&mut program, &mut instructions, 5);
         rom[..program.len()].copy_from_slice(&program);
         let cart = Cartridge::from_bytes(rom, None).unwrap();
 
@@ -726,9 +738,17 @@ mod tests {
         emulator.load_rom(cart);
         emulator.apu.enable_isolated_ipl_upload();
         assert_eq!(emulator.apu_to_cpu_ports()[0], 0xaa);
-        for _ in 0..instruction_count {
+        for _ in 0..instructions {
             emulator.step_instruction().unwrap();
         }
+        for (slot, expected) in [0xcc_u8, 0, 1, 2, 3, 5].into_iter().enumerate() {
+            assert_eq!(
+                emulator.peek_wram_u8(0x7e0010 + slot as u32),
+                Some(expected),
+                "65816 readback of APU acknowledgement {slot}"
+            );
+        }
+        assert_eq!(emulator.cpu_registers().pc, 0x8000 + program.len() as u16);
 
         let upload = emulator.apu.isolated_ipl_upload().unwrap();
         assert_eq!(upload.bytes_written(), sound_program.len() as u64);
@@ -752,8 +772,7 @@ mod tests {
         assert_eq!(emulator.apu.spc700.halt_state(), Spc700HaltState::Sleeping);
         assert_eq!(emulator.apu.spc700.pc, 0x0404);
 
-        // No change to default runtime: the opt-in upload existed only in
-        // this synthetic test's instance, not in Emulator's normal startup.
+        // Opt-in capture was never enabled in the default emulator.
         assert!(Emulator::default().apu.isolated_ipl_upload().is_none());
     }
 

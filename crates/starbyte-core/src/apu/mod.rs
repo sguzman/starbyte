@@ -883,6 +883,31 @@ mod tests {
     }
 
     #[test]
+    fn spc700_mov_mmio_writes_mirror_to_ram_without_changing_port_readback() {
+        let mut apu = Apu::default();
+        // MOV $F0,#$0A; MOV $FA,#$04; MOV $F4,#$77;
+        // MOV A,$F4; MOV $20,A.
+        let program = [
+            0x8f, 0x0a, 0xf0, 0x8f, 0x04, 0xfa, 0x8f, 0x77, 0xf4, 0xe4, 0xf4, 0xc4, 0x20,
+        ];
+        for (offset, byte) in program.into_iter().enumerate() {
+            apu.write_spc_ram(0x0400 + offset as u16, byte);
+        }
+        apu.spc700.load_state(0x0400, 0, 0, 0, 0xef, 0);
+        for _ in 0..5 {
+            apu.execute_spc_program_instruction().unwrap();
+        }
+        assert_eq!(apu.spc700.pc, 0x040d);
+        assert_eq!(apu.read_spc_ram(0x00f0), 0x0a);
+        assert_eq!(apu.read_spc_ram(0x00fa), 4);
+        assert_eq!(apu.read_spc_ram(0x00f4), 0x77);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0x77);
+        assert_eq!(apu.read_spc_bus(0x00fa), 0); // Timer target is write-only.
+        assert_eq!(apu.read_spc_ram(0x0020), 0); // CPU port input was zero.
+        assert_eq!(apu.spc700.a, 0);
+    }
+
+    #[test]
     fn spc_dspaddr_high_bit_selects_read_only_register_mirror() {
         let mut apu = Apu::default();
         apu.write_spc_bus(0x00f2, 0x0c); // MVOL(L)

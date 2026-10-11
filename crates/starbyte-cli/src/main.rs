@@ -1619,6 +1619,23 @@ fn build_apu_io_activity_report(emulator: &starbyte_core::Emulator) -> serde_jso
             "expected_index": upload.expected_index(),
             "entrypoint": upload.entrypoint(),
         });
+        // Compact read-only DSP view for distinguishing incomplete driver
+        // setup, held mute/reset, zero master volume and missing key-on.
+        // Never include sample RAM, waveform bytes or user ROM content.
+        report["isolated_ipl_upload"]["dsp_registers"] = json!({
+            "mvol_left": emulator.isolated_apu_dsp_register(0x0c),
+            "mvol_right": emulator.isolated_apu_dsp_register(0x1c),
+            "flg": emulator.isolated_apu_dsp_register(0x6c),
+            "dir": emulator.isolated_apu_dsp_register(0x5d),
+            "kon": emulator.isolated_apu_dsp_register(0x4c),
+            "koff": emulator.isolated_apu_dsp_register(0x5c),
+            "eon": emulator.isolated_apu_dsp_register(0x4d),
+            "non": emulator.isolated_apu_dsp_register(0x3d),
+            "pmon": emulator.isolated_apu_dsp_register(0x2d),
+            "esa": emulator.isolated_apu_dsp_register(0x6d),
+            "edl": emulator.isolated_apu_dsp_register(0x7d),
+            "endx": emulator.isolated_apu_dsp_register(0x7c),
+        });
         if let Some(status) = emulator.isolated_apu_spc700_status() {
             report["isolated_ipl_upload"]["spc700_execution"] = json!({
                 "pc": status.pc,

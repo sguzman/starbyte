@@ -610,6 +610,113 @@ fn headless_upload_probe_captures_real_cpu_mailbox_transfer_in_run_report() {
 }
 
 #[test]
+fn cli_uploaded_spc_driver_generates_nonzero_stereo_wav_from_synthetic_rom() {
+    let dir = tempdir().unwrap();
+    let rom = dir.path().join("three-block-audio.sfc");
+    let wav = dir.path().join("output/audio.wav");
+    let report = dir.path().join("output/audio.json");
+    write_test_rom(&rom);
+
+    let mut driver = Vec::new();
+    for (reg, value) in [
+        (0x5d, 0x02), // BRR source directory at $0200.
+        (0x00, 0x7f), // Voice-zero left volume.
+        (0x01, 0x7f), // Voice-zero right volume.
+        (0x03, 0x10), // Pitch: one sample per DSP tick.
+        (0x07, 0x7f), // Direct GAIN.
+        (0x0c, 0x7f), // Master volume, left.
+        (0x1c, 0x7f), // Master volume, right.
+        (0x4c, 0x01), // Key on voice zero.
+    ] {
+        driver.extend_from_slice(&[0x8f, reg, 0xf2, 0x8f, value, 0xf3]);
+    }
+    driver.extend_from_slice(&[0x2f, 0xfe]); // Infinite BRA; host clocks bound it.
+
+    let mut cpu_code = Vec::new();
+    let mut send_port = |port: u8, value: u8| {
+        cpu_code.extend_from_slice(&[0xa9, value, 0x8d, 0x40 + port, 0x21]);
+    };
+    send_port(1, 1);
+    send_port(2, 0);
+    send_port(3, 2);
+    send_port(0, 0xcc);
+    // Block one: $0200 BRR directory entry.
+    for (index, byte) in [0, 3, 0, 3].into_iter().enumerate() {
+        send_port(1, byte);
+        send_port(0, index as u8);
+    }
+    // Block two: $0300, one original looping positive BRR block.
+    send_port(1, 1);
+    send_port(2, 0);
+    send_port(3, 3);
+    send_port(0, 5);
+    for (index, byte) in [0xc3, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77]
+        .into_iter()
+        .enumerate()
+    {
+        send_port(1, byte);
+        send_port(0, index as u8);
+    }
+    // Block three: $0400 uploaded SPC700 program.
+    send_port(1, 1);
+    send_port(2, 0);
+    send_port(3, 4);
+    send_port(0, 10);
+    for (index, byte) in driver.iter().copied().enumerate() {
+        send_port(1, byte);
+        send_port(0, index as u8);
+    }
+    send_port(1, 0);
+    send_port(2, 0);
+    send_port(3, 4);
+    send_port(0, driver.len() as u8 + 1);
+    cpu_code.extend_from_slice(&[0x80, 0xfe]); // 65816 BRA -2, idle forever.
+
+    let mut rom_bytes = fs::read(&rom).unwrap();
+    rom_bytes[..cpu_code.len()].copy_from_slice(&cpu_code);
+    fs::write(&rom, rom_bytes).unwrap();
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "run",
+            rom.to_str().unwrap(),
+            "--frames",
+            "1",
+            "--no-save-ram",
+            "--apu-upload-probe",
+            "--apu-execute-driver",
+            "--audio-wav",
+            wav.to_str().unwrap(),
+            "--report-json",
+            report.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+    let upload = &report["apu_io_activity"]["isolated_ipl_upload"];
+    assert_eq!(upload["phase"], "executable");
+    assert_eq!(upload["blocks_finished"], 3);
+    assert_eq!(upload["bytes_written"], (4 + 9 + driver.len()) as u64);
+    assert_eq!(upload["entrypoint"], 0x0400);
+    assert!(upload["spc700_execution"]["instructions"].as_u64().unwrap() > 100);
+    assert!(upload["audio_frame"]["nonzero_pairs"].as_u64().unwrap() > 10);
+    assert!(upload["audio_frame"]["peak_absolute"].as_u64().unwrap() > 1000);
+    let bytes = fs::read(wav).unwrap();
+    assert_eq!(&bytes[0..4], b"RIFF");
+    assert_eq!(&bytes[8..12], b"WAVE");
+    let pcm = &bytes[44..];
+    assert!(pcm.len() > 100);
+    assert_eq!(
+        pcm.len() as u64,
+        upload["audio_frame"]["stereo_pairs"].as_u64().unwrap() * 4
+    );
+    assert!(pcm.iter().any(|sample| *sample != 0));
+    assert!(!dir.path().join("three-block-audio.srm").exists());
+}
+
+#[test]
 fn run_succeeds_without_external_spc700_ipl_rom() {
     let dir = tempdir().unwrap();
     let rom = dir.path().join("sample.sfc");

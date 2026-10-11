@@ -1137,7 +1137,10 @@ mod tests {
     fn spc_dsp_soft_reset_blocks_rekey_until_cleared_through_mmio() {
         let mut apu = Apu::default();
         for (address, value) in [
-            (0x0200, 0), (0x0201, 3), (0x0202, 0), (0x0203, 3),
+            (0x0200, 0),
+            (0x0201, 3),
+            (0x0202, 0),
+            (0x0203, 3),
             (0x0300, 0xc3),
         ] {
             apu.write_spc_ram(address, value);
@@ -1146,8 +1149,13 @@ mod tests {
             apu.write_spc_ram(0x0300 + offset, 0x77);
         }
         for (reg, value) in [
-            (0x5d, 2), (0x00, 0x7f), (0x01, 0x7f), (0x03, 0x10),
-            (0x07, 0x7f), (0x0c, 0x7f), (0x1c, 0x7f),
+            (0x5d, 2),
+            (0x00, 0x7f),
+            (0x01, 0x7f),
+            (0x03, 0x10),
+            (0x07, 0x7f),
+            (0x0c, 0x7f),
+            (0x1c, 0x7f),
         ] {
             apu.write_spc_bus(0x00f2, reg);
             apu.write_spc_bus(0x00f3, value);

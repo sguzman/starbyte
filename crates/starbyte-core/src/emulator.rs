@@ -347,6 +347,16 @@ impl Emulator {
         Some(self.apu.read_dsp_register(register))
     }
 
+    /// Expose the internal SMP TEST latch only in opt-in IPL diagnostics.
+    ///
+    /// TEST is write-only to the SPC700; this does not alter guest MMIO
+    /// reads and cannot be used to inspect a production sound session.
+    #[must_use]
+    pub fn isolated_apu_test_latch(&self) -> Option<u8> {
+        self.apu.isolated_ipl_upload()?;
+        Some(self.apu.test_latch())
+    }
+
     /// Host-side write access used by bootstrap tests and regression fixtures.
     pub fn host_write_u8(&mut self, address: u32, value: u8) {
         self.system.write(address, value);
@@ -1096,6 +1106,7 @@ mod tests {
         );
         assert!(Emulator::default().apu.isolated_ipl_upload().is_none());
         assert_eq!(Emulator::default().isolated_apu_dsp_register(0x0c), None);
+        assert_eq!(Emulator::default().isolated_apu_test_latch(), None);
     }
 
     #[test]

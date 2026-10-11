@@ -226,11 +226,8 @@ impl Dsp {
         }
         let left = (left / 128) * i64::from(self.registers[0x0c] as i8) / 128;
         let right = (right / 128) * i64::from(self.registers[0x1c] as i8) / 128;
-        let (left, right) = self.process_echo(
-            ram,
-            [left, right],
-            [echo_left / 128, echo_right / 128],
-        );
+        let (left, right) =
+            self.process_echo(ram, [left, right], [echo_left / 128, echo_right / 128]);
         if self.registers[0x6c] & 0x40 != 0 {
             (0, 0)
         } else {
@@ -241,14 +238,8 @@ impl Dsp {
     /// Echo reads and writes SPC RAM at ESA with EDL-selected ring length.
     /// FIR runs on eight historical 16-bit stereo samples; echo effects are
     /// not yet precisely synchronized to the S-DSP 32-cycle pipeline.
-    fn process_echo(
-        &mut self,
-        ram: &mut [u8],
-        main: [i64; 2],
-        send: [i64; 2],
-    ) -> (i16, i16) {
-        let address = (u16::from(self.registers[0x6d]) << 8)
-            .wrapping_add(self.echo_offset);
+    fn process_echo(&mut self, ram: &mut [u8], main: [i64; 2], send: [i64; 2]) -> (i16, i16) {
+        let address = (u16::from(self.registers[0x6d]) << 8).wrapping_add(self.echo_offset);
         let recent = [
             i16::from_le_bytes([
                 read_ram(ram, address),
@@ -277,11 +268,9 @@ impl Dsp {
         let feedback = i64::from(self.registers[0x0d] as i8);
         let mut output = [0_i16; 2];
         for channel in 0..2 {
-            let echo_volume = i64::from(
-                self.registers[if channel == 0 { 0x2c } else { 0x3c }] as i8,
-            );
-            output[channel] =
-                clamp_i16(main[channel] + filtered[channel] * echo_volume / 128);
+            let echo_volume =
+                i64::from(self.registers[if channel == 0 { 0x2c } else { 0x3c }] as i8);
+            output[channel] = clamp_i16(main[channel] + filtered[channel] * echo_volume / 128);
             if self.registers[0x6c] & 0x20 == 0 {
                 let sample = clamp_i16(send[channel] + filtered[channel] * feedback / 128) & !1;
                 let [low, high] = sample.to_le_bytes();
@@ -797,7 +786,10 @@ mod tests {
         dsp.write_register(0x06, 0x1f, &ram); // Enable rapid sustain decay.
         resumed.write_register(0x06, 0x1f, &ram);
         for _ in 0..128 {
-            assert_eq!(dsp.next_stereo_pair(&mut ram), resumed.next_stereo_pair(&mut ram));
+            assert_eq!(
+                dsp.next_stereo_pair(&mut ram),
+                resumed.next_stereo_pair(&mut ram)
+            );
         }
         assert_eq!(dsp.voices[0].envelope, resumed.voices[0].envelope);
         assert!(dsp.voices[0].envelope < frozen);
@@ -901,7 +893,10 @@ mod tests {
         let snapshot = serde_json::to_string(&dsp).unwrap();
         let mut restored: Dsp = serde_json::from_str(&snapshot).unwrap();
         for _ in 0..128 {
-            assert_eq!(dsp.next_stereo_pair(&mut ram), restored.next_stereo_pair(&mut ram));
+            assert_eq!(
+                dsp.next_stereo_pair(&mut ram),
+                restored.next_stereo_pair(&mut ram)
+            );
             assert_eq!(dsp.noise_lfsr, restored.noise_lfsr);
         }
         assert_ne!(dsp.noise_lfsr, 0x4000);
@@ -971,7 +966,10 @@ mod tests {
         let state = serde_json::to_string(&dsp).unwrap();
         let mut resumed: Dsp = serde_json::from_str(&state).unwrap();
         for _ in 0..50 {
-            assert_eq!(dsp.next_stereo_pair(&mut ram), resumed.next_stereo_pair(&mut ram));
+            assert_eq!(
+                dsp.next_stereo_pair(&mut ram),
+                resumed.next_stereo_pair(&mut ram)
+            );
         }
     }
 }

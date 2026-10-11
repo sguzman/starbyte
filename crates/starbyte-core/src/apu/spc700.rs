@@ -611,7 +611,14 @@ impl Spc700 {
             0xDB | 0xCC => self.y,
             _ => self.a,
         };
-        self.push_read_trace(read, trace, address);
+        if opcode == 0xAF {
+            // MOV (X)+,A has an internal cycle before its store, not the
+            // destination read used by MOV (X),A and other memory stores.
+            // In particular, $FD-$FF timer outputs must not be cleared.
+            self.push_wait_trace(trace);
+        } else {
+            self.push_read_trace(read, trace, address);
+        }
         self.push_write_trace(write, trace, address, value);
         if opcode == 0xAF {
             self.x = self.x.wrapping_add(1);
@@ -3087,6 +3094,31 @@ mod accumulator_alu_tests {
             assert_eq!(trace[3].access, AccessKind::Wait);
             assert_eq!(trace[4].address, 0x0100);
             assert_eq!(trace[4].access, AccessKind::Read);
+        }
+    }
+
+    #[test]
+    fn mov_x_increment_store_idles_instead_of_reading_destination() {
+        for (opcode, expected_access, expected_x) in [
+            (0xaf_u8, AccessKind::Wait, 0_u8),
+            (0xc6_u8, AccessKind::Read, 0xff_u8),
+        ] {
+            let (cpu, trace, bytes) = run_indexed(
+                opcode, &[], 0x42, 0x31, 0xff, 0,
+                &[(0x01ff, 0xaa)],
+            );
+            assert_eq!(trace.len(), 4, "opcode {opcode:02X}");
+            assert_eq!(cpu.cycles(), 4);
+            assert_eq!(trace[2].access, expected_access);
+            if opcode == 0xc6 {
+                assert_eq!(trace[2].address, 0x01ff);
+                assert_eq!(trace[2].value, 0xaa);
+            }
+            assert_eq!(trace[3].access, AccessKind::Write);
+            assert_eq!(trace[3].address, 0x01ff);
+            assert_eq!(bytes[0x01ff], 0x42);
+            assert_eq!(cpu.x, expected_x);
+            assert_eq!(cpu.psw, 0x31);
         }
     }
 

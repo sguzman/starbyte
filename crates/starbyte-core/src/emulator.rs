@@ -760,6 +760,7 @@ mod tests {
         rom[0x7ffc] = 0;
         rom[0x7ffd] = 0x80;
         rom[0] = 0xea; // NOP; the CPU never explicitly writes a port.
+        rom[1] = 0xea; // A second idle instruction after the SPC clear.
         let mut emulator = Emulator::default();
         emulator.load_rom(Cartridge::from_bytes(rom, None).unwrap());
 

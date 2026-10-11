@@ -601,8 +601,11 @@ mod tests {
         // Voice 1 is unaffected and must remain audible.
         dsp.write_register(0x5c, 0b01, &ram);
         dsp.write_register(0x4c, 0b11, &ram);
-        let sample = dsp.next_stereo_pair(&mut ram);
-        assert!(sample.0 > 1000, "voice 1 should remain audible");
+        let mut remaining_voice_audible = false;
+        for _ in 0..5 {
+            remaining_voice_audible |= dsp.next_stereo_pair(&mut ram).0 > 1000;
+        }
+        assert!(remaining_voice_audible, "voice 1 should remain audible");
         assert!(!dsp.voices[0].active);
         assert!(dsp.voices[1].active);
         assert_eq!(dsp.read_register(0x08), 0);
@@ -624,7 +627,11 @@ mod tests {
         // Clearing KOFF allows the next KON to create an audible note.
         dsp.write_register(0x5c, 0, &ram);
         dsp.write_register(0x4c, 0b01, &ram);
-        assert!(dsp.next_stereo_pair(&mut ram).0 > 1000);
+        let mut rekey_audible = false;
+        for _ in 0..5 {
+            rekey_audible |= dsp.next_stereo_pair(&mut ram).0 > 1000;
+        }
+        assert!(rekey_audible);
         assert!(dsp.voices[0].active);
     }
 

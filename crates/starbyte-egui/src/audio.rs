@@ -56,7 +56,7 @@ impl AudioOutput {
 /// Return interleaved stereo floats in [-1, 1], or nothing for an empty or
 /// malformed frame. Conversion is deterministic and independent of hardware.
 fn pcm16_stereo_to_float(samples: &[i16]) -> Option<Vec<f32>> {
-    if samples.is_empty() || !samples.len().is_multiple_of(2) {
+    if samples.is_empty() || samples.len() % 2 != 0 {
         return None;
     }
     Some(

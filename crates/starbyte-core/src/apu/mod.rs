@@ -530,7 +530,7 @@ impl Apu {
     pub fn append_dsp_audio(&mut self, master_cycles: u64, output: &mut Vec<i16>) {
         let pairs = self.advance_dsp_sample_clock(master_cycles);
         for _ in 0..pairs {
-            let (left, right) = self.dsp.next_stereo_pair(&self.spc_ram);
+            let (left, right) = self.dsp.next_stereo_pair(&mut self.spc_ram);
             output.push(left);
             output.push(right);
         }

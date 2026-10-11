@@ -498,10 +498,15 @@ impl Apu {
                     self.cpu_to_apu_ports[2..4].fill(0);
                 }
             }
-            0x00f2 => self.spc_ram[0x00f2] = value & 0x7f,
-            0x00f3 => self
-                .dsp
-                .write_register(self.spc_ram[0x00f2], value, &self.spc_ram),
+            // DSPADDR bit 7 selects a read-only mirror of $00-$7F.
+            // Keep the bit in $F2 for SPC700 reads, and ignore $F3
+            // writes while the mirror is selected.
+            0x00f2 => self.spc_ram[0x00f2] = value,
+            0x00f3 if self.spc_ram[0x00f2] & 0x80 == 0 => {
+                self.dsp
+                    .write_register(self.spc_ram[0x00f2], value, &self.spc_ram);
+            }
+            0x00f3 => {}
             0x00f4..=0x00f7 => {
                 self.apu_to_cpu_ports[usize::from(address - 0x00f4)] = value;
             }
@@ -765,6 +770,31 @@ mod tests {
 
         apu.write_spc_bus(0x0300, 0x7b);
         assert_eq!(apu.read_spc_bus(0x0300), 0x7b);
+    }
+
+    #[test]
+    fn spc_dspaddr_high_bit_selects_read_only_register_mirror() {
+        let mut apu = Apu::default();
+        apu.write_spc_bus(0x00f2, 0x0c); // MVOL(L)
+        apu.write_spc_bus(0x00f3, 0x36);
+        assert_eq!(apu.read_spc_bus(0x00f3), 0x36);
+
+        // $8C reads the same register as $0C, but cannot write it.
+        apu.write_spc_bus(0x00f2, 0x8c);
+        assert_eq!(apu.read_spc_bus(0x00f2), 0x8c);
+        assert_eq!(apu.read_spc_bus(0x00f3), 0x36);
+        apu.write_spc_bus(0x00f3, 0x7f);
+        assert_eq!(apu.read_dsp_register(0x0c), 0x36);
+
+        // Preserve the high bit through a save-state round trip.
+        let saved = serde_json::to_string(&apu).unwrap();
+        let mut restored: Apu = serde_json::from_str(&saved).unwrap();
+        restored.write_spc_bus(0x00f3, 0x40);
+        assert_eq!(restored.read_dsp_register(0x0c), 0x36);
+        assert_eq!(restored.read_spc_bus(0x00f2), 0x8c);
+        restored.write_spc_bus(0x00f2, 0x0c);
+        restored.write_spc_bus(0x00f3, 0x40);
+        assert_eq!(restored.read_dsp_register(0x0c), 0x40);
     }
 
     #[test]

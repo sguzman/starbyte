@@ -446,6 +446,81 @@ fn isolated_upload_probe_requires_no_save_ram_and_reports_explicit_mode() {
 }
 
 #[test]
+fn headless_upload_probe_captures_real_cpu_mailbox_transfer_in_run_report() {
+    let dir = tempdir().unwrap();
+    let rom = dir.path().join("upload-fixture.sfc");
+    let probe_report = dir.path().join("probe.json");
+    let default_report = dir.path().join("default.json");
+    write_test_rom(&rom);
+
+    let mut code = Vec::new();
+    let mut port_write = |port: u8, value: u8| {
+        code.extend_from_slice(&[0xa9, value, 0x8d, 0x40 + port, 0x21]);
+    };
+    port_write(1, 1);
+    port_write(2, 0);
+    port_write(3, 4);
+    port_write(0, 0xcc);
+    for (index, byte) in [0x8f, 0x42, 0xf4, 0xef].into_iter().enumerate() {
+        port_write(1, byte);
+        port_write(0, index as u8);
+    }
+    port_write(1, 0);
+    port_write(2, 0);
+    port_write(3, 4);
+    port_write(0, 5);
+    code.push(0xdb); // 65816 STP; video/APU master clocks still advance.
+
+    let mut rom_bytes = fs::read(&rom).unwrap();
+    rom_bytes[..code.len()].copy_from_slice(&code);
+    fs::write(&rom, rom_bytes).unwrap();
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "run",
+            rom.to_str().unwrap(),
+            "--frames",
+            "1",
+            "--no-save-ram",
+            "--apu-upload-probe",
+            "--report-json",
+            probe_report.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(&probe_report).unwrap()).unwrap();
+    let upload = &report["apu_io_activity"]["isolated_ipl_upload"];
+    assert_eq!(upload["phase"], "executable");
+    assert_eq!(upload["bytes_written"], 4);
+    assert_eq!(upload["blocks_finished"], 1);
+    assert_eq!(upload["entrypoint"], 0x0400);
+    assert!(report["save_ram_path"].is_null());
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "run",
+            rom.to_str().unwrap(),
+            "--frames",
+            "1",
+            "--no-save-ram",
+            "--report-json",
+            default_report.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let default: serde_json::Value =
+        serde_json::from_slice(&fs::read(&default_report).unwrap()).unwrap();
+    assert!(
+        default["apu_io_activity"]
+            .get("isolated_ipl_upload")
+            .is_none()
+    );
+}
+
+#[test]
 fn run_succeeds_without_external_spc700_ipl_rom() {
     let dir = tempdir().unwrap();
     let rom = dir.path().join("sample.sfc");

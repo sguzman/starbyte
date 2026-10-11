@@ -64,6 +64,12 @@ The isolated, opt-in IPL transfer decoder now uses the SPC700 loader's **signed 
 
 **Verification boundary:** these changes are committed, with synthetic tests added, but hosted CI completion and authentic commercial-ROM acceptance are **not** yet confirmed. The production bootstrap shortcut and silent commercial audio behavior remain unchanged. The next acceptance gate remains a complete observed real-ROM upload, verified SPC700 instruction progress, expected DSP register changes, and nonzero audio in the existing opt-in diagnostic.
 
+## SPC700 MMIO / RAM write coherency (October 11; CI not yet confirmed)
+
+The isolated SPC700 bus now mirrors **all MMIO writes** into backing SPC audio RAM, in addition to each register's hardware side effect. This includes TEST/CONTROL ($F0/$F1), DSPADDR/DSPDATA ($F2/$F3), output mailboxes ($F4-$F7), write-only timer targets ($FA-$FC), and attempted writes to read-only timer outputs ($FD-$FF). As before, SPC700 MMIO reads return their own register behavior rather than those RAM bytes. Tests cover direct bus writes, executable SPC700 MOV instructions, timer target readback, independent CPU/SPC mailbox visibility, and memory behind the register overlay. Hardware references: [Anomie's SPC700 document](https://github.com/gilligan/snesdev/blob/master/docs/spc700.txt) and [Near's S-SMP bus discussion](https://forums.nesdev.org/viewtopic.php?start=30&t=16140).
+
+**Outstanding fidelity:** TEST register speed and RAM-write protection effects are not modeled, nor is cycle-exact MMIO/DSP timing. Documentation differs on the high-bit readback of DSPADDR $F2; the implementation preserves the address latch and write-inhibit behavior without declaring that ambiguity hardware-validated. The new bus regressions still require hosted Rust/Windows CI confirmation.
+
 ## Post-run-529 audio correctness work (October 11; CI not yet confirmed)
 
 The subsequent audio work is **committed to `main` but does not yet have independently confirmed Ubuntu, Windows, formatting or Clippy results at the latest head**. Do not elevate these source-level regressions to the verified table until an exact-commit Actions run is inspected:

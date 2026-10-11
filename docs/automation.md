@@ -61,6 +61,8 @@ cargo run --release -p starbyte-cli -- run /path/to/game.sfc --frames 1 \
   --frame-log /tmp/starbyte-sound-driver.jsonl
 ```
 
+The opt-in `isolated_ipl_upload.audio_frame` object reports the **most recent completed frame only**: `stereo_pairs`, `nonzero_pairs`, and `peak_absolute` (full-range unsigned absolute PCM magnitude). A nonzero value means the emulator generated samples, not that a speaker played them or that a game's music is correct; zero can also be legitimate silence. The ordinary production-mode report does not expose these experimental counters.
+
 This runs a partial SPC700/DSP interpreter **without opening an audio device or exporting a WAV file**. It is an experimental source of machine-readable driver progress, not a claim that a commercial game has working sound; a real game's IPL upload may still stall or encounter unsupported hardware behavior. The desktop emulator never enables this mode implicitly. Do not publish game-specific traces.
 
 This flag replaces the bootstrap handshake in **only this run** and may cause games that depend on the shim to stall. It requires `--no-save-ram` and conflicts with `--load-state`. It does not activate audio in the commercial runtime, download firmware, upload anything to the network, or change the desktop emulator's default. The isolated driver runner exists separately in the core and is not automatically called by this probe.

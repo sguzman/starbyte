@@ -687,7 +687,10 @@ mod tests {
         assert_eq!(dsp.voices[0].past_samples, dsp.voices[0].samples[13..16]);
         assert_eq!(dsp.voices[0].index, 0);
         let first_loop = dsp.next_stereo_pair(&mut original_ram).0;
-        assert!(first_loop > 1000, "previous block must feed interpolation on a loop");
+        assert!(
+            first_loop > 1000,
+            "previous block must feed interpolation on a loop"
+        );
         let snapshot = serde_json::to_string(&dsp).unwrap();
         let mut restored: Dsp = serde_json::from_str(&snapshot).unwrap();
         for _ in 0..48 {
@@ -713,11 +716,13 @@ mod tests {
             half.next_stereo_pair(&mut ram);
         }
         assert_ne!(
-            full.voices[0].fraction,
-            half.voices[0].fraction,
+            full.voices[0].fraction, half.voices[0].fraction,
             "test must select different fractional phases"
         );
-        assert_ne!(full.next_stereo_pair(&mut ram), half.next_stereo_pair(&mut ram));
+        assert_ne!(
+            full.next_stereo_pair(&mut ram),
+            half.next_stereo_pair(&mut ram)
+        );
     }
 
     #[test]

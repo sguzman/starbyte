@@ -518,6 +518,12 @@ fn read_ram(ram: &[u8], address: u16) -> u8 {
 }
 
 fn write_ram(ram: &mut [u8], address: u16, value: u8) {
+    // The S-DSP echo engine cannot overwrite the SMP's special RAM bytes
+    // $F8/$F9. CPU/SPC700 bus writes to these locations remain ordinary
+    // memory accesses and are handled separately by the APU bus.
+    if matches!(address, 0x00f8 | 0x00f9) {
+        return;
+    }
     if let Some(slot) = ram.get_mut(usize::from(address)) {
         *slot = value;
     }
@@ -799,6 +805,30 @@ mod tests {
         let stored = i16::from_le_bytes([ram[0x6000], ram[0x6001]]);
         assert!(stored < -1000, "feedback should write signed filtered echo");
         assert_eq!(stored, i16::from_le_bytes([ram[0x6002], ram[0x6003]]));
+    }
+
+    #[test]
+    fn echo_writes_skip_special_spc_ram_bytes_f8_and_f9() {
+        let (mut dsp, mut ram) = looping_sample();
+        // Echo at ESA=$0000 reaches $F8/$F9 on its 62nd stereo frame.
+        // Both addresses are readable CPU/SPC RAM, but not DSP echo-write
+        // targets. The preceding and following bytes still change.
+        ram[0x00f8] = 0xa5;
+        ram[0x00f9] = 0x5a;
+        dsp.write_register(0x6d, 0, &ram);
+        dsp.write_register(0x7d, 1, &ram);
+        dsp.write_register(0x4d, 1, &ram); // Voice 0 echo send.
+        dsp.write_register(0x6c, 0, &ram); // Enable echo writes.
+        dsp.write_register(0x4c, 1, &ram); // A continuously looping BRR.
+        for _ in 0..64 {
+            dsp.next_stereo_pair(&mut ram);
+        }
+        assert_eq!(&ram[0x00f8..0x00fa], &[0xa5, 0x5a]);
+        assert_ne!(&ram[0x00fc..0x00fe], &[0, 0]);
+        // The regular SPC bus remains permitted to overwrite special RAM.
+        ram[0x00f8] = 0x24;
+        ram[0x00f9] = 0x42;
+        assert_eq!(&ram[0x00f8..0x00fa], &[0x24, 0x42]);
     }
 
     #[test]

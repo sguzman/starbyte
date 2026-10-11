@@ -315,6 +315,20 @@ impl Apu {
         Ok(())
     }
 
+    /// Whether the caller explicitly enabled the host-clocked driver probe.
+    #[must_use]
+    pub const fn isolated_host_clocked_driver_enabled(&self) -> bool {
+        self.host_clocked_spc_enabled
+    }
+
+    /// Disarm the opt-in driver scheduler, for example when restoring a
+    /// diagnostic snapshot into an ordinary desktop emulator session.
+    pub fn disable_isolated_host_clocked_driver(&mut self) {
+        self.host_clocked_spc_enabled = false;
+        self.host_clocked_spc_phase = 0;
+        self.host_clocked_spc_credit = 0;
+    }
+
     /// Spend SNES master-clock time on uploaded SPC700 instructions, in the
     /// opt-in host-clocked probe only. Timers and DSP samples are advanced
     /// separately by `step_master_cycles` and `append_dsp_audio`, so this

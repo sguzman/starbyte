@@ -1148,6 +1148,62 @@ mod tests {
     }
 
     #[test]
+    fn spc_dsp_held_koff_suppresses_rekey_through_mmio_and_survives_save() {
+        let mut apu = Apu::default();
+        for (address, value) in [
+            (0x0200, 0),
+            (0x0201, 3),
+            (0x0202, 0),
+            (0x0203, 3),
+            (0x0300, 0xc3),
+        ] {
+            apu.write_spc_ram(address, value);
+        }
+        for offset in 1..9 {
+            apu.write_spc_ram(0x0300 + offset, 0x77);
+        }
+        for (register, value) in [
+            (0x5d, 2),
+            (0x00, 0x7f),
+            (0x01, 0x7f),
+            (0x03, 0x10),
+            (0x07, 0x7f),
+            (0x0c, 0x7f),
+            (0x1c, 0x7f),
+            (0x5c, 1), // Hold voice zero in key-off.
+            (0x4c, 1), // Re-key while KOFF is still asserted.
+        ] {
+            apu.write_spc_bus(0x00f2, register);
+            apu.write_spc_bus(0x00f3, value);
+        }
+
+        let mut blocked = Vec::new();
+        apu.append_dsp_audio(21_477, &mut blocked);
+        assert!(blocked.iter().all(|&sample| sample == 0));
+        assert_eq!(apu.read_dsp_register(0x5c), 1);
+        assert_eq!(apu.read_dsp_register(0x08), 0);
+
+        let saved = serde_json::to_string(&apu).unwrap();
+        let mut restored: Apu = serde_json::from_str(&saved).unwrap();
+        for runtime in [&mut apu, &mut restored] {
+            runtime.write_spc_bus(0x00f2, 0x5c);
+            runtime.write_spc_bus(0x00f3, 0);
+            runtime.write_spc_bus(0x00f2, 0x4c);
+            runtime.write_spc_bus(0x00f3, 1);
+        }
+        let mut original_pcm = Vec::new();
+        let mut restored_pcm = Vec::new();
+        apu.append_dsp_audio(21_477, &mut original_pcm);
+        restored.append_dsp_audio(21_477, &mut restored_pcm);
+        assert_eq!(original_pcm, restored_pcm);
+        assert!(original_pcm.iter().any(|&sample| sample > 1000));
+        assert_eq!(
+            serde_json::to_value(&apu).unwrap(),
+            serde_json::to_value(&restored).unwrap()
+        );
+    }
+
+    #[test]
     fn spc_dsp_soft_reset_blocks_rekey_until_cleared_through_mmio() {
         let mut apu = Apu::default();
         for (address, value) in [

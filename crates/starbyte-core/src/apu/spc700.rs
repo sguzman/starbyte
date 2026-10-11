@@ -641,8 +641,10 @@ impl Spc700 {
         FWrite: FnMut(u16, u8),
     {
         let source = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
-        let destination = self.push_read_trace(read, trace, self.pc.wrapping_add(2));
+        // SPC700 reads the source byte before fetching the destination
+        // operand, unlike a conventional fetch-all-operands decoder.
         let value = self.push_read_trace(read, trace, self.direct_page_address(source));
+        let destination = self.push_read_trace(read, trace, self.pc.wrapping_add(2));
         self.push_write_trace(write, trace, self.direct_page_address(destination), value);
         self.pc = self.pc.wrapping_add(3);
         Ok(())
@@ -2524,12 +2526,16 @@ mod accumulator_alu_tests {
         assert_eq!(cpu.pc, 0x8003);
         assert_eq!(cpu.psw, 0xA3);
         assert_eq!(trace.len(), 5);
-        assert!(
-            trace
-                .iter()
-                .all(|event| { event.address != 0x0142 || event.access != AccessKind::Read })
-        );
-        assert_eq!(trace.last().unwrap().access, AccessKind::Write);
+        assert_eq!(trace[0].address, 0x8000);
+        assert_eq!(trace[1].address, 0x8001);
+        assert_eq!(trace[2].address, 0x01ff);
+        assert_eq!(trace[2].access, AccessKind::Read);
+        assert_eq!(trace[3].address, 0x8002);
+        assert_eq!(trace[4].address, 0x0142);
+        assert_eq!(trace[4].access, AccessKind::Write);
+        assert!(trace.iter().all(|event| {
+            event.address != 0x0142 || event.access != AccessKind::Read
+        }));
     }
 
     #[test]

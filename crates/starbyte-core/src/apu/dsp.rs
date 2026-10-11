@@ -557,6 +557,24 @@ mod tests {
     }
 
     #[test]
+    fn echo_esa_address_wraps_through_end_of_spc_ram() {
+        let (mut dsp, mut ram) = looping_sample();
+        // $FF00 + $0100 must wrap to RAM $0000, not address $10000.
+        ram[0..4].copy_from_slice(&[0x10, 0x27, 0x10, 0x27]);
+        dsp.echo_offset = 0x0100;
+        dsp.write_register(0x6d, 0xff, &ram);
+        dsp.write_register(0x7d, 1, &ram);
+        dsp.write_register(0x0f, 0x7f, &ram);
+        dsp.write_register(0x2c, 0x7f, &ram);
+        dsp.write_register(0x3c, 0x7f, &ram);
+        let sample = dsp.next_stereo_pair(&mut ram);
+        assert!(sample.0 > 1000);
+        assert_eq!(sample.0, sample.1);
+        assert_eq!(&ram[0..4], &[0x10, 0x27, 0x10, 0x27]);
+        assert_eq!(dsp.echo_offset, 0x0104);
+    }
+
+    #[test]
     fn echo_fir_history_and_spc_ram_resume_exactly_after_save() {
         let (mut dsp, mut ram) = looping_sample();
         dsp.write_register(0x4d, 1, &ram);

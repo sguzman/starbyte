@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument};
 
-use crate::apu::{Apu, ApuStatus, AudioFrame, upload::IplUpload};
+use crate::apu::{Apu, ApuStatus, AudioFrame, IsolatedSpc700Status, upload::IplUpload};
 use crate::bus::{Bus, BusEvent};
 use crate::cartridge::Cartridge;
 use crate::cpu_65816::Cpu65816;
@@ -311,6 +311,12 @@ impl Emulator {
     #[must_use]
     pub fn isolated_apu_upload(&self) -> Option<&IplUpload> {
         self.apu.isolated_ipl_upload()
+    }
+
+    /// Actual sound-CPU status after a completed opt-in upload handoff.
+    #[must_use]
+    pub fn isolated_apu_spc700_status(&self) -> Option<IsolatedSpc700Status> {
+        self.apu.isolated_spc700_status()
     }
 
     /// Host-side write access used by bootstrap tests and regression fixtures.
@@ -775,6 +781,10 @@ mod tests {
             assert_eq!(emulator.apu.read_spc_ram(0x0400 + index as u16), byte);
         }
         assert_eq!(emulator.apu.spc700.pc, 0x0400);
+        let status = emulator.isolated_apu_spc700_status().unwrap();
+        assert_eq!(status.pc, 0x0400);
+        assert_eq!(status.instructions, 0);
+        assert_eq!(status.cycles, 0);
         assert_eq!(emulator.host_read_u8(0x002140), 5);
 
         let mut audio = Vec::new();
@@ -788,6 +798,10 @@ mod tests {
         assert_eq!(emulator.apu.read_apu_port(0).unwrap(), 0x42);
         assert_eq!(emulator.apu.spc700.halt_state(), Spc700HaltState::Sleeping);
         assert_eq!(emulator.apu.spc700.pc, 0x0404);
+        let status = emulator.isolated_apu_spc700_status().unwrap();
+        assert_eq!(status.pc, 0x0404);
+        assert_eq!(status.instructions, 2);
+        assert_eq!(status.halt_state, Spc700HaltState::Sleeping);
 
         // Opt-in capture was never enabled in the default emulator.
         assert!(Emulator::default().apu.isolated_ipl_upload().is_none());

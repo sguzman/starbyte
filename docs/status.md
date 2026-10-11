@@ -58,6 +58,14 @@ An **additional opt-in** diagnostic now advances uploaded SPC700 instructions al
 
 This is an experimental compatibility diagnostic, **not proof of genuine Super Mario World sound, hardware-accurate SPC/DSP timing, or Linux audio-device integration**. Proprietary sound-driver probes have not yet established an accepted game-specific audio trace.
 
+## IPL-to-MMIO replay and zero-marker fall-through (October 11; CI not yet confirmed)
+
+An isolated IPL upload copies sound-program bytes through the SPC700 memory bus, **not just into a detached RAM array**. The APU now replays upload bytes in the $F0-$FF MMIO range through the corresponding hardware handlers as well as the RAM backing. This enables an IPL transfer directly targeting $F2/$F3 to select and write actual DSP registers, and preserves the documented overwrite of port-0 byte acknowledgements when an IPL store targets output mailbox $F4. New tests exercise these effects at the isolated APU boundary and using actual 65816 instructions over $2140-$2143 with save-state continuation.
+
+A zero-valued *forward block marker* requires special treatment: if the old block expected index $FE or $FF, token $00 ends that block, and the IPL immediately consumes the still-present nonzero mode byte as byte index zero of the next block. The decoder now records that **implicit first data byte**, moves its expected index to one, and replays the MMIO side effect if its new destination is a hardware address. Tests verify the explicit and wrapped transitions, duplicate-zero suppression, automatic data transfer, and DSPADDR/DSPDATA interaction. Normal uploaders should avoid zero-valued markers, as documented by [Anomie's disassembly](https://github.com/gilligan/snesdev/blob/master/docs/spc700.txt) and [SnesLab's IPL protocol](https://www.sneslab.net/wiki/SPC700/IPL_ROM).
+
+**Verification:** committed source and synthetic regressions; latest-commit hosted Rust tests, lint, and authentic ROM upload evidence remain unconfirmed. The opt-in isolation boundary and the silent production APU are unchanged.
+
 ## IPL upload protocol ordering (October 11; CI not yet confirmed)
 
 The isolated, opt-in IPL transfer decoder now uses the SPC700 loader's **signed 8-bit CMP/BPL block-end comparison**, rather than treating every unexpected port-0 index as a block termination. A transfer retains its current byte and acknowledgement indices when it sees stale indices or commands more than 128 indices ahead; valid forward commands and index-wrap boundaries still work. Tests exercise the transfer decoder, the actual APU mailbox path, the exact 128-step signed comparison boundary, and a save-state restored after an ignored index. See [the SPC700 IPL protocol](https://snes.nesdev.org/wiki/Booting_the_SPC700) and [Anomie's documented IPL disassembly](https://github.com/gilligan/snesdev/blob/master/docs/spc700.txt).

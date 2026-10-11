@@ -1129,9 +1129,9 @@ mod tests {
             (0x01, 0),    // Right channel disabled.
             (0x0c, 1),    // Tiny left master volume.
             (0x1c, 0),
-            (0x07, 1),    // Direct GAIN -> envelope 16.
-            (0x3d, 1),    // NON -> initial signed noise -32768.
-            (0x4c, 1),    // KON voice 0.
+            (0x07, 1), // Direct GAIN -> envelope 16.
+            (0x3d, 1), // NON -> initial signed noise -32768.
+            (0x4c, 1), // KON voice 0.
         ] {
             apu.write_spc_bus(0x00f2, register);
             apu.write_spc_bus(0x00f3, value);

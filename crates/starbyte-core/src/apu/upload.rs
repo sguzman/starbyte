@@ -48,7 +48,7 @@ pub struct IplUpload {
     destination: u16,
     expected_index: u8,
     last_port0: Option<u8>,
-    /// Total bytes actually copied into SPC audio RAM.
+    /// Accepted IPL data bytes, including writes blocked by SMP TEST.
     bytes_written: u64,
     /// Number of completed upload blocks.
     blocks_finished: u64,
@@ -86,7 +86,7 @@ impl IplUpload {
         self.phase
     }
 
-    /// Number of successfully copied bytes.
+    /// Number of accepted transfer bytes (not necessarily stored in RAM).
     #[must_use]
     pub const fn bytes_written(&self) -> u64 {
         self.bytes_written
@@ -128,6 +128,19 @@ impl IplUpload {
         spc_ports: &mut [u8; 4],
         ram: &mut [u8],
     ) -> UploadEvent {
+        self.observe_with_ram_writes(cpu_ports, spc_ports, ram, true)
+    }
+
+    /// Apply TEST bit 1 write gating while preserving mailbox acks and
+    /// consumed byte indices. The IPL interpreter uses the same SRAM bus
+    /// as any other SPC700 instruction, including the $F0-$FF exemption.
+    pub(super) fn observe_with_ram_writes(
+        &mut self,
+        cpu_ports: [u8; 4],
+        spc_ports: &mut [u8; 4],
+        ram: &mut [u8],
+        ram_writable: bool,
+    ) -> UploadEvent {
         if ram.len() != 65_536 {
             return UploadEvent::None;
         }
@@ -166,11 +179,11 @@ impl IplUpload {
                     return UploadEvent::None;
                 }
                 self.phase = UploadPhase::Receiving;
-                self.write_byte(token, cpu_ports[1], spc_ports, ram)
+                self.write_byte(token, cpu_ports[1], spc_ports, ram, ram_writable)
             }
             UploadPhase::Receiving => {
                 if token == self.expected_index {
-                    return self.write_byte(token, cpu_ports[1], spc_ports, ram);
+                    return self.write_byte(token, cpu_ports[1], spc_ports, ram, ram_writable);
                 }
                 // The real IPL compares Y (the expected byte index) to
                 // the CPU's port-0 token and takes the block-end path only
@@ -200,7 +213,7 @@ impl IplUpload {
                         // nonzero mode byte from port 1 as byte index 0.
                         // No second port-0 edge is required (or possible).
                         self.phase = UploadPhase::Receiving;
-                        let _ = self.write_byte(0, cpu_ports[1], spc_ports, ram);
+                        let _ = self.write_byte(0, cpu_ports[1], spc_ports, ram, ram_writable);
                         UploadEvent::NextBlockWithByte {
                             destination: address,
                             value: cpu_ports[1],
@@ -221,9 +234,12 @@ impl IplUpload {
         value: u8,
         spc_ports: &mut [u8; 4],
         ram: &mut [u8],
+        ram_writable: bool,
     ) -> UploadEvent {
         let address = self.destination;
-        ram[usize::from(address)] = value;
+        if ram_writable || (0x00f0..=0x00ff).contains(&address) {
+            ram[usize::from(address)] = value;
+        }
         self.destination = address.wrapping_add(1);
         self.expected_index = token.wrapping_add(1);
         self.bytes_written = self.bytes_written.saturating_add(1);
@@ -483,6 +499,29 @@ mod tests {
         assert_eq!(&h.ram[0x5000..0x5003], &[0x8f, 0xaa, 0xf4]);
         assert_eq!(h.transfer.bytes_written(), 3);
         assert_eq!(h.transfer.phase(), UploadPhase::Receiving);
+    }
+
+    #[test]
+    fn disabled_ram_writes_consume_indices_without_storing_ordinary_bytes() {
+        let mut h = Harness::new();
+        h.kick(0x3000);
+        h.cpu[1] = 0x44;
+        assert_eq!(
+            h.transfer
+                .observe_with_ram_writes([0, h.cpu[1], h.cpu[2], h.cpu[3]], &mut h.spc, &mut h.ram, false),
+            UploadEvent::ByteWritten { address: 0x3000, value: 0x44 }
+        );
+        assert_eq!(h.ram[0x3000], 0);
+        assert_eq!(h.transfer.bytes_written(), 1);
+        assert_eq!(h.transfer.expected_index(), 1);
+        h.cpu[1] = 0x77;
+        h.cpu[0] = 1;
+        assert_eq!(
+            h.transfer.observe_with_ram_writes(h.cpu, &mut h.spc, &mut h.ram, true),
+            UploadEvent::ByteWritten { address: 0x3001, value: 0x77 }
+        );
+        assert_eq!(h.ram[0x3001], 0x77);
+        assert_eq!(h.transfer.bytes_written(), 2);
     }
 
     #[test]

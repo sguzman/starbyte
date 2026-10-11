@@ -58,6 +58,14 @@ An **additional opt-in** diagnostic now advances uploaded SPC700 instructions al
 
 This is an experimental compatibility diagnostic, **not proof of genuine Super Mario World sound, hardware-accurate SPC/DSP timing, or Linux audio-device integration**. Proprietary sound-driver probes have not yet established an accepted game-specific audio trace.
 
+## Opt-in sound-CPU / timer / DSP scheduling order (October 11; CI not yet confirmed)
+
+The experimental `--apu-execute-driver` emulation path now interleaves SPC700 execution, hardware timer advancement, and DSP sample generation at **six NTSC master-clock quanta**, matching the existing 65816 bus-cycle unit. Previously the emulator clocked the timers for the *whole* 65816 instruction, then executed its full SPC700 quota, and only then synthesized all due PCM. That ordering could let timer-polling sound drivers observe ticks that should not have happened yet and move DSP configuration ahead of samples within that CPU instruction. The smaller quanta apply **only when the host-clocked sound-driver probe has been explicitly enabled**; ordinary commercial gameplay keeps the prior single-quantum `step_master_cycles` and PCM path unchanged.
+
+A synthetic uploaded SPC program configures timer 2, polls its read-to-clear output, and acknowledges the first positive tick on an APU output port. Its test compares a 2,000-master-clock emulator quantum against independently sequenced six-clock APU execution, including the full serialized APU state and PCM buffer; a separate regression verifies the default production path remains identical to the previous single-quantum algorithm. The host still completes the 65816 instruction's bus operations before APU substeps, so this does **not** provide bus-cycle interleaving of CPU writes with SPC700 MMIO, nor cycle-exact 32-phase DSP timing.
+
+**Verification boundary:** source and regression tests are committed, but hosted Linux/Windows `cargo test`, formatting and lint results remain unconfirmed, as do authentic SMW music execution and Linux speaker output.
+
 ## PMON extreme-pitch interpolation limit (October 11; CI not yet confirmed)
 
 The sample-stepped DSP now caps the **accumulated interpolation position** at `$7FFF` after pitch modulation, matching the limiter in Snes9x's S-DSP reference implementation. The unmodulated `VxPITCH` remains a 14-bit register value (`$0000-$3FFF`); a sufficiently positive previous-voice `OUTX` can almost double it. Before this correction, combining a high modulated pitch with a nearly full fractional sample could skip one additional BRR sample within a DSP tick. A direct voice accumulator boundary regression and a two-voice BRR/PMON integration regression cover the case and preserve ordinary one-sample stepping. Reference: [Snes9x SPC_DSP.cpp](https://github.com/snes9xgit/snes9x/blob/master/apu/bapu/dsp/SPC_DSP.cpp), especially the interpolation-position cap following the pitch modulation step.

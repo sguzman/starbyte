@@ -707,6 +707,31 @@ mod tests {
     }
 
     #[test]
+    fn gaussian_blends_opposite_polarity_samples_across_brr_block_boundary() {
+        let (mut dsp, mut ram) = looping_sample();
+        ram[0x300] = 0xc0; // First BRR block: positive, not an end marker.
+        ram[0x301..0x309].fill(0x44);
+        ram[0x309] = 0xc3; // Second BRR block: negative, end/loop.
+        ram[0x30a..0x312].fill(0xcc);
+        ram[0x202] = 0x09; // Loop to the second block on subsequent ends.
+        ram[0x203] = 0x03;
+        dsp.write_register(0x4c, 1, &ram);
+
+        for _ in 0..16 {
+            dsp.next_stereo_pair(&mut ram);
+        }
+        assert_eq!(dsp.voices[0].address, 0x0309);
+        let first = dsp.next_stereo_pair(&mut ram).0;
+        let second = dsp.next_stereo_pair(&mut ram).0;
+        let third = dsp.next_stereo_pair(&mut ram).0;
+        // A step-function sampler would go negative immediately. The four-tap
+        // Gaussian preserves the preceding positive block for two samples.
+        assert!(first > 1000);
+        assert!(second > 1000);
+        assert!(third < -1000);
+    }
+
+    #[test]
     fn gaussian_phase_changes_output_on_nonconstant_brr_waveform() {
         let (mut full, mut ram) = looping_sample();
         // Alternating high/low decoded nibble input: interpolation varies

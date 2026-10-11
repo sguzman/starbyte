@@ -3,10 +3,12 @@
 //! This DSP consumes SPC700 audio RAM, not the SNES main CPU bus. It handles
 //! directory-based BRR samples, pitch stepping and PMON, signed channel/master
 //! volume, timed ADSR/GAIN envelopes, NON shared noise, and key-on/off/loop
-//! state. Gaussian interpolation, echo/FIR processing and exact multi-phase
-//! hardware pipeline latency still need work. This is not bit-exact DSP audio.
+//! state, RAM-backed echo/FIR, and four-tap Gaussian interpolation. Exact
+//! hardware phase scheduling remains unfinished; this is not bit-exact audio.
 
 use serde::{Deserialize, Serialize};
+
+use super::gaussian;
 
 const VOICE_COUNT: usize = 8;
 const REGISTER_COUNT: usize = 128;
@@ -78,6 +80,9 @@ struct Voice {
     address: u16,
     header: u8,
     samples: [i16; BRR_SAMPLES_PER_BLOCK],
+    /// Last three decoded BRR values from the previous 16-sample block.
+    #[serde(default)]
+    past_samples: [i16; 3],
     index: usize,
     fraction: u32,
     previous: i32,
@@ -105,6 +110,7 @@ impl Default for Voice {
             address: 0,
             header: 0,
             samples: [0; BRR_SAMPLES_PER_BLOCK],
+            past_samples: [0; 3],
             index: 0,
             fraction: 0,
             previous: 0,
@@ -324,7 +330,10 @@ impl Voice {
 
         self.advance_envelope(adsr1, adsr2, gain, counter);
 
-        let waveform = noise.unwrap_or(self.samples[self.index]);
+        // Gaussian interpolation spans three earlier decoded samples,
+        // including values in the previous BRR block. NON overrides the
+        // interpolated waveform, not its envelope.
+        let waveform = noise.unwrap_or_else(|| self.interpolated_waveform());
         let result = (i32::from(waveform) * self.envelope / 2048) as i16;
         let mut ended_block = false;
         self.fraction += u32::from(pitch);
@@ -333,6 +342,7 @@ impl Voice {
             self.index += 1;
             if self.index == BRR_SAMPLES_PER_BLOCK {
                 self.index = 0;
+                self.past_samples.copy_from_slice(&self.samples[13..16]);
                 if self.header & 1 != 0 {
                     // ENDX records the BRR end event even for looping voices.
                     ended_block = true;
@@ -353,8 +363,23 @@ impl Voice {
         (result, ended_block)
     }
 
-    /// Rate-controlled ADSR and GAIN. Gaussian interpolation, echo and
-    /// hardware pipeline timing are separate outstanding fidelity tasks.
+    /// Four consecutive BRR samples, with a three-sample carry at a block
+    /// boundary. Fetch only decoded history: no speculative BRR block reads.
+    fn interpolated_waveform(&self) -> i16 {
+        let mut taps = [0_i16; 4];
+        for (tap, sample) in taps.iter_mut().enumerate() {
+            let position = self.index as isize + tap as isize - 3;
+            *sample = if position < 0 {
+                self.past_samples[(position + 3) as usize]
+            } else {
+                self.samples[position as usize]
+            };
+        }
+        gaussian::interpolate(taps, self.fraction)
+    }
+
+    /// Rate-controlled ADSR and GAIN; hardware pipeline timing is still
+    /// separate outstanding fidelity work.
     fn advance_envelope(&mut self, adsr1: u8, adsr2: u8, gain: u8, counter: u16) {
         if self.releasing {
             // SPC release is fixed at -8 per output sample, not rate-table
@@ -648,13 +673,65 @@ mod tests {
     }
 
     #[test]
+    fn gaussian_window_carries_previous_brr_block_without_hard_discontinuity() {
+        let mut ram = vec![0_u8; 65_536];
+        ram[0x200..0x204].copy_from_slice(&[0, 3, 0, 3]);
+        ram[0x300] = 0xc3; // Looping positive block.
+        ram[0x301..0x309].fill(0x77);
+        let (mut dsp, mut original_ram) = looping_sample();
+        original_ram.copy_from_slice(&ram);
+        dsp.write_register(0x4c, 1, &original_ram);
+        for _ in 0..16 {
+            dsp.next_stereo_pair(&mut original_ram);
+        }
+        assert_eq!(dsp.voices[0].past_samples, dsp.voices[0].samples[13..16]);
+        assert_eq!(dsp.voices[0].index, 0);
+        let first_loop = dsp.next_stereo_pair(&mut original_ram).0;
+        assert!(first_loop > 1000, "previous block must feed interpolation on a loop");
+        let snapshot = serde_json::to_string(&dsp).unwrap();
+        let mut restored: Dsp = serde_json::from_str(&snapshot).unwrap();
+        for _ in 0..48 {
+            assert_eq!(
+                dsp.next_stereo_pair(&mut original_ram),
+                restored.next_stereo_pair(&mut original_ram)
+            );
+        }
+    }
+
+    #[test]
+    fn gaussian_phase_changes_output_on_nonconstant_brr_waveform() {
+        let (mut full, mut ram) = looping_sample();
+        // Alternating high/low decoded nibble input: interpolation varies
+        // continuously as phase changes, unlike the previous step sampler.
+        ram[0x301..0x309].fill(0x70);
+        full.write_register(0x4c, 1, &ram);
+        let mut half = full.clone();
+        half.write_register(0x02, 0, &ram);
+        half.write_register(0x03, 8, &ram);
+        for _ in 0..7 {
+            full.next_stereo_pair(&mut ram);
+            half.next_stereo_pair(&mut ram);
+        }
+        assert_ne!(
+            full.voices[0].fraction,
+            half.voices[0].fraction,
+            "test must select different fractional phases"
+        );
+        assert_ne!(full.next_stereo_pair(&mut ram), half.next_stereo_pair(&mut ram));
+    }
+
+    #[test]
     fn looping_brr_voice_generates_sample_data_and_stereo_volume() {
         let (mut dsp, mut ram) = looping_sample();
         assert_eq!(dsp.next_stereo_pair(&mut ram), (0, 0));
         dsp.write_register(0x4c, 1, &ram);
-        for _ in 0..64 {
+        for tick in 0..64 {
             let (left, right) = dsp.next_stereo_pair(&mut ram);
-            assert!(left > 1000);
+            // Four-tap Gaussian interpolation takes three decoded samples
+            // to fill its startup window.
+            if tick >= 3 {
+                assert!(left > 1000);
+            }
             assert_eq!(left, right);
         }
         assert_eq!(dsp.read_register(0x7c), 1);
@@ -678,9 +755,11 @@ mod tests {
         dsp.write_register(0x14, 1, &ram);
         dsp.write_register(0x17, 0x7f, &ram);
         dsp.write_register(0x4c, 0b10, &ram);
-        for _ in 0..48 {
+        for tick in 0..48 {
             let (left, right) = dsp.next_stereo_pair(&mut ram);
-            assert!(left < -1000, "voice one must retain its own loop source");
+            if tick >= 3 {
+                assert!(left < -1000, "voice one must retain its own loop source");
+            }
             assert_eq!(right, 0);
         }
         assert_eq!(dsp.read_register(0x7c) & 0b10, 0b10);
@@ -711,8 +790,11 @@ mod tests {
         let (mut dsp, mut ram) = looping_sample();
         ram[0x300] = 0xc1; // End without loop.
         dsp.write_register(0x4c, 1, &ram);
-        for _ in 0..16 {
-            assert!(dsp.next_stereo_pair(&mut ram).0 > 0);
+        for tick in 0..16 {
+            let output = dsp.next_stereo_pair(&mut ram).0;
+            if tick >= 3 {
+                assert!(output > 0);
+            }
         }
         assert_eq!(dsp.next_stereo_pair(&mut ram), (0, 0));
         assert_eq!(dsp.read_register(0x7c) & 1, 1);
@@ -735,6 +817,9 @@ mod tests {
         dsp.write_register(0x6c, 0x40, &ram);
         assert_eq!(dsp.next_stereo_pair(&mut ram), (0, 0));
         dsp.write_register(0x6c, 0x00, &ram);
+        for _ in 0..3 {
+            dsp.next_stereo_pair(&mut ram);
+        }
         assert!(dsp.next_stereo_pair(&mut ram).0 > 0);
         dsp.write_register(0x5c, 1, &ram);
         for _ in 0..300 {

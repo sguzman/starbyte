@@ -365,10 +365,23 @@ impl Emulator {
         self.system.peek_wram_u8(address)
     }
 
-    /// Borrow the current CPU-to-APU communication ports.
+    /// Borrow the last values written by the 65816 to APU communication ports.
+    ///
+    /// These are the CPU-side bus mirrors; SPC700 CONTROL port clearing does
+    /// not change them. See `apu_input_latch_ports` for what the SPC actually
+    /// reads after independent input latch clearing.
     #[must_use]
     pub fn cpu_to_apu_ports(&self) -> &[u8] {
         self.system.cpu_to_apu_ports()
+    }
+
+    /// Current incoming mailbox bytes as read by the SPC700 sound CPU.
+    ///
+    /// Unlike the CPU write mirrors, these values reflect input-latch
+    /// clearing by SPC CONTROL, even before the CPU writes another byte.
+    #[must_use]
+    pub fn apu_input_latch_ports(&self) -> [u8; 4] {
+        std::array::from_fn(|port| self.apu.read_cpu_port(port).unwrap_or(0))
     }
 
     /// Borrow the current APU-to-CPU communication ports.
@@ -761,6 +774,8 @@ mod tests {
         // 65816 NOP must never resurrect its earlier $2140 write.
         emulator.apu.write_spc_bus(0x00f1, 0x10);
         assert_eq!(emulator.apu.read_cpu_port(0).unwrap(), 0);
+        assert_eq!(emulator.apu_input_latch_ports()[0], 0);
+        assert_eq!(emulator.cpu_to_apu_ports()[0], 0x66);
         let checkpoint = emulator.save_state().unwrap();
         let mut restored = Emulator::default();
         restored.load_state(&checkpoint).unwrap();

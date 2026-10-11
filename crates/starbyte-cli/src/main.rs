@@ -1630,6 +1630,7 @@ fn build_apu_io_activity_report(emulator: &starbyte_core::Emulator) -> serde_jso
             "blocks_finished": upload.blocks_finished(),
             "ignored_tokens": upload.ignored_tokens(),
             "expected_index": upload.expected_index(),
+            "next_ram_address": upload.next_ram_address(),
             "entrypoint": upload.entrypoint(),
         });
         // TEST is write-only guest MMIO, but its internal latch can
@@ -2092,6 +2093,7 @@ mod tests {
         );
         assert_eq!(report["isolated_ipl_upload"]["bytes_written"], 0);
         assert_eq!(report["isolated_ipl_upload"]["bytes_stored"], 0);
+        assert_eq!(report["isolated_ipl_upload"]["next_ram_address"], serde_json::Value::Null);
     }
 
     #[test]

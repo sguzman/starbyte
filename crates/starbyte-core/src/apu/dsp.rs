@@ -595,7 +595,8 @@ mod tests {
         let both = dsp.next_stereo_pair(&ram);
         assert!(both.0 > 0);
         assert!(both.1 > 0);
-        assert_eq!(both.0, both.1 * 2);
+        // Integer master-volume scaling rounds twice; allow two LSBs.
+        assert!((i32::from(both.0) - 2 * i32::from(both.1)).abs() <= 2);
     }
 
     #[test]

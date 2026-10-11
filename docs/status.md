@@ -58,6 +58,12 @@ An **additional opt-in** diagnostic now advances uploaded SPC700 instructions al
 
 This is an experimental compatibility diagnostic, **not proof of genuine Super Mario World sound, hardware-accurate SPC/DSP timing, or Linux audio-device integration**. Proprietary sound-driver probes have not yet established an accepted game-specific audio trace.
 
+## Complete SPC700 opcode-cycle reference matrix (October 11; CI not yet confirmed)
+
+The core now contains an explicit **256-entry baseline-cycle table** inside the opcode regression suite, derived from the Nintendo SPC700 Appendix C opcode tables as independently transcribed in [sony-spc700-python's hardware.json](https://github.com/gufranco/sony-spc700-python/blob/main/conformance/hardware.json). A test executes every one of the 256 opcodes under three differing A/X/Y/PSW/operand configurations, compares the observed bus-event count to the documented baseline, and permits exactly two additional cycles for any of the 28 conditional-branch opcodes. It also checks that each instruction's cumulative cycle counter agrees with the emitted trace.
+
+The table explicitly overrides the manual's erroneous `MOVW dp,YA` (`$DA`) four-cycle entry with the **five cycles shown by actual recorded SPC700 bus execution**. The independent reference identifies the underlying hardware corpus as [SingleStepTests/ProcessorTests at `bb11756436da8fd16cce86aef63dc6725f48836f`](https://github.com/SingleStepTests/ProcessorTests/tree/bb11756436da8fd16cce86aef63dc6725f48836f/spc700/v1). This is a **cycle-count guard, not cycle-exact address/value equivalence** and not evidence of commercial-game audio. The suite is committed but has **not yet been run or confirmed green** on the latest commit.
+
 ## SPC700 memory-move bus-side effects (October 11; CI not yet confirmed)
 
 Two more read/write sequencing errors in the standalone SPC700 interpreter are corrected against the independently recorded SingleStepTests bus order. Opcode `$AF` (`MOV (X)+,A`) performs a **wait**, not a read of the memory destination, before storing A and incrementing X. The similar opcode `$C6` (`MOV (X),A`) **does** read the destination before its write. Both still take four cycles. This difference is observable if X addresses timer output `$FF`: only `$C6` clears the output through its read; `$AF` must not. APU integration regressions cover both forms, timer output, direct-page address wrapping, and four-cycle traces.

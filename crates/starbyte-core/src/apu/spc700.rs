@@ -1114,7 +1114,10 @@ impl Spc700 {
         } else {
             previous & !self.a
         };
-        self.push_wait_trace(trace);
+        // The second bus slot is a real read of the same destination,
+        // not an internal wait. Keep the first value for the ALU result:
+        // timer MMIO may return zero after the first read clears it.
+        self.push_read_trace(read, trace, address);
         self.push_write_trace(write, trace, address, value);
         self.pc = self.pc.wrapping_add(3);
         Ok(())
@@ -3179,6 +3182,8 @@ mod accumulator_alu_tests {
             assert_eq!(trace.len(), 6);
             assert_eq!(trace[3].access, AccessKind::Read);
             assert_eq!(trace[3].address, 0x9234);
+            assert_eq!(trace[4].access, AccessKind::Read);
+            assert_eq!(trace[4].address, 0x9234);
             assert_eq!(trace[5].access, AccessKind::Write);
             assert_eq!(trace[5].address, 0x9234);
         }

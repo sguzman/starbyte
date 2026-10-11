@@ -2258,6 +2258,8 @@ mod accumulator_alu_tests {
         // Hardware bus recordings supersede its known MOVW dp,YA $DA
         // four-cycle manual erratum: the actual store takes five.
         // Conditional branches take exactly two additional cycles.
+        // Preserve the 16x16 layout: each row corresponds to one opcode high nibble.
+        #[rustfmt::skip]
         const MIN_CYCLES: [usize; 256] = [
              2,  8,  4,  5,  3,  4,  3,  6,  2,  6,  5,  4,  5,  4,  6,  8,
              2,  8,  4,  5,  4,  5,  5,  6,  5,  5,  6,  5,  2,  2,  4,  6,

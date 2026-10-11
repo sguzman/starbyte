@@ -396,6 +396,54 @@ fn diagnostic_run_can_skip_loading_and_writing_save_ram() {
 }
 
 #[test]
+fn isolated_upload_probe_requires_no_save_ram_and_reports_explicit_mode() {
+    let dir = tempdir().unwrap();
+    let rom = dir.path().join("sample.sfc");
+    let report = dir.path().join("upload-probe.json");
+    write_test_rom(&rom);
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "run",
+            rom.to_str().unwrap(),
+            "--frames",
+            "0",
+            "--apu-upload-probe",
+            "--report-json",
+            report.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+
+    Command::cargo_bin("starbyte")
+        .unwrap()
+        .args([
+            "run",
+            rom.to_str().unwrap(),
+            "--frames",
+            "0",
+            "--no-save-ram",
+            "--apu-upload-probe",
+            "--report-json",
+            report.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
+    assert_eq!(report["apu_io_activity"]["isolated_ipl_upload"]["phase"], "ready");
+    assert_eq!(
+        report["apu_io_activity"]["isolated_ipl_upload"]["bytes_written"],
+        0
+    );
+    assert!(report["apu_io_activity"]["isolated_ipl_upload"]["entrypoint"].is_null());
+    assert!(report["save_ram_path"].is_null());
+    assert!(!dir.path().join("sample.srm").exists());
+}
+
+#[test]
 fn run_succeeds_without_external_spc700_ipl_rom() {
     let dir = tempdir().unwrap();
     let rom = dir.path().join("sample.sfc");

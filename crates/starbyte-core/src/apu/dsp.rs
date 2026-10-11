@@ -265,18 +265,24 @@ impl Dsp {
         let pos = self.echo_history_index;
         self.echo_history[pos] = [recent[0] >> 1, recent[1] >> 1];
 
-        let mut filtered = [0_i64; 2];
-        for tap in 0..8 {
-            let history = self.echo_history[(pos + 8 - tap) % 8];
+        // FIR0 acts on the oldest history sample; FIR7 acts on the
+        // newest. Hardware accumulates the first seven products with
+        // signed 16-bit wrap, then clamps only the final FIR7 addition.
+        // Clamping all eight at the end changes high-gain echo behavior.
+        let mut sum = [0_i64; 2];
+        for tap in 0..7 {
+            let history = self.echo_history[(pos + 1 + tap) % 8];
             let coefficient = i64::from(self.registers[0x0f + tap * 16] as i8);
             for channel in 0..2 {
-                filtered[channel] += (i64::from(history[channel]) * coefficient) >> 6;
+                sum[channel] += (i64::from(history[channel]) * coefficient) >> 6;
             }
         }
-        let filtered = [
-            i64::from(clamp_i16(filtered[0])) & !1,
-            i64::from(clamp_i16(filtered[1])) & !1,
-        ];
+        let final_coefficient = i64::from(self.registers[0x7f] as i8);
+        let filtered = [0, 1].map(|channel| {
+            let wrapped = i64::from(sum[channel] as i16);
+            let newest = i64::from(self.echo_history[pos][channel]);
+            i64::from(clamp_i16(wrapped + ((newest * final_coefficient) >> 6))) & !1
+        });
         let feedback = i64::from(self.registers[0x0d] as i8);
         let mut output = [0_i16; 2];
         for channel in 0..2 {
@@ -549,12 +555,12 @@ mod tests {
     #[test]
     fn negative_echo_volume_and_feedback_round_toward_negative_infinity() {
         let (mut dsp, mut ram) = looping_sample();
-        // A preloaded tiny negative echo input, routed through tap zero,
+        // A preloaded tiny negative echo input, routed through the newest FIR tap,
         // reaches negative fixed-point scaling before the final output clamp.
         ram[0x6000..0x6004].copy_from_slice(&[0xfe, 0xff, 0xfe, 0xff]);
         dsp.write_register(0x6d, 0x60, &ram);
         dsp.write_register(0x7d, 1, &ram);
-        dsp.write_register(0x0f, 0x7f, &ram);
+        dsp.write_register(0x7f, 0x7f, &ram);
         dsp.write_register(0x2c, 1, &ram);
         dsp.write_register(0x3c, 1, &ram);
         dsp.write_register(0x0d, 1, &ram);
@@ -564,10 +570,63 @@ mod tests {
     }
 
     #[test]
+    fn fir_zero_is_oldest_and_seven_is_newest() {
+        let (mut dsp, mut ram) = looping_sample();
+        // Preload only the first echo frame. Later echo samples are zero,
+        // and FLG defaults to write-inhibited, so they stay that way.
+        ram[0x5000..0x5004].copy_from_slice(&[0x10, 0x27, 0x10, 0x27]);
+        dsp.write_register(0x6d, 0x50, &ram);
+        dsp.write_register(0x7d, 1, &ram);
+        dsp.write_register(0x2c, 0x7f, &ram);
+        dsp.write_register(0x3c, 0x7f, &ram);
+
+        dsp.write_register(0x7f, 0x7f, &ram);
+        let immediate = dsp.next_stereo_pair(&mut ram);
+        assert!(immediate.0 > 1_000);
+        assert_eq!(immediate.0, immediate.1);
+
+        // A fresh DSP with FIR0 only must delay this input by seven
+        // samples. FIR7 would have produced output immediately.
+        let (mut delayed_dsp, mut delayed_ram) = looping_sample();
+        delayed_ram[0x5000..0x5004].copy_from_slice(&[0x10, 0x27, 0x10, 0x27]);
+        for (reg, value) in [(0x6d, 0x50), (0x7d, 1), (0x2c, 0x7f), (0x3c, 0x7f), (0x0f, 0x7f)] {
+            delayed_dsp.write_register(reg, value, &delayed_ram);
+        }
+        for _ in 0..7 {
+            assert_eq!(delayed_dsp.next_stereo_pair(&mut delayed_ram), (0, 0));
+        }
+        let delayed = delayed_dsp.next_stereo_pair(&mut delayed_ram);
+        assert!(delayed.0 > 1_000);
+        assert_eq!(delayed.0, delayed.1);
+    }
+
+    #[test]
+    fn fir_first_seven_sum_wraps_before_saturating_last_tap() {
+        let (mut dsp, mut ram) = looping_sample();
+        ram[0x5000..0x5004].copy_from_slice(&[0xfe, 0x7f, 0xfe, 0x7f]);
+        dsp.echo_history.fill([16_383, 16_383]);
+        dsp.write_register(0x6d, 0x50, &ram);
+        dsp.write_register(0x2c, 0x7f, &ram);
+        dsp.write_register(0x3c, 0x7f, &ram);
+        for tap in 0..7 {
+            dsp.write_register(0x0f + tap * 16, 0x7f, &ram);
+        }
+        dsp.write_register(0x7f, 0x80, &ram); // Final signed coefficient = -128.
+        let term = (16_383_i32 * 127) >> 6;
+        let wrapped = i32::from((term * 7) as i16);
+        let final_term = (16_383_i32 * -128) >> 6;
+        let filtered = (wrapped + final_term).clamp(-32_768, 32_767) & !1;
+        let expected = ((filtered * 127) >> 7) as i16;
+        let output = dsp.next_stereo_pair(&mut ram);
+        assert_eq!(output, (expected, expected));
+        assert!(expected < 0, "wrap must change the sign of high-gain FIR");
+    }
+
+    #[test]
     fn global_mute_silences_dac_but_not_voice_outx_or_echo_ram_writes() {
         let (mut dsp, mut ram) = looping_sample();
         dsp.write_register(0x4d, 1, &ram); // Route voice zero into echo.
-        dsp.write_register(0x0f, 0x7f, &ram); // First FIR tap.
+        dsp.write_register(0x7f, 0x7f, &ram); // Newest FIR tap.
         dsp.write_register(0x6d, 0x50, &ram); // Safe RAM echo region.
         dsp.write_register(0x7d, 1, &ram);
         dsp.write_register(0x6c, 0x40, &ram); // Mute output; echo writes on.
@@ -598,7 +657,7 @@ mod tests {
         dsp.write_register(0x2c, 0x7f, &ram);
         dsp.write_register(0x3c, 0x7f, &ram);
         dsp.write_register(0x4d, 1, &ram);
-        dsp.write_register(0x0f, 0x7f, &ram); // FIR newest-sample tap.
+        dsp.write_register(0x7f, 0x7f, &ram); // FIR newest-sample tap (FIR7).
         dsp.write_register(0x6d, 0x50, &ram); // ESA $5000.
         dsp.write_register(0x7d, 1, &ram); // 2048 echo bytes = 512 pairs.
         dsp.write_register(0x6c, 0, &ram); // Permit echo RAM writes.
@@ -624,7 +683,7 @@ mod tests {
         ram[0x5000..0x5004].copy_from_slice(&[0x10, 0x27, 0x10, 0x27]);
         dsp.write_register(0x6d, 0x50, &ram);
         dsp.write_register(0x7d, 1, &ram);
-        dsp.write_register(0x0f, 0x7f, &ram);
+        dsp.write_register(0x7f, 0x7f, &ram);
         dsp.write_register(0x2c, 0x7f, &ram);
         dsp.write_register(0x3c, 0x7f, &ram);
         // Default FLG bit 5 inhibits echo writes, but not reads.
@@ -640,7 +699,7 @@ mod tests {
         ram[0x6000..0x6004].copy_from_slice(&[0x10, 0x27, 0x10, 0x27]);
         dsp.write_register(0x6d, 0x60, &ram);
         dsp.write_register(0x7d, 1, &ram);
-        dsp.write_register(0x0f, 0xc0, &ram); // Negative FIR coefficient.
+        dsp.write_register(0x7f, 0xc0, &ram); // Negative FIR coefficient.
         dsp.write_register(0x2c, 0x7f, &ram);
         dsp.write_register(0x3c, 0x7f, &ram);
         dsp.write_register(0x0d, 0x40, &ram); // Positive echo feedback.
@@ -661,7 +720,7 @@ mod tests {
         dsp.echo_offset = 0x0100;
         dsp.write_register(0x6d, 0xff, &ram);
         dsp.write_register(0x7d, 1, &ram);
-        dsp.write_register(0x0f, 0x7f, &ram);
+        dsp.write_register(0x7f, 0x7f, &ram);
         dsp.write_register(0x2c, 0x7f, &ram);
         dsp.write_register(0x3c, 0x7f, &ram);
         let sample = dsp.next_stereo_pair(&mut ram);
@@ -675,8 +734,8 @@ mod tests {
     fn echo_fir_history_and_spc_ram_resume_exactly_after_save() {
         let (mut dsp, mut ram) = looping_sample();
         dsp.write_register(0x4d, 1, &ram);
-        dsp.write_register(0x0f, 0x7f, &ram);
-        dsp.write_register(0x1f, 0x20, &ram); // FIR history tap 1.
+        dsp.write_register(0x7f, 0x7f, &ram);
+        dsp.write_register(0x6f, 0x20, &ram); // FIR previous-sample tap (FIR6).
         dsp.write_register(0x6d, 0x50, &ram);
         dsp.write_register(0x7d, 1, &ram);
         dsp.write_register(0x2c, 0x7f, &ram);

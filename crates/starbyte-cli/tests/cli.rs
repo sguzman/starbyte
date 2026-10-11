@@ -441,6 +441,10 @@ fn isolated_upload_probe_requires_no_save_ram_and_reports_explicit_mode() {
         0
     );
     assert!(report["apu_io_activity"]["isolated_ipl_upload"]["entrypoint"].is_null());
+    assert_eq!(
+        report["apu_io_activity"]["isolated_ipl_upload"]["audio_frame"]["stereo_pairs"],
+        0
+    );
     assert!(
         report["apu_io_activity"]["isolated_ipl_upload"]
             .get("spc700_execution")
@@ -531,6 +535,9 @@ fn headless_upload_probe_captures_real_cpu_mailbox_transfer_in_run_report() {
     assert_eq!(driver_status["spc700_execution"]["pc"], 0x0404);
     assert_eq!(driver_status["spc700_execution"]["instructions"], 2);
     assert_eq!(driver_status["spc700_execution"]["halt_state"], "sleeping");
+    assert!(driver_status["audio_frame"]["stereo_pairs"].as_u64().unwrap() > 0);
+    assert_eq!(driver_status["audio_frame"]["nonzero_pairs"], 0);
+    assert_eq!(driver_status["audio_frame"]["peak_absolute"], 0);
     assert!(
         driver_status["spc700_execution"]["cycles"]
             .as_u64()

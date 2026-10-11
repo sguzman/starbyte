@@ -565,6 +565,22 @@ mod tests {
     }
 
     #[test]
+    fn noise_fibonacci_lfsr_has_full_nonzero_fifteen_bit_period() {
+        let mut dsp = Dsp::default();
+        dsp.write_register(0x6c, 0x1f, &[]);
+        let mut visited = [false; 0x8000];
+        for _ in 0..32_767 {
+            let state = usize::from(dsp.noise_lfsr);
+            assert_ne!(state, 0);
+            assert!(!visited[state], "LFSR repeated before completing full period");
+            visited[state] = true;
+            dsp.next_stereo_pair(&[]);
+        }
+        assert_eq!(dsp.noise_lfsr, 0x4000);
+        assert!(!visited[0]);
+    }
+
+    #[test]
     fn noise_rate_zero_holds_lfsr_while_non_toggles_waveform() {
         let (mut dsp, ram) = looping_sample();
         dsp.write_register(0x4c, 1, &ram);

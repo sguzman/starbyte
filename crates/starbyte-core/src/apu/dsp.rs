@@ -162,7 +162,13 @@ impl Dsp {
             0x7c => self.registers[0x7c] = 0,
             0x6c if value & 0x80 != 0 => {
                 self.registers[reg] = value;
-                self.voices.fill(Voice::default());
+                // FLG soft reset forces key-off and an empty envelope.
+                // Do not discard the voice decoder state: echo processing
+                // and DSP sample timing continue during soft reset.
+                for voice in &mut self.voices {
+                    voice.releasing = true;
+                    voice.envelope = 0;
+                }
             }
             _ => self.registers[reg] = value,
         }
@@ -188,6 +194,14 @@ impl Dsp {
             self.noise_lfsr = (self.noise_lfsr >> 1) | (feedback << 14);
         }
         let noise_sample = (self.noise_lfsr << 1) as i16;
+        // Reset is a held state, not a one-time command. A KON issued
+        // while FLG.7 remains set must not produce a sounding voice.
+        if self.registers[0x6c] & 0x80 != 0 {
+            for voice in &mut self.voices {
+                voice.releasing = true;
+                voice.envelope = 0;
+            }
+        }
         let mut left = 0_i64;
         let mut right = 0_i64;
         let mut echo_left = 0_i64;
@@ -540,6 +554,49 @@ mod tests {
         dsp.write_register(0x0c, 0x7f, &ram);
         dsp.write_register(0x1c, 0x7f, &ram);
         (dsp, ram)
+    }
+
+    #[test]
+    fn held_soft_reset_silences_new_keyons_without_discarding_echo() {
+        let (mut dsp, mut ram) = looping_sample();
+        dsp.write_register(0x4c, 1, &ram);
+        for _ in 0..12 {
+            dsp.next_stereo_pair(&mut ram);
+        }
+        assert!(dsp.voices[0].active);
+        let prior_address = dsp.voices[0].address;
+
+        // Read an existing echo sample with FIR7. Soft reset must mute
+        // voices, but it is not the global DAC mute flag (FLG bit 6).
+        ram[0x5000..0x5004].copy_from_slice(&[0x10, 0x27, 0x10, 0x27]);
+        for (reg, value) in [
+            (0x6d, 0x50),
+            (0x7d, 1),
+            (0x7f, 0x7f),
+            (0x2c, 0x7f),
+            (0x3c, 0x7f),
+        ] {
+            dsp.write_register(reg, value, &ram);
+        }
+        dsp.write_register(0x6c, 0xa0, &ram); // Reset; no echo writes.
+        assert_eq!(dsp.voices[0].address, prior_address);
+        assert_eq!(dsp.voices[0].envelope, 0);
+        dsp.write_register(0x4c, 1, &ram);
+        let echoed = dsp.next_stereo_pair(&mut ram);
+        assert!(echoed.0 > 1000);
+        assert_eq!(echoed.0, echoed.1);
+        assert_eq!(dsp.read_register(0x08), 0);
+        assert_eq!(dsp.read_register(0x09), 0);
+        assert!(!dsp.voices[0].active);
+
+        // Release reset; a fresh KON is allowed to play again.
+        dsp.write_register(0x6c, 0x20, &ram);
+        dsp.write_register(0x4c, 1, &ram);
+        let mut audible = false;
+        for _ in 0..20 {
+            audible |= dsp.next_stereo_pair(&mut ram).0 > 1000;
+        }
+        assert!(audible);
     }
 
     #[test]

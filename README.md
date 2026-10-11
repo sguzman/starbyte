@@ -75,6 +75,8 @@ Select an installed library card and click **Play Selected**, or use the card's 
 
 The library has a direct **Open ROM...** file picker, and accepts ROM files or single-game ZIP archives dragged from a file manager. ZIPs containing multiple ROMs must be opened through the library to choose the intended member. Its **Recent** menu remembers up to eight locally opened games and offers one-click reloading without launching games automatically at startup. Missing paths remain visible but disabled until their files return.
 
+Desktop speaker output is now wired through a bounded, best-effort Rodio backend: it opens the default audio device only after emulation generates nonzero 32 kHz stereo PCM, and audio-device failure does not prevent video or input. Queued sound is cleared on pause, ROM changes and state restores. **This is not yet a sound-compatibility claim:** normal commercial-ROM APU bootstrap still produces silence, and the native Linux speaker path remains unverified. The app requires the platform audio development/runtime libraries needed by Rodio/CPAL when building and using speaker output.
+
 The GUI uses `eframe` with both Wayland and X11 backends enabled. **Native Wayland behavior and dependencies still require verification on the target Linux system.** These are source-build instructions, not a claim of a working packaged release.
 
 ## Linux configuration and cache

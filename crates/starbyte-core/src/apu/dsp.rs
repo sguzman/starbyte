@@ -398,7 +398,13 @@ impl Voice {
         // OUTX and channel-volume processing.
         let result = (((i32::from(waveform) * self.envelope) >> 11) as i16) & !1;
         let mut ended_block = false;
-        self.fraction += u32::from(pitch);
+        // S-DSP saturates its interpolation position at $7FFF after
+        // applying PMON. A high positive modulator can almost double
+        // the 14-bit voice pitch, but cannot advance more than seven
+        // whole BRR samples plus a fractional sample in one DSP tick.
+        // Without this cap, a near-full fraction plus $7FFF pitch can
+        // incorrectly skip an eighth decoded sample.
+        self.fraction = (self.fraction + u32::from(pitch)).min(0x7fff);
         while self.fraction >= PITCH_UNIT && self.active {
             self.fraction -= PITCH_UNIT;
             self.index += 1;
@@ -1218,6 +1224,45 @@ mod tests {
             full.next_stereo_pair(&mut ram),
             half.next_stereo_pair(&mut ram)
         );
+    }
+
+    #[test]
+    fn extreme_pmon_pitch_limits_interpolation_to_seven_sample_steps() {
+        let (mut dsp, ram) = looping_sample();
+        dsp.write_register(0x4c, 1, &ram);
+        // A high positive voice-0 OUTX can raise voice-1 pitch close to
+        // $7FFF. With a nearly complete fractional sample already due,
+        // hardware clamps the *accumulator*, not the pitch register.
+        dsp.voices[0].fraction = 0x0fff;
+        let _ = dsp.voices[0].clock(
+            0,
+            0x7fff,
+            0,
+            0,
+            0x7f,
+            0,
+            None,
+            &ram,
+            &dsp.registers,
+        );
+        assert_eq!(dsp.voices[0].index, 7);
+        assert_eq!(dsp.voices[0].fraction, 0x0fff);
+
+        // Ordinary unmodulated pitch retains exact one-sample stepping.
+        dsp.write_register(0x4c, 1, &ram);
+        let _ = dsp.voices[0].clock(
+            0,
+            0x1000,
+            0,
+            0,
+            0x7f,
+            0,
+            None,
+            &ram,
+            &dsp.registers,
+        );
+        assert_eq!(dsp.voices[0].index, 1);
+        assert_eq!(dsp.voices[0].fraction, 0);
     }
 
     #[test]

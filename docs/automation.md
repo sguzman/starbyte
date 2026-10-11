@@ -42,6 +42,21 @@ Each completed frame emits and flushes a `starbyte.frame_log.v1` JSON object con
 
 Each frame record now also includes a `joypad` object with `host_controller1_bits` (buttons from the frontend/CLI), `latched_controller1_bits` (the SNES's $4218/$4219 readback), and `auto_read_busy` (the $4212 bit-0 busy state). This distinguishes an input event being delivered by the host from an input actually being readable by the game. Joypad auto-read occurs at VBlank when NMITIMEN bit 0 is set, with an approximate 4,224-master-clock busy interval; exact serial clock timing remains outside the bootstrap model.
 
+### Experimental SPC700 upload probe (opt-in)
+
+The default APU still uses the historical bootstrap compatibility shim and does **not** run a game's uploaded sound driver. To inspect the more authentic, independent SPC IPL mailbox decoder without changing normal gameplay mode, explicitly opt into the headless probe:
+
+```sh
+cargo run --release -p starbyte-cli -- run /path/to/game.sfc --frames 1 \
+  --no-save-ram --apu-upload-probe \
+  --frame-log /tmp/starbyte-apu-frames.jsonl \
+  --report-json /tmp/starbyte-apu-final.json
+```
+
+This flag replaces the bootstrap handshake in **only this run** and may cause games that depend on the shim to stall. It requires `--no-save-ram` and conflicts with `--load-state`. It does not activate audio in the commercial runtime, download firmware, upload anything to the network, or change the desktop emulator's default. The isolated driver runner exists separately in the core and is not automatically called by this probe.
+
+When enabled, the `apu_io_activity.isolated_ipl_upload` object in each frame record and successful final report includes `phase`, `bytes_written`, `blocks_finished`, and `entrypoint` (null until handoff). If emulation stalls before finishing, inspect the flushed frame log; `--report-json` is deliberately not written on failure. A synthetic 65816 ROM regression verifies CPU writes and acknowledgements through the real system bus, but **no real Super Mario World upload/audio acceptance evidence** has yet been established. Keep proprietary ROM traces local and uncommitted.
+
 ### Optional per-frame game-state WRAM watch
 
 Add `--watch-wram 7E0100,7E0094,7E0095` to an existing `run ... --frame-log /tmp/frames.jsonl` command to snapshot those **canonical SNES WRAM bytes** into the per-frame JSONL `wram_watch` map, keyed by uppercase six-digit address. Values are unsigned bytes. All watches are read without MMIO side effects or modifications to CPU-visible open-bus state. The switch requires an explicit `--frame-log` path and accepts 1–32 **distinct** comma-separated six-digit hexadecimal addresses in banks `7E` or `7F`. Incorrect address formats, duplicates and MMIO/ROM addresses are rejected before loading the cartridge. Without the switch, the map is empty; this adds no background recording or implicit file writes.

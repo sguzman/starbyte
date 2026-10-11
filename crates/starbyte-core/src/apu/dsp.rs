@@ -1310,6 +1310,13 @@ mod tests {
         dsp.write_register(0x4c, 0b11, &ram);
         dsp.voices[1].index = 0;
         dsp.voices[1].fraction = 0x0fff;
+        let mut without_pmon = dsp.clone();
+        without_pmon.write_register(0x2d, 0, &ram);
+        let mut control_ram = ram.clone();
+        without_pmon.next_stereo_pair(&mut control_ram);
+        assert_eq!(without_pmon.voices[1].index, 4);
+        assert_eq!(without_pmon.voices[1].fraction, 0x0ffe);
+
         dsp.next_stereo_pair(&mut ram);
         // Nonzero modulation must really reach the saturation limit;
         // otherwise this test would merely reassert an ordinary pitch.

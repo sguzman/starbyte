@@ -966,7 +966,7 @@ mod tests {
         ram[0x400] = 0xc3;
         ram[0x401..0x409].fill(0x77);
         base.write_register(0x12, 0, &ram);
-        base.write_register(0x13, 0x08, &ram);
+        base.write_register(0x13, 0x02, &ram); // Avoid fractional wrap during startup.
         base.write_register(0x14, 1, &ram);
         base.write_register(0x17, 0x7f, &ram);
         base.write_register(0x4c, 0b11, &ram);

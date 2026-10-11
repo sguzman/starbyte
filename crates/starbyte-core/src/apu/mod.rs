@@ -1118,6 +1118,49 @@ mod tests {
     }
 
     #[test]
+    fn signed_voice_pcm_and_live_outx_are_visible_via_spc_dsp_ports() {
+        let mut apu = Apu::default();
+        for (address, value) in [(0x0200, 0x00), (0x0201, 0x03)] {
+            apu.write_spc_ram(address, value);
+        }
+        for (register, value) in [
+            (0x5d, 0x02), // BRR sample directory at $0200.
+            (0x00, 1),    // Tiny left voice volume.
+            (0x01, 0),    // Right channel disabled.
+            (0x0c, 1),    // Tiny left master volume.
+            (0x1c, 0),
+            (0x07, 1),    // Direct GAIN -> envelope 16.
+            (0x3d, 1),    // NON -> initial signed noise -32768.
+            (0x4c, 1),    // KON voice 0.
+        ] {
+            apu.write_spc_bus(0x00f2, register);
+            apu.write_spc_bus(0x00f3, value);
+        }
+        let mut pcm = Vec::new();
+        apu.append_dsp_audio(672, &mut pcm);
+        assert_eq!(pcm, [-1, 0]);
+
+        // OUTX represents the signed envelope-scaled voice, not the tiny
+        // post-master-volume DAC sample. ENVX remains independent of volume.
+        apu.write_spc_bus(0x00f2, 0x09);
+        assert_eq!(apu.read_spc_bus(0x00f3), 0xff);
+        apu.write_spc_bus(0x00f2, 0x08);
+        assert_eq!(apu.read_spc_bus(0x00f3), 1);
+
+        let saved = serde_json::to_string(&apu).unwrap();
+        let mut restored: Apu = serde_json::from_str(&saved).unwrap();
+        let mut uninterrupted = Vec::new();
+        let mut resumed = Vec::new();
+        apu.append_dsp_audio(123_456, &mut uninterrupted);
+        restored.append_dsp_audio(123_456, &mut resumed);
+        assert_eq!(uninterrupted, resumed);
+        assert_eq!(
+            serde_json::to_value(&apu).unwrap(),
+            serde_json::to_value(&restored).unwrap()
+        );
+    }
+
+    #[test]
     fn sample_clock_produces_exactly_32k_pairs_per_ntsc_second() {
         let mut apu = Apu::default();
         assert_eq!(apu.advance_dsp_sample_clock(21_477_272), 32_000);

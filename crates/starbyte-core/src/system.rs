@@ -1618,6 +1618,47 @@ mod tests {
     }
 
     #[test]
+    fn dma_to_apu_port_zero_preserves_each_ipl_token_in_order() {
+        let mut bus = SystemBus::default();
+        bus.install_cartridge(make_cart(Mapper::LoRom));
+        let mut apu = Apu::default();
+        apu.reset();
+        apu.enable_isolated_ipl_upload();
+
+        // CPU handshakes with the sound IPL before the DMA block.
+        for (port, value) in [(1, 1), (2, 0), (3, 4), (0, 0xcc)] {
+            bus.write(0x002140 + port as u32, value);
+        }
+        bus.sync_apu_ports_to_runtime(&mut apu);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0xcc);
+
+        // $2141 holds the data byte. DMA channel zero writes the two
+        // consecutive index tokens $00 and $01 to fixed B-bus $2140.
+        bus.write(0x002141, 0xe8);
+        bus.write(0x7e0000, 0);
+        bus.write(0x7e0001, 1);
+        bus.write(0x004300, 0); // Mode 0, one fixed B-bus register.
+        bus.write(0x004301, 0x40); // $2140 = APU input port zero.
+        bus.write(0x004302, 0);
+        bus.write(0x004303, 0);
+        bus.write(0x004304, 0x7e);
+        bus.write(0x004305, 2);
+        bus.write(0x004306, 0);
+        bus.write(0x00420b, 1);
+
+        // The old four-bit dirty mask forwarded only the final index one;
+        // the IPL was waiting for index zero and wrote nothing.
+        bus.sync_apu_ports_to_runtime(&mut apu);
+        assert_eq!(bus.dma_transferred_bytes(), 2);
+        assert_eq!(apu.read_spc_ram(0x0400), 0xe8);
+        assert_eq!(apu.read_spc_ram(0x0401), 0xe8);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 2);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 1);
+        bus.sync_apu_ports_to_runtime(&mut apu);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().bytes_written(), 2);
+    }
+
+    #[test]
     fn dma_can_stream_bytes_into_ppu_cgram() {
         let mut bus = SystemBus::default();
         bus.install_cartridge(make_cart(Mapper::LoRom));

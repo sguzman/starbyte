@@ -193,6 +193,17 @@ impl Dsp {
     /// indicates that a sample is due.
     #[must_use]
     pub fn next_stereo_pair(&mut self, ram: &mut [u8]) -> (i16, i16) {
+        self.next_stereo_pair_with_ram_writes(ram, true)
+    }
+
+    /// Clock the DSP even if SMP TEST has disabled ordinary RAM writes.
+    /// Echo reads, FIR feedback, voice envelopes and PCM still advance.
+    #[must_use]
+    pub(super) fn next_stereo_pair_with_ram_writes(
+        &mut self,
+        ram: &mut [u8],
+        ram_writable: bool,
+    ) -> (i16, i16) {
         // The S-DSP clock decrements its common envelope counter once per
         // output sample. All eight voices share this phase.
         self.envelope_counter = if self.envelope_counter == 0 {
@@ -279,7 +290,8 @@ impl Dsp {
         // low-amplitude negative samples and changes the echo-send signal.
         let left = (left * i64::from(self.registers[0x0c] as i8)) >> 7;
         let right = (right * i64::from(self.registers[0x1c] as i8)) >> 7;
-        let (left, right) = self.process_echo(ram, [left, right], [echo_left, echo_right]);
+        let (left, right) =
+            self.process_echo(ram, [left, right], [echo_left, echo_right], ram_writable);
         if self.registers[0x6c] & 0x40 != 0 {
             (0, 0)
         } else {
@@ -290,7 +302,13 @@ impl Dsp {
     /// Echo reads and writes SPC RAM at ESA with EDL-selected ring length.
     /// FIR runs on eight historical 16-bit stereo samples; echo effects are
     /// not yet precisely synchronized to the S-DSP 32-cycle pipeline.
-    fn process_echo(&mut self, ram: &mut [u8], main: [i64; 2], send: [i64; 2]) -> (i16, i16) {
+    fn process_echo(
+        &mut self,
+        ram: &mut [u8],
+        main: [i64; 2],
+        send: [i64; 2],
+        ram_writable: bool,
+    ) -> (i16, i16) {
         let address = (u16::from(self.registers[0x6d]) << 8).wrapping_add(self.echo_offset);
         let recent = [
             i16::from_le_bytes([
@@ -329,7 +347,7 @@ impl Dsp {
             let echo_volume =
                 i64::from(self.registers[if channel == 0 { 0x2c } else { 0x3c }] as i8);
             output[channel] = clamp_i16(main[channel] + ((filtered[channel] * echo_volume) >> 7));
-            if self.registers[0x6c] & 0x20 == 0 {
+            if ram_writable && self.registers[0x6c] & 0x20 == 0 {
                 let sample = clamp_i16(send[channel] + ((filtered[channel] * feedback) >> 7)) & !1;
                 let [low, high] = sample.to_le_bytes();
                 let sample_address = address.wrapping_add((channel * 2) as u16);
@@ -884,6 +902,35 @@ mod tests {
         let stored = i16::from_le_bytes([ram[0x6000], ram[0x6001]]);
         assert!(stored < -1000, "feedback should write signed filtered echo");
         assert_eq!(stored, i16::from_le_bytes([ram[0x6002], ram[0x6003]]));
+    }
+
+    #[test]
+    fn external_smp_ram_write_gate_prevents_echo_storage_but_not_fir_or_time() {
+        let (mut dsp, mut ram) = looping_sample();
+        dsp.write_register(0x4d, 1, &ram); // Echo send voice 0.
+        dsp.write_register(0x6d, 0x50, &ram);
+        dsp.write_register(0x7d, 1, &ram);
+        dsp.write_register(0x6c, 0, &ram); // FLG enables echo writing.
+        dsp.write_register(0x4c, 1, &ram);
+        let mut gated = dsp.clone();
+        let mut gated_ram = ram.clone();
+
+        // DSP still renders exactly the same direct PCM for both cases.
+        // Only RAM-side echo writes are suppressed by SMP TEST.
+        for _ in 0..20 {
+            let normal = dsp.next_stereo_pair_with_ram_writes(&mut ram, true);
+            let inhibited = gated.next_stereo_pair_with_ram_writes(&mut gated_ram, false);
+            assert_eq!(normal, inhibited);
+        }
+        assert_ne!(&ram[0x500c..0x5010], &[0, 0, 0, 0]);
+        assert_eq!(&gated_ram[0x5000..0x5050], &[0; 80]);
+        assert_eq!(dsp.echo_offset, gated.echo_offset);
+        assert_eq!(dsp.envelope_counter, gated.envelope_counter);
+
+        // Reopening RAM writes does not reset the DSP's echo position.
+        let next = gated.echo_offset;
+        let _ = gated.next_stereo_pair_with_ram_writes(&mut gated_ram, true);
+        assert_ne!(&gated_ram[0x5000 + usize::from(next)..0x5004 + usize::from(next)], &[0; 4]);
     }
 
     #[test]

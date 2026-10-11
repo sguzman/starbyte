@@ -48,6 +48,10 @@ pub struct Dsp {
     /// Echo ring offset is expressed in bytes, relative to ESA.
     #[serde(default)]
     echo_offset: u16,
+    /// Last EDL size latched at echo ring index zero. Zero indicates an
+    /// older save-state which did not preserve this internal DSP state.
+    #[serde(default)]
+    echo_delay_bytes: u16,
     /// Eight stereo samples, newest at echo_history_index - 1.
     #[serde(default)]
     echo_history: [[i16; 2]; 8],
@@ -70,6 +74,7 @@ impl Default for Dsp {
             envelope_counter: 0,
             noise_lfsr: initial_noise_seed(),
             echo_offset: 0,
+            echo_delay_bytes: 0,
             echo_history: [[0; 2]; 8],
             echo_history_index: 0,
         }
@@ -319,9 +324,16 @@ impl Dsp {
         }
 
         self.echo_history_index = (pos + 1) % 8;
-        let delay_bytes = u16::from(self.registers[0x7d] & 0x0f) * 2048;
-        let delay_bytes = delay_bytes.max(4);
-        self.echo_offset = (self.echo_offset + 4) % delay_bytes;
+        // EDL is sampled only when the echo ring is at its first stereo
+        // word, not on every output sample. Software can change EDL while
+        // the old ring is running; the new delay takes effect only after
+        // the current ring reaches its boundary. EDL=0 still spans one
+        // four-byte stereo pair. An older save without the latch uses its
+        // register value until the next natural boundary.
+        if self.echo_offset == 0 || self.echo_delay_bytes == 0 {
+            self.echo_delay_bytes = (u16::from(self.registers[0x7d] & 0x0f) * 2048).max(4);
+        }
+        self.echo_offset = (self.echo_offset + 4) % self.echo_delay_bytes;
         (output[0], output[1])
     }
 
@@ -829,6 +841,63 @@ mod tests {
         ram[0x00f8] = 0x24;
         ram[0x00f9] = 0x42;
         assert_eq!(&ram[0x00f8..0x00fa], &[0x24, 0x42]);
+    }
+
+    #[test]
+    fn changing_edl_mid_ring_waits_for_old_echo_delay_to_complete() {
+        let (mut dsp, mut ram) = looping_sample();
+        dsp.write_register(0x6d, 0x50, &ram);
+        dsp.write_register(0x7d, 1, &ram);
+        dsp.next_stereo_pair(&mut ram);
+        assert_eq!(dsp.echo_offset, 4);
+        assert_eq!(dsp.echo_delay_bytes, 2048);
+
+        // The new two-page delay must not change the existing 512-frame
+        // ring, even though the readable DSP register updates instantly.
+        dsp.write_register(0x7d, 2, &ram);
+        assert_eq!(dsp.read_register(0x7d), 2);
+        for _ in 1..512 {
+            dsp.next_stereo_pair(&mut ram);
+        }
+        assert_eq!(dsp.echo_offset, 0);
+        assert_eq!(dsp.echo_delay_bytes, 2048);
+        dsp.next_stereo_pair(&mut ram);
+        assert_eq!(dsp.echo_offset, 4);
+        assert_eq!(dsp.echo_delay_bytes, 4096);
+
+        // Save-state restoration must preserve the *latched* size even
+        // while the readable register changes again midway through it.
+        dsp.write_register(0x7d, 1, &ram);
+        let encoded = serde_json::to_string(&dsp).unwrap();
+        let mut restored: Dsp = serde_json::from_str(&encoded).unwrap();
+        let mut restored_ram = ram.clone();
+        for _ in 0..1023 {
+            assert_eq!(
+                dsp.next_stereo_pair(&mut ram),
+                restored.next_stereo_pair(&mut restored_ram)
+            );
+        }
+        assert_eq!(dsp.echo_offset, 0);
+        assert_eq!(dsp.echo_delay_bytes, 4096);
+        assert_eq!(ram, restored_ram);
+        assert_eq!(
+            serde_json::to_value(&dsp).unwrap(),
+            serde_json::to_value(&restored).unwrap()
+        );
+        dsp.next_stereo_pair(&mut ram);
+        assert_eq!(dsp.echo_delay_bytes, 2048);
+        assert_eq!(dsp.echo_offset, 4);
+    }
+
+    #[test]
+    fn edl_zero_reuses_only_one_stereo_echo_word() {
+        let (mut dsp, mut ram) = looping_sample();
+        dsp.write_register(0x7d, 0, &ram);
+        for _ in 0..8 {
+            dsp.next_stereo_pair(&mut ram);
+            assert_eq!(dsp.echo_offset, 0);
+            assert_eq!(dsp.echo_delay_bytes, 4);
+        }
     }
 
     #[test]

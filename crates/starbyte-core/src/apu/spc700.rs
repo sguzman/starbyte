@@ -2160,6 +2160,118 @@ impl Spc700 {
 }
 
 #[cfg(test)]
+mod hardware_bus_reference_tests {
+    use std::cell::RefCell;
+
+    use serde::Deserialize;
+
+    use super::Spc700;
+    use crate::bus::AccessKind;
+
+    // Two published SingleStepTests/ProcessorTests v1 samples per opcode.
+    // Pinned source: bb11756436da8fd16cce86aef63dc6725f48836f
+    // https://github.com/SingleStepTests/ProcessorTests/tree/bb11756436da8fd16cce86aef63dc6725f48836f/spc700/v1
+    // These are *independent execution traces*, not Starbyte-generated expectations.
+    #[derive(Deserialize)]
+    struct HardwareState {
+        pc: u16,
+        a: u8,
+        x: u8,
+        y: u8,
+        sp: u8,
+        psw: u8,
+        ram: Vec<(u16, u8)>,
+    }
+
+    #[derive(Deserialize)]
+    struct HardwareCase {
+        name: String,
+        initial: HardwareState,
+        #[serde(rename = "final")]
+        expected: HardwareState,
+        cycles: Vec<(Option<u16>, Option<u8>, String)>,
+    }
+
+    #[test]
+    fn selected_spc700_instructions_match_recorded_hardware_bus_and_registers() {
+        let fixtures: Vec<HardwareCase> = serde_json::from_str(include_str!(
+            "../../tests/fixtures/spc700-bus-reference.json"
+        ))
+        .expect("valid pinned hardware bus fixture");
+        assert_eq!(fixtures.len(), 26);
+        for fixture in fixtures {
+            let mut cpu = Spc700::default();
+            cpu.load_state(
+                fixture.initial.pc,
+                fixture.initial.a,
+                fixture.initial.x,
+                fixture.initial.y,
+                fixture.initial.sp,
+                fixture.initial.psw,
+            );
+            let mut memory = vec![0_u8; 65_536];
+            for &(address, value) in &fixture.initial.ram {
+                memory[usize::from(address)] = value;
+            }
+            let bus = RefCell::new(memory);
+            let trace = cpu
+                .step_with_memory(
+                    |address| bus.borrow()[usize::from(address)],
+                    |address, value| bus.borrow_mut()[usize::from(address)] = value,
+                )
+                .expect("recorded opcode must execute");
+
+            assert_eq!(trace.len(), fixture.cycles.len(), "{}", fixture.name);
+            for (index, (event, &(address, value, ref access))) in
+                trace.iter().zip(&fixture.cycles).enumerate()
+            {
+                let expected_access = match access.as_str() {
+                    "read" => AccessKind::Read,
+                    "write" => AccessKind::Write,
+                    "wait" => AccessKind::Wait,
+                    _ => panic!("unknown hardware bus access in {}", fixture.name),
+                };
+                assert_eq!(
+                    event.access, expected_access,
+                    "{} bus event {index}",
+                    fixture.name
+                );
+                if let Some(address) = address {
+                    assert_eq!(
+                        event.address,
+                        u32::from(address),
+                        "{} bus event {index} address",
+                        fixture.name
+                    );
+                }
+                if let Some(value) = value {
+                    assert_eq!(
+                        event.value, value,
+                        "{} bus event {index} value",
+                        fixture.name
+                    );
+                }
+            }
+
+            let expected = fixture.expected;
+            assert_eq!(cpu.pc, expected.pc, "{} PC", fixture.name);
+            assert_eq!(cpu.a, expected.a, "{} A", fixture.name);
+            assert_eq!(cpu.x, expected.x, "{} X", fixture.name);
+            assert_eq!(cpu.y, expected.y, "{} Y", fixture.name);
+            assert_eq!(cpu.sp, expected.sp, "{} SP", fixture.name);
+            assert_eq!(cpu.psw, expected.psw, "{} PSW", fixture.name);
+            assert_eq!(cpu.cycles(), trace.len() as u64, "{} cycles", fixture.name);
+
+            let mut expected_memory = vec![0_u8; 65_536];
+            for (address, value) in expected.ram {
+                expected_memory[usize::from(address)] = value;
+            }
+            assert_eq!(bus.into_inner(), expected_memory, "{} RAM", fixture.name);
+        }
+    }
+}
+
+#[cfg(test)]
 mod accumulator_alu_tests {
     use std::cell::RefCell;
 

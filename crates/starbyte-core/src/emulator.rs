@@ -754,12 +754,7 @@ mod tests {
 
         // No change to default runtime: the opt-in upload existed only in
         // this synthetic test's instance, not in Emulator's normal startup.
-        assert!(
-            Emulator::default()
-                .apu
-                .isolated_ipl_upload()
-                .is_none()
-        );
+        assert!(Emulator::default().apu.isolated_ipl_upload().is_none());
     }
 
     #[test]

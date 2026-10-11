@@ -539,11 +539,16 @@ mod tests {
         for _ in 0..512 {
             assert_eq!(dsp.next_stereo_pair(&mut ram), (0, 0));
         }
-        assert_ne!(&ram[0x5000..0x5004], &[0; 4]);
+        // Gaussian startup has an initial silent decode window. The echo
+        // ring contains those initial silent frames before audible BRR PCM.
+        assert_ne!(&ram[0x5010..0x5014], &[0; 4]);
+        for _ in 0..4 {
+            dsp.next_stereo_pair(&mut ram);
+        }
         let echoed = dsp.next_stereo_pair(&mut ram);
         assert!(echoed.0 > 1000, "echo must replay earlier voice output");
         assert_eq!(echoed.0, echoed.1);
-        assert_eq!(dsp.echo_offset, 4);
+        assert_eq!(dsp.echo_offset, 20);
     }
 
     #[test]
@@ -762,7 +767,7 @@ mod tests {
         dsp.write_register(0x4c, 0b10, &ram);
         for tick in 0..48 {
             let (left, right) = dsp.next_stereo_pair(&mut ram);
-            if tick >= 3 {
+            if tick >= 6 {
                 assert!(left < -1000, "voice one must retain its own loop source");
             }
             assert_eq!(right, 0);
@@ -968,8 +973,13 @@ mod tests {
 
         let mut modulated = base.clone();
         modulated.write_register(0x2d, 0b10, &ram);
-        base.next_stereo_pair(&mut ram);
-        modulated.next_stereo_pair(&mut ram);
+        // PMON cannot modulate from the initial all-zero Gaussian window.
+        // Once the first three decoded samples have reached the FIR taps,
+        // negative voice zero lowers voice one's effective playback pitch.
+        for _ in 0..6 {
+            base.next_stereo_pair(&mut ram);
+            modulated.next_stereo_pair(&mut ram);
+        }
         assert!(modulated.voices[1].fraction < base.voices[1].fraction);
 
         let saved = serde_json::to_string(&modulated).unwrap();

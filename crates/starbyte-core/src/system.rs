@@ -75,6 +75,11 @@ pub struct SystemBus {
     wram: Vec<u8>,
     ppu: Ppu,
     cpu_to_apu_io: Vec<u8>,
+    /// CPU ports actually written since the last APU synchronization.
+    /// Without this mask, an SPC CONTROL port-clear is undone every CPU
+    /// instruction by blindly replaying stale CPU-side register contents.
+    #[serde(default)]
+    pending_apu_port_writes: u8,
     apu_to_cpu_io: Vec<u8>,
     dma: DmaController,
     timing: TimingState,
@@ -109,6 +114,7 @@ impl Default for SystemBus {
             wram: vec![0; WRAM_SIZE],
             ppu: Ppu::default(),
             cpu_to_apu_io: vec![0; APU_IO_PORT_COUNT],
+            pending_apu_port_writes: 0,
             apu_to_cpu_io: vec![0; APU_IO_PORT_COUNT],
             dma: DmaController::default(),
             timing: TimingState::default(),
@@ -152,6 +158,7 @@ impl SystemBus {
         }
         self.ppu = Ppu::default();
         self.cpu_to_apu_io.fill(0);
+        self.pending_apu_port_writes = 0;
         self.apu_to_cpu_io.fill(0);
         self.dma = DmaController::default();
         self.timing = TimingState::default();
@@ -339,10 +346,19 @@ impl SystemBus {
         }
     }
 
-    /// Copy CPU-written APU input ports from the system bus view into the APU runtime.
-    pub fn sync_apu_ports_to_runtime(&self, apu: &mut Apu) {
+    /// Replay only CPU mailbox writes made since the previous synchronization.
+    ///
+    /// SPC700 CONTROL may independently clear its input latches. Replaying
+    /// all four last-written CPU bytes every 65816 instruction would
+    /// immediately undo that hardware clear, preventing real sound drivers
+    /// from safely exchanging commands with the main CPU.
+    pub fn sync_apu_ports_to_runtime(&mut self, apu: &mut Apu) {
+        let pending = self.pending_apu_port_writes;
+        self.pending_apu_port_writes = 0;
         for port in 0..APU_IO_PORT_COUNT {
-            let _ = apu.write_cpu_port(port, self.cpu_to_apu_io[port]);
+            if pending & (1 << port) != 0 {
+                let _ = apu.write_cpu_port(port, self.cpu_to_apu_io[port]);
+            }
         }
     }
 
@@ -751,6 +767,7 @@ impl SystemBus {
                 self.observability.apu_port_write_counts[port] =
                     self.observability.apu_port_write_counts[port].saturating_add(1);
                 self.cpu_to_apu_io[port] = value;
+                self.pending_apu_port_writes |= 1 << port;
                 Some(())
             }
             0x2180 => {
@@ -1163,6 +1180,45 @@ mod tests {
         bus.write(0x7E0010, 0x5A);
 
         assert_eq!(bus.read(0x006000), 0x5A);
+    }
+
+    #[test]
+    fn apu_port_sync_replays_only_new_cpu_writes_after_spc_input_clear() {
+        let mut bus = SystemBus::default();
+        let mut apu = Apu::default();
+        apu.reset();
+        bus.write(0x002140, 0xa5);
+        bus.write(0x002142, 0x77);
+        bus.sync_apu_ports_to_runtime(&mut apu);
+        assert_eq!(apu.read_cpu_port(0).unwrap(), 0xa5);
+        assert_eq!(apu.read_cpu_port(2).unwrap(), 0x77);
+
+        // The SPC700 clears its CPU input latches using CONTROL bits 4/5.
+        apu.write_spc_bus(0x00f1, 0x30);
+        assert_eq!(apu.read_cpu_port(0).unwrap(), 0);
+        assert_eq!(apu.read_cpu_port(2).unwrap(), 0);
+        bus.sync_apu_ports_to_runtime(&mut apu);
+        assert_eq!(apu.read_cpu_port(0).unwrap(), 0);
+        assert_eq!(apu.read_cpu_port(2).unwrap(), 0);
+
+        // A real second CPU write must be forwarded even if it writes
+        // exactly the same value again. Value equality cannot substitute
+        // for tracking write events.
+        bus.write(0x002140, 0xa5);
+        bus.sync_apu_ports_to_runtime(&mut apu);
+        assert_eq!(apu.read_cpu_port(0).unwrap(), 0xa5);
+        assert_eq!(apu.read_cpu_port(2).unwrap(), 0);
+
+        // Dirty writes made before a save must survive serialization;
+        // otherwise a restored frame would lose the outstanding command.
+        bus.write(0x002141, 0x4d);
+        let snapshot = serde_json::to_string(&bus).unwrap();
+        let mut restored: SystemBus = serde_json::from_str(&snapshot).unwrap();
+        let mut restored_apu = apu.clone();
+        restored.sync_apu_ports_to_runtime(&mut restored_apu);
+        assert_eq!(restored_apu.read_cpu_port(1).unwrap(), 0x4d);
+        restored.sync_apu_ports_to_runtime(&mut restored_apu);
+        assert_eq!(restored_apu.read_cpu_port(1).unwrap(), 0x4d);
     }
 
     #[test]

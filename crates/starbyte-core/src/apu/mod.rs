@@ -966,6 +966,36 @@ mod tests {
     }
 
     #[test]
+    fn memory_alu_reads_timer_source_before_fetching_destination_operand() {
+        let mut apu = Apu::default();
+        apu.reset();
+        apu.write_spc_bus(0x00fc, 1);
+        apu.write_spc_bus(0x00f1, 4);
+        apu.step_master_cycles(336);
+        let mut probe = apu.clone();
+        assert_eq!(probe.read_spc_bus(0x00ff), 1);
+
+        // OR $20,$FF: the source $FF is a read-to-clear timer register.
+        for (index, byte) in [0x09, 0xff, 0x20].into_iter().enumerate() {
+            apu.write_spc_ram(0x0400 + index as u16, byte);
+        }
+        apu.spc700.load_state(0x0400, 0x55, 0, 0, 0xef, 0x02);
+        let trace = apu.execute_spc_program_instruction().unwrap();
+        assert_eq!(trace.len(), 6);
+        assert_eq!(trace[1].address, 0x0401);
+        assert_eq!(trace[2].address, 0x00ff);
+        assert_eq!(trace[2].access, crate::bus::AccessKind::Read);
+        assert_eq!(trace[2].value, 1);
+        assert_eq!(trace[3].address, 0x0402);
+        assert_eq!(trace[4].address, 0x0020);
+        assert_eq!(trace[4].access, crate::bus::AccessKind::Read);
+        assert_eq!(trace[5].address, 0x0020);
+        assert_eq!(trace[5].access, crate::bus::AccessKind::Write);
+        assert_eq!(apu.read_spc_ram(0x0020), 1);
+        assert_eq!(apu.read_spc_bus(0x00ff), 0);
+    }
+
+    #[test]
     fn spc_test_and_control_read_zero_through_bus_and_spc700_opcodes() {
         let mut apu = Apu::default();
         // Emulated RAM contents are not readable through write-only MMIO.

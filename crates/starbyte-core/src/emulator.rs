@@ -337,6 +337,16 @@ impl Emulator {
         self.apu.isolated_spc700_status()
     }
 
+    /// Read one current DSP register in explicitly enabled IPL diagnostics.
+    ///
+    /// Production play does not expose an experimental sound-driver
+    /// snapshot. Reading the partial DSP register file has no side effects.
+    #[must_use]
+    pub fn isolated_apu_dsp_register(&self, register: u8) -> Option<u8> {
+        self.apu.isolated_ipl_upload()?;
+        Some(self.apu.read_dsp_register(register))
+    }
+
     /// Host-side write access used by bootstrap tests and regression fixtures.
     pub fn host_write_u8(&mut self, address: u32, value: u8) {
         self.system.write(address, value);
@@ -856,6 +866,7 @@ mod tests {
         }
         assert_eq!(emulator.apu.read_spc_ram(0x00f2), 0x0c);
         assert_eq!(emulator.apu.read_dsp_register(0x0c), 0);
+        assert_eq!(emulator.isolated_apu_dsp_register(0x0c), Some(0));
         assert_eq!(emulator.isolated_apu_upload().unwrap().bytes_written(), 1);
 
         let state = emulator.save_state().unwrap();
@@ -869,6 +880,7 @@ mod tests {
             assert_eq!(machine.apu.read_spc_ram(0x00f2), 0x0c);
             assert_eq!(machine.apu.read_spc_ram(0x00f3), 0x55);
             assert_eq!(machine.apu.read_dsp_register(0x0c), 0x55);
+            assert_eq!(machine.isolated_apu_dsp_register(0x0c), Some(0x55));
             assert_eq!(machine.isolated_apu_upload().unwrap().bytes_written(), 2);
             assert_eq!(machine.apu_to_cpu_ports()[0], 1);
         }
@@ -877,6 +889,7 @@ mod tests {
             serde_json::to_value(&restored.apu).unwrap()
         );
         assert!(Emulator::default().apu.isolated_ipl_upload().is_none());
+        assert_eq!(Emulator::default().isolated_apu_dsp_register(0x0c), None);
     }
 
     #[test]

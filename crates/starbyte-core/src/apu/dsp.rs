@@ -732,6 +732,28 @@ mod tests {
     }
 
     #[test]
+    fn gaussian_history_resets_on_rekey_and_old_saves_default_to_silence() {
+        let (mut dsp, mut ram) = looping_sample();
+        dsp.write_register(0x4c, 1, &ram);
+        for _ in 0..32 {
+            dsp.next_stereo_pair(&mut ram);
+        }
+        assert!(dsp.voices[0].past_samples.iter().any(|&value| value != 0));
+        dsp.write_register(0x4c, 1, &ram);
+        assert_eq!(dsp.voices[0].past_samples, [0; 3]);
+        assert_eq!(dsp.next_stereo_pair(&mut ram), (0, 0));
+
+        // Save states predating the new carryover field must deserialize
+        // safely without making up prior BRR waveform history.
+        let mut legacy = serde_json::to_value(&dsp).unwrap();
+        for voice in legacy["voices"].as_array_mut().unwrap() {
+            voice.as_object_mut().unwrap().remove("past_samples");
+        }
+        let restored: Dsp = serde_json::from_value(legacy).unwrap();
+        assert!(restored.voices.iter().all(|v| v.past_samples == [0; 3]));
+    }
+
+    #[test]
     fn gaussian_phase_changes_output_on_nonconstant_brr_waveform() {
         let (mut full, mut ram) = looping_sample();
         // Alternating high/low decoded nibble input: interpolation varies

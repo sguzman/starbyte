@@ -53,7 +53,7 @@ cargo run --release -p starbyte-cli -- run /path/to/game.sfc --frames 1 \
   --report-json /tmp/starbyte-apu-final.json
 ```
 
-To advance the uploaded sound program alongside 65816 master clocks **only in this diagnostic run**, additionally pass `--apu-execute-driver`. This switch requires `--apu-upload-probe`, which itself requires `--no-save-ram`; state loading remains disallowed. The scheduler uses a persisted fractional sound-CPU clock and a bounded, signed instruction-cycle credit. It does not also clock timers or synthesize extra samples; the ordinary emulator frame already advances those. After handoff, the `spc700_execution` report exposes actual instructions and cycles rather than placeholder clock steps.
+To advance the uploaded sound program alongside 65816 master clocks **only in this diagnostic run**, additionally pass `--apu-execute-driver`. This switch requires `--apu-upload-probe`, which itself requires `--no-save-ram`; state loading remains disallowed. The scheduler uses a persisted fractional sound-CPU clock and a bounded, signed instruction-cycle credit. In this explicitly enabled mode, the emulator advances SPC instructions, SPC timers, and DSP synthesis together in six-master-clock CPU bus-cycle quanta, rather than advancing a whole CPU instruction's timers before its SPC execution. This is **not** an extra timer/DSP clock: each master clock is counted once. The 65816 instruction's bus operations still complete before its APU substeps, and the DSP is not internally phase-exact. After handoff, the `spc700_execution` report exposes actual instructions and cycles rather than placeholder clock steps.
 
 ```sh
 cargo run --release -p starbyte-cli -- run /path/to/game.sfc --frames 1 \

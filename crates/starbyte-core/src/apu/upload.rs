@@ -34,6 +34,9 @@ pub enum UploadEvent {
     ByteWritten { address: u16, value: u8 },
     /// A block ended and a new upload destination was selected.
     NextBlock { destination: u16 },
+    /// A zero-valued block marker immediately consumed the nonzero command
+    /// byte as byte 0 at the next block address (real IPL fall-through).
+    NextBlockWithByte { destination: u16, value: u8 },
     /// CPU requested that the uploaded program begin executing.
     EntryPoint { address: u16 },
 }
@@ -173,8 +176,21 @@ impl IplUpload {
                     self.destination = address;
                     self.expected_index = 0;
                     self.phase = UploadPhase::AwaitFirstByte;
-                    UploadEvent::NextBlock {
-                        destination: address,
+                    if token == 0 {
+                        // After an end marker $00, IPL's MOV Y,$F4/BNE
+                        // falls straight through: it reads the still-live
+                        // nonzero mode byte from port 1 as byte index 0.
+                        // No second port-0 edge is required (or possible).
+                        self.phase = UploadPhase::Receiving;
+                        let _ = self.write_byte(0, cpu_ports[1], spc_ports, ram);
+                        UploadEvent::NextBlockWithByte {
+                            destination: address,
+                            value: cpu_ports[1],
+                        }
+                    } else {
+                        UploadEvent::NextBlock {
+                            destination: address,
+                        }
                     }
                 }
             }
@@ -370,12 +386,18 @@ mod tests {
         assert_eq!(h.send(252), UploadEvent::None);
         assert_eq!(
             h.send(0),
-            UploadEvent::NextBlock {
-                destination: 0x4000
+            UploadEvent::NextBlockWithByte {
+                destination: 0x4000,
+                value: 1,
             }
         );
         assert_eq!(h.transfer.blocks_finished(), 1);
-        h.send_byte(0, 0x77, 0x4000);
+        assert_eq!(h.transfer.bytes_written(), 255);
+        assert_eq!(h.ram[0x4000], 1);
+        // The first byte is already consumed; a repeated index zero is
+        // not a second transfer. The next legitimate index is one.
+        assert_eq!(h.send(0), UploadEvent::None);
+        h.send_byte(1, 0x77, 0x4001);
     }
 
     #[test]

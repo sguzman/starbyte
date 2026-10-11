@@ -798,6 +798,34 @@ mod tests {
     }
 
     #[test]
+    fn uploaded_spc_instructions_cannot_write_through_dsp_read_mirror() {
+        let mut apu = Apu::default();
+        // Original SPC700 program:
+        // write MVOL(L)=0x24, select read mirror $8C,
+        // attempt a forbidden write, read back MVOL(L), then write $48
+        // through the normal $0C address.
+        let program = [
+            0x8f, 0x0c, 0xf2, 0x8f, 0x24, 0xf3, 0x8f, 0x8c, 0xf2, 0x8f, 0x7f, 0xf3, 0xe4, 0xf3,
+            0x8f, 0x0c, 0xf2, 0x8f, 0x48, 0xf3,
+        ];
+        for (index, byte) in program.into_iter().enumerate() {
+            apu.write_spc_ram(0x0200 + index as u16, byte);
+        }
+        apu.spc700.load_state(0x0200, 0, 0, 0, 0xef, 0);
+        for _ in 0..5 {
+            apu.execute_spc_program_instruction().unwrap();
+        }
+        assert_eq!(apu.spc700.a, 0x24);
+        assert_eq!(apu.read_dsp_register(0x0c), 0x24);
+        assert_eq!(apu.read_spc_bus(0x00f2), 0x8c);
+        for _ in 0..2 {
+            apu.execute_spc_program_instruction().unwrap();
+        }
+        assert_eq!(apu.read_dsp_register(0x0c), 0x48);
+        assert_eq!(apu.spc700.pc, 0x0214);
+    }
+
+    #[test]
     fn spc700_program_moves_data_through_real_dsp_and_cpu_mailbox_ports() {
         let mut apu = Apu::default();
         // MOV $F2,#$5D; MOV $F3,#$02; MOV A,$F5; MOV $F4,A.

@@ -1020,6 +1020,7 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
     // Bound memory to five minutes of 32 kHz stereo samples.
     const MAX_WAV_SAMPLES: usize = 32_000 * 2 * 60 * 5;
     let mut audio_wav_samples = Vec::new();
+    let mut audio_run = AudioProbeSummary::default();
     let mut saved_frame_images = 0_u32;
     let mut next_controller_event = 0_usize;
     for index in 0..args.frames {
@@ -1072,6 +1073,7 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
             )?;
         }
         step.with_context(|| format!("emulation failed at requested frame {}", index + 1))?;
+        audio_run.record_frame(index + 1, &emulator.audio_samples().samples);
         if args.audio_wav.is_some() {
             let samples = &emulator.audio_samples().samples;
             anyhow::ensure!(
@@ -1109,6 +1111,7 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
         save_ram_path.as_deref(),
         save_state_path.as_deref(),
         args.report_json.as_deref(),
+        &audio_run,
     )?;
 
     let apu_status = emulator.apu_status();
@@ -1403,6 +1406,36 @@ fn write_frame_log_entry(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct AudioProbeSummary {
+    stereo_pairs: u64,
+    nonzero_pairs: u64,
+    peak_absolute: u16,
+    first_nonzero_frame: Option<u32>,
+}
+
+impl AudioProbeSummary {
+    fn record_frame(&mut self, frame: u32, samples: &[i16]) {
+        let mut nonzero = 0_u64;
+        for pair in samples.chunks_exact(2) {
+            self.peak_absolute = self
+                .peak_absolute
+                .max(pair[0].unsigned_abs())
+                .max(pair[1].unsigned_abs());
+            if pair[0] != 0 || pair[1] != 0 {
+                nonzero += 1;
+            }
+        }
+        self.stereo_pairs = self
+            .stereo_pairs
+            .saturating_add((samples.len() / 2) as u64);
+        self.nonzero_pairs = self.nonzero_pairs.saturating_add(nonzero);
+        if nonzero > 0 && self.first_nonzero_frame.is_none() {
+            self.first_nonzero_frame = Some(frame);
+        }
+    }
+}
+
 fn maybe_write_run_report(
     emulator: &starbyte_core::Emulator,
     rom: &Path,
@@ -1410,6 +1443,7 @@ fn maybe_write_run_report(
     save_ram_path: Option<&Path>,
     save_state_path: Option<&Path>,
     report_path: Option<&Path>,
+    audio_run: &AudioProbeSummary,
 ) -> Result<()> {
     let Some(report_path) = report_path else {
         return Ok(());
@@ -1451,6 +1485,12 @@ fn maybe_write_run_report(
             "hash": framebuffer_hash(emulator.framebuffer()),
         },
         "audio_sample_count": emulator.audio_samples().samples.len(),
+        "audio_run": {
+            "stereo_pairs": audio_run.stereo_pairs,
+            "nonzero_pairs": audio_run.nonzero_pairs,
+            "peak_absolute": audio_run.peak_absolute,
+            "first_nonzero_frame": audio_run.first_nonzero_frame,
+        },
         "apu_steps": emulator.apu_status().spc700_steps,
         "apu_io_activity": apu_io_activity,
         "ppu_write_activity": ppu_write_activity,
@@ -1976,7 +2016,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        parse_controller_events, parse_wram_watch_addresses, resolve_state_path,
+        AudioProbeSummary, parse_controller_events, parse_wram_watch_addresses, resolve_state_path,
         sanitize_file_stem, write_frame_log_entry, write_pcm16_stereo_wav,
     };
 
@@ -1994,6 +2034,23 @@ mod tests {
         rom[base + 0x1E] = 0xFF;
         rom[base + 0x1F] = 0x00;
         Cartridge::from_bytes(rom, Some(PathBuf::from("C:/ROMs/test game.sfc"))).unwrap()
+    }
+
+    #[test]
+    fn audio_run_summary_remembers_sound_even_when_final_frame_is_silent() {
+        let mut summary = AudioProbeSummary::default();
+        summary.record_frame(1, &[0, 0, 0, 0]);
+        summary.record_frame(2, &[0, 0, i16::MIN, 42, -9, 0]);
+        summary.record_frame(3, &[0, 0, 0, 0]);
+        assert_eq!(summary.stereo_pairs, 7);
+        assert_eq!(summary.nonzero_pairs, 2);
+        assert_eq!(summary.peak_absolute, 32_768);
+        assert_eq!(summary.first_nonzero_frame, Some(2));
+
+        let mut silent = AudioProbeSummary::default();
+        silent.record_frame(1, &[0, 0]);
+        assert_eq!(silent.nonzero_pairs, 0);
+        assert_eq!(silent.first_nonzero_frame, None);
     }
 
     #[test]

@@ -1975,7 +1975,7 @@ mod tests {
 
     use super::{
         parse_controller_events, parse_wram_watch_addresses, resolve_state_path,
-        sanitize_file_stem, write_frame_log_entry,
+        sanitize_file_stem, write_frame_log_entry, write_pcm16_stereo_wav,
     };
 
     fn test_cartridge() -> Cartridge {
@@ -1992,6 +1992,21 @@ mod tests {
         rom[base + 0x1E] = 0xFF;
         rom[base + 0x1F] = 0x00;
         Cartridge::from_bytes(rom, Some(PathBuf::from("C:/ROMs/test game.sfc"))).unwrap()
+    }
+
+    #[test]
+    fn wav_writer_preserves_signed_stereo_pcm_samples() {
+        let dir = tempdir().unwrap();
+        let wav = dir.path().join("nested/sound.wav");
+        write_pcm16_stereo_wav(&wav, &[-32768, -1, 0, 32767]).unwrap();
+        let bytes = std::fs::read(&wav).unwrap();
+        assert_eq!(bytes.len(), 52);
+        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 44);
+        assert_eq!(u32::from_le_bytes(bytes[28..32].try_into().unwrap()), 128_000);
+        assert_eq!(u32::from_le_bytes(bytes[40..44].try_into().unwrap()), 8);
+        assert_eq!(&bytes[44..52], &[0x00, 0x80, 0xff, 0xff, 0, 0, 0xff, 0x7f]);
+        assert!(write_pcm16_stereo_wav(&wav, &[100]).is_err());
+        assert_eq!(std::fs::read(&wav).unwrap(), bytes);
     }
 
     #[test]

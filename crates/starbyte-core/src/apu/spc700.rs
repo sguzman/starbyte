@@ -1249,9 +1249,11 @@ impl Spc700 {
         let dp = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
         let low_address = self.direct_page_address(dp);
         let high_address = self.direct_page_address(dp.wrapping_add(1));
-        // MOVW dp,YA is a five-cycle read-modify-write on the low
-        // destination byte, followed by a high-byte write. Its dummy
-        // low read can trigger MMIO side effects.
+        // Hardware bus traces confirm five cycles: opcode, operand,
+        // low-destination read, low write, high write. Nintendo-derived
+        // opcode tables sometimes report *four* cycles for $DA, but that
+        // omits the observable low read (Anomie's SPC700 notes; the
+        // SingleStepTests cycle recording). The read can clear timers.
         self.push_read_trace(read, trace, low_address);
         self.push_write_trace(write, trace, low_address, self.a);
         self.push_write_trace(write, trace, high_address, self.y);

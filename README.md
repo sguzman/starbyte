@@ -63,6 +63,14 @@ cargo run -p starbyte-egui -- --rom-dir /path/to/your/roms
 
 Starbyte can also inspect a locally supplied [Cheatarium](https://github.com/sguzman/cheatarium) SNES index through its **read-only CLI**. This is candidate title search only; it does not match ROM hashes or enable codes. See [Cheatarium integration](docs/cheatarium.md).
 
+To check that the default Linux audio device accepts stereo output independently of game emulation, run the **opt-in synthetic speaker probe** (440 Hz, about 0.25 seconds; no ROM or firmware required):
+
+```sh
+cargo run -p starbyte-egui -- --speaker-test
+```
+
+This is only a local audio-device smoke test: a successful exit does not prove that real SNES music works. Normal emulation opens the speaker device lazily only when nonzero sound is generated. A missing device does not stop graphics or controls, and speaker initialization is retried after a short cooldown if a device becomes available later.
+
 For CLI help:
 
 ```sh

@@ -92,6 +92,15 @@ pub struct Apu {
     /// Fractional SPC CPU cycles to NTSC master clocks for isolated execution.
     #[serde(default)]
     isolated_spc_master_phase: u64,
+    /// Only an explicit opt-in probe runs uploaded SPC instructions beside 65816 time.
+    #[serde(default)]
+    host_clocked_spc_enabled: bool,
+    /// Fractional sound-CPU clock corresponding to advancing SNES master clocks.
+    #[serde(default)]
+    host_clocked_spc_phase: u64,
+    /// Signed instruction-cycle credit; a dispatched opcode may exceed the budget.
+    #[serde(default)]
+    host_clocked_spc_credit: i64,
     /// Independent SPC700 address space (not main CPU WRAM).
     #[serde(default = "blank_spc_ram")]
     spc_ram: Vec<u8>,
@@ -121,6 +130,9 @@ impl Default for Apu {
             bootstrap_state: BootstrapState::default(),
             dsp_sample_phase: 0,
             isolated_spc_master_phase: 0,
+            host_clocked_spc_enabled: false,
+            host_clocked_spc_phase: 0,
+            host_clocked_spc_credit: 0,
             spc_ram: blank_spc_ram(),
             dsp: Dsp::default(),
             timers: SpcTimers::default(),
@@ -152,6 +164,9 @@ impl Apu {
         self.spc700_steps = 0;
         self.dsp_sample_phase = 0;
         self.isolated_spc_master_phase = 0;
+        self.host_clocked_spc_enabled = false;
+        self.host_clocked_spc_phase = 0;
+        self.host_clocked_spc_credit = 0;
         self.spc_ram.resize(SPC_RAM_BYTES, 0);
         self.spc_ram.fill(0);
         self.dsp.reset();
@@ -249,6 +264,11 @@ impl Apu {
         instruction_limit: usize,
         audio: &mut Vec<i16>,
     ) -> Result<usize> {
+        if self.host_clocked_spc_enabled {
+            return Err(Error::Unimplemented(
+                "cannot mix host-clocked SPC700 execution with standalone sound-runner clock",
+            ));
+        }
         if self
             .ipl_upload
             .as_ref()
@@ -278,6 +298,60 @@ impl Apu {
         Ok(executed)
     }
 
+    /// Opt into running an uploaded sound program alongside CPU master clocks.
+    ///
+    /// This requires the separate opt-in IPL transfer. The production APU
+    /// never enables the driver clock. Call once before the host begins its
+    /// mailbox upload; do not mix with `run_isolated_uploaded_spc_program`.
+    pub fn enable_isolated_host_clocked_driver(&mut self) -> Result<()> {
+        if self.ipl_upload.is_none() {
+            return Err(Error::Unimplemented(
+                "enable opt-in IPL upload capture before sound-driver clocking",
+            ));
+        }
+        self.host_clocked_spc_enabled = true;
+        self.host_clocked_spc_phase = 0;
+        self.host_clocked_spc_credit = 0;
+        Ok(())
+    }
+
+    /// Spend SNES master-clock time on uploaded SPC700 instructions, in the
+    /// opt-in host-clocked probe only. Timers and DSP samples are advanced
+    /// separately by `step_master_cycles` and `append_dsp_audio`, so this
+    /// method must not clock either a second time.
+    pub fn execute_host_clocked_spc(&mut self, master_cycles: u64) -> Result<usize> {
+        if !self.host_clocked_spc_enabled
+            || self.ipl_upload.as_ref().and_then(IplUpload::entrypoint).is_none()
+            || self.spc700.halt_state() != Spc700HaltState::Running
+        {
+            return Ok(0);
+        }
+
+        let numerator = u128::from(self.host_clocked_spc_phase)
+            + u128::from(master_cycles) * u128::from(SPC700_CLOCK_HZ);
+        self.host_clocked_spc_phase = (numerator % u128::from(NTSC_MASTER_CLOCK_HZ)) as u64;
+        let new_cycles = numerator / u128::from(NTSC_MASTER_CLOCK_HZ);
+        self.host_clocked_spc_credit = self.host_clocked_spc_credit.saturating_add(
+            i64::try_from(new_cycles).unwrap_or(i64::MAX),
+        );
+
+        // Host frame stalls are independently guarded. Bound a single master
+        // clock quantum as well to prevent an accidentally huge time advance
+        // from monopolizing the GUI or diagnostics.
+        let mut executed = 0;
+        while self.host_clocked_spc_credit > 0
+            && self.spc700.halt_state() == Spc700HaltState::Running
+            && executed < 4096
+        {
+            let trace = self.execute_spc_program_instruction()?;
+            self.host_clocked_spc_credit = self
+                .host_clocked_spc_credit
+                .saturating_sub(trace.len() as i64);
+            executed += 1;
+        }
+        Ok(executed)
+    }
+
     /// Enable byte-accurate mailbox upload capture for an isolated APU test.
     ///
     /// The production emulator deliberately retains its previous compatibility
@@ -286,6 +360,9 @@ impl Apu {
     /// transferred program continuously. Do not enable it implicitly.
     pub fn enable_isolated_ipl_upload(&mut self) {
         self.ipl_upload = Some(IplUpload::default());
+        self.host_clocked_spc_enabled = false;
+        self.host_clocked_spc_phase = 0;
+        self.host_clocked_spc_credit = 0;
         self.bootstrap_state = BootstrapState::Idle;
         self.apu_to_cpu_ports = [0xaa, 0xbb, 0, 0];
     }
@@ -335,6 +412,8 @@ impl Apu {
                 // Discard any earlier dummy-clock count. The opt-in status
                 // reports only instructions executed by the uploaded driver.
                 self.spc700_steps = 0;
+                self.host_clocked_spc_phase = 0;
+                self.host_clocked_spc_credit = 0;
                 self.spc700.load_state(address, 0, 0, 0, 0xef, 0x02);
             }
         } else {
@@ -1109,6 +1188,24 @@ mod tests {
             Some(0x0400)
         );
         assert_eq!(apu.spc700.pc, 0x0400);
+
+        let mut host_clocked = apu.clone();
+        host_clocked.enable_isolated_host_clocked_driver().unwrap();
+        let mut host_audio = Vec::new();
+        for _ in 0..500 {
+            host_clocked.step_master_cycles(256);
+            host_clocked.execute_host_clocked_spc(256).unwrap();
+            host_clocked.append_dsp_audio(256, &mut host_audio);
+        }
+        let host_status = host_clocked.isolated_spc700_status().unwrap();
+        assert!(host_status.instructions > 100);
+        assert_eq!(host_clocked.read_dsp_register(0x4c), 1);
+        assert!(host_audio.iter().any(|sample| *sample > 1_000));
+        assert!(
+            host_clocked
+                .run_isolated_uploaded_spc_program(1, &mut Vec::new())
+                .is_err()
+        );
 
         let mut split_run = apu.clone();
         let mut split_audio = Vec::new();

@@ -53,6 +53,17 @@ impl AudioOutput {
         self.sink.play();
     }
 
+    /// A standalone speaker smoke test. It uses synthesized samples rather
+    /// than a commercial ROM and does not change the production APU path.
+    pub fn test_speakers() -> Result<()> {
+        let output = Self::open_default()?;
+        output.enqueue(&speaker_test_tone());
+        // Allow the output stream to consume the quarter-second tone before
+        // its owner is dropped. This is invoked only by an explicit CLI flag.
+        std::thread::sleep(std::time::Duration::from_millis(350));
+        Ok(())
+    }
+
     /// Drop queued audio on pause, state restore, cartridge change, or error.
     pub fn clear(&self) {
         self.sink.clear();
@@ -73,9 +84,31 @@ fn pcm16_stereo_to_float(samples: &[i16]) -> Option<Vec<f32>> {
     )
 }
 
+/// Copyright-free, low-amplitude stereo sine burst with short fades.
+/// Audio hardware is not needed to validate its length and channel layout.
+fn speaker_test_tone() -> Vec<i16> {
+    const TONE_HZ: f32 = 440.0;
+    const TONE_FRAMES: usize = DSP_SAMPLE_RATE as usize / 4;
+    const FADE_FRAMES: f32 = 256.0;
+    let mut output = Vec::with_capacity(TONE_FRAMES * usize::from(CHANNELS));
+    for index in 0..TONE_FRAMES {
+        let time = index as f32 / DSP_SAMPLE_RATE as f32;
+        let attack = (index as f32 / FADE_FRAMES).min(1.0);
+        let release = ((TONE_FRAMES - index) as f32 / FADE_FRAMES).min(1.0);
+        let amplitude = attack.min(release);
+        let sample = (std::f32::consts::TAU * TONE_HZ * time).sin()
+            * amplitude
+            * 0.15
+            * f32::from(i16::MAX);
+        let sample = sample as i16;
+        output.extend_from_slice(&[sample, sample]);
+    }
+    output
+}
+
 #[cfg(test)]
 mod tests {
-    use super::pcm16_stereo_to_float;
+    use super::{pcm16_stereo_to_float, speaker_test_tone};
 
     #[test]
     fn stereo_conversion_preserves_channel_order_and_signed_full_scale() {
@@ -88,6 +121,17 @@ mod tests {
         assert_eq!(result[2], -0.5);
         assert_eq!(result[3], 0.5);
         assert_eq!(result[4], 0.0);
+    }
+
+    #[test]
+    fn speaker_test_is_bounded_symmetric_and_does_not_need_a_device() {
+        let pcm = speaker_test_tone();
+        assert_eq!(pcm.len(), 32_000 / 4 * 2);
+        assert_eq!(&pcm[..2], &[0, 0]);
+        assert!(pcm.chunks_exact(2).all(|pair| pair[0] == pair[1]));
+        assert!(pcm.iter().any(|&sample| sample > 1_000));
+        assert!(pcm.iter().any(|&sample| sample < -1_000));
+        assert!(pcm.iter().all(|&sample| sample.unsigned_abs() <= 5_000));
     }
 
     #[test]

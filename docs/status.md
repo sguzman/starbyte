@@ -58,6 +58,18 @@ An **additional opt-in** diagnostic now advances uploaded SPC700 instructions al
 
 This is an experimental compatibility diagnostic, **not proof of genuine Super Mario World sound, hardware-accurate SPC/DSP timing, or Linux audio-device integration**. Proprietary sound-driver probes have not yet established an accepted game-specific audio trace.
 
+## Post-run-529 audio correctness work (October 11; CI not yet confirmed)
+
+The subsequent audio work is **committed to `main` but does not yet have independently confirmed Ubuntu, Windows, formatting or Clippy results at the latest head**. Do not elevate these source-level regressions to the verified table until an exact-commit Actions run is inspected:
+
+- The SPC700's stage-1 timer prescalers now free-run through CONTROL disable/enable transitions; only the downstream timer counters reset when enabled. A newly written target below the running stage-2 counter waits for its eight-bit wrap rather than firing early. The timer implementation has new edge, target-rewrite, reference-loop and APU save-state regressions.
+- DSPADDR $F2 now retains bit 7 for SPC700-visible reads. The DSPDATA $F3 write path ignores writes to high-bit-set (read-only) mirrors, while reads still select the low seven address bits. Both direct MMIO and executed-SPC700 regressions were added.
+- Echo FIR coefficients now apply FIR0 to the oldest sample and FIR7 to the newest, with signed 16-bit wrap for the first seven products and saturation only on the final addition. Original echo tests were updated and new tap-order/overflow fixtures added.
+- Voice mixing now applies signed left/right volume and 16-bit saturation after **each** voice's contribution to both the main and echo sums, rather than accumulating full precision until after all voices. A four-voice cancellation regression checks DAC output and SPC echo RAM.
+- These changes have been independently cross-checked as arithmetic models, not compiled or proven on SNES hardware. The emulator's 32-phase DSP interleaving, actual commercial-driver synchronization and real Linux speaker playback remain outstanding.
+
+Hardware references: [S-SMP register/timer behavior](https://snes.nesdev.org/wiki/S-SMP), [S-DSP FIR/filter behavior](https://snes.nesdev.org/wiki/S-DSP_registers). All code remains within Starbyte's existing audio-emulation scope. No unrelated UI, reverse-direction behavior, Python tooling or copyrighted ROM files were added.
+
 ## What exists today
 
 | Area | Implementation and evidence | Remaining uncertainty |

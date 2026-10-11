@@ -877,8 +877,10 @@ impl Spc700 {
             }
             0x09 => {
                 let source = self.push_read_trace(read, trace, self.pc.wrapping_add(1));
-                let dest = self.push_read_trace(read, trace, self.pc.wrapping_add(2));
+                // The source byte is read before fetching the destination
+                // operand (same bus order as MOV dp,dp).
                 let rhs = self.push_read_trace(read, trace, self.direct_page_address(source));
+                let dest = self.push_read_trace(read, trace, self.pc.wrapping_add(2));
                 let address = self.direct_page_address(dest);
                 let lhs = self.push_read_trace(read, trace, address);
                 (address, lhs, rhs, 3)
@@ -2641,6 +2643,14 @@ mod accumulator_alu_tests {
                             .any(|event| event.address == u32::from(address))
                     );
                     assert_eq!(bytes[usize::from(address)], 0x0f, "source unchanged");
+                    if mode == 0x09 {
+                        assert_eq!(trace[1].address, 0x8001);
+                        assert_eq!(trace[2].address, u32::from(address));
+                        assert_eq!(trace[2].access, AccessKind::Read);
+                        assert_eq!(trace[3].address, 0x8002);
+                        assert_eq!(trace[4].address, u32::from(destination));
+                        assert_eq!(trace[4].access, AccessKind::Read);
+                    }
                 }
                 if family == 0x60 {
                     assert_eq!(bytes[usize::from(destination)], 0x10);

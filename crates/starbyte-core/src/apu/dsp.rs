@@ -918,6 +918,28 @@ mod tests {
     }
 
     #[test]
+    fn edl_maximum_delay_uses_7680_stereo_samples_and_masks_high_bits() {
+        let (mut dsp, mut ram) = looping_sample();
+        dsp.write_register(0x7d, 0xff, &ram);
+        assert_eq!(dsp.read_register(0x7d), 0xff);
+        dsp.next_stereo_pair(&mut ram);
+        assert_eq!(dsp.echo_delay_bytes, 15 * 2048);
+        assert_eq!(dsp.echo_offset, 4);
+        // EDL upper nibble is writable/readable but does not affect the
+        // current or next echo-ring length.
+        dsp.write_register(0x7d, 0xa0, &ram);
+        for _ in 1..7680 {
+            dsp.next_stereo_pair(&mut ram);
+        }
+        assert_eq!(dsp.echo_offset, 0);
+        assert_eq!(dsp.echo_delay_bytes, 15 * 2048);
+        dsp.next_stereo_pair(&mut ram);
+        assert_eq!(dsp.read_register(0x7d), 0xa0);
+        assert_eq!(dsp.echo_delay_bytes, 4);
+        assert_eq!(dsp.echo_offset, 0);
+    }
+
+    #[test]
     fn edl_zero_reuses_only_one_stereo_echo_word() {
         let (mut dsp, mut ram) = looping_sample();
         dsp.write_register(0x7d, 0, &ram);

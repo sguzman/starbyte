@@ -575,8 +575,15 @@ mod tests {
             dsp.write_register(base + 7, 0x7f, &ram);
         }
         dsp.write_register(0x3d, 0x0f, &ram); // NON on four voices.
+        dsp.write_register(0x4d, 0x0f, &ram); // Same saturated mix to echo.
+        dsp.write_register(0x6d, 0x50, &ram); // Safe SPC RAM echo page.
+        dsp.write_register(0x6c, 0, &ram); // Enable echo writes.
         dsp.write_register(0x4c, 0x0f, &ram);
         assert_eq!(dsp.next_stereo_pair(&mut ram), (505, 0));
+        // Echo send saturates at each voice too, before the low bit is
+        // cleared for the 15-bit left-aligned echo RAM sample.
+        assert_eq!(i16::from_le_bytes([ram[0x5000], ram[0x5001]]), 508);
+        assert_eq!(i16::from_le_bytes([ram[0x5002], ram[0x5003]]), 0);
     }
 
     #[test]

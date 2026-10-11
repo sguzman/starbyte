@@ -80,6 +80,10 @@ pub struct SystemBus {
     /// instruction by blindly replaying stale CPU-side register contents.
     #[serde(default)]
     pending_apu_port_writes: u8,
+    /// Full ordered mailbox writes, including repeated writes within DMA.
+    /// Earlier snapshots without this field fall back to the bit mask.
+    #[serde(default)]
+    pending_apu_port_events: Vec<(u8, u8)>,
     apu_to_cpu_io: Vec<u8>,
     dma: DmaController,
     timing: TimingState,
@@ -115,6 +119,7 @@ impl Default for SystemBus {
             ppu: Ppu::default(),
             cpu_to_apu_io: vec![0; APU_IO_PORT_COUNT],
             pending_apu_port_writes: 0,
+            pending_apu_port_events: Vec::new(),
             apu_to_cpu_io: vec![0; APU_IO_PORT_COUNT],
             dma: DmaController::default(),
             timing: TimingState::default(),
@@ -159,6 +164,7 @@ impl SystemBus {
         self.ppu = Ppu::default();
         self.cpu_to_apu_io.fill(0);
         self.pending_apu_port_writes = 0;
+        self.pending_apu_port_events.clear();
         self.apu_to_cpu_io.fill(0);
         self.dma = DmaController::default();
         self.timing = TimingState::default();
@@ -346,18 +352,29 @@ impl SystemBus {
         }
     }
 
-    /// Replay only CPU mailbox writes made since the previous synchronization.
-    ///
-    /// SPC700 CONTROL may independently clear its input latches. Replaying
-    /// all four last-written CPU bytes every 65816 instruction would
-    /// immediately undo that hardware clear, preventing real sound drivers
-    /// from safely exchanging commands with the main CPU.
+    /// Replay CPU mailbox writes in bus order, preserving repeated tokens
+    /// from DMA bursts within a single 65816 instruction. The CPU's cached
+    /// last-written byte is not a new event when SPC CONTROL clears a latch.
     pub fn sync_apu_ports_to_runtime(&mut self, apu: &mut Apu) {
         let pending = self.pending_apu_port_writes;
         self.pending_apu_port_writes = 0;
-        for port in 0..APU_IO_PORT_COUNT {
-            if pending & (1 << port) != 0 {
-                let _ = apu.write_cpu_port(port, self.cpu_to_apu_io[port]);
+        let events = std::mem::take(&mut self.pending_apu_port_events);
+        if events.is_empty() {
+            // Older save states persisted only the four-bit dirty mask.
+            for port in 0..APU_IO_PORT_COUNT {
+                if pending & (1 << port) != 0 {
+                    let _ = apu.write_cpu_port(port, self.cpu_to_apu_io[port]);
+                    if port == 0 {
+                        apu.poll_ipl_upload();
+                    }
+                }
+            }
+        } else {
+            for (port, value) in events {
+                let _ = apu.write_cpu_port(usize::from(port), value);
+                if port == 0 {
+                    apu.poll_ipl_upload();
+                }
             }
         }
     }
@@ -768,6 +785,7 @@ impl SystemBus {
                     self.observability.apu_port_write_counts[port].saturating_add(1);
                 self.cpu_to_apu_io[port] = value;
                 self.pending_apu_port_writes |= 1 << port;
+                self.pending_apu_port_events.push((port as u8, value));
                 Some(())
             }
             0x2180 => {
@@ -1180,6 +1198,52 @@ mod tests {
         bus.write(0x7E0010, 0x5A);
 
         assert_eq!(bus.read(0x006000), 0x5A);
+    }
+
+    #[test]
+    fn cpu_apu_port_sync_preserves_multiple_ipl_tokens_in_one_bus_burst() {
+        let mut bus = SystemBus::default();
+        let mut apu = Apu::default();
+        apu.reset();
+        apu.enable_isolated_ipl_upload();
+        // One simulated DMA burst configures and starts a transfer, then
+        // sends two data bytes with distinct port-zero tokens. The old
+        // per-port dirty mask collapsed all of these writes into a single
+        // final port snapshot and never accepted the IPL kick.
+        for (address, value) in [
+            (0x2141, 1),
+            (0x2142, 0),
+            (0x2143, 4),
+            (0x2140, 0xcc),
+            (0x2141, 0xe8),
+            (0x2140, 0),
+            (0x2141, 0x42),
+            (0x2140, 1),
+        ] {
+            bus.write(address, value);
+        }
+        let state = serde_json::to_string(&bus).unwrap();
+        let mut resumed: SystemBus = serde_json::from_str(&state).unwrap();
+        let mut cloned_apu = apu.clone();
+        for (system, sound) in [(&mut bus, &mut apu), (&mut resumed, &mut cloned_apu)] {
+            system.sync_apu_ports_to_runtime(sound);
+            assert_eq!(sound.read_spc_ram(0x0400), 0xe8);
+            assert_eq!(sound.read_spc_ram(0x0401), 0x42);
+            assert_eq!(sound.isolated_ipl_upload().unwrap().bytes_written(), 2);
+            assert_eq!(sound.read_apu_port(0).unwrap(), 1);
+            assert_eq!(system.cpu_to_apu_ports()[0], 1);
+            system.sync_apu_ports_to_runtime(sound);
+            assert_eq!(sound.isolated_ipl_upload().unwrap().bytes_written(), 2);
+        }
+        assert_eq!(
+            serde_json::to_value(&apu).unwrap(),
+            serde_json::to_value(&cloned_apu).unwrap()
+        );
+
+        // Old serialized buses had a mask but no ordered event queue.
+        let mut legacy = serde_json::to_value(&bus).unwrap();
+        legacy.as_object_mut().unwrap().remove("pending_apu_port_events");
+        assert!(serde_json::from_value::<SystemBus>(legacy).is_ok());
     }
 
     #[test]

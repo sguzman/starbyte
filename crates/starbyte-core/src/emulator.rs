@@ -691,6 +691,78 @@ mod tests {
     }
 
     #[test]
+    fn cpu_program_uploads_spc_driver_through_real_mailbox_bus_and_runs_it() {
+        use crate::apu::spc700::Spc700HaltState;
+
+        let mut rom = rom_bytes();
+        rom[0x7ffc] = 0x00;
+        rom[0x7ffd] = 0x80;
+        // Original 65816 program: each write uses LDA #imm; STA $214x.
+        // This exercises the normal CPU -> SystemBus -> APU port sync path.
+        let mut program = Vec::new();
+        let mut write_port = |port: u8, value: u8| {
+            program.extend_from_slice(&[0xa9, value, 0x8d, 0x40 + port, 0x21]);
+        };
+        write_port(1, 1);
+        write_port(2, 0);
+        write_port(3, 4);
+        write_port(0, 0xcc);
+
+        // SPC700 program at $0400: MOV $F4,#$42; SLEEP.
+        let sound_program = [0x8f, 0x42, 0xf4, 0xef];
+        for (index, byte) in sound_program.into_iter().enumerate() {
+            write_port(1, byte);
+            write_port(0, index as u8);
+        }
+        write_port(1, 0);
+        write_port(2, 0);
+        write_port(3, 4);
+        write_port(0, 5); // End-of-block / entrypoint command.
+        let instruction_count = program.len() / 5 * 2;
+        rom[..program.len()].copy_from_slice(&program);
+        let cart = Cartridge::from_bytes(rom, None).unwrap();
+
+        let mut emulator = Emulator::default();
+        emulator.load_rom(cart);
+        emulator.apu.enable_isolated_ipl_upload();
+        assert_eq!(emulator.apu_to_cpu_ports()[0], 0xaa);
+        for _ in 0..instruction_count {
+            emulator.step_instruction().unwrap();
+        }
+
+        let upload = emulator.apu.isolated_ipl_upload().unwrap();
+        assert_eq!(upload.bytes_written(), sound_program.len() as u64);
+        assert_eq!(upload.blocks_finished(), 1);
+        assert_eq!(upload.entrypoint(), Some(0x0400));
+        for (index, byte) in sound_program.into_iter().enumerate() {
+            assert_eq!(emulator.apu.read_spc_ram(0x0400 + index as u16), byte);
+        }
+        assert_eq!(emulator.apu.spc700.pc, 0x0400);
+        assert_eq!(emulator.host_read_u8(0x002140), 5);
+
+        let mut audio = Vec::new();
+        assert_eq!(
+            emulator
+                .apu
+                .run_isolated_uploaded_spc_program(20, &mut audio)
+                .unwrap(),
+            2
+        );
+        assert_eq!(emulator.apu.read_apu_port(0).unwrap(), 0x42);
+        assert_eq!(emulator.apu.spc700.halt_state(), Spc700HaltState::Sleeping);
+        assert_eq!(emulator.apu.spc700.pc, 0x0404);
+
+        // No change to default runtime: the opt-in upload existed only in
+        // this synthetic test's instance, not in Emulator's normal startup.
+        assert!(
+            Emulator::default()
+                .apu
+                .isolated_ipl_upload()
+                .is_none()
+        );
+    }
+
+    #[test]
     fn rejects_unknown_save_state_version() {
         let state = r#"{"version":999,"cpu":{"registers":{"a":0,"x":0,"y":0,"s":0,"d":0,"pc":0,"pbr":0,"dbr":0,"p":0,"emulation":false},"cycles":0},"apu":{"spc700":{"pc":0,"a":0,"x":0,"y":0,"sp":0,"psw":0,"cycles":0},"cpu_to_apu_ports":[0,0,0,0],"apu_to_cpu_ports":[0,0,0,0],"ipl_rom":null,"configured_ipl_path":null,"spc700_steps":0},"system":{"cartridge":null,"save_ram":[],"wram":[],"ppu":{"registers":[],"cgram":[],"cgram_address":0,"cgram_high_byte":false},"cpu_to_apu_io":[0,0,0,0],"apu_to_cpu_io":[0,0,0,0],"dma":{"channels":[{"control":0,"b_bus_address":0,"a_bus_address":0,"a_bus_bank":0,"byte_count":0,"indirect_address":0,"hdma_table_address":0,"hdma_data_address":0,"hdma_line_counter":0,"hdma_active":false,"hdma_repeat":false},{"control":0,"b_bus_address":0,"a_bus_address":0,"a_bus_bank":0,"byte_count":0,"indirect_address":0,"hdma_table_address":0,"hdma_data_address":0,"hdma_line_counter":0,"hdma_active":false,"hdma_repeat":false},{"control":0,"b_bus_address":0,"a_bus_address":0,"a_bus_bank":0,"byte_count":0,"indirect_address":0,"hdma_table_address":0,"hdma_data_address":0,"hdma_line_counter":0,"hdma_active":false,"hdma_repeat":false},{"control":0,"b_bus_address":0,"a_bus_address":0,"a_bus_bank":0,"byte_count":0,"indirect_address":0,"hdma_table_address":0,"hdma_data_address":0,"hdma_line_counter":0,"hdma_active":false,"hdma_repeat":false},{"control":0,"b_bus_address":0,"a_bus_address":0,"a_bus_bank":0,"byte_count":0,"indirect_address":0,"hdma_table_address":0,"hdma_data_address":0,"hdma_line_counter":0,"hdma_active":false,"hdma_repeat":false},{"control":0,"b_bus_address":0,"a_bus_address":0,"a_bus_bank":0,"byte_count":0,"indirect_address":0,"hdma_table_address":0,"hdma_data_address":0,"hdma_line_counter":0,"hdma_active":false,"hdma_repeat":false},{"control":0,"b_bus_address":0,"a_bus_address":0,"a_bus_bank":0,"byte_count":0,"indirect_address":0,"hdma_table_address":0,"hdma_data_address":0,"hdma_line_counter":0,"hdma_active":false,"hdma_repeat":false},{"control":0,"b_bus_address":0,"a_bus_address":0,"a_bus_bank":0,"byte_count":0,"indirect_address":0,"hdma_table_address":0,"hdma_data_address":0,"hdma_line_counter":0,"hdma_active":false,"hdma_repeat":false}],"dma_enable_mask":0,"hdma_enable_mask":0,"transfer_count":0},"timing":{"master_clock":0,"scanline":0,"dot":0,"frame":0},"open_bus":0,"nmitimen":0,"rdnmi":false,"timeup":false,"joypad":{"controller1":{"b":false,"y":false,"select":false,"start":false,"up":false,"down":false,"left":false,"right":false,"a":false,"x":false,"l":false,"r":false},"latch_line":false,"latched1":0,"shift1":0},"wram_address":0}}"#;
         let mut emulator = Emulator::default();

@@ -1521,6 +1521,98 @@ mod tests {
     }
 
     #[test]
+    fn uploaded_timer_driven_spc_driver_keys_audio_only_after_timer_ticks() {
+        let mut apu = Apu::default();
+        apu.reset();
+        apu.enable_isolated_ipl_upload();
+        apu.enable_isolated_host_clocked_driver().unwrap();
+        // Original copyright-free looping BRR sample and SPC source directory.
+        for (index, byte) in [0, 3, 0, 3].into_iter().enumerate() {
+            apu.write_spc_ram(0x0200 + index as u16, byte);
+        }
+        for (index, byte) in [0xc3, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77]
+            .into_iter()
+            .enumerate()
+        {
+            apu.write_spc_ram(0x0300 + index as u16, byte);
+        }
+
+        // SPC700 MOV dp,#immediate configures TIMER2 at target=64, then
+        // configures a DSP voice. The loop reads $FF (timer2, read-to-clear),
+        // branches while zero, and sends KON only on a timer event.
+        let mut program = vec![0x8f, 64, 0xfc, 0x8f, 4, 0xf1];
+        for (register, value) in [
+            (0x5d, 0x02),
+            (0x00, 0x7f),
+            (0x01, 0x7f),
+            (0x03, 0x10),
+            (0x07, 0x7f),
+            (0x0c, 0x7f),
+            (0x1c, 0x7f),
+        ] {
+            program.extend_from_slice(&[0x8f, register, 0xf2, 0x8f, value, 0xf3]);
+        }
+        let polling_pc = 0x0400 + program.len() as u16;
+        program.extend_from_slice(&[
+            0xe4, 0xff, // MOV A,$FF (timer2 output; clears on read).
+            0xf0, 0xfc, // BEQ backwards four bytes, to timer read.
+            0x8f, 0x4c, 0xf2, // DSP address=KON.
+            0x8f, 0x01, 0xf3, // DSP KON voice zero.
+            0x2f, 0xf4, // BRA backwards twelve bytes, to timer read.
+        ]);
+
+        for (port, value) in [(1, 1), (2, 0), (3, 4), (0, 0xcc)] {
+            apu.write_cpu_port(port, value).unwrap();
+        }
+        apu.step_master_cycles(6);
+        for (index, byte) in program.iter().copied().enumerate() {
+            apu.write_cpu_port(1, byte).unwrap();
+            apu.write_cpu_port(0, index as u8).unwrap();
+            apu.step_master_cycles(6);
+        }
+        for (port, value) in [(1, 0), (2, 0), (3, 4), (0, program.len() as u8 + 1)] {
+            apu.write_cpu_port(port, value).unwrap();
+        }
+        apu.step_master_cycles(6);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().entrypoint(), Some(0x0400));
+        assert_eq!(apu.read_dsp_register(0x4c), 0);
+
+        let mut pcm = Vec::new();
+        for _ in 0..5000 {
+            apu.step_master_cycles(256);
+            apu.execute_host_clocked_spc(256).unwrap();
+            apu.append_dsp_audio(256, &mut pcm);
+        }
+        assert_eq!(apu.read_spc_ram(0x00fc), 64);
+        assert_eq!(apu.read_spc_ram(0x00f1) & 4, 4);
+        assert_eq!(apu.read_dsp_register(0x4c), 1);
+        assert!(apu.isolated_spc700_status().unwrap().pc >= polling_pc);
+        assert!(pcm.iter().filter(|&&value| value > 1000).count() > 100);
+
+        // The timer, Gaussian voice history and sound CPU PC remain
+        // deterministic when resuming from an APU save state.
+        let saved = serde_json::to_string(&apu).unwrap();
+        let mut restored: Apu = serde_json::from_str(&saved).unwrap();
+        let mut continuous = Vec::new();
+        let mut resumed = Vec::new();
+        for _ in 0..100 {
+            for (sound_apu, samples) in [
+                (&mut apu, &mut continuous),
+                (&mut restored, &mut resumed),
+            ] {
+                sound_apu.step_master_cycles(256);
+                sound_apu.execute_host_clocked_spc(256).unwrap();
+                sound_apu.append_dsp_audio(256, samples);
+            }
+        }
+        assert_eq!(continuous, resumed);
+        assert_eq!(
+            serde_json::to_value(&apu).unwrap(),
+            serde_json::to_value(&restored).unwrap()
+        );
+    }
+
+    #[test]
     fn builtin_bootstrap_handshake_runs_without_external_ipl_rom() {
         let mut apu = Apu::default();
         apu.reset();

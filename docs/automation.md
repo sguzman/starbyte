@@ -53,6 +53,16 @@ cargo run --release -p starbyte-cli -- run /path/to/game.sfc --frames 1 \
   --report-json /tmp/starbyte-apu-final.json
 ```
 
+To advance the uploaded sound program alongside 65816 master clocks **only in this diagnostic run**, additionally pass `--apu-execute-driver`. This switch requires `--apu-upload-probe`, which itself requires `--no-save-ram`; state loading remains disallowed. The scheduler uses a persisted fractional sound-CPU clock and a bounded, signed instruction-cycle credit. It does not also clock timers or synthesize extra samples; the ordinary emulator frame already advances those. After handoff, the `spc700_execution` report exposes actual instructions and cycles rather than placeholder clock steps.
+
+```sh
+cargo run --release -p starbyte-cli -- run /path/to/game.sfc --frames 1 \\
+  --no-save-ram --apu-upload-probe --apu-execute-driver \\
+  --frame-log /tmp/starbyte-sound-driver.jsonl
+```
+
+This runs a partial SPC700/DSP interpreter **without opening an audio device or exporting a WAV file**. It is an experimental source of machine-readable driver progress, not a claim that a commercial game has working sound; a real game's IPL upload may still stall or encounter unsupported hardware behavior. The desktop emulator never enables this mode implicitly. Do not publish game-specific traces.
+
 This flag replaces the bootstrap handshake in **only this run** and may cause games that depend on the shim to stall. It requires `--no-save-ram` and conflicts with `--load-state`. It does not activate audio in the commercial runtime, download firmware, upload anything to the network, or change the desktop emulator's default. The isolated driver runner exists separately in the core and is not automatically called by this probe.
 
 When enabled, the `apu_io_activity.isolated_ipl_upload` object in each frame record and successful final report includes `phase`, `bytes_written`, `blocks_finished`, and `entrypoint` (null until handoff). After an entrypoint handoff, the upload object additionally reports `spc700_execution` with `pc`, `instructions`, `cycles`, and `halt_state` (`running`, `sleeping`, or `stopped`). **A completed upload is not evidence of executed instructions**: the ordinary `--apu-upload-probe` captures transport only, so its execution count remains zero until a separate opt-in core caller runs the driver. Before handoff there is no execution object at all; a fresh diagnostic run must not report fake placeholder execution. This status never appears in default gameplay reports.

@@ -249,10 +249,19 @@ impl Apu {
         // The CPU needs independent read/write callbacks to the same bus.
         // Temporarily move it out so the callbacks can safely borrow the APU.
         let mut cpu = std::mem::take(&mut self.spc700);
+        // The moved-out APU CPU is only a placeholder while this opcode
+        // executes. The TEST MMIO latch must observe the *active* CPU's
+        // direct-page flag, not that placeholder's default PSW.
+        // No SPC700 instruction modifies PSW.P and writes MMIO in the
+        // same opcode, so the entry PSW is sufficient for bus writes.
+        let instruction_psw = cpu.psw;
         let bus = RefCell::new(&mut *self);
         let result = cpu.step_with_memory(
             |address| bus.borrow_mut().read_spc_bus(address),
-            |address, value| bus.borrow_mut().write_spc_bus(address, value),
+            |address, value| {
+                bus.borrow_mut()
+                    .write_spc_bus_with_psw(address, value, instruction_psw);
+            },
         );
         let mut apu = bus.borrow_mut();
         apu.spc700 = cpu;
@@ -522,13 +531,19 @@ impl Apu {
 
     /// Write the SPC700 RAM/MMIO bus, including indirect DSP register access.
     pub fn write_spc_bus(&mut self, address: u16, value: u8) {
+        self.write_spc_bus_with_psw(address, value, self.spc700.psw);
+    }
+
+    /// Explicit executing-CPU PSW for the instruction callback: the actual
+    /// SPC700 instance is temporarily moved out during opcode dispatch.
+    fn write_spc_bus_with_psw(&mut self, address: u16, value: u8, psw: u8) {
         match address {
             0x00f0 => {
                 // TEST responds to writes only with the SPC700 direct
                 // page flag (PSW.P) clear. Its RAM mirror is always
                 // written even if the hardware TEST latch ignores it.
                 // Leave unsafe wait-state/clock-test modes unmodeled.
-                if self.spc700.psw & 0x20 == 0 {
+                if psw & 0x20 == 0 {
                     self.spc_test = value;
                 }
             }
@@ -982,6 +997,45 @@ mod tests {
         apu.write_spc_bus(0x00f0, 0x0a);
         apu.write_spc_bus(0x2201, 0xa5);
         assert_eq!(apu.read_spc_ram(0x2201), 0xa5);
+    }
+
+    #[test]
+    fn interpreted_spc_test_write_uses_active_cpu_direct_page_flag() {
+        let mut apu = Apu::default();
+        apu.reset();
+        // SETP; MOV A,#$00; MOV !$00F0,A (must not change TEST);
+        // MOV A,#$55; MOV !$2200,A; CLRP;
+        // MOV !$00F0,A (TEST=$55, bit 1 disabled);
+        // MOV A,#$77; MOV !$2200,A (blocked);
+        // MOV A,#$0A; MOV !$00F0,A (enable);
+        // MOV !$2200,A (accepted).
+        let program = [
+            0x40, 0xe8, 0x00, 0xc5, 0xf0, 0x00,
+            0xe8, 0x55, 0xc5, 0x00, 0x22, 0x20,
+            0xc5, 0xf0, 0x00, 0xe8, 0x77, 0xc5, 0x00, 0x22,
+            0xe8, 0x0a, 0xc5, 0xf0, 0x00, 0xc5, 0x00, 0x22,
+        ];
+        for (i, opcode) in program.into_iter().enumerate() {
+            apu.write_spc_ram(0x0400 + i as u16, opcode);
+        }
+        apu.spc700.load_state(0x0400, 0, 0, 0, 0xef, 0x02);
+        for _ in 0..3 {
+            apu.execute_spc_program_instruction().unwrap();
+        }
+        apu.write_spc_bus(0x2200, 0x11); // TEST must still permit RAM writes.
+        assert_eq!(apu.read_spc_ram(0x2200), 0x11);
+        for _ in 0..4 {
+            apu.execute_spc_program_instruction().unwrap();
+        }
+        assert_eq!(apu.read_spc_ram(0x2200), 0x55);
+        for _ in 0..2 {
+            apu.execute_spc_program_instruction().unwrap();
+        }
+        assert_eq!(apu.read_spc_ram(0x2200), 0x55);
+        for _ in 0..3 {
+            apu.execute_spc_program_instruction().unwrap();
+        }
+        assert_eq!(apu.read_spc_ram(0x2200), 0x0a);
     }
 
     #[test]

@@ -1055,6 +1055,11 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
         } else {
             emulator.run_until_frame()
         };
+        // Only fully completed frames count toward cumulative PCM.
+        // A failing probe still emits the totals from earlier good frames.
+        if step.is_ok() {
+            audio_run.record_frame(index + 1, &emulator.audio_samples().samples);
+        }
         if let Some(file) = frame_log.as_mut() {
             write_frame_log_entry(
                 file,
@@ -1062,6 +1067,7 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
                 index + 1,
                 step.as_ref().err(),
                 &watched_wram_addresses,
+                &audio_run,
             )?;
         }
         if args.trace_frame == Some(index + 1) {
@@ -1073,7 +1079,6 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
             )?;
         }
         step.with_context(|| format!("emulation failed at requested frame {}", index + 1))?;
-        audio_run.record_frame(index + 1, &emulator.audio_samples().samples);
         if args.audio_wav.is_some() {
             let samples = &emulator.audio_samples().samples;
             anyhow::ensure!(
@@ -1344,6 +1349,7 @@ fn write_frame_log_entry(
     requested_frame: u32,
     error: Option<&starbyte_core::error::Error>,
     watched_wram_addresses: &[u32],
+    audio_run: &AudioProbeSummary,
 ) -> Result<()> {
     let frame = emulator.framebuffer();
     let cpu = emulator.cpu_registers();
@@ -1386,6 +1392,7 @@ fn write_frame_log_entry(
         "ppu_display": build_ppu_display_report(emulator),
         "ppu_write_activity": build_ppu_write_activity_report(emulator),
         "apu_io_activity": build_apu_io_activity_report(emulator),
+        "audio_run": audio_run.as_json(),
         "dma_transferred_bytes": emulator.dma_transferred_bytes(),
         "irq_timer": {
             "nmitimen": nmitimen,
@@ -1433,6 +1440,15 @@ impl AudioProbeSummary {
         if nonzero > 0 && self.first_nonzero_frame.is_none() {
             self.first_nonzero_frame = Some(frame);
         }
+    }
+
+    fn as_json(&self) -> serde_json::Value {
+        json!({
+            "stereo_pairs": self.stereo_pairs,
+            "nonzero_pairs": self.nonzero_pairs,
+            "peak_absolute": self.peak_absolute,
+            "first_nonzero_frame": self.first_nonzero_frame,
+        })
     }
 }
 
@@ -1485,12 +1501,7 @@ fn maybe_write_run_report(
             "hash": framebuffer_hash(emulator.framebuffer()),
         },
         "audio_sample_count": emulator.audio_samples().samples.len(),
-        "audio_run": {
-            "stereo_pairs": audio_run.stereo_pairs,
-            "nonzero_pairs": audio_run.nonzero_pairs,
-            "peak_absolute": audio_run.peak_absolute,
-            "first_nonzero_frame": audio_run.first_nonzero_frame,
-        },
+        "audio_run": audio_run.as_json(),
         "apu_steps": emulator.apu_status().spc700_steps,
         "apu_io_activity": apu_io_activity,
         "ppu_write_activity": ppu_write_activity,
@@ -2165,7 +2176,15 @@ mod tests {
         let mut emulator = Emulator::default();
         emulator.host_write_u8(0x7E0100, 7);
         emulator.host_write_u8(0x7E0094, 42);
-        write_frame_log_entry(&mut writer, &emulator, 1, None, &[0x7E0100, 0x7E0094]).unwrap();
+        write_frame_log_entry(
+            &mut writer,
+            &emulator,
+            1,
+            None,
+            &[0x7E0100, 0x7E0094],
+            &AudioProbeSummary::default(),
+        )
+        .unwrap();
         let record: serde_json::Value =
             serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         assert_eq!(record["wram_watch"]["7E0100"], 7);
@@ -2186,12 +2205,19 @@ mod tests {
             elapsed_ms: 0,
             pc: 0x008000,
         };
-        write_frame_log_entry(&mut writer, &emulator, 1, Some(&stall), &[]).unwrap();
+        let mut audio_run = AudioProbeSummary::default();
+        audio_run.record_frame(1, &[0, 0, -100, 50]);
+        write_frame_log_entry(&mut writer, &emulator, 2, Some(&stall), &[], &audio_run)
+            .unwrap();
         let record: serde_json::Value =
             serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         assert_eq!(record["schema"], "starbyte.frame_log.v1");
-        assert_eq!(record["requested_frame"], 1);
+        assert_eq!(record["requested_frame"], 2);
         assert_eq!(record["completed_frame"], 0);
+        assert_eq!(record["audio_run"]["stereo_pairs"], 2);
+        assert_eq!(record["audio_run"]["nonzero_pairs"], 1);
+        assert_eq!(record["audio_run"]["peak_absolute"], 100);
+        assert_eq!(record["audio_run"]["first_nonzero_frame"], 1);
         assert_eq!(record["status"], "error");
         assert!(
             record["error"]

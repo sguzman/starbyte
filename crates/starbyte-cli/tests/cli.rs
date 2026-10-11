@@ -431,9 +431,11 @@ fn isolated_upload_probe_requires_no_save_ram_and_reports_explicit_mode() {
         .assert()
         .success();
 
-    let report: serde_json::Value =
-        serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
-    assert_eq!(report["apu_io_activity"]["isolated_ipl_upload"]["phase"], "ready");
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
+    assert_eq!(
+        report["apu_io_activity"]["isolated_ipl_upload"]["phase"],
+        "ready"
+    );
     assert_eq!(
         report["apu_io_activity"]["isolated_ipl_upload"]["bytes_written"],
         0

@@ -30,6 +30,11 @@ struct Args {
     #[arg(long)]
     demo: bool,
 
+    /// Play a short, locally synthesized 440 Hz tone through the default
+    /// output device and exit; requires no ROM or firmware.
+    #[arg(long, conflicts_with_all = ["rom", "demo"])]
+    speaker_test: bool,
+
     /// Optional library ROM directory to add on startup. May be provided multiple times.
     #[arg(long = "rom-dir")]
     rom_dirs: Vec<PathBuf>,
@@ -53,6 +58,11 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if args.speaker_test {
+        crate::audio::AudioOutput::test_speakers()?;
+        println!("Speaker probe finished (440 Hz stereo test tone).");
+        return Ok(());
+    }
     let assets = AssetConfig {
         spc700_ipl: args.spc700_ipl.clone(),
         save_dir: None,

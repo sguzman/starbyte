@@ -919,6 +919,18 @@ mod tests {
         assert!(audio.iter().any(|sample| *sample > 1000));
         assert_eq!(apu.read_spc_ram(0x0300), 0xc3);
         assert_eq!(apu.read_dsp_register(0x5d), 0x02);
+
+        // Drivers read ENDX indirectly through SPC MMIO, not the DSP test
+        // helper. Loop events must latch and software clears must stick
+        // until the next actual end/loop boundary.
+        apu.write_spc_bus(0x00f2, 0x7c);
+        assert_eq!(apu.read_spc_bus(0x00f3) & 1, 1);
+        apu.write_spc_bus(0x00f3, 0xff);
+        assert_eq!(apu.read_spc_bus(0x00f3) & 1, 0);
+        apu.append_dsp_audio(1_000, &mut audio);
+        assert_eq!(apu.read_spc_bus(0x00f3) & 1, 0);
+        apu.append_dsp_audio(21_477, &mut audio);
+        assert_eq!(apu.read_spc_bus(0x00f3) & 1, 1);
     }
 
     #[test]

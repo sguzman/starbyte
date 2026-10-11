@@ -2199,8 +2199,7 @@ mod accumulator_alu_tests {
         // deterministic RAM snapshot. This only proves interpreter dispatch
         // and absence of panics, not accuracy for any commercial sound driver.
         for opcode in u8::MIN..=u8::MAX {
-            let (cpu, trace, _memory) =
-                run_indexed(opcode, &[0, 0], 0x40, 0x01, 3, 5, &[]);
+            let (cpu, trace, _memory) = run_indexed(opcode, &[0, 0], 0x40, 0x01, 3, 5, &[]);
             assert!(!trace.is_empty(), "opcode {opcode:02X} has no bus trace");
             assert_eq!(trace[0].value, opcode, "opcode {opcode:02X}");
             assert_eq!(trace[0].access, AccessKind::Read);

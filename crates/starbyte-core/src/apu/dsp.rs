@@ -756,7 +756,7 @@ mod tests {
         ram[0x206] = 0x00;
         ram[0x207] = 0x04;
         ram[0x400] = 0xc3;
-        ram[0x401..0x409].fill(0x88);
+        ram[0x401..0x409].fill(0xaa); // Avoid full-scale Gaussian wrap.
         // Silence voice zero and drive only voice one to the left channel.
         dsp.write_register(0x00, 0, &ram);
         dsp.write_register(0x10, 0x7f, &ram);
@@ -958,7 +958,7 @@ mod tests {
         let (mut base, mut ram) = looping_sample();
         // One negative BRR voice modulates a distinct positive second voice.
         ram[0x300] = 0xc3;
-        ram[0x301..0x309].fill(0x88);
+        ram[0x301..0x309].fill(0xaa); // Signed waveform below wrap threshold.
         ram[0x204] = 0x00;
         ram[0x205] = 0x04;
         ram[0x206] = 0x00;

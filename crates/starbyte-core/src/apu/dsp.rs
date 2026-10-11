@@ -564,6 +564,31 @@ mod tests {
     }
 
     #[test]
+    fn global_mute_silences_dac_but_not_voice_outx_or_echo_ram_writes() {
+        let (mut dsp, mut ram) = looping_sample();
+        dsp.write_register(0x4d, 1, &ram); // Route voice zero into echo.
+        dsp.write_register(0x0f, 0x7f, &ram); // First FIR tap.
+        dsp.write_register(0x6d, 0x50, &ram); // Safe RAM echo region.
+        dsp.write_register(0x7d, 1, &ram);
+        dsp.write_register(0x6c, 0x40, &ram); // Mute output; echo writes on.
+        dsp.write_register(0x4c, 1, &ram);
+        for _ in 0..32 {
+            assert_eq!(dsp.next_stereo_pair(&mut ram), (0, 0));
+        }
+        assert_eq!(dsp.read_register(0x08), 0x7f);
+        assert_ne!(dsp.read_register(0x09), 0);
+        assert!(ram[0x5010..0x5080].iter().any(|&byte| byte != 0));
+
+        // Muting is an output-gain gate, not a voice restart.
+        let sample_index = dsp.voices[0].index;
+        dsp.write_register(0x6c, 0, &ram);
+        let (left, right) = dsp.next_stereo_pair(&mut ram);
+        assert!(left > 1000);
+        assert_eq!(left, right);
+        assert_ne!(dsp.voices[0].index, sample_index);
+    }
+
+    #[test]
     fn spc_ram_echo_delay_and_fir_replay_after_512_stereo_samples() {
         let (mut dsp, mut ram) = looping_sample();
         // Keep the dry output silent. Route voice zero only to the echo

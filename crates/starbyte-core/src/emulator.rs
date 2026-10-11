@@ -1107,6 +1107,11 @@ mod tests {
         assert!(Emulator::default().apu.isolated_ipl_upload().is_none());
         assert_eq!(Emulator::default().isolated_apu_dsp_register(0x0c), None);
         assert_eq!(Emulator::default().isolated_apu_test_latch(), None);
+        let mut probe = Emulator::default();
+        probe.enable_isolated_apu_upload_probe();
+        assert_eq!(probe.isolated_apu_test_latch(), Some(0x0a));
+        probe.apu.write_spc_bus(0x00f0, 0);
+        assert_eq!(probe.isolated_apu_test_latch(), Some(0));
     }
 
     #[test]

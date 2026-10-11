@@ -8,6 +8,10 @@
 
 The APU's direct SPC700 instruction API now distinguishes a dispatched `SLEEP` or `STOP` opcode from subsequent halted-idle bus polls. The opcode entering standby still increments the instruction count once; later synthetic idle cycles advance the SPC cycle counter but do **not** inflate `spc700_steps` or the opt-in `spc700_execution.instructions` diagnostic. A focused regression covers both halt modes, idle PC stability and clock accounting. This changes no production sound-driver scheduling or commercial-game audio behavior. Source is committed; latest-commit Linux/Windows tests and lint remain unconfirmed.
 
+## Fresh isolated IPL upload timing (October 11; CI not yet confirmed)
+
+Rearming an opt-in IPL upload on an existing APU instance now clears the **standalone SPC700-to-master-clock fractional remainder**, in addition to the already reset host-clocked credit and phase. This prevents a new diagnostic transfer and later sound-driver execution from inheriting fractional CPU time from an earlier independent probe. A synthetic SPC program is uploaded, handed off, executed for one NOP, and rearmed to assert cleared timing/entrypoint/transfer state. Ordinary production-mode gameplay is unaffected. The change has been committed without a new confirmed Linux/Windows CI result.
+
 ## SPC700 completion and audio-execution boundary (October 10)
 
 The SPC700 interpreter now **recognizes all 256 opcode values**, including the previously missing memory INC/DEC, shifts and rotates, bit operations, compare/loop branches, word arithmetic, BRK/RETI, DIV edge behavior, decimal adjustment, and SLEEP/STOP standby states. The complete dispatch plus synthetic regressions passed hosted Linux/Windows tests and lint at [`bbcfde7e`](https://github.com/sguzman/starbyte/actions/runs/38066031908). This is **opcode coverage, not cycle-perfect accuracy**, and does not imply a commercial sound driver executes correctly.

@@ -577,7 +577,10 @@ fn headless_upload_probe_captures_real_cpu_mailbox_transfer_in_run_report() {
     assert_eq!(wav.len(), 44 + payload_bytes as usize);
     assert_eq!(
         payload_bytes as u64,
-        driver_status["audio_frame"]["stereo_pairs"].as_u64().unwrap() * 4
+        driver_status["audio_frame"]["stereo_pairs"]
+            .as_u64()
+            .unwrap()
+            * 4
     );
     assert!(wav[44..].iter().all(|byte| *byte == 0));
     assert!(

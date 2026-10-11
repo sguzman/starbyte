@@ -1297,7 +1297,7 @@ mod tests {
         let (mut dsp, mut ram) = looping_sample();
         // The base BRR test sample is not loud enough to guarantee the
         // saturation boundary. Drive voice zero with deterministic positive
-        // NON instead: its $7FF fixed GAIN produces a near-full-scale
+        // NON instead: its $7F0 fixed GAIN produces a near-full-scale
         // positive OUTX regardless of Gaussian startup/BRR history.
         // Voice one still decodes real BRR under PMON.
         dsp.noise_lfsr = 0x3fff;
@@ -1324,6 +1324,24 @@ mod tests {
         assert!(prev_sample > 16_384);
         assert_eq!(dsp.voices[1].index, 7);
         assert_eq!(dsp.voices[1].fraction, 0x0fff);
+
+        // The saturated pitch state also survives a mid-BRR save state;
+        // both continuations must retain identical waveforms and phase.
+        let saved = serde_json::to_string(&dsp).unwrap();
+        let mut restored: Dsp = serde_json::from_str(&saved).unwrap();
+        let mut restored_ram = ram.clone();
+        let mut resumed_pcm = Vec::new();
+        let mut original_pcm = Vec::new();
+        for _ in 0..64 {
+            original_pcm.push(dsp.next_stereo_pair(&mut ram));
+            resumed_pcm.push(restored.next_stereo_pair(&mut restored_ram));
+        }
+        assert_eq!(original_pcm, resumed_pcm);
+        assert_eq!(ram, restored_ram);
+        assert_eq!(
+            serde_json::to_value(&dsp).unwrap(),
+            serde_json::to_value(&restored).unwrap()
+        );
     }
 
     #[test]

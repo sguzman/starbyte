@@ -934,6 +934,38 @@ mod tests {
     }
 
     #[test]
+    fn tset1_tclr1_read_timer_output_twice_before_writing_memory() {
+        let mut apu = Apu::default();
+        apu.reset();
+        apu.write_spc_bus(0x00fc, 1);
+        apu.write_spc_bus(0x00f1, 4);
+        apu.step_master_cycles(336);
+        let mut timer_probe = apu.clone();
+        assert_eq!(timer_probe.read_spc_bus(0x00ff), 1);
+
+        for (opcode, expected_byte) in [(0x0e_u8, 0x0f_u8), (0x4e, 0)] {
+            let mut state = apu.clone();
+            // TSET1/TCLR1 !$00FF with A=$0F.
+            for (index, byte) in [opcode, 0xff, 0x00].into_iter().enumerate() {
+                state.write_spc_ram(0x0400 + index as u16, byte);
+            }
+            state.spc700.load_state(0x0400, 0x0f, 0, 0, 0xef, 0x02);
+            let trace = state.execute_spc_program_instruction().unwrap();
+            assert_eq!(trace.len(), 6);
+            assert_eq!(trace[3].address, 0x00ff);
+            assert_eq!(trace[3].access, crate::bus::AccessKind::Read);
+            assert_eq!(trace[3].value, 1);
+            assert_eq!(trace[4].address, 0x00ff);
+            assert_eq!(trace[4].access, crate::bus::AccessKind::Read);
+            assert_eq!(trace[4].value, 0);
+            assert_eq!(trace[5].address, 0x00ff);
+            assert_eq!(trace[5].access, crate::bus::AccessKind::Write);
+            assert_eq!(state.read_spc_ram(0x00ff), expected_byte);
+            assert_eq!(state.read_spc_bus(0x00ff), 0);
+        }
+    }
+
+    #[test]
     fn spc_test_and_control_read_zero_through_bus_and_spc700_opcodes() {
         let mut apu = Apu::default();
         // Emulated RAM contents are not readable through write-only MMIO.

@@ -4,6 +4,10 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## Explicit, nonpersistent desktop SPC700 driver probe (October 11; CI pending)
+
+The graphical frontend now accepts `--rom /path/to/game.sfc --experimental-sound-driver` as an explicit, single-startup-ROM probe. It arms the already available isolated IPL upload and host-clocked sound-driver execution immediately after loading that ROM, allowing generated PCM to reach the threaded speaker backend without enabling unverified sound in ordinary library play. Frontend isolation blocks reads/writes of existing battery SRAM and all persistent save slots for that run; it allows in-memory quick state only. The opt-in flag is not stored in user configuration and is not inherited by later library-selected games. Regression tests verify opt-in-only CLI argument parsing, disabled durable persistence, untouched existing SRAM/state-slot files, and restoration of normal mode on ordinary ROM reload. This does not establish that a real commercial driver will upload, execute correctly, or sound right; an experimental game may stall.
+
 ## SPC700 standby bus poll fidelity (October 11; CI pending)
 
 The independent reference records SLEEP (`EF`) and STOP (`FF`) as a three-cycle opcode followed by repeated two-cycle read/wait bus polls at the parked PC. Starbyte's idle step now performs the corresponding read/wait pair without decoding further instructions or moving the PC; the sound-CPU instruction counter remains unchanged during standby. The conformance harness gathers the two trailing idle polls and compares all seven recorded cycles. This corrects an actual bus trace discrepancy rather than simply waiving the failure, while maintaining the documented lack of automatic interrupt wakeup.

@@ -35,6 +35,11 @@ struct Args {
     #[arg(long, conflicts_with_all = ["rom", "demo"])]
     speaker_test: bool,
 
+    /// EXPERIMENTAL: execute the uploaded SPC700 driver for this one startup
+    /// ROM. May stall; existing SRAM and durable save slots are isolated.
+    #[arg(long, requires = "rom", conflicts_with_all = ["demo", "speaker_test"])]
+    experimental_sound_driver: bool,
+
     /// Optional library ROM directory to add on startup. May be provided multiple times.
     #[arg(long = "rom-dir")]
     rom_dirs: Vec<PathBuf>,
@@ -128,6 +133,7 @@ fn main() -> Result<()> {
                 config.clone(),
                 rom.clone(),
                 rom_dirs.clone(),
+                args.experimental_sound_driver,
                 prefer_dark_mode_override,
                 log_lines.clone(),
             )
@@ -190,6 +196,37 @@ mod speaker_cli_tests {
 
         let normal = Args::try_parse_from(["starbyte-egui"]).unwrap();
         assert!(!normal.speaker_test);
+    }
+
+    #[test]
+    fn experimental_sound_driver_requires_an_explicit_rom_and_never_defaults_on() {
+        let normal = Args::try_parse_from(["starbyte-egui", "--rom", "fixture.sfc"]).unwrap();
+        assert!(!normal.experimental_sound_driver);
+        let probe = Args::try_parse_from([
+            "starbyte-egui",
+            "--rom",
+            "fixture.sfc",
+            "--experimental-sound-driver",
+        ])
+        .unwrap();
+        assert!(probe.experimental_sound_driver);
+        assert!(Args::try_parse_from([
+            "starbyte-egui",
+            "--experimental-sound-driver",
+        ])
+        .is_err());
+        assert!(Args::try_parse_from([
+            "starbyte-egui",
+            "--demo",
+            "--experimental-sound-driver",
+        ])
+        .is_err());
+        assert!(Args::try_parse_from([
+            "starbyte-egui",
+            "--speaker-test",
+            "--experimental-sound-driver",
+        ])
+        .is_err());
     }
 
     #[test]

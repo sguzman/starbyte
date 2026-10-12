@@ -67,6 +67,9 @@ pub struct FrontendSession {
     quick_state: Option<String>,
     /// Last SRAM image successfully read from or written to disk.
     last_saved_ram: Option<Vec<u8>>,
+    /// Isolated sound-driver compatibility run: never read/write user SRAM
+    /// or durable save slots while experimental emulation is active.
+    isolated_audio_probe: bool,
 }
 
 impl FrontendSession {
@@ -81,6 +84,7 @@ impl FrontendSession {
             active_cheat_patches: Vec::new(),
             quick_state: None,
             last_saved_ram: None,
+            isolated_audio_probe: false,
         })
     }
 
@@ -89,7 +93,21 @@ impl FrontendSession {
     where
         P: AsRef<Path>,
     {
-        let path = rom_path.as_ref().to_path_buf();
+        self.load_rom_inner(rom_path.as_ref(), false)
+    }
+
+    /// Explicitly opt a single loaded ROM into host-clocked SPC700 sound
+    /// execution for desktop compatibility diagnostics. Existing SRAM and
+    /// durable slots are never read or modified in this mode.
+    pub fn load_rom_with_isolated_audio_probe<P>(&mut self, rom_path: P) -> Result<()>
+    where
+        P: AsRef<Path>,
+    {
+        self.load_rom_inner(rom_path.as_ref(), true)
+    }
+
+    fn load_rom_inner(&mut self, rom_path: &Path, isolated_audio_probe: bool) -> Result<()> {
+        let path = rom_path.to_path_buf();
         let cartridge = Cartridge::load(&path)
             .with_context(|| format!("failed to load ROM at {}", path.display()))?;
         // Hash once at load time, not every egui frame while a save-slot menu
@@ -105,7 +123,7 @@ impl FrontendSession {
             .assets()
             .save_root()
             .join(format!("{identity}.srm"));
-        let stored_save = if expected_save_len > 0 && new_save_path.exists() {
+        let stored_save = if !isolated_audio_probe && expected_save_len > 0 && new_save_path.exists() {
             let data = std::fs::read(&new_save_path)
                 .with_context(|| format!("failed reading SRAM {}", new_save_path.display()))?;
             anyhow::ensure!(
@@ -122,6 +140,12 @@ impl FrontendSession {
         // Preserve the old game's pending SRAM before replacing the cartridge.
         self.flush_save_ram()?;
         self.emulator.load_rom(cartridge);
+        if isolated_audio_probe {
+            self.emulator
+                .enable_isolated_apu_driver_probe()
+                .context("could not initialize opt-in SPC700 sound-driver probe")?;
+        }
+        self.isolated_audio_probe = isolated_audio_probe;
         self.cartridge_identity = Some(identity);
         self.quick_state = None;
         self.rom_path = Some(path);
@@ -132,7 +156,11 @@ impl FrontendSession {
                 .load_save_ram(bytes)
                 .context("could not restore SRAM")?;
         }
-        self.last_saved_ram = self.emulator.save_ram();
+        self.last_saved_ram = if isolated_audio_probe {
+            None
+        } else {
+            self.emulator.save_ram()
+        };
         Ok(())
     }
 
@@ -197,6 +225,9 @@ impl FrontendSession {
 
     /// Return the current cartridge's on-disk SRAM location, if present.
     pub fn save_ram_path(&self) -> Option<PathBuf> {
+        if self.isolated_audio_probe {
+            return None;
+        }
         let identity = self.cartridge_identity.as_deref()?;
         let ram = self.emulator.save_ram()?;
         if ram.is_empty() {
@@ -228,6 +259,10 @@ impl FrontendSession {
     /// Deterministic, game-scoped disk slot. Slot names never contain untrusted
     /// paths or game titles; SHA-1 is for local naming, not authentication.
     pub fn state_slot_path(&self, slot: u8) -> Result<PathBuf> {
+        anyhow::ensure!(
+            !self.isolated_audio_probe,
+            "durable save slots are disabled in experimental sound-driver mode"
+        );
         anyhow::ensure!((1..=3).contains(&slot), "save slot must be 1, 2, or 3");
         let identity = self
             .cartridge_identity
@@ -601,6 +636,51 @@ mod tests {
         fs::write(&second_path, [0xFF]).unwrap();
         assert!(reopened.load_rom(&second_rom).is_err());
         assert_eq!(reopened.loaded_rom_path(), Some(rom.as_path()));
+    }
+
+    #[test]
+    fn isolated_audio_probe_never_reads_or_overwrites_existing_sram_or_slots() {
+        let dir = tempdir().unwrap();
+        let rom_path = dir.path().join("sound-probe.sfc");
+        fs::write(&rom_path, synthetic_rom_bytes()).unwrap();
+        let assets = AssetConfig {
+            save_dir: Some(dir.path().join("save")),
+            state_dir: Some(dir.path().join("states")),
+            ..AssetConfig::default()
+        };
+        let mut session = FrontendSession::new(assets).unwrap();
+        session.load_rom(&rom_path).unwrap();
+        let save_path = session.save_ram_path().unwrap();
+        let initial_sram = session.emulator().save_ram().unwrap();
+        assert!(!initial_sram.is_empty());
+        let mut existing_sram = initial_sram;
+        existing_sram[0] = 0x5a;
+        std::fs::create_dir_all(save_path.parent().unwrap()).unwrap();
+        fs::write(&save_path, &existing_sram).unwrap();
+        session.save_state_slot(1).unwrap();
+        let existing_slot = session.state_slot_path(1).unwrap();
+        let original_slot = fs::read(&existing_slot).unwrap();
+
+        session
+            .load_rom_with_isolated_audio_probe(&rom_path)
+            .unwrap();
+        assert!(session.emulator().isolated_apu_upload().is_some());
+        assert!(session.emulator().apu.isolated_host_clocked_driver_enabled());
+        assert_eq!(session.emulator().save_ram().unwrap()[0], 0);
+        assert!(session.save_ram_path().is_none());
+        assert!(!session.has_state_slot(1));
+        assert!(session.save_state_slot(1).is_err());
+        assert!(session.load_state_slot(1).is_err());
+        session.flush_save_ram().unwrap();
+        assert_eq!(fs::read(&save_path).unwrap(), existing_sram);
+        assert_eq!(fs::read(&existing_slot).unwrap(), original_slot);
+
+        session.load_rom(&rom_path).unwrap();
+        assert!(!session.emulator().apu.isolated_host_clocked_driver_enabled());
+        assert!(session.emulator().isolated_apu_upload().is_none());
+        assert_eq!(session.emulator().save_ram().unwrap()[0], 0x5a);
+        assert_eq!(session.save_ram_path(), Some(save_path));
+        assert!(session.has_state_slot(1));
     }
 
     #[test]

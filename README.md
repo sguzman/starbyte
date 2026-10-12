@@ -69,6 +69,8 @@ To check that the default Linux audio device accepts stereo output independently
 cargo run -p starbyte-egui -- --speaker-test
 ```
 
+For an **explicitly experimental** native graphical sound-driver probe on a single startup ROM, use `cargo run -p starbyte-egui -- --rom /path/to/game.sfc --experimental-sound-driver`. This mode replaces the compatibility bootstrap with isolated IPL upload/host-clocked SPC700 execution and may stall or produce incorrect sound. It never reads/writes existing battery SRAM or persistent save slots, does not modify the saved global configuration, and does not apply automatically to games opened later from the library. Normal gameplay remains on the stable compatibility path.
+
 This is only a local audio-device smoke test: a successful exit does not prove that real SNES music works. Normal emulation opens the speaker device lazily only when nonzero sound is generated. A missing device does not stop graphics or controls; device creation, bounded queueing and automatic retry run on a dedicated background audio thread rather than blocking the UI. Game audio more than 150 ms old is discarded to limit audible lag. Rust dependencies are pinned in `Cargo.lock` and CI uses locked builds.
 
 For CLI help:

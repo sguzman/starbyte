@@ -149,6 +149,7 @@ impl StarbyteApp {
         mut config: RuntimeConfig,
         rom_path: Option<PathBuf>,
         startup_rom_dirs: Vec<PathBuf>,
+        experimental_sound_driver: bool,
         prefer_dark_mode_override: Option<bool>,
         logs: SharedLogBuffer,
     ) -> Result<Self> {
@@ -184,7 +185,11 @@ impl StarbyteApp {
         let mut status_line = "Waiting for library scan...".to_owned();
         let mut startup_error = None;
         if let Some(path) = rom_path {
-            session.load_rom(&path)?;
+            if experimental_sound_driver {
+                session.load_rom_with_isolated_audio_probe(&path)?;
+            } else {
+                session.load_rom(&path)?;
+            }
             record_recent_rom(&mut config.library.recent_roms, path.as_path());
             match session.run_frame_with_timeout(GUI_FRAME_TIMEOUT) {
                 Ok(()) => status_line = format!("Loaded {}", path.display()),

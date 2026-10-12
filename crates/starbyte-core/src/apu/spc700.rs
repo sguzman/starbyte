@@ -84,15 +84,26 @@ impl Spc700 {
         FWrite: FnMut(u16, u8),
     {
         if self.halt_state != Spc700HaltState::Running {
-            // Surface one bounded idle event instead of repeatedly fetching
-            // the next opcode. Interrupt wakeup is not connected to runtime.
-            self.cycles = self.cycles.saturating_add(1);
-            return Ok(vec![BusEvent {
-                address: u32::from(self.pc),
-                value: 0,
-                access: AccessKind::Wait,
-                cycle: 0,
-            }]);
+            // SingleStepTests records repeated read/wait bus pairs at the
+            // parked PC after SLEEP or STOP. Those are *idle* cycles, not
+            // new opcode dispatches: PC and registers must remain fixed.
+            // Interrupt wakeup remains outside this emulator boundary.
+            let value = read(self.pc);
+            self.cycles = self.cycles.saturating_add(2);
+            return Ok(vec![
+                BusEvent {
+                    address: u32::from(self.pc),
+                    value,
+                    access: AccessKind::Read,
+                    cycle: 0,
+                },
+                BusEvent {
+                    address: 0,
+                    value: 0,
+                    access: AccessKind::Wait,
+                    cycle: 1,
+                },
+            ]);
         }
         let opcode_address = self.pc;
         let opcode = read(opcode_address);
@@ -2327,7 +2338,7 @@ mod accumulator_alu_tests {
         memory[0x8002] = 0x42;
         memory[0x8003] = 0xef; // SLEEP: 3 cycles.
         let bus = RefCell::new(memory);
-        for expected in [2_u64, 4, 7, 8] {
+        for expected in [2_u64, 4, 7, 9] {
             cpu.step_with_memory(
                 |address| bus.borrow()[usize::from(address)],
                 |address, value| bus.borrow_mut()[usize::from(address)] = value,
@@ -2340,14 +2351,14 @@ mod accumulator_alu_tests {
 
         let snapshot = serde_json::to_string(&cpu).unwrap();
         let mut restored: Spc700 = serde_json::from_str(&snapshot).unwrap();
-        assert_eq!(restored.cycles(), 8);
+        assert_eq!(restored.cycles(), 9);
         restored
             .step_with_memory(
                 |address| bus.borrow()[usize::from(address)],
                 |address, value| bus.borrow_mut()[usize::from(address)] = value,
             )
             .unwrap();
-        assert_eq!(restored.cycles(), 9);
+        assert_eq!(restored.cycles(), 11);
     }
 
     #[test]
@@ -3643,7 +3654,7 @@ mod accumulator_alu_tests {
     }
 
     #[test]
-    fn sleep_and_stop_halt_instruction_fetch_and_resume_on_state_load() {
+    fn sleep_and_stop_repeat_parked_bus_reads_without_dispatching_new_opcodes() {
         use super::Spc700HaltState;
 
         for (opcode, halt_state) in [
@@ -3680,9 +3691,12 @@ mod accumulator_alu_tests {
                     |address, value| memory.borrow_mut()[usize::from(address)] = value,
                 )
                 .unwrap();
-            assert_eq!(reads, reads_after_halt, "halted CPU must not fetch");
-            assert_eq!(idle.len(), 1);
-            assert_eq!(idle[0].access, AccessKind::Wait);
+            assert_eq!(reads, reads_after_halt + 1, "halted CPU polls parked PC");
+            assert_eq!(idle.len(), 2);
+            assert_eq!(idle[0].access, AccessKind::Read);
+            assert_eq!(idle[0].address, 0x8001);
+            assert_eq!(idle[0].value, 0xe8);
+            assert_eq!(idle[1].access, AccessKind::Wait);
             assert_eq!(cpu.a, 0x42);
             assert_eq!(cpu.pc, 0x8001);
             let serialized = serde_json::to_string(&cpu).unwrap();

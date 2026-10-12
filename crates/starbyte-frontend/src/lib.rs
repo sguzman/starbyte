@@ -640,6 +640,55 @@ mod tests {
     }
 
     #[test]
+    fn experimental_desktop_probe_executes_synthetically_uploaded_spc700_driver() {
+        let dir = tempdir().unwrap();
+        let rom_path = dir.path().join("smp-driver-probe.sfc");
+        let mut rom = synthetic_rom_bytes();
+        let driver = [0xe8, 0x2a, 0xc4, 0xf4, 0x2f, 0xfe];
+        fn append_port_write(code: &mut Vec<u8>, port: u8, value: u8) {
+            code.extend_from_slice(&[0xa9, value, 0x8d, 0x40 + port, 0x21]);
+        }
+
+        // Original 65816 program; no commercial ROM bytes. The host uploads
+        // a small sound program and then parks in a bounded BRA loop.
+        let mut code = Vec::new();
+        append_port_write(&mut code, 1, 1);
+        append_port_write(&mut code, 2, 0);
+        append_port_write(&mut code, 3, 4);
+        append_port_write(&mut code, 0, 0xcc);
+        for (index, byte) in driver.into_iter().enumerate() {
+            append_port_write(&mut code, 1, byte);
+            append_port_write(&mut code, 0, index as u8);
+        }
+        append_port_write(&mut code, 1, 0);
+        append_port_write(&mut code, 2, 0);
+        append_port_write(&mut code, 3, 4);
+        append_port_write(&mut code, 0, 7);
+        code.extend_from_slice(&[0x80, 0xfe]);
+        rom[..code.len()].copy_from_slice(&code);
+        fs::write(&rom_path, rom).unwrap();
+
+        let mut session = FrontendSession::new(AssetConfig::default()).unwrap();
+        session
+            .load_rom_with_isolated_audio_probe(&rom_path)
+            .unwrap();
+        session.run_frame().unwrap();
+
+        let upload = session.emulator().isolated_apu_upload().unwrap();
+        assert_eq!(upload.bytes_written(), 6);
+        assert_eq!(upload.entrypoint(), Some(0x0400));
+        assert_eq!(session.emulator().apu_to_cpu_ports()[0], 0x2a);
+        let status = session.emulator().isolated_apu_spc700_status().unwrap();
+        assert!(status.instructions > 2);
+        assert!(session.emulator().isolated_apu_driver_probe_enabled());
+        assert!(session.save_ram_path().is_none());
+
+        session.load_rom(&rom_path).unwrap();
+        assert!(!session.emulator().isolated_apu_driver_probe_enabled());
+        assert!(session.emulator().isolated_apu_upload().is_none());
+    }
+
+    #[test]
     fn isolated_audio_probe_never_reads_or_overwrites_existing_sram_or_slots() {
         let dir = tempdir().unwrap();
         let rom_path = dir.path().join("sound-probe.sfc");

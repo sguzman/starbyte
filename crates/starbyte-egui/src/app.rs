@@ -129,6 +129,31 @@ impl FrameClock {
     }
 }
 
+/// Cumulative PCM evidence for an explicitly bounded native GUI smoke.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct NativeSmokeAudioMetrics {
+    stereo_pairs: u64,
+    nonzero_pairs: u64,
+    peak_absolute: u16,
+    first_nonzero_frame: Option<u64>,
+}
+
+impl NativeSmokeAudioMetrics {
+    fn record(&mut self, frame: u64, samples: &[i16]) {
+        for pair in samples.chunks_exact(2) {
+            self.stereo_pairs = self.stereo_pairs.saturating_add(1);
+            if pair[0] != 0 || pair[1] != 0 {
+                self.nonzero_pairs = self.nonzero_pairs.saturating_add(1);
+                self.first_nonzero_frame.get_or_insert(frame);
+            }
+            self.peak_absolute = self
+                .peak_absolute
+                .max(pair[0].unsigned_abs())
+                .max(pair[1].unsigned_abs());
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct QueuedKeyboardPresses {
     actions: BTreeSet<String>,
@@ -213,6 +238,7 @@ pub struct StarbyteApp {
     pending_step_frames: u32,
     /// Explicitly requested bounded native window smoke; never persistent.
     exit_after_frames: Option<u64>,
+    native_smoke_audio: NativeSmokeAudioMetrics,
     last_sram_flush: Instant,
     show_compact_settings: bool,
     show_compact_session: bool,
@@ -262,6 +288,7 @@ impl StarbyteApp {
         let mut session = FrontendSession::new(assets.clone())?;
         let mut status_line = "Waiting for library scan...".to_owned();
         let mut startup_error = None;
+        let mut native_smoke_audio = NativeSmokeAudioMetrics::default();
         if let Some(path) = rom_path {
             if experimental_sound_driver {
                 session.load_rom_with_isolated_audio_probe(&path)?;
@@ -270,7 +297,15 @@ impl StarbyteApp {
             }
             record_recent_rom(&mut config.library.recent_roms, path.as_path());
             match session.run_frame_with_timeout(GUI_FRAME_TIMEOUT) {
-                Ok(()) => status_line = format!("Loaded {}", path.display()),
+                Ok(()) => {
+                    status_line = format!("Loaded {}", path.display());
+                    if exit_after_frames.is_some() {
+                        native_smoke_audio.record(
+                            session.snapshot().frame,
+                            &session.emulator().audio_samples().samples,
+                        );
+                    }
+                }
                 Err(error) => {
                     let message = format!("Emulation stopped: {error}");
                     status_line = message.clone();
@@ -329,6 +364,7 @@ impl StarbyteApp {
             show_input_overlay: false,
             pending_step_frames: 0,
             exit_after_frames,
+            native_smoke_audio,
             last_sram_flush: Instant::now(),
             show_compact_settings: false,
             show_compact_session: false,
@@ -740,6 +776,12 @@ impl StarbyteApp {
         match self.session.run_frame_with_timeout(GUI_FRAME_TIMEOUT) {
             Ok(()) => {
                 self.frame_performance.record(started.elapsed());
+                if self.exit_after_frames.is_some() {
+                    self.native_smoke_audio.record(
+                        self.session.snapshot().frame,
+                        &self.session.emulator().audio_samples().samples,
+                    );
+                }
                 self.refresh_framebuffer(ctx);
                 self.enqueue_current_audio();
                 self.status_line = self.session.snapshot().status_line();
@@ -2158,8 +2200,36 @@ impl eframe::App for StarbyteApp {
         {
             self.exit_after_frames = None;
             let frame = self.session.snapshot().frame;
-            info!(frame, "native GUI smoke completed");
-            println!("STARBYTE_NATIVE_SMOKE_OK frame={frame}");
+            let metrics = self.native_smoke_audio;
+            let spc_instructions = self
+                .session
+                .emulator()
+                .isolated_apu_spc700_status()
+                .map_or(0, |status| status.instructions);
+            let uploaded_spc_bytes = self
+                .session
+                .emulator()
+                .isolated_apu_upload()
+                .map_or(0, |upload| upload.bytes_written());
+            let audio_worker_spawned = self.audio_output.is_some();
+            let first_audio_frame = metrics
+                .first_nonzero_frame
+                .map_or_else(|| "none".to_owned(), |frame| frame.to_string());
+            info!(
+                frame,
+                stereo_pairs = metrics.stereo_pairs,
+                nonzero_pairs = metrics.nonzero_pairs,
+                spc_instructions,
+                uploaded_spc_bytes,
+                audio_worker_spawned,
+                "native GUI smoke completed"
+            );
+            println!(
+                "STARBYTE_NATIVE_SMOKE_OK frame={frame} audio_pairs={} audio_nonzero_pairs={} audio_peak={} audio_first_nonzero_frame={first_audio_frame} spc_instructions={spc_instructions} uploaded_spc_bytes={uploaded_spc_bytes} audio_worker_spawned={audio_worker_spawned}",
+                metrics.stereo_pairs,
+                metrics.nonzero_pairs,
+                metrics.peak_absolute,
+            );
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
 
@@ -2187,9 +2257,28 @@ mod playback_tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        FRAME_INTERVAL, FrameClock, FramePerformance, Vec2, egui, fit_game_size, is_compact_layout,
+        FRAME_INTERVAL, FrameClock, FramePerformance, NativeSmokeAudioMetrics, Vec2, egui,
+        fit_game_size, is_compact_layout,
         merged_gamepad_buttons, pressed_button_labels, record_recent_rom, write_png_screenshot,
     };
+
+    #[test]
+    fn native_smoke_audio_metrics_track_silence_then_real_stereo_activity() {
+        let mut metrics = NativeSmokeAudioMetrics::default();
+        metrics.record(1, &[0, 0, 0, 0]);
+        assert_eq!(metrics.stereo_pairs, 2);
+        assert_eq!(metrics.nonzero_pairs, 0);
+        assert_eq!(metrics.first_nonzero_frame, None);
+        metrics.record(2, &[0, -1, 0, 0, 4, 0]);
+        metrics.record(3, &[-32_768, 32_767]);
+        assert_eq!(metrics.stereo_pairs, 6);
+        assert_eq!(metrics.nonzero_pairs, 3);
+        assert_eq!(metrics.first_nonzero_frame, Some(2));
+        assert_eq!(metrics.peak_absolute, 32_768);
+        metrics.record(4, &[0, 0]);
+        assert_eq!(metrics.first_nonzero_frame, Some(2));
+        assert_eq!(metrics.nonzero_pairs, 3);
+    }
 
     #[test]
     fn frame_pacing_matches_ntsc_master_clock_ratio() {

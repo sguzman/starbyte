@@ -4,6 +4,10 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## Bounded native sound acceptance metrics (2026-10-12; CI pending)
+
+The opt-in `--exit-after-frames N` GUI smoke now prints cumulative stereo pairs, nonzero pairs, absolute peak, first nonzero frame, uploaded SPC bytes and dispatched SPC700 instructions alongside its completion marker. The initial startup frame is included, so a 500-frame bounded graphical probe can be compared directly with the successful 500-frame headless SMW sound diagnostic. A separate field reports whether the asynchronous audio worker was spawned, **not** whether a physical speaker device opened. Synthetic tests verify silence followed by stereo activity, peak saturation-safe accounting, and first-sound-frame retention. Native Hyprland/speaker behavior remains untested.
+
 ## Automated native Wayland smoke (2026-10-12; CI pending)
 
 A bounded `starbyte-egui --demo --exit-after-frames 30` probe now requests a real native egui window under a **Weston headless Wayland compositor** and closes cleanly after 30 completed SNES frames. The Linux CI job builds the GUI and runs this probe with Mesa software rendering, no X11 DISPLAY and an isolated temporary config/cache, rejecting launch failures, hangs, early emulator errors and missing completion markers. The same frame limit can be paired with an explicit user-owned `--rom` and `--experimental-sound-driver` for later native acceptance; it is never persisted or automatically enabled.

@@ -19,7 +19,7 @@
 - [x] Queue keyboard press edges across non-emulation egui updates and consume once at the next SNES frame (fixes short taps missed between repaint deadlines; native latency unmeasured).
 - [x] Preserve short physical gamepad button presses across UI polls until an emulation frame, with per-device disconnect cleanup and rebinding suppression (native validation pending).
 - [x] Preserve keyboard press edges even when pressed and released within a single egui input frame, preventing missed sub-frame taps (native input latency remains unmeasured).
-- [ ] Measure and improve frame pacing, latency, pauses and save stability during sustained play.
+- [ ] Measure and improve frame pacing, latency, pauses and save stability during sustained play. Bounded GUI smoke now logs cumulative audio PCM, uploaded SPC bytes, driver instructions and worker-start state; real Hyprland/speaker acceptance pending.
 - [x] Isolate ROM materialization from the cover-download worker and expose an explicit Play Selected action and visible job feedback (hosted CI passed at `9fe41ff5`; native Wayland launch still unverified).
 - [x] Add core frame instruction-progress guard and GUI 1.5-second wall-clock budget with frame/PC diagnostics to prevent indefinite synchronous stalls (native test pending).
 - [x] Replace the 60-frame blocking UI callback with incremental, cancellable stepping; expose measured per-frame runtime and over-budget counters (source; native Wayland timing pending).

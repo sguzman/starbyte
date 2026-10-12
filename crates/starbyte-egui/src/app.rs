@@ -112,7 +112,15 @@ impl FrameClock {
         if now < self.next_frame_at {
             return false;
         }
-        self.next_frame_at = now + FRAME_INTERVAL;
+        // Keep the NTSC cadence despite ordinary UI wake-up jitter.
+        // When we miss a whole frame, resynchronize instead of catching up
+        // with an expensive burst of emulated frames.
+        let following_deadline = self.next_frame_at + FRAME_INTERVAL;
+        self.next_frame_at = if now < following_deadline {
+            following_deadline
+        } else {
+            now + FRAME_INTERVAL
+        };
         true
     }
 
@@ -2105,6 +2113,22 @@ mod playback_tests {
 
         clock.reset(late);
         assert!(clock.take_due_frame(late));
+    }
+
+    #[test]
+    fn frame_clock_preserves_ntsc_phase_across_small_ui_wake_delays() {
+        let start = Instant::now();
+        let mut clock = FrameClock::new(start);
+        assert!(clock.take_due_frame(start));
+        let slightly_late = start + FRAME_INTERVAL + Duration::from_millis(3);
+        assert!(clock.take_due_frame(slightly_late));
+        assert_eq!(
+            clock.time_until_next_frame(slightly_late),
+            FRAME_INTERVAL - Duration::from_millis(3)
+        );
+        assert!(!clock.take_due_frame(slightly_late));
+        let original_next_deadline = start + FRAME_INTERVAL + FRAME_INTERVAL;
+        assert!(clock.take_due_frame(original_next_deadline));
     }
 
     #[test]

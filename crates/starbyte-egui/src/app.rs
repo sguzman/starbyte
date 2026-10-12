@@ -204,6 +204,9 @@ pub struct StarbyteApp {
     cache_root: PathBuf,
     session: FrontendSession,
     audio_output: Option<AudioOutput>,
+    /// Session mute defaults from persisted startup preference, then follows
+    /// the live in-game Sound menu without rewriting that preference.
+    audio_muted: bool,
     worker: AppWorker,
     library_snapshot: LibrarySnapshot,
     framebuffer_texture: Option<TextureHandle>,
@@ -326,12 +329,14 @@ impl StarbyteApp {
         } else {
             status_line
         };
+        let audio_muted = config.audio.mute_on_startup;
         let mut app = Self {
             assets,
             config,
             cache_root,
             session,
             audio_output: None,
+            audio_muted,
             worker,
             library_snapshot: cached_snapshot.unwrap_or_else(empty_snapshot),
             framebuffer_texture: None,
@@ -729,22 +734,73 @@ impl StarbyteApp {
         }
     }
 
+    /// Apply the existing persisted audio preferences to the live mixer.
+    /// The session mute control is intentionally not saved as mute-on-startup.
+    fn sync_audio_volume(&self) {
+        if let Some(output) = &self.audio_output {
+            output.set_volume(audible_output_volume(
+                self.config.audio.enabled,
+                self.audio_muted,
+                self.config.audio.volume,
+            ));
+        }
+    }
+
+    fn draw_audio_controls(&mut self, ui: &mut egui::Ui) {
+        let enabled_changed = ui
+            .checkbox(&mut self.config.audio.enabled, "Sound enabled")
+            .changed();
+        let mute_changed = ui
+            .add_enabled_ui(self.config.audio.enabled, |ui| {
+                ui.checkbox(&mut self.audio_muted, "Mute")
+            })
+            .inner
+            .changed();
+        let volume_changed = ui
+            .add_enabled_ui(self.config.audio.enabled, |ui| {
+                ui.add(egui::Slider::new(&mut self.config.audio.volume, 0.0..=1.0).text("Volume"))
+            })
+            .inner
+            .changed();
+        if enabled_changed || mute_changed || volume_changed {
+            self.sync_audio_volume();
+            if !self.config.audio.enabled || self.audio_muted || self.config.audio.volume <= 0.0 {
+                self.clear_audio();
+            }
+            if enabled_changed || volume_changed {
+                self.persist_config();
+            }
+        }
+    }
+
     /// Start the host audio device only after DSP synthesis produces sound.
     /// A missing device must never prevent a game from playing.
     fn enqueue_current_audio(&mut self) {
+        let output_volume = audible_output_volume(
+            self.config.audio.enabled,
+            self.audio_muted,
+            self.config.audio.volume,
+        );
+        if output_volume <= 0.0 {
+            return;
+        }
         let samples = &self.session.emulator().audio_samples().samples;
         if samples.is_empty() || samples.len() % 2 != 0 {
             return;
         }
         if self.audio_output.is_none() && samples.iter().any(|&sample| sample != 0) {
             match AudioOutput::start() {
-                Ok(output) => self.audio_output = Some(output),
+                Ok(output) => {
+                    output.set_volume(output_volume);
+                    self.audio_output = Some(output);
+                },
                 Err(error) => {
                     warn!("could not start desktop audio thread (video remains playable): {error}");
                 }
             }
         }
         if let Some(output) = &self.audio_output {
+            output.set_volume(output_volume);
             output.enqueue(samples);
         }
     }
@@ -961,6 +1017,7 @@ impl StarbyteApp {
                 if ui.button("Screenshot (F12)").clicked() {
                     self.save_screenshot();
                 }
+                ui.menu_button("Sound", |ui| self.draw_audio_controls(ui));
                 if ui
                     .checkbox(&mut self.show_performance_overlay, "Timing")
                     .changed()
@@ -1227,29 +1284,17 @@ impl StarbyteApp {
             }
 
             ui.separator();
-            egui::CollapsingHeader::new("Audio (output not connected yet)")
+            egui::CollapsingHeader::new("Audio")
                 .default_open(true)
                 .show(ui, |ui| {
-                    let audio = &mut self.config.audio;
-                    let mut changed = false;
-                    changed |= ui.checkbox(&mut audio.enabled, "Enabled").changed();
-                    changed |= ui
-                        .checkbox(&mut audio.mute_on_startup, "Mute on startup")
-                        .changed();
-                    changed |= ui
-                        .add(egui::Slider::new(&mut audio.volume, 0.0..=1.0).text("Volume"))
-                        .changed();
-                    changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut audio.sample_rate_hz)
-                                .speed(1_000)
-                                .range(8_000..=96_000)
-                                .prefix("Hz "),
-                        )
-                        .changed();
-                    if changed {
+                    self.draw_audio_controls(ui);
+                    if ui
+                        .checkbox(&mut self.config.audio.mute_on_startup, "Mute on startup")
+                        .changed()
+                    {
                         self.persist_config();
                     }
+                    ui.label("Emulated DSP: 32 kHz stereo; the OS chooses the speaker output rate.");
                 });
 
             egui::CollapsingHeader::new("Video")
@@ -2263,9 +2308,19 @@ mod playback_tests {
 
     use super::{
         FRAME_INTERVAL, FrameClock, FramePerformance, NativeSmokeAudioMetrics, Vec2, egui,
-        fit_game_size, is_compact_layout, merged_gamepad_buttons, pressed_button_labels,
-        record_recent_rom, write_png_screenshot,
+        audible_output_volume, fit_game_size, is_compact_layout, merged_gamepad_buttons,
+        pressed_button_labels, record_recent_rom, write_png_screenshot,
     };
+
+    #[test]
+    fn audio_settings_gate_actual_speaker_output_without_muting_dsp_emulation() {
+        assert_eq!(audible_output_volume(true, false, 0.5), 0.5);
+        assert_eq!(audible_output_volume(false, false, 1.0), 0.0);
+        assert_eq!(audible_output_volume(true, true, 1.0), 0.0);
+        assert_eq!(audible_output_volume(true, false, 0.0), 0.0);
+        assert_eq!(audible_output_volume(true, false, 1.5), 1.0);
+        assert_eq!(audible_output_volume(true, false, f32::NAN), 0.0);
+    }
 
     #[test]
     fn native_smoke_audio_metrics_track_silence_then_real_stereo_activity() {
@@ -2617,6 +2672,15 @@ mod playback_tests {
         assert!(is_compact_layout(959.0, 900.0));
         assert!(is_compact_layout(1200.0, 500.0));
         assert!(!is_compact_layout(960.0, 650.0));
+    }
+}
+
+/// Persisted volume affects OS playback, not synthesis or WAV diagnostics.
+fn audible_output_volume(enabled: bool, muted: bool, volume: f32) -> f32 {
+    if !enabled || muted || !volume.is_finite() {
+        0.0
+    } else {
+        volume.clamp(0.0, 1.0)
     }
 }
 

@@ -410,10 +410,12 @@ fn main() -> Result<()> {
                 load_runtime_config(&assets)?
                     .cheats
                     .cheatarium_snes_index()
-                    .context("Configure [cheats].cheatarium_root or pass --index to search Cheatarium")?
+                    .context(
+                        "Configure [cheats].cheatarium_root or pass --index to search Cheatarium",
+                    )?
             };
             cheatarium::search(&index, &title, limit, json)
-        },
+        }
         Command::Library(args) => run_library(args, assets),
         Command::Run(args) => run_rom(args, assets),
         Command::PrintConfig { format } => print_config(format),

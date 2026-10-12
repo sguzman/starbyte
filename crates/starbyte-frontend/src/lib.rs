@@ -757,31 +757,44 @@ mod tests {
             .unwrap();
         session.run_frame().unwrap();
         assert_eq!(
-            session.emulator().isolated_apu_upload().unwrap().entrypoint(),
+            session
+                .emulator()
+                .isolated_apu_upload()
+                .unwrap()
+                .entrypoint(),
             Some(0x0400)
         );
         assert_eq!(session.emulator().isolated_apu_dsp_register(0x4c), Some(1));
         assert!(
-            session.emulator().audio_samples().samples.iter().any(|&sample| sample > 1_000),
+            session
+                .emulator()
+                .audio_samples()
+                .samples
+                .iter()
+                .any(|&sample| sample > 1_000),
             "explicitly uploaded original BRR driver must reach frontend PCM"
         );
-        assert!(session
-            .emulator()
-            .audio_samples()
-            .samples
-            .chunks_exact(2)
-            .all(|pair| pair[0] == pair[1]));
+        assert!(
+            session
+                .emulator()
+                .audio_samples()
+                .samples
+                .chunks_exact(2)
+                .all(|pair| pair[0] == pair[1])
+        );
 
         // Reload the same cartridge ordinarily: no implicit upload or audio.
         session.load_rom(&rom_path).unwrap();
         session.run_frame().unwrap();
         assert!(session.emulator().isolated_apu_upload().is_none());
-        assert!(session
-            .emulator()
-            .audio_samples()
-            .samples
-            .iter()
-            .all(|&sample| sample == 0));
+        assert!(
+            session
+                .emulator()
+                .audio_samples()
+                .samples
+                .iter()
+                .all(|&sample| sample == 0)
+        );
     }
 
     #[test]

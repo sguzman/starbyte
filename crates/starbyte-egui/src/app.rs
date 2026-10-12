@@ -129,6 +129,42 @@ impl FrameClock {
     }
 }
 
+#[derive(Debug, Default)]
+struct QueuedKeyboardPresses {
+    actions: BTreeSet<String>,
+}
+
+impl QueuedKeyboardPresses {
+    /// Collect press edges even when a UI update does not run the emulator.
+    fn capture(
+        &mut self,
+        ctx: &egui::Context,
+        bindings: &BTreeMap<String, String>,
+        allow_keyboard_gameplay: bool,
+    ) {
+        if !allow_keyboard_gameplay {
+            self.actions.clear();
+            return;
+        }
+        for &action in input_actions() {
+            if let Some(binding) = bindings.get(action)
+                && let Some(key) = parse_egui_key(binding)
+                && ctx.input(|input| input.key_pressed(key))
+            {
+                self.actions.insert(action.to_owned());
+            }
+        }
+    }
+
+    fn contains(&self, action: &str) -> bool {
+        self.actions.contains(action)
+    }
+
+    fn clear(&mut self) {
+        self.actions.clear();
+    }
+}
+
 #[derive(Debug, Clone)]
 struct JobRecord {
     id: u64,
@@ -149,6 +185,7 @@ pub struct StarbyteApp {
     cover_textures: BTreeMap<String, TextureHandle>,
     failed_cover_ids: BTreeSet<String>,
     held_input: ControllerState,
+    queued_keyboard_presses: QueuedKeyboardPresses,
     status_line: String,
     playback_error: Option<String>,
     search_query: String,
@@ -261,6 +298,7 @@ impl StarbyteApp {
             cover_textures: BTreeMap::new(),
             failed_cover_ids: BTreeSet::new(),
             held_input: ControllerState::default(),
+            queued_keyboard_presses: QueuedKeyboardPresses::default(),
             status_line,
             playback_error: startup_error,
             search_query: String::new(),
@@ -519,7 +557,8 @@ impl StarbyteApp {
             for &action in input_actions() {
                 if let Some(binding) = self.config.input.keyboard_bindings.get(action)
                     && let Some(key) = parse_egui_key(binding)
-                    && ctx.input(|input| gameplay_key_active(input, key))
+                    && (self.queued_keyboard_presses.contains(action)
+                        || ctx.input(|input| gameplay_key_active(input, key)))
                 {
                     set_controller_flag(&mut state, action, true);
                 }
@@ -535,6 +574,25 @@ impl StarbyteApp {
             }
         }
         state
+    }
+
+    fn capture_gameplay_key_presses(
+        &mut self,
+        ctx: &egui::Context,
+        was_recording_binding: bool,
+    ) {
+        let (keyboard_enabled, _) = controller_input_sources(
+            self.config.input.active_device,
+            ctx.wants_keyboard_input(),
+            was_recording_binding || self.pending_keyboard_bind.is_some(),
+        );
+        self.queued_keyboard_presses.capture(
+            ctx,
+            &self.config.input.keyboard_bindings,
+            keyboard_enabled
+                && self.session.snapshot().has_rom
+                && (self.is_playing || self.pending_step_frames > 0),
+        );
     }
 
     fn capture_keyboard_binding(&mut self, ctx: &egui::Context) {
@@ -652,6 +710,9 @@ impl StarbyteApp {
     fn run_frame(&mut self, ctx: &egui::Context) {
         self.session
             .set_controller1(self.effective_controller_state(ctx));
+        // Consume each short press once; held keys are sampled again from
+        // egui when subsequent emulation frames execute.
+        self.queued_keyboard_presses.clear();
         let started = Instant::now();
         match self.session.run_frame_with_timeout(GUI_FRAME_TIMEOUT) {
             Ok(()) => {
@@ -1900,6 +1961,7 @@ impl StarbyteApp {
 impl eframe::App for StarbyteApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         apply_theme(ctx, self.config.prefer_dark_mode);
+        let was_recording_binding = self.pending_keyboard_bind.is_some();
         self.capture_keyboard_binding(ctx);
         self.poll_gamepad_events();
         self.poll_worker_events(ctx);
@@ -2037,6 +2099,10 @@ impl eframe::App for StarbyteApp {
             }
         }
 
+        // Capture edges from every UI update, including repaint callbacks
+        // that are too early for another NTSC emulation frame.
+        self.capture_gameplay_key_presses(ctx, was_recording_binding);
+
         if self.is_playing && self.session.snapshot().has_rom {
             self.pending_step_frames = 0;
             if self.frame_clock.take_due_frame(Instant::now()) {
@@ -2166,6 +2232,72 @@ mod playback_tests {
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             assert!(!ctx.input(|input| super::gameplay_key_active(input, egui::Key::B)));
         });
+    }
+
+    #[test]
+    fn keyboard_press_survives_a_ui_update_without_emulation_and_is_consumed_once() {
+        use super::QueuedKeyboardPresses;
+
+        let mut pending = QueuedKeyboardPresses::default();
+        let bindings = std::collections::BTreeMap::from([("b".to_owned(), "B".to_owned())]);
+        let ctx = egui::Context::default();
+        let key_event = |pressed| egui::Event::Key {
+            key: egui::Key::B,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        };
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![key_event(true), key_event(false)],
+                ..Default::default()
+            },
+            |ctx| {
+                pending.capture(ctx, &bindings, true);
+                assert!(pending.contains("b"));
+            },
+        );
+        // A repaint happened, but no game frame ran. The key is already up.
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            pending.capture(ctx, &bindings, true);
+            assert!(pending.contains("b"));
+            assert!(!ctx.input(|input| super::gameplay_key_active(input, egui::Key::B)));
+            pending.clear();
+            assert!(!pending.contains("b"));
+        });
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            pending.capture(ctx, &bindings, true);
+            assert!(!pending.contains("b"));
+        });
+    }
+
+    #[test]
+    fn keyboard_focus_or_pause_discards_queued_gameplay_taps() {
+        use super::QueuedKeyboardPresses;
+
+        let mut pending = QueuedKeyboardPresses::default();
+        let bindings = std::collections::BTreeMap::from([("start".to_owned(), "Enter".to_owned())]);
+        let ctx = egui::Context::default();
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::default(),
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                pending.capture(ctx, &bindings, true);
+                assert!(pending.contains("start"));
+                // Text focus, binding capture, pause, or no ROM must clear.
+                pending.capture(ctx, &bindings, false);
+                assert!(!pending.contains("start"));
+            },
+        );
     }
 
     #[test]

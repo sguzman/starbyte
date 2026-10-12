@@ -4,6 +4,10 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## Queued keyboard taps across non-emulation repaint updates (October 12; CI pending)
+
+The frontend now holds keyboard press edges across egui repaint cycles until the next actual emulated frame, consuming each short press exactly once after submitting the SNES controller state. The earlier same-update `key_pressed` check missed a tap if no emulator frame was due in that update. Held keys continue to work normally, while text focus, key rebinding, pause and unloaded sessions discard pending taps. This is a desktop input fix with synthetic egui regressions for no-frame repaint persistence, one-time consumption and suppression. Native hardware latency remains unmeasured.
+
 ## Short keyboard taps captured for gameplay (October 12; CI pending)
 
 Keyboard SNES button mapping now accepts either the current held state or the key-press edge from the current egui input frame. This prevents a short press+release, entirely between two 60 Hz emulation updates, from disappearing. It does not latch buttons across multiple emulated frames or affect typing-focused controls, which remain gated by input source selection. An egui raw-input regression supplies key-down and key-up events in one frame and checks that the next frame no longer sees that press. Native Wayland latency is still unmeasured.

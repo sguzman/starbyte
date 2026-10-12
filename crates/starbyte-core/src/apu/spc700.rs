@@ -76,13 +76,31 @@ impl Spc700 {
     /// Execute one instruction against a 64 KiB memory callback and return the trace.
     pub fn step_with_memory<FRead, FWrite>(
         &mut self,
-        mut read: FRead,
-        mut write: FWrite,
+        read: FRead,
+        write: FWrite,
     ) -> Result<Vec<BusEvent>>
     where
         FRead: FnMut(u16) -> u8,
         FWrite: FnMut(u16, u8),
     {
+        let mut trace = Vec::new();
+        self.step_with_memory_into(read, write, &mut trace)?;
+        Ok(trace)
+    }
+
+    /// Interpret one sound-CPU instruction using caller-owned trace storage.
+    /// Host-clocked sound can reuse this allocation across every opcode.
+    pub fn step_with_memory_into<FRead, FWrite>(
+        &mut self,
+        mut read: FRead,
+        mut write: FWrite,
+        trace: &mut Vec<BusEvent>,
+    ) -> Result<()>
+    where
+        FRead: FnMut(u16) -> u8,
+        FWrite: FnMut(u16, u8),
+    {
+        trace.clear();
         if self.halt_state != Spc700HaltState::Running {
             // SingleStepTests records repeated read/wait bus pairs at the
             // parked PC after SLEEP or STOP. Those are *idle* cycles, not
@@ -90,7 +108,7 @@ impl Spc700 {
             // Interrupt wakeup remains outside this emulator boundary.
             let value = read(self.pc);
             self.cycles = self.cycles.saturating_add(2);
-            return Ok(vec![
+            trace.extend([
                 BusEvent {
                     address: u32::from(self.pc),
                     value,
@@ -104,50 +122,51 @@ impl Spc700 {
                     cycle: 1,
                 },
             ]);
+            return Ok(());
         }
         let opcode_address = self.pc;
         let opcode = read(opcode_address);
-        let mut trace = vec![BusEvent {
+        trace.push(BusEvent {
             address: u32::from(opcode_address),
             value: opcode,
             access: AccessKind::Read,
             cycle: 0,
-        }];
+        });
 
         match opcode {
-            0x00 => self.execute_nop(&mut read, &mut trace),
-            0x0D => self.execute_push_psw(&mut read, &mut write, &mut trace),
-            0x0F => self.execute_brk(&mut read, &mut write, &mut trace),
+            0x00 => self.execute_nop(&mut read, trace),
+            0x0D => self.execute_push_psw(&mut read, &mut write, trace),
+            0x0F => self.execute_brk(&mut read, &mut write, trace),
             0x01 | 0x11 | 0x21 | 0x31 | 0x41 | 0x51 | 0x61 | 0x71 | 0x81 | 0x91 | 0xA1 | 0xB1
             | 0xC1 | 0xD1 | 0xE1 | 0xF1 => {
-                self.execute_tcall(opcode, &mut read, &mut write, &mut trace)
+                self.execute_tcall(opcode, &mut read, &mut write, trace)
             }
-            0x10 => self.execute_bpl(&mut read, &mut trace),
-            0x1F => self.execute_jmp_abs_x_indirect(&mut read, &mut trace),
-            0x20 => self.execute_clrp(&mut read, &mut trace),
-            0x2F => self.execute_bra(&mut read, &mut trace),
+            0x10 => self.execute_bpl(&mut read, trace),
+            0x1F => self.execute_jmp_abs_x_indirect(&mut read, trace),
+            0x20 => self.execute_clrp(&mut read, trace),
+            0x2F => self.execute_bra(&mut read, trace),
             0x2E | 0x6E | 0xDE | 0xFE => {
-                self.execute_compare_decrement_branch(opcode, &mut read, &mut write, &mut trace)
+                self.execute_compare_decrement_branch(opcode, &mut read, &mut write, trace)
             }
             0x02 | 0x12 | 0x22 | 0x32 | 0x42 | 0x52 | 0x62 | 0x72 | 0x82 | 0x92 | 0xA2 | 0xB2
             | 0xC2 | 0xD2 | 0xE2 | 0xF2 => {
-                self.execute_direct_page_bit_set_clear(opcode, &mut read, &mut write, &mut trace)
+                self.execute_direct_page_bit_set_clear(opcode, &mut read, &mut write, trace)
             }
             0x03 | 0x13 | 0x23 | 0x33 | 0x43 | 0x53 | 0x63 | 0x73 | 0x83 | 0x93 | 0xA3 | 0xB3
             | 0xC3 | 0xD3 | 0xE3 | 0xF3 => {
-                self.execute_direct_page_bit_branch(opcode, &mut read, &mut trace)
+                self.execute_direct_page_bit_branch(opcode, &mut read, trace)
             }
-            0x2D => self.execute_push_a(&mut read, &mut write, &mut trace),
-            0x30 => self.execute_bmi(&mut read, &mut trace),
-            0x3F => self.execute_call_abs(&mut read, &mut write, &mut trace),
-            0x4F => self.execute_pcall(&mut read, &mut write, &mut trace),
+            0x2D => self.execute_push_a(&mut read, &mut write, trace),
+            0x30 => self.execute_bmi(&mut read, trace),
+            0x3F => self.execute_call_abs(&mut read, &mut write, trace),
+            0x4F => self.execute_pcall(&mut read, &mut write, trace),
             0x0E | 0x4E => {
-                self.execute_test_and_set_clear_bits(opcode, &mut read, &mut write, &mut trace)
+                self.execute_test_and_set_clear_bits(opcode, &mut read, &mut write, trace)
             }
             0x0A | 0x2A | 0x4A | 0x6A | 0x8A | 0xAA | 0xCA | 0xEA => {
-                self.execute_memory_bit_logic(opcode, &mut read, &mut write, &mut trace)
+                self.execute_memory_bit_logic(opcode, &mut read, &mut write, trace)
             }
-            0x4D => self.execute_push_x(&mut read, &mut write, &mut trace),
+            0x4D => self.execute_push_x(&mut read, &mut write, trace),
             // Standard SPC700 accumulator ALU: immediate, direct-page,
             // and absolute memory addressing. Separate from word ALU.
             0x08 | 0x28 | 0x48 | 0x68 | 0x88 | 0xA8 | 0x04 | 0x24 | 0x44 | 0x64 | 0x84 | 0xA4
@@ -155,90 +174,90 @@ impl Spc700 {
             | 0x07 | 0x27 | 0x47 | 0x67 | 0x87 | 0xA7 | 0x14 | 0x34 | 0x54 | 0x74 | 0x94 | 0xB4
             | 0x15 | 0x35 | 0x55 | 0x75 | 0x95 | 0xB5 | 0x16 | 0x36 | 0x56 | 0x76 | 0x96 | 0xB6
             | 0x17 | 0x37 | 0x57 | 0x77 | 0x97 | 0xB7 => {
-                self.execute_accumulator_alu(opcode, &mut read, &mut trace)
+                self.execute_accumulator_alu(opcode, &mut read, trace)
             }
             0x18 | 0x38 | 0x58 | 0x78 | 0x98 | 0xB8 | 0x09 | 0x29 | 0x49 | 0x69 | 0x89 | 0xA9
             | 0x19 | 0x39 | 0x59 | 0x79 | 0x99 | 0xB9 => {
-                self.execute_memory_alu(opcode, &mut read, &mut write, &mut trace)
+                self.execute_memory_alu(opcode, &mut read, &mut write, trace)
             }
             0x1E | 0x3E | 0x5E | 0x7E | 0xAD | 0xC8 => {
-                self.execute_cmp_index_register(opcode, &mut read, &mut trace)
+                self.execute_cmp_index_register(opcode, &mut read, trace)
             }
-            0x50 => self.execute_bvc(&mut read, &mut trace),
-            0x1C => self.execute_asl_a(&mut read, &mut trace),
-            0x3C => self.execute_rol_a(&mut read, &mut trace),
-            0x5C => self.execute_lsr_a(&mut read, &mut trace),
-            0x5D => self.execute_mov_x_a(&mut read, &mut trace),
-            0x5F => self.execute_jmp_abs(&mut read, &mut trace),
-            0xE8 => self.execute_mov_a_imm(&mut read, &mut trace),
+            0x50 => self.execute_bvc(&mut read, trace),
+            0x1C => self.execute_asl_a(&mut read, trace),
+            0x3C => self.execute_rol_a(&mut read, trace),
+            0x5C => self.execute_lsr_a(&mut read, trace),
+            0x5D => self.execute_mov_x_a(&mut read, trace),
+            0x5F => self.execute_jmp_abs(&mut read, trace),
+            0xE8 => self.execute_mov_a_imm(&mut read, trace),
             0xE5 | 0xE6 | 0xE7 | 0xF4 | 0xF5 | 0xF6 | 0xF7 => {
-                self.execute_mov_a_addressed(opcode, &mut read, &mut trace)
+                self.execute_mov_a_addressed(opcode, &mut read, trace)
             }
-            0xBF => self.execute_mov_a_x_increment(&mut read, &mut trace),
+            0xBF => self.execute_mov_a_x_increment(&mut read, trace),
             0xAF | 0xC5 | 0xC7 | 0xC9 | 0xCC | 0xD4 | 0xD5 | 0xD6 | 0xD8 | 0xD9 | 0xDB => {
-                self.execute_mov_store(opcode, &mut read, &mut write, &mut trace)
+                self.execute_mov_store(opcode, &mut read, &mut write, trace)
             }
-            0xFA => self.execute_mov_dp_dp(&mut read, &mut write, &mut trace),
+            0xFA => self.execute_mov_dp_dp(&mut read, &mut write, trace),
             0xE9 | 0xEC | 0xF8 | 0xF9 | 0xFB => {
-                self.execute_mov_index_load(opcode, &mut read, &mut trace)
+                self.execute_mov_index_load(opcode, &mut read, trace)
             }
-            0x40 => self.execute_setp(&mut read, &mut trace),
-            0x70 => self.execute_bvs(&mut read, &mut trace),
-            0x6D => self.execute_push_y(&mut read, &mut write, &mut trace),
-            0x6F => self.execute_ret(&mut read, &mut trace),
-            0x7C => self.execute_ror_a(&mut read, &mut trace),
-            0x7D => self.execute_mov_a_x(&mut read, &mut trace),
-            0xA0 => self.execute_ei(&mut read, &mut trace),
-            0x8E => self.execute_pop_psw(&mut read, &mut trace),
-            0x90 => self.execute_bcc(&mut read, &mut trace),
-            0x9C => self.execute_dec_a(&mut read, &mut trace),
-            0x9D => self.execute_mov_x_sp(&mut read, &mut trace),
-            0xB0 => self.execute_bcs(&mut read, &mut trace),
-            0xBC => self.execute_inc_a(&mut read, &mut trace),
-            0xBD => self.execute_mov_sp_x(&mut read, &mut trace),
-            0xC0 => self.execute_di(&mut read, &mut trace),
-            0xCD => self.execute_mov_x_imm(&mut read, &mut trace),
-            0xCE => self.execute_pop_x(&mut read, &mut trace),
-            0xD0 => self.execute_bne(&mut read, &mut trace),
-            0xDC => self.execute_dec_y(&mut read, &mut trace),
-            0xDD => self.execute_mov_a_y(&mut read, &mut trace),
-            0x9E => self.execute_div_ya_x(&mut read, &mut trace),
-            0x9F => self.execute_xcn_a(&mut read, &mut trace),
-            0xBE | 0xDF => self.execute_decimal_adjust(opcode, &mut read, &mut trace),
-            0xCF => self.execute_mul_ya(&mut read, &mut trace),
-            0xE0 => self.execute_clrv(&mut read, &mut trace),
-            0xEF | 0xFF => self.execute_standby(opcode, &mut read, &mut trace),
-            0xED => self.execute_notc(&mut read, &mut trace),
-            0xEE => self.execute_pop_y(&mut read, &mut trace),
-            0x8D => self.execute_mov_y_imm(&mut read, &mut trace),
-            0x8F => self.execute_mov_dp_imm(&mut read, &mut write, &mut trace),
+            0x40 => self.execute_setp(&mut read, trace),
+            0x70 => self.execute_bvs(&mut read, trace),
+            0x6D => self.execute_push_y(&mut read, &mut write, trace),
+            0x6F => self.execute_ret(&mut read, trace),
+            0x7C => self.execute_ror_a(&mut read, trace),
+            0x7D => self.execute_mov_a_x(&mut read, trace),
+            0xA0 => self.execute_ei(&mut read, trace),
+            0x8E => self.execute_pop_psw(&mut read, trace),
+            0x90 => self.execute_bcc(&mut read, trace),
+            0x9C => self.execute_dec_a(&mut read, trace),
+            0x9D => self.execute_mov_x_sp(&mut read, trace),
+            0xB0 => self.execute_bcs(&mut read, trace),
+            0xBC => self.execute_inc_a(&mut read, trace),
+            0xBD => self.execute_mov_sp_x(&mut read, trace),
+            0xC0 => self.execute_di(&mut read, trace),
+            0xCD => self.execute_mov_x_imm(&mut read, trace),
+            0xCE => self.execute_pop_x(&mut read, trace),
+            0xD0 => self.execute_bne(&mut read, trace),
+            0xDC => self.execute_dec_y(&mut read, trace),
+            0xDD => self.execute_mov_a_y(&mut read, trace),
+            0x9E => self.execute_div_ya_x(&mut read, trace),
+            0x9F => self.execute_xcn_a(&mut read, trace),
+            0xBE | 0xDF => self.execute_decimal_adjust(opcode, &mut read, trace),
+            0xCF => self.execute_mul_ya(&mut read, trace),
+            0xE0 => self.execute_clrv(&mut read, trace),
+            0xEF | 0xFF => self.execute_standby(opcode, &mut read, trace),
+            0xED => self.execute_notc(&mut read, trace),
+            0xEE => self.execute_pop_y(&mut read, trace),
+            0x8D => self.execute_mov_y_imm(&mut read, trace),
+            0x8F => self.execute_mov_dp_imm(&mut read, &mut write, trace),
             0x0B | 0x0C | 0x1B | 0x2B | 0x2C | 0x3B | 0x4B | 0x4C | 0x5B | 0x6B | 0x6C | 0x7B => {
-                self.execute_memory_shift_rotate(opcode, &mut read, &mut write, &mut trace)
+                self.execute_memory_shift_rotate(opcode, &mut read, &mut write, trace)
             }
             0x8B | 0x8C | 0x9B | 0xAB | 0xAC | 0xBB => {
-                self.execute_memory_inc_dec(opcode, &mut read, &mut write, &mut trace)
+                self.execute_memory_inc_dec(opcode, &mut read, &mut write, trace)
             }
             0x1A | 0x3A | 0x5A => {
-                self.execute_word_increment_compare(opcode, &mut read, &mut write, &mut trace)
+                self.execute_word_increment_compare(opcode, &mut read, &mut write, trace)
             }
-            0x7A | 0x9A => self.execute_word_add_sub(opcode, &mut read, &mut trace),
-            0xBA => self.execute_movw_ya_dp(&mut read, &mut trace),
-            0xC6 => self.execute_mov_x_indirect_a(&mut read, &mut write, &mut trace),
-            0xCB => self.execute_mov_dp_y(&mut read, &mut write, &mut trace),
-            0xD7 => self.execute_mov_indirect_y_a(&mut read, &mut write, &mut trace),
-            0xDA => self.execute_movw_dp_ya(&mut read, &mut write, &mut trace),
-            0xEB => self.execute_mov_y_dp(&mut read, &mut trace),
-            0xC4 => self.execute_mov_dp_a(&mut read, &mut write, &mut trace),
-            0xE4 => self.execute_mov_a_dp(&mut read, &mut trace),
-            0xF0 => self.execute_beq(&mut read, &mut trace),
-            0xFC => self.execute_inc_y(&mut read, &mut trace),
-            0xFD => self.execute_mov_y_a(&mut read, &mut trace),
-            0x7F => self.execute_ret1(&mut read, &mut trace),
-            0x60 => self.execute_clrc(&mut read, &mut trace),
-            0x80 => self.execute_setc(&mut read, &mut trace),
-            0x1D => self.execute_dec_x(&mut read, &mut trace),
-            0x3D => self.execute_inc_x(&mut read, &mut trace),
-            0xAE => self.execute_pop_a(&mut read, &mut trace),
+            0x7A | 0x9A => self.execute_word_add_sub(opcode, &mut read, trace),
+            0xBA => self.execute_movw_ya_dp(&mut read, trace),
+            0xC6 => self.execute_mov_x_indirect_a(&mut read, &mut write, trace),
+            0xCB => self.execute_mov_dp_y(&mut read, &mut write, trace),
+            0xD7 => self.execute_mov_indirect_y_a(&mut read, &mut write, trace),
+            0xDA => self.execute_movw_dp_ya(&mut read, &mut write, trace),
+            0xEB => self.execute_mov_y_dp(&mut read, trace),
+            0xC4 => self.execute_mov_dp_a(&mut read, &mut write, trace),
+            0xE4 => self.execute_mov_a_dp(&mut read, trace),
+            0xF0 => self.execute_beq(&mut read, trace),
+            0xFC => self.execute_inc_y(&mut read, trace),
+            0xFD => self.execute_mov_y_a(&mut read, trace),
+            0x7F => self.execute_ret1(&mut read, trace),
+            0x60 => self.execute_clrc(&mut read, trace),
+            0x80 => self.execute_setc(&mut read, trace),
+            0x1D => self.execute_dec_x(&mut read, trace),
+            0x3D => self.execute_inc_x(&mut read, trace),
+            0xAE => self.execute_pop_a(&mut read, trace),
             _ => Err(Error::UnsupportedOpcode {
                 cpu: "SPC700",
                 opcode,
@@ -247,7 +266,7 @@ impl Spc700 {
         }?;
 
         self.cycles = self.cycles.saturating_add(trace.len() as u64);
-        Ok(trace)
+        Ok(())
     }
 
     /// Load a register snapshot and reset cycle accounting for compliance work.

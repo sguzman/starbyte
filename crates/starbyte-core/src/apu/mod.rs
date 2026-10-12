@@ -90,6 +90,10 @@ pub struct Apu {
     ipl_rom: Option<Vec<u8>>,
     configured_ipl_path: Option<PathBuf>,
     spc700_steps: u64,
+    /// Reusable instruction bus events for the host-clocked sound driver.
+    /// Scratch storage is never part of a portable save-state.
+    #[serde(skip)]
+    spc_trace_scratch: Vec<crate::bus::BusEvent>,
     #[serde(default)]
     bootstrap_state: BootstrapState,
     /// Fractional numerator of the DSP sample clock; serialized for save-state continuity.
@@ -136,6 +140,7 @@ impl Default for Apu {
             ipl_rom: None,
             configured_ipl_path: None,
             spc700_steps: 0,
+            spc_trace_scratch: Vec::new(),
             bootstrap_state: BootstrapState::default(),
             dsp_sample_phase: 0,
             isolated_spc_master_phase: 0,
@@ -240,32 +245,40 @@ impl Apu {
         self.spc700_steps = self.spc700_steps.saturating_add(1);
     }
 
-    /// Execute a single SPC700 instruction against its own RAM and MMIO bus.
-    ///
-    /// This path is available for isolated sound-driver regression tests.
-    /// Full cartridge runtime still uses the historical bootstrap boundary:
-    /// all 256 opcodes dispatch, but commercial driver timing is not validated.
+    /// Execute one SPC700 instruction with an owned diagnostic trace.
     pub fn execute_spc_program_instruction(&mut self) -> Result<Vec<crate::bus::BusEvent>> {
-        // The CPU needs independent read/write callbacks to the same bus.
-        // Temporarily move it out so the callbacks can safely borrow the APU.
+        let mut trace = Vec::new();
+        self.execute_spc_program_instruction_into(&mut trace)?;
+        Ok(trace)
+    }
+
+    /// Reuse bus-event allocation while clocking live uploaded sound drivers.
+    fn execute_spc_program_instruction_reuse(&mut self) -> Result<u64> {
+        let mut scratch = std::mem::take(&mut self.spc_trace_scratch);
+        let result = self.execute_spc_program_instruction_into(&mut scratch);
+        let cycles = scratch.len() as u64;
+        self.spc_trace_scratch = scratch;
+        result?;
+        Ok(cycles)
+    }
+
+    fn execute_spc_program_instruction_into(
+        &mut self,
+        trace: &mut Vec<crate::bus::BusEvent>,
+    ) -> Result<()> {
+        // The read/write callbacks require access to the APU while its
+        // SPC700 interpreter is temporarily moved out.
         let mut cpu = std::mem::take(&mut self.spc700);
-        // A subsequent poll of a SLEEP/STOP CPU is an idle bus cycle, not
-        // another successfully dispatched instruction. Count the opcode
-        // that enters standby, but never count its later idle probes.
         let was_running = cpu.halt_state() == Spc700HaltState::Running;
-        // The moved-out APU CPU is only a placeholder while this opcode
-        // executes. The TEST MMIO latch must observe the *active* CPU's
-        // direct-page flag, not that placeholder's default PSW.
-        // No SPC700 instruction modifies PSW.P and writes MMIO in the
-        // same opcode, so the entry PSW is sufficient for bus writes.
         let instruction_psw = cpu.psw;
         let bus = RefCell::new(&mut *self);
-        let result = cpu.step_with_memory(
+        let result = cpu.step_with_memory_into(
             |address| bus.borrow_mut().read_spc_bus(address),
             |address, value| {
                 bus.borrow_mut()
                     .write_spc_bus_with_psw(address, value, instruction_psw);
             },
+            trace,
         );
         let mut apu = bus.borrow_mut();
         apu.spc700 = cpu;
@@ -308,8 +321,7 @@ impl Apu {
             if self.spc700.halt_state() != Spc700HaltState::Running {
                 break;
             }
-            let trace = self.execute_spc_program_instruction()?;
-            let cpu_cycles = trace.len() as u64;
+            let cpu_cycles = self.execute_spc_program_instruction_reuse()?;
             let numerator = u128::from(self.isolated_spc_master_phase)
                 + u128::from(cpu_cycles) * u128::from(NTSC_MASTER_CLOCK_HZ);
             let denominator = u128::from(SPC700_CLOCK_HZ);
@@ -391,10 +403,10 @@ impl Apu {
             && self.spc700.halt_state() == Spc700HaltState::Running
             && executed < 4096
         {
-            let trace = self.execute_spc_program_instruction()?;
+            let cpu_cycles = self.execute_spc_program_instruction_reuse()?;
             self.host_clocked_spc_credit = self
                 .host_clocked_spc_credit
-                .saturating_sub(trace.len() as i64);
+                .saturating_sub(cpu_cycles as i64);
             executed += 1;
         }
         Ok(executed)
@@ -838,6 +850,34 @@ mod tests {
         assert_eq!(apu.read_spc_bus(0xffff), 0x22);
         apu.write_spc_bus(0x00f1, 0x80);
         assert_eq!(apu.read_spc_bus(0xffc0), 0xe8);
+    }
+
+    #[test]
+    fn live_spc_runner_reuses_trace_without_changing_instruction_effects() {
+        let mut traced = Apu::default();
+        // MOV A,#5; MOV $30,A; BRA back to first instruction.
+        for (offset, value) in [0xe8, 5, 0xc4, 0x30, 0x2f, 0xfa]
+            .into_iter()
+            .enumerate()
+        {
+            traced.write_spc_ram(0x0400 + offset as u16, value);
+        }
+        traced.spc700.load_state(0x0400, 0, 0, 0, 0xef, 0x02);
+        let mut reused = traced.clone();
+        for _ in 0..64 {
+            let reference = traced.execute_spc_program_instruction().unwrap();
+            let cycles = reused.execute_spc_program_instruction_reuse().unwrap();
+            assert_eq!(cycles, reference.len() as u64);
+            assert_eq!(traced.spc700, reused.spc700);
+            assert_eq!(traced.spc700_steps, reused.spc700_steps);
+            assert_eq!(traced.spc_ram, reused.spc_ram);
+        }
+        assert!(reused.spc_trace_scratch.capacity() > 0);
+        // Transient bus trace buffers must not alter save-state equality.
+        assert_eq!(
+            serde_json::to_value(&traced).unwrap(),
+            serde_json::to_value(&reused).unwrap()
+        );
     }
 
     #[test]

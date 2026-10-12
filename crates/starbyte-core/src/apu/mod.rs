@@ -2310,7 +2310,10 @@ mod tests {
             apu.write_cpu_port(port, value).unwrap();
         }
         apu.step_master_cycles(6);
-        assert_eq!(apu.isolated_ipl_upload().unwrap().entrypoint(), Some(0x5678));
+        assert_eq!(
+            apu.isolated_ipl_upload().unwrap().entrypoint(),
+            Some(0x5678)
+        );
         assert_eq!(apu.spc700.pc, 0x5678);
         assert_eq!((apu.read_spc_ram(0), apu.read_spc_ram(1)), (0x78, 0x56));
     }

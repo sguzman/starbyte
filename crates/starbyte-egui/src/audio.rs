@@ -6,7 +6,7 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicU8, AtomicU64, Ordering},
+        atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
     thread,
@@ -69,6 +69,7 @@ pub struct AudioOutput {
     sender: SyncSender<AudioMessage>,
     generation: Arc<AtomicU64>,
     device_status: Arc<AtomicU8>,
+    volume_bits: Arc<AtomicU32>,
 }
 
 impl AudioOutput {
@@ -78,16 +79,21 @@ impl AudioOutput {
         let shared_generation = Arc::clone(&generation);
         let device_status = Arc::new(AtomicU8::new(0));
         let shared_device_status = Arc::clone(&device_status);
+        let volume_bits = Arc::new(AtomicU32::new(1.0_f32.to_bits()));
+        let shared_volume_bits = Arc::clone(&volume_bits);
         // The GUI must not join this thread: the bounded channel owns its
         // lifecycle and disconnects when the last AudioOutput is dropped.
         let _audio_thread = thread::Builder::new()
             .name("starbyte-audio".to_owned())
-            .spawn(move || audio_worker(receiver, shared_generation, shared_device_status))
+            .spawn(move || {
+                audio_worker(receiver, shared_generation, shared_device_status, shared_volume_bits)
+            })
             .context("could not spawn background audio thread")?;
         Ok(Self {
             sender,
             generation,
             device_status,
+            volume_bits,
         })
     }
 
@@ -95,6 +101,13 @@ impl AudioOutput {
     /// Opened does not prove sound reached the physical speakers.
     pub fn device_status(&self) -> AudioDeviceStatus {
         AudioDeviceStatus::from_raw(self.device_status.load(Ordering::Acquire))
+    }
+
+    /// Update the mixer level without opening an audio device or waiting
+    /// on its thread. Applied to the next emulated audio buffer.
+    pub fn set_volume(&self, volume: f32) {
+        self.volume_bits
+            .store(normalize_volume(volume).to_bits(), Ordering::Release);
     }
 
     /// Bounded try-send: full queues lose stale audio rather than blocking
@@ -121,7 +134,7 @@ impl AudioOutput {
     /// than ROM data and never starts the production emulator or window.
     pub fn test_speakers() -> Result<()> {
         let output = PlaybackDevice::open_default()?;
-        output.enqueue(&speaker_test_tone());
+        output.enqueue(&speaker_test_tone(), 1.0);
         thread::sleep(Duration::from_millis(350));
         Ok(())
     }
@@ -145,7 +158,7 @@ impl PlaybackDevice {
         })
     }
 
-    fn enqueue(&self, samples: &[i16]) {
+    fn enqueue(&self, samples: &[i16], volume: f32) {
         let Some(pcm) = pcm16_stereo_to_float(samples) else {
             return;
         };
@@ -157,6 +170,7 @@ impl PlaybackDevice {
         for _ in 0..excess {
             self.sink.skip_one();
         }
+        self.sink.set_volume(volume);
         self.sink
             .append(SamplesBuffer::new(CHANNELS, DSP_SAMPLE_RATE, pcm));
         self.sink.play();
@@ -179,6 +193,7 @@ fn audio_worker(
     receiver: Receiver<AudioMessage>,
     generation: Arc<AtomicU64>,
     device_status: Arc<AtomicU8>,
+    volume_bits: Arc<AtomicU32>,
 ) {
     let mut device: Option<PlaybackDevice> = None;
     let mut retry_after: Option<Instant> = None;
@@ -229,9 +244,19 @@ fn audio_worker(
                 output.clear();
                 active_generation = newest_generation;
             } else if frame_is_fresh(queued_at, Instant::now()) {
-                output.enqueue(&pcm);
+                let volume = f32::from_bits(volume_bits.load(Ordering::Acquire));
+                output.enqueue(&pcm, normalize_volume(volume));
             }
         }
+    }
+}
+
+/// Keep untrusted persisted volumes within a usable, non-clipping range.
+fn normalize_volume(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        0.0
     }
 }
 
@@ -276,8 +301,8 @@ mod tests {
     };
 
     use super::{
-        AudioDeviceStatus, AudioOutput, frame_is_fresh, pcm16_stereo_to_float, retry_ready,
-        speaker_test_tone,
+        AudioDeviceStatus, AudioOutput, frame_is_fresh, normalize_volume,
+        pcm16_stereo_to_float, retry_ready, speaker_test_tone,
     };
 
     #[test]
@@ -293,6 +318,28 @@ mod tests {
         output.device_status.store(1, Ordering::Release);
         assert_eq!(output.device_status(), AudioDeviceStatus::Opened);
         assert_eq!(output.device_status().label(), "opened");
+    }
+
+    #[test]
+    fn volume_changes_are_nonblocking_and_clamped_without_a_device() {
+        let output = AudioOutput::start().unwrap();
+        output.set_volume(0.25);
+        assert_eq!(
+            f32::from_bits(output.volume_bits.load(Ordering::Acquire)),
+            0.25
+        );
+        output.set_volume(2.5);
+        assert_eq!(
+            f32::from_bits(output.volume_bits.load(Ordering::Acquire)),
+            1.0
+        );
+        output.set_volume(f32::NAN);
+        assert_eq!(
+            f32::from_bits(output.volume_bits.load(Ordering::Acquire)),
+            0.0
+        );
+        assert_eq!(normalize_volume(-1.0), 0.0);
+        assert_eq!(normalize_volume(0.75), 0.75);
     }
 
     #[test]

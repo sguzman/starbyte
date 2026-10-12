@@ -86,7 +86,12 @@ impl AudioOutput {
         let _audio_thread = thread::Builder::new()
             .name("starbyte-audio".to_owned())
             .spawn(move || {
-                audio_worker(receiver, shared_generation, shared_device_status, shared_volume_bits)
+                audio_worker(
+                    receiver,
+                    shared_generation,
+                    shared_device_status,
+                    shared_volume_bits,
+                )
             })
             .context("could not spawn background audio thread")?;
         Ok(Self {
@@ -301,8 +306,8 @@ mod tests {
     };
 
     use super::{
-        AudioDeviceStatus, AudioOutput, frame_is_fresh, normalize_volume,
-        pcm16_stereo_to_float, retry_ready, speaker_test_tone,
+        AudioDeviceStatus, AudioOutput, frame_is_fresh, normalize_volume, pcm16_stereo_to_float,
+        retry_ready, speaker_test_tone,
     };
 
     #[test]

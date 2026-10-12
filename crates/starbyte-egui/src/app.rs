@@ -793,7 +793,7 @@ impl StarbyteApp {
                 Ok(output) => {
                     output.set_volume(output_volume);
                     self.audio_output = Some(output);
-                },
+                }
                 Err(error) => {
                     warn!("could not start desktop audio thread (video remains playable): {error}");
                 }
@@ -1294,7 +1294,9 @@ impl StarbyteApp {
                     {
                         self.persist_config();
                     }
-                    ui.label("Emulated DSP: 32 kHz stereo; the OS chooses the speaker output rate.");
+                    ui.label(
+                        "Emulated DSP: 32 kHz stereo; the OS chooses the speaker output rate.",
+                    );
                 });
 
             egui::CollapsingHeader::new("Video")
@@ -2307,8 +2309,8 @@ mod playback_tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        FRAME_INTERVAL, FrameClock, FramePerformance, NativeSmokeAudioMetrics, Vec2, egui,
-        audible_output_volume, fit_game_size, is_compact_layout, merged_gamepad_buttons,
+        FRAME_INTERVAL, FrameClock, FramePerformance, NativeSmokeAudioMetrics, Vec2,
+        audible_output_volume, egui, fit_game_size, is_compact_layout, merged_gamepad_buttons,
         pressed_button_labels, record_recent_rom, write_png_screenshot,
     };
 

@@ -2155,7 +2155,10 @@ mod playback_tests {
         };
         let _ = ctx.run(input, |ctx| {
             let (held, observed) = ctx.input(|input| {
-                (input.key_down(egui::Key::B), super::gameplay_key_active(input, egui::Key::B))
+                (
+                    input.key_down(egui::Key::B),
+                    super::gameplay_key_active(input, egui::Key::B),
+                )
             });
             assert!(!held, "the key is released within this UI frame");
             assert!(observed, "the press edge must still reach the game");

@@ -507,16 +507,15 @@ impl StarbyteApp {
     }
 
     fn effective_controller_state(&self, ctx: &egui::Context) -> ControllerState {
-        // Do not trigger in-game buttons while typing into the library search or settings.
-        if self.config.input.active_device != InputDeviceMode::Gamepad && ctx.wants_keyboard_input()
-        {
-            return ControllerState::default();
-        }
-        let mut state = self.held_input;
-        if matches!(
+        // Keyboard focus must not suppress an independent gamepad when the
+        // default Auto input mode is active.
+        let (keyboard_enabled, gamepad_enabled) = controller_input_sources(
             self.config.input.active_device,
-            InputDeviceMode::Auto | InputDeviceMode::Keyboard
-        ) {
+            ctx.wants_keyboard_input(),
+            self.pending_keyboard_bind.is_some(),
+        );
+        let mut state = self.held_input;
+        if keyboard_enabled {
             for &action in input_actions() {
                 if let Some(binding) = self.config.input.keyboard_bindings.get(action)
                     && let Some(key) = parse_egui_key(binding)
@@ -526,10 +525,7 @@ impl StarbyteApp {
                 }
             }
         }
-        if matches!(
-            self.config.input.active_device,
-            InputDeviceMode::Auto | InputDeviceMode::Gamepad
-        ) {
+        if gamepad_enabled {
             for &action in input_actions() {
                 if let Some(binding) = self.config.input.gamepad_bindings.get(action)
                     && self.gamepad_buttons_down.contains(binding)
@@ -2144,6 +2140,37 @@ mod playback_tests {
     }
 
     #[test]
+    fn automatic_input_preserves_gamepad_during_keyboard_text_focus() {
+        use super::controller_input_sources;
+        use starbyte_core::manifest::InputDeviceMode;
+
+        assert_eq!(
+            controller_input_sources(InputDeviceMode::Auto, false, false),
+            (true, true)
+        );
+        assert_eq!(
+            controller_input_sources(InputDeviceMode::Auto, true, false),
+            (false, true)
+        );
+        assert_eq!(
+            controller_input_sources(InputDeviceMode::Auto, false, true),
+            (false, true)
+        );
+        assert_eq!(
+            controller_input_sources(InputDeviceMode::Keyboard, true, false),
+            (false, false)
+        );
+        assert_eq!(
+            controller_input_sources(InputDeviceMode::Keyboard, false, false),
+            (true, false)
+        );
+        assert_eq!(
+            controller_input_sources(InputDeviceMode::Gamepad, true, true),
+            (false, true)
+        );
+    }
+
+    #[test]
     fn primary_gamepad_stick_drives_cardinal_and_diagonal_snes_directions() {
         use super::StickAxes;
         let neutral = StickAxes { x: 0.15, y: -0.3 }.dpad_buttons();
@@ -2340,6 +2367,19 @@ fn normalize_query(input: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Decide which physical inputs may control the emulated pad.
+fn controller_input_sources(
+    mode: InputDeviceMode,
+    keyboard_focused: bool,
+    binding_keyboard: bool,
+) -> (bool, bool) {
+    let keyboard = matches!(mode, InputDeviceMode::Auto | InputDeviceMode::Keyboard)
+        && !keyboard_focused
+        && !binding_keyboard;
+    let gamepad = matches!(mode, InputDeviceMode::Auto | InputDeviceMode::Gamepad);
+    (keyboard, gamepad)
 }
 
 fn input_actions() -> &'static [&'static str] {

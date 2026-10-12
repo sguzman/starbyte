@@ -7,6 +7,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
+use flate2::read::GzDecoder;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
@@ -541,6 +542,14 @@ impl LibraryService {
             view_mode: self.config.library.active_view,
             ..LibraryFilter::default()
         })?;
+        // Load the configured local source once, not once per ROM. The public
+        // project never hardcodes a player's checkout path or downloads these codes.
+        let local_cheatarium = self
+            .config
+            .cheats
+            .cheatarium_snes_index()
+            .map(|index| read_cheatarium_records(&index))
+            .transpose()?;
         let mut records = 0;
         for entry in select_entries(snapshot.entries, target) {
             let enabled_ids = self
@@ -552,13 +561,19 @@ impl LibraryService {
                 .unwrap_or_default()
                 .into_iter()
                 .collect();
-            let cheats = self.cheat_provider.refresh_cheats(
-                &self.client,
-                &self.config.advanced.providers,
-                &entry,
-                &self.cache_root(),
-                &enabled_ids,
-            );
+            let cheats = if let Some(source_records) = &local_cheatarium {
+                let cheats = cheatarium_candidates(source_records, &entry, &enabled_ids);
+                write_json(cheat_cache_path(&self.cache_root(), &entry.game_id), &cheats)
+                    .map(|()| cheats)
+            } else {
+                self.cheat_provider.refresh_cheats(
+                    &self.client,
+                    &self.config.advanced.providers,
+                    &entry,
+                    &self.cache_root(),
+                    &enabled_ids,
+                )
+            };
             match cheats {
                 Ok(cheats) => {
                     records += cheats.len();
@@ -813,6 +828,95 @@ impl CoverProvider for LibretroCoverProvider {
             fetched_at_unix: now_unix(),
         }))
     }
+}
+
+const MAX_CHEATARIUM_BUNDLE_BYTES: u64 = 128 * 1024 * 1024;
+
+/// Read a configured, local, versioned Cheatarium bundle without network access.
+fn read_cheatarium_records(index: &Path) -> Result<Vec<serde_json::Value>> {
+    let file = fs::File::open(index)
+        .with_context(|| format!("failed to open local Cheatarium index {}", index.display()))?;
+    let mut bytes = Vec::new();
+    GzDecoder::new(file)
+        .take(MAX_CHEATARIUM_BUNDLE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .context("failed to decompress local Cheatarium SNES index")?;
+    anyhow::ensure!(
+        bytes.len() as u64 <= MAX_CHEATARIUM_BUNDLE_BYTES,
+        "Cheatarium SNES index exceeds decompression limit"
+    );
+    let bundle: serde_json::Value =
+        serde_json::from_slice(&bytes).context("invalid Cheatarium JSON index")?;
+    anyhow::ensure!(
+        bundle["schema_version"] == 1 && bundle["platform"] == "snes",
+        "expected Cheatarium SNES index schema v1"
+    );
+    bundle["records"]
+        .as_array()
+        .cloned()
+        .context("Cheatarium SNES index has no source records")
+}
+
+/// Title-matched suggestions only. Source codes and provenance are preserved;
+/// this does not establish region/revision/hash compatibility.
+fn cheatarium_candidates(
+    source_records: &[serde_json::Value],
+    game: &LibraryEntry,
+    enabled_ids: &BTreeSet<String>,
+) -> Vec<CheatEntry> {
+    let mut titles = vec![normalize_title(&strip_title_suffixes(&game.display_title))];
+    if let Some(local) = &game.local {
+        titles.extend(local_match_titles(local));
+    }
+    if let Some(metadata) = &game.metadata {
+        titles.extend(metadata_match_titles(metadata));
+    }
+    titles.sort();
+    titles.dedup();
+    let mut matches = Vec::new();
+    for (record_index, record) in source_records.iter().enumerate() {
+        let Some(title) = record["title_hint"].as_str() else {
+            continue;
+        };
+        let candidate_title = normalize_title(&strip_title_suffixes(title));
+        if candidate_title.is_empty() || !titles.contains(&candidate_title) {
+            continue;
+        }
+        let source_id = record["provenance"]["source_id"]
+            .as_str()
+            .unwrap_or("unknown");
+        let record_id = record["id"]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("record-{record_index}"));
+        let Some(codes) = record["codes"].as_array() else {
+            continue;
+        };
+        for (code_index, field) in codes.iter().enumerate() {
+            if field["role"] != "code" {
+                continue;
+            }
+            let Some(code) = field["code"].as_str().filter(|s| !s.trim().is_empty()) else {
+                continue;
+            };
+            let ordinal = field["ordinal"].as_u64().unwrap_or(code_index as u64);
+            let id = format!("cheatarium:{record_id}:{ordinal}");
+            let name = field["description"].as_str().unwrap_or("Unnamed code");
+            matches.push(CheatEntry {
+                id: id.clone(),
+                game_id: game.game_id.clone(),
+                name: name.to_owned(),
+                code: code.to_owned(),
+                source: format!("Cheatarium / {source_id}"),
+                kind: field["snes_decode"]["format"]
+                    .as_str()
+                    .unwrap_or("unverified")
+                    .to_owned(),
+                enabled: enabled_ids.contains(&id),
+            });
+        }
+    }
+    matches
 }
 
 impl CheatProvider for LibretroCheatProvider {
@@ -1991,6 +2095,44 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn cheatarium_candidate_matching_preserves_codes_and_avoids_wrong_titles() {
+        let game = super::LibraryEntry {
+            game_id: game_id_for_title("Super Mario World"),
+            display_title: "Super Mario World".to_owned(),
+            installed_status: InstalledStatus::Installed,
+            local: None,
+            metadata: None,
+            cover: None,
+            cheats: Vec::new(),
+        };
+        let records = vec![
+            serde_json::json!({
+                "id": "source-1",
+                "title_hint": "Super Mario World (USA)",
+                "provenance": {"source_id": "libretro"},
+                "codes": [{
+                    "ordinal": 3,
+                    "role": "code",
+                    "description": "Nine lives",
+                    "code": "7E0DBE09",
+                    "snes_decode": {"format": "raw-snes-address-value"}
+                }]
+            }),
+            serde_json::json!({
+                "id": "other",
+                "title_hint": "Super Mario Kart",
+                "codes": [{"ordinal": 1, "role": "code", "code": "7E0DBE09"}]
+            }),
+        ];
+        let cheats = super::cheatarium_candidates(&records, &game, &Default::default());
+        assert_eq!(cheats.len(), 1);
+        assert_eq!(cheats[0].code, "7E0DBE09");
+        assert_eq!(cheats[0].id, "cheatarium:source-1:3");
+        assert_eq!(cheats[0].kind, "raw-snes-address-value");
+        assert!(!cheats[0].enabled);
     }
 
     #[test]

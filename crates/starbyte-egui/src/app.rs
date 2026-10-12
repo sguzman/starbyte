@@ -2084,7 +2084,7 @@ mod playback_tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        FRAME_INTERVAL, FrameClock, FramePerformance, Vec2, fit_game_size, is_compact_layout,
+        FRAME_INTERVAL, FrameClock, FramePerformance, Vec2, egui, fit_game_size, is_compact_layout,
         merged_gamepad_buttons, pressed_button_labels, record_recent_rom, write_png_screenshot,
     };
 

@@ -4,6 +4,10 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## Background OS audio-device feedback (2026-10-12; CI pending)
+
+The speaker worker now publishes a read-only, atomic last-open result to the native GUI smoke report: `opened`, `open_failed`, or `not_attempted` (with `worker_not_started` if playback never needed a worker). It reports successful initialization of the default Rodio/CPAL output separately from nonzero DSP PCM and from worker-thread creation. An unavailable device continues to be nonfatal and is retried under the existing cooldown. The status neither certifies audible output nor measures latency, dropout or physical Hyprland playback. A device-free unit test exercises initial, failure and success visibility.
+
 ## Bounded native sound acceptance metrics (2026-10-12; CI pending)
 
 The opt-in `--exit-after-frames N` GUI smoke now prints cumulative stereo pairs, nonzero pairs, absolute peak, first nonzero frame, uploaded SPC bytes and dispatched SPC700 instructions alongside its completion marker. The initial startup frame is included, so a 500-frame bounded graphical probe can be compared directly with the successful 500-frame headless SMW sound diagnostic. A separate field reports whether the asynchronous audio worker was spawned, **not** whether a physical speaker device opened. Synthetic tests verify silence followed by stereo activity, peak saturation-safe accounting, and first-sound-frame retention. Native Hyprland/speaker behavior remains untested.

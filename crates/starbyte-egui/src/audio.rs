@@ -6,7 +6,7 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU8, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
     thread,
@@ -25,6 +25,35 @@ const AUDIO_RETRY_DELAY: Duration = Duration::from_secs(10);
 /// A slow device open must never replay seconds-old game audio.
 const MAX_FRAME_AGE: Duration = Duration::from_millis(150);
 
+/// Last known hardware output discovery state of the desktop worker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioDeviceStatus {
+    /// The worker has not attempted to open an OS device yet.
+    NotAttempted,
+    /// Rodio successfully initialized the default OS playback device.
+    Opened,
+    /// The last device-open attempt failed; background retries remain armed.
+    OpenFailed,
+}
+
+impl AudioDeviceStatus {
+    const fn from_raw(raw: u8) -> Self {
+        match raw {
+            1 => Self::Opened,
+            2 => Self::OpenFailed,
+            _ => Self::NotAttempted,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::NotAttempted => "not_attempted",
+            Self::Opened => "opened",
+            Self::OpenFailed => "open_failed",
+        }
+    }
+}
+
 enum AudioMessage {
     Frame {
         generation: u64,
@@ -39,6 +68,7 @@ enum AudioMessage {
 pub struct AudioOutput {
     sender: SyncSender<AudioMessage>,
     generation: Arc<AtomicU64>,
+    device_status: Arc<AtomicU8>,
 }
 
 impl AudioOutput {
@@ -46,13 +76,25 @@ impl AudioOutput {
         let (sender, receiver) = mpsc::sync_channel(MAX_PENDING_FRAMES);
         let generation = Arc::new(AtomicU64::new(0));
         let shared_generation = Arc::clone(&generation);
+        let device_status = Arc::new(AtomicU8::new(0));
+        let shared_device_status = Arc::clone(&device_status);
         // The GUI must not join this thread: the bounded channel owns its
         // lifecycle and disconnects when the last AudioOutput is dropped.
         let _audio_thread = thread::Builder::new()
             .name("starbyte-audio".to_owned())
-            .spawn(move || audio_worker(receiver, shared_generation))
+            .spawn(move || audio_worker(receiver, shared_generation, shared_device_status))
             .context("could not spawn background audio thread")?;
-        Ok(Self { sender, generation })
+        Ok(Self {
+            sender,
+            generation,
+            device_status,
+        })
+    }
+
+    /// Query the background worker's last OS default-device open result.
+    /// Opened does not prove sound reached the physical speakers.
+    pub fn device_status(&self) -> AudioDeviceStatus {
+        AudioDeviceStatus::from_raw(self.device_status.load(Ordering::Acquire))
     }
 
     /// Bounded try-send: full queues lose stale audio rather than blocking
@@ -133,7 +175,11 @@ fn frame_is_fresh(queued_at: Instant, now: Instant) -> bool {
     now.saturating_duration_since(queued_at) <= MAX_FRAME_AGE
 }
 
-fn audio_worker(receiver: Receiver<AudioMessage>, generation: Arc<AtomicU64>) {
+fn audio_worker(
+    receiver: Receiver<AudioMessage>,
+    generation: Arc<AtomicU64>,
+    device_status: Arc<AtomicU8>,
+) {
     let mut device: Option<PlaybackDevice> = None;
     let mut retry_after: Option<Instant> = None;
     let mut active_generation = generation.load(Ordering::Acquire);
@@ -164,10 +210,12 @@ fn audio_worker(receiver: Receiver<AudioMessage>, generation: Arc<AtomicU64>) {
         {
             match PlaybackDevice::open_default() {
                 Ok(output) => {
+                    device_status.store(1, Ordering::Release);
                     device = Some(output);
                     retry_after = None;
                 }
                 Err(error) => {
+                    device_status.store(2, Ordering::Release);
                     warn!("desktop audio unavailable (video remains playable): {error}");
                     retry_after = Some(Instant::now() + AUDIO_RETRY_DELAY);
                 }
@@ -228,8 +276,24 @@ mod tests {
     };
 
     use super::{
-        AudioOutput, frame_is_fresh, pcm16_stereo_to_float, retry_ready, speaker_test_tone,
+        AudioDeviceStatus, AudioOutput, frame_is_fresh, pcm16_stereo_to_float, retry_ready,
+        speaker_test_tone,
     };
+
+    #[test]
+    fn device_open_status_is_distinct_from_worker_start_and_audio_emission() {
+        let output = AudioOutput::start().unwrap();
+        assert_eq!(output.device_status(), AudioDeviceStatus::NotAttempted);
+        assert_eq!(output.device_status().label(), "not_attempted");
+        // Only the real playback thread can set these in production; avoid
+        // requiring a physical speaker in this deterministic unit test.
+        output.device_status.store(2, Ordering::Release);
+        assert_eq!(output.device_status(), AudioDeviceStatus::OpenFailed);
+        assert_eq!(output.device_status().label(), "open_failed");
+        output.device_status.store(1, Ordering::Release);
+        assert_eq!(output.device_status(), AudioDeviceStatus::Opened);
+        assert_eq!(output.device_status().label(), "opened");
+    }
 
     #[test]
     fn stereo_conversion_preserves_channel_order_and_signed_full_scale() {

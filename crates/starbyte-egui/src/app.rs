@@ -2212,6 +2212,10 @@ impl eframe::App for StarbyteApp {
                 .isolated_apu_upload()
                 .map_or(0, |upload| upload.bytes_written());
             let audio_worker_spawned = self.audio_output.is_some();
+            let audio_device_status = self.audio_output.as_ref().map_or(
+                "worker_not_started",
+                |output| output.device_status().label(),
+            );
             let first_audio_frame = metrics
                 .first_nonzero_frame
                 .map_or_else(|| "none".to_owned(), |frame| frame.to_string());
@@ -2222,10 +2226,11 @@ impl eframe::App for StarbyteApp {
                 spc_instructions,
                 uploaded_spc_bytes,
                 audio_worker_spawned,
+                audio_device_status,
                 "native GUI smoke completed"
             );
             println!(
-                "STARBYTE_NATIVE_SMOKE_OK frame={frame} audio_pairs={} audio_nonzero_pairs={} audio_peak={} audio_first_nonzero_frame={first_audio_frame} spc_instructions={spc_instructions} uploaded_spc_bytes={uploaded_spc_bytes} audio_worker_spawned={audio_worker_spawned}",
+                "STARBYTE_NATIVE_SMOKE_OK frame={frame} audio_pairs={} audio_nonzero_pairs={} audio_peak={} audio_first_nonzero_frame={first_audio_frame} spc_instructions={spc_instructions} uploaded_spc_bytes={uploaded_spc_bytes} audio_worker_spawned={audio_worker_spawned} audio_device_status={audio_device_status}",
                 metrics.stereo_pairs, metrics.nonzero_pairs, metrics.peak_absolute,
             );
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);

@@ -2369,7 +2369,10 @@ mod tests {
             report["failure"]["error"],
             "frame stalled while awaiting SPC response"
         );
-        assert_eq!(report["apu_io_activity"]["isolated_ipl_upload"]["bytes_written"], 0);
+        assert_eq!(
+            report["apu_io_activity"]["isolated_ipl_upload"]["bytes_written"],
+            0
+        );
         assert!(report["apu_upload_timeline"].is_object());
         assert!(report["apu_upload_timeline"]["first_accepted_frame"].is_null());
     }

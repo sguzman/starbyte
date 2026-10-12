@@ -4,6 +4,10 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## Live speaker volume and mute controls (2026-10-12; CI pending)
+
+The desktop's previously inert Audio preferences are now connected to Rodio's real mixer through a nonblocking atomic gain value. **Sound enabled**, in-session **Mute**, and the persisted 0–100% **Volume** slider are accessible in the game toolbar's **Sound** menu and the library Audio settings. Disabling or muting immediately clears the queued device buffers; restoring audible output resumes on newly generated PCM without restarting or mutating emulated sound CPU/DSP state. The persisted `mute_on_startup` setting seeds only the initial session mute flag and is not overwritten by toggling live mute. The obsolete editable `sample_rate_hz` control was removed from the GUI because Starbyte's DSP always emits 32 kHz stereo PCM and the operating system selects device playback rate. Original sound generation and ROM-free diagnostic metrics remain unaffected by mixer settings. Audio-device-open success is not proof of audible or accurate game music.
+
 ## First physical Hyprland Super Mario World GUI success (2026-10-12)
 
 A local **500-frame** opt-in GUI smoke at commit `bafbd83` successfully opened an actual Starbyte native window under the user's Hyprland session and automatically exited with code **0** at the requested frame limit. The user directly reported seeing gameplay on screen for several seconds; the log contains `STARBYTE_NATIVE_SMOKE_OK frame=500`, not a crash. The 500-frame duration intentionally bounds the test and must not be confused with an unexpected shutdown.

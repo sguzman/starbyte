@@ -500,8 +500,7 @@ impl StarbyteApp {
 
     fn effective_controller_state(&self, ctx: &egui::Context) -> ControllerState {
         // Do not trigger in-game buttons while typing into the library search or settings.
-        if self.config.input.active_device != InputDeviceMode::Gamepad
-            && ctx.wants_keyboard_input()
+        if self.config.input.active_device != InputDeviceMode::Gamepad && ctx.wants_keyboard_input()
         {
             return ControllerState::default();
         }

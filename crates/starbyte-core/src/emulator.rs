@@ -588,7 +588,10 @@ mod tests {
         assert_eq!(from_memory.save_state().unwrap(), disk_state);
         assert_eq!(from_disk.save_state().unwrap(), disk_state);
         assert_eq!(from_memory.cpu_registers(), from_disk.cpu_registers());
-        assert_eq!(from_memory.timing().master_clock, from_disk.timing().master_clock);
+        assert_eq!(
+            from_memory.timing().master_clock,
+            from_disk.timing().master_clock
+        );
     }
 
     #[test]

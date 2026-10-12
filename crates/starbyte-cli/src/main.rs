@@ -1091,7 +1091,27 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
                 step.as_ref().err(),
             )?;
         }
-        step.with_context(|| format!("emulation failed at requested frame {}", index + 1))?;
+        if let Err(error) = step {
+            // Most genuine IPL failures occur before a frame completes.
+            // Retain live CPU/APU/PPU counters even if the first frame stalls,
+            // and preserve the original error as the CLI's failure reason.
+            let failure_message = error.to_string();
+            if let Err(report_error) = maybe_write_run_report(
+                &emulator,
+                &args.rom,
+                args.frames,
+                save_ram_path.as_deref(),
+                save_state_path.as_deref(),
+                args.report_json.as_deref(),
+                &audio_run,
+                &upload_timeline,
+                Some((index + 1, index, &failure_message)),
+            ) {
+                warn!("could not write failure report: {report_error:#}");
+            }
+            return Err(error)
+                .with_context(|| format!("emulation failed at requested frame {}", index + 1));
+        }
         if args.audio_wav.is_some() {
             let samples = &emulator.audio_samples().samples;
             anyhow::ensure!(
@@ -1131,6 +1151,7 @@ fn run_rom(args: RunArgs, assets: AssetConfig) -> Result<()> {
         args.report_json.as_deref(),
         &audio_run,
         &upload_timeline,
+        None,
     )?;
 
     let apu_status = emulator.apu_status();
@@ -1546,6 +1567,7 @@ fn maybe_write_run_report(
     report_path: Option<&Path>,
     audio_run: &AudioProbeSummary,
     upload_timeline: &UploadProbeTimeline,
+    failure: Option<(u32, u32, &str)>,
 ) -> Result<()> {
     let Some(report_path) = report_path else {
         return Ok(());
@@ -1597,6 +1619,14 @@ fn maybe_write_run_report(
     });
     if emulator.isolated_apu_upload().is_some() {
         report["apu_upload_timeline"] = upload_timeline.as_json(emulator.timing().frame);
+    }
+    if let Some((failed_frame, completed_frames, message)) = failure {
+        report["status"] = json!("failed");
+        report["failure"] = json!({
+            "requested_frame": failed_frame,
+            "completed_frames": completed_frames,
+            "error": message,
+        });
     }
     std::fs::write(report_path, serde_json::to_string_pretty(&report)?)
         .with_context(|| format!("failed to write run report to {}", report_path.display()))?;
@@ -2283,6 +2313,7 @@ mod tests {
             Some(&report_path),
             &audio,
             &timeline,
+            None,
         )
         .unwrap();
         let ordinary: serde_json::Value =
@@ -2299,12 +2330,72 @@ mod tests {
             Some(&report_path),
             &audio,
             &timeline,
+            None,
         )
         .unwrap();
         let opted_in: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
         assert!(opted_in["apu_upload_timeline"].is_object());
         assert!(opted_in["apu_upload_timeline"]["first_handoff_frame"].is_null());
+    }
+
+    #[test]
+    fn failed_first_frame_preserves_opt_in_upload_state_in_final_report() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("failed-run.json");
+        let mut emulator = Emulator::default();
+        emulator.enable_isolated_apu_upload_probe();
+        let timeline = UploadProbeTimeline::default();
+        maybe_write_run_report(
+            &emulator,
+            &PathBuf::from("synthetic.sfc"),
+            5,
+            None,
+            None,
+            Some(&path),
+            &AudioProbeSummary::default(),
+            &timeline,
+            Some((1, 0, "frame stalled while awaiting SPC response")),
+        )
+        .unwrap();
+        let report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(report["schema"], "starbyte.run_report.v1");
+        assert_eq!(report["frames"], 5);
+        assert_eq!(report["status"], "failed");
+        assert_eq!(report["failure"]["requested_frame"], 1);
+        assert_eq!(report["failure"]["completed_frames"], 0);
+        assert_eq!(
+            report["failure"]["error"],
+            "frame stalled while awaiting SPC response"
+        );
+        assert_eq!(report["apu_io_activity"]["isolated_ipl_upload"]["bytes_written"], 0);
+        assert!(report["apu_upload_timeline"].is_object());
+        assert!(report["apu_upload_timeline"]["first_accepted_frame"].is_null());
+    }
+
+    #[test]
+    fn normal_success_report_keeps_existing_schema_without_failure_fields() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("success-run.json");
+        maybe_write_run_report(
+            &Emulator::default(),
+            &PathBuf::from("synthetic.sfc"),
+            2,
+            None,
+            None,
+            Some(&path),
+            &AudioProbeSummary::default(),
+            &UploadProbeTimeline::default(),
+            None,
+        )
+        .unwrap();
+        let report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(report["schema"], "starbyte.run_report.v1");
+        assert!(report.get("status").is_none());
+        assert!(report.get("failure").is_none());
+        assert!(report.get("apu_upload_timeline").is_none());
     }
 
     #[test]

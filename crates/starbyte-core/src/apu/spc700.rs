@@ -138,9 +138,7 @@ impl Spc700 {
             0x0D => self.execute_push_psw(&mut read, &mut write, trace),
             0x0F => self.execute_brk(&mut read, &mut write, trace),
             0x01 | 0x11 | 0x21 | 0x31 | 0x41 | 0x51 | 0x61 | 0x71 | 0x81 | 0x91 | 0xA1 | 0xB1
-            | 0xC1 | 0xD1 | 0xE1 | 0xF1 => {
-                self.execute_tcall(opcode, &mut read, &mut write, trace)
-            }
+            | 0xC1 | 0xD1 | 0xE1 | 0xF1 => self.execute_tcall(opcode, &mut read, &mut write, trace),
             0x10 => self.execute_bpl(&mut read, trace),
             0x1F => self.execute_jmp_abs_x_indirect(&mut read, trace),
             0x20 => self.execute_clrp(&mut read, trace),

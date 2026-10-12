@@ -98,10 +98,29 @@ fn spc700_matches_independent_single_step_cpu_memory_and_bus_cases() {
         include_str!("fixtures/spc700_ref_a8_ae.json"),
         include_str!("fixtures/spc700_ref_b0_b7.json"),
         include_str!("fixtures/spc700_ref_b8_bf.json"),
+        include_str!("fixtures/spc700_ref_c0_c5.json"),
+        include_str!("fixtures/spc700_ref_c8_ce.json"),
+        include_str!("fixtures/spc700_ref_d1_d6.json"),
+        include_str!("fixtures/spc700_ref_d8_df.json"),
+        include_str!("fixtures/spc700_ref_e0_e7.json"),
+        include_str!("fixtures/spc700_ref_e9_ef.json"),
+        include_str!("fixtures/spc700_ref_f1_f7.json"),
+        include_str!("fixtures/spc700_ref_f8_ff.json"),
     ] {
         references.extend(serde_json::from_str::<Vec<ReferenceStep>>(fixture).unwrap());
     }
-    assert_eq!(references.len(), 1680, "reference fixture truncated");
+    assert_eq!(references.len(), 2128, "reference fixture truncated");
+    let mut opcode_case_counts = [0_u32; 256];
+    for case in &references {
+        let opcode = u8::from_str_radix(&case.name[..2], 16).unwrap();
+        opcode_case_counts[usize::from(opcode)] += 1;
+    }
+    for (opcode, count) in opcode_case_counts.into_iter().enumerate() {
+        assert!(
+            count >= 8,
+            "opcode {opcode:02X} has only {count} independent cases"
+        );
+    }
     for case in references {
         let label = case.name.as_str();
         let mut cpu = Spc700::default();

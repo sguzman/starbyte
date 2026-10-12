@@ -7,7 +7,10 @@ Additional cases: first 8 from every opcode 40 through 7f (hex), excluding
        4c, 5c, 6f and 7a, already present at 12 cases each.
 Additional cases: first 8 from every opcode 80 through bf (hex), excluding
        8d, 8f, 9a, 9e and af, already present at 12 cases each.
-Total: 1680 reference steps over 200 distinct opcode values.
+Additional cases: first 8 from each opcode c0 through ff (hex), excluding
+       c6, c7, cd, cf, d0, d7, e8 and f0, already present at 12 cases each.
+Total: 2128 reference steps over all 256 distinct SPC700 opcode values.
+Coverage validates individual instruction behavior, not commercial game audio.
 The fixture contains reference CPU and bus data; no commercial ROMs or user data.
 
 MIT License

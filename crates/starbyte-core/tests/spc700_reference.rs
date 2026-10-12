@@ -161,7 +161,11 @@ fn spc700_matches_independent_single_step_cpu_memory_and_bus_cases() {
             // Compare only the complete instruction trace and explicitly
             // verify the reference's out-of-scope poll pattern.
             assert_eq!(trace.len(), 3, "{label}: standby instruction cycles");
-            assert_eq!(case.cycles.len(), 7, "{label}: reference includes idle polls");
+            assert_eq!(
+                case.cycles.len(),
+                7,
+                "{label}: reference includes idle polls"
+            );
             assert_eq!(
                 cpu.halt_state(),
                 if label.starts_with("EF") {

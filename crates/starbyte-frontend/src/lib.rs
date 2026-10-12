@@ -689,6 +689,102 @@ mod tests {
     }
 
     #[test]
+    fn experimental_frontend_probe_generates_real_dsp_pcm_from_original_driver() {
+        let dir = tempdir().unwrap();
+        let rom_path = dir.path().join("original-brr-audio.sfc");
+        let mut driver = Vec::new();
+        for (register, value) in [
+            (0x5d, 0x02), // Sample directory base.
+            (0x00, 0x7f), // Voice 0 left.
+            (0x01, 0x7f), // Voice 0 right.
+            (0x03, 0x10), // Sample pitch.
+            (0x07, 0x7f), // Gain.
+            (0x0c, 0x7f), // Master volume left.
+            (0x1c, 0x7f), // Master volume right.
+            (0x4c, 0x01), // Key on voice 0.
+        ] {
+            driver.extend_from_slice(&[0x8f, register, 0xf2, 0x8f, value, 0xf3]);
+        }
+        driver.extend_from_slice(&[0x2f, 0xfe]); // Stable sound CPU BRA loop.
+
+        fn port_write(code: &mut Vec<u8>, port: u8, value: u8) {
+            code.extend_from_slice(&[0xa9, value, 0x8d, 0x40 + port, 0x21]);
+        }
+        let mut cpu = Vec::new();
+        // Original synthetic IPL upload: BRR directory at $0200.
+        port_write(&mut cpu, 1, 1);
+        port_write(&mut cpu, 2, 0);
+        port_write(&mut cpu, 3, 2);
+        port_write(&mut cpu, 0, 0xcc);
+        for (index, byte) in [0, 3, 0, 3].into_iter().enumerate() {
+            port_write(&mut cpu, 1, byte);
+            port_write(&mut cpu, 0, index as u8);
+        }
+        // Looping, copyright-free BRR waveform at $0300.
+        port_write(&mut cpu, 1, 1);
+        port_write(&mut cpu, 2, 0);
+        port_write(&mut cpu, 3, 3);
+        port_write(&mut cpu, 0, 5);
+        for (index, byte) in [0xc3, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77]
+            .into_iter()
+            .enumerate()
+        {
+            port_write(&mut cpu, 1, byte);
+            port_write(&mut cpu, 0, index as u8);
+        }
+        // Upload MMIO-programming sound driver at $0400.
+        port_write(&mut cpu, 1, 1);
+        port_write(&mut cpu, 2, 0);
+        port_write(&mut cpu, 3, 4);
+        port_write(&mut cpu, 0, 10);
+        for (index, byte) in driver.iter().copied().enumerate() {
+            port_write(&mut cpu, 1, byte);
+            port_write(&mut cpu, 0, index as u8);
+        }
+        port_write(&mut cpu, 1, 0);
+        port_write(&mut cpu, 2, 0);
+        port_write(&mut cpu, 3, 4);
+        port_write(&mut cpu, 0, driver.len() as u8 + 1);
+        cpu.extend_from_slice(&[0x80, 0xfe]); // Stable 65816 BRA loop.
+
+        let mut rom = synthetic_rom_bytes();
+        rom[..cpu.len()].copy_from_slice(&cpu);
+        fs::write(&rom_path, rom).unwrap();
+
+        let mut session = FrontendSession::new(AssetConfig::default()).unwrap();
+        session
+            .load_rom_with_isolated_audio_probe(&rom_path)
+            .unwrap();
+        session.run_frame().unwrap();
+        assert_eq!(
+            session.emulator().isolated_apu_upload().unwrap().entrypoint(),
+            Some(0x0400)
+        );
+        assert_eq!(session.emulator().isolated_apu_dsp_register(0x4c), Some(1));
+        assert!(
+            session.emulator().audio_samples().samples.iter().any(|&sample| sample > 1_000),
+            "explicitly uploaded original BRR driver must reach frontend PCM"
+        );
+        assert!(session
+            .emulator()
+            .audio_samples()
+            .samples
+            .chunks_exact(2)
+            .all(|pair| pair[0] == pair[1]));
+
+        // Reload the same cartridge ordinarily: no implicit upload or audio.
+        session.load_rom(&rom_path).unwrap();
+        session.run_frame().unwrap();
+        assert!(session.emulator().isolated_apu_upload().is_none());
+        assert!(session
+            .emulator()
+            .audio_samples()
+            .samples
+            .iter()
+            .all(|&sample| sample == 0));
+    }
+
+    #[test]
     fn isolated_audio_probe_never_reads_or_overwrites_existing_sram_or_slots() {
         let dir = tempdir().unwrap();
         let rom_path = dir.path().join("sound-probe.sfc");

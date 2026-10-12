@@ -224,6 +224,7 @@ impl Default for InputSettings {
 
 /// Persistent cheat-management settings.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct CheatSettings {
     /// Enabled cheat identifiers grouped by stable game id.
     pub enabled_by_game: BTreeMap<String, Vec<String>>,
@@ -640,11 +641,13 @@ mod tests {
             loaded.cheats.cheatarium_root.as_deref(),
             Some(std::path::Path::new("~/example/cheatarium"))
         );
-        assert!(loaded
-            .cheats
-            .cheatarium_snes_index()
-            .unwrap()
-            .ends_with("example/cheatarium/generated/v1/snes.json.gz"));
+        assert!(
+            loaded
+                .cheats
+                .cheatarium_snes_index()
+                .unwrap()
+                .ends_with("example/cheatarium/generated/v1/snes.json.gz")
+        );
         assert!(!loaded.ui.show_log_panel);
         assert_eq!(loaded.ui.details_panel_width, 512.0);
         assert_eq!(
@@ -683,7 +686,8 @@ mod tests {
 
     #[test]
     fn missing_cheatarium_setting_is_optional_in_legacy_config() {
-        let config: super::RuntimeConfig = toml::from_str("[cheats]\nshow_cheat_badges = true\n").unwrap();
+        let config: super::RuntimeConfig =
+            toml::from_str("[cheats]\nshow_cheat_badges = true\n").unwrap();
         assert!(config.cheats.cheatarium_root.is_none());
         assert!(config.cheats.cheatarium_snes_index().is_none());
     }

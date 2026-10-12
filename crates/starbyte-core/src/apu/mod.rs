@@ -856,10 +856,7 @@ mod tests {
     fn live_spc_runner_reuses_trace_without_changing_instruction_effects() {
         let mut traced = Apu::default();
         // MOV A,#5; MOV $30,A; BRA back to first instruction.
-        for (offset, value) in [0xe8, 5, 0xc4, 0x30, 0x2f, 0xfa]
-            .into_iter()
-            .enumerate()
-        {
+        for (offset, value) in [0xe8, 5, 0xc4, 0x30, 0x2f, 0xfa].into_iter().enumerate() {
             traced.write_spc_ram(0x0400 + offset as u16, value);
         }
         traced.spc700.load_state(0x0400, 0, 0, 0, 0xef, 0x02);

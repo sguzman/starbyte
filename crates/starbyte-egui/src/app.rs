@@ -2212,10 +2212,12 @@ impl eframe::App for StarbyteApp {
                 .isolated_apu_upload()
                 .map_or(0, |upload| upload.bytes_written());
             let audio_worker_spawned = self.audio_output.is_some();
-            let audio_device_status = self.audio_output.as_ref().map_or(
-                "worker_not_started",
-                |output| output.device_status().label(),
-            );
+            let audio_device_status = self
+                .audio_output
+                .as_ref()
+                .map_or("worker_not_started", |output| {
+                    output.device_status().label()
+                });
             let first_audio_frame = metrics
                 .first_nonzero_frame
                 .map_or_else(|| "none".to_owned(), |frame| frame.to_string());

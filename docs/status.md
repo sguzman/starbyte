@@ -4,6 +4,10 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## New-cartridge sound-mode isolation (October 11; CI pending)
+
+Loading any new cartridge now explicitly disarms the previous isolated IPL transfer decoder and host-clocked sound-CPU execution before emulator reset. A plain reset within the same diagnostic can still retain a deliberately armed decoder, but an ordinary library game can never inherit it from the previously loaded experimental game. A core regression checks both status flags and the restored production bootstrap after cartridge replacement; the frontend checks restoration of ordinary disk-backed SRAM access. This was identified by an independent failed CI test and fixed at the emulator mode boundary.
+
 ## Explicit, nonpersistent desktop SPC700 driver probe (October 11; CI pending)
 
 The graphical frontend now accepts `--rom /path/to/game.sfc --experimental-sound-driver` as an explicit, single-startup-ROM probe. It arms the already available isolated IPL upload and host-clocked sound-driver execution immediately after loading that ROM, allowing generated PCM to reach the threaded speaker backend without enabling unverified sound in ordinary library play. Frontend isolation blocks reads/writes of existing battery SRAM and all persistent save slots for that run; it allows in-memory quick state only. The opt-in flag is not stored in user configuration and is not inherited by later library-selected games. Regression tests verify opt-in-only CLI argument parsing, disabled durable persistence, untouched existing SRAM/state-slot files, and restoration of normal mode on ordinary ROM reload. This does not establish that a real commercial driver will upload, execute correctly, or sound right; an experimental game may stall.

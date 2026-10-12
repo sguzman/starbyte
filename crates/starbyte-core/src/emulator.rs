@@ -90,6 +90,9 @@ impl Emulator {
     #[instrument(skip_all)]
     pub fn load_rom(&mut self, rom: Cartridge) {
         debug!(title = rom.header().title, mapper = ?rom.mapper(), "installing cartridge");
+        // A new cartridge is never implicit permission to continue an
+        // earlier experimental sound-driver upload or execution session.
+        self.apu.disarm_isolated_ipl_upload();
         self.system.install_cartridge(rom);
         self.reset();
     }
@@ -571,6 +574,20 @@ mod tests {
         );
         same_rom.load_state(&state).unwrap();
         assert_eq!(same_rom.timing().frame, first.timing().frame);
+    }
+
+    #[test]
+    fn new_cartridge_disarms_previous_isolated_sound_driver_mode() {
+        let mut emulator = Emulator::default();
+        emulator.load_rom(Cartridge::from_bytes(rom_bytes(), None).unwrap());
+        emulator.enable_isolated_apu_driver_probe().unwrap();
+        assert!(emulator.isolated_apu_driver_probe_enabled());
+        assert!(emulator.isolated_apu_upload().is_some());
+
+        emulator.load_rom(Cartridge::from_bytes(rom_bytes(), None).unwrap());
+        assert!(!emulator.isolated_apu_driver_probe_enabled());
+        assert!(emulator.isolated_apu_upload().is_none());
+        assert!(emulator.apu_status().using_builtin_bootstrap);
     }
 
     #[test]

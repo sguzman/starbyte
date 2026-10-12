@@ -419,6 +419,14 @@ impl Apu {
         self.apu_to_cpu_ports = [0xaa, 0xbb, 0, 0];
     }
 
+    /// Clear a previous cartridge's experimental upload/driver mode.
+    /// Reset alone retains the opt-in decoder for same-ROM reset tests;
+    /// installing a new cartridge must instead return to normal bootstrap.
+    pub(crate) fn disarm_isolated_ipl_upload(&mut self) {
+        self.ipl_upload = None;
+        self.disable_isolated_host_clocked_driver();
+    }
+
     /// State of the explicitly enabled sound-program upload decoder.
     #[must_use]
     pub fn isolated_ipl_upload(&self) -> Option<&IplUpload> {

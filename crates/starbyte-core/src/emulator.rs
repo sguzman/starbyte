@@ -1377,6 +1377,107 @@ mod tests {
     }
 
     #[test]
+    fn emulated_65816_can_restart_spc_ipl_and_upload_a_second_sound_program() {
+        // Every port transaction below is executed by a synthetic 65816
+        // cartridge through $2140-$2143; no host-side mailbox writes.
+        fn write_port(code: &mut Vec<u8>, port: u8, value: u8) {
+            code.extend_from_slice(&[0xa9, value, 0x8d, 0x40 + port, 0x21]);
+        }
+
+        fn upload(code: &mut Vec<u8>, program: &[u8]) {
+            write_port(code, 1, 1);
+            write_port(code, 2, 0);
+            write_port(code, 3, 4);
+            write_port(code, 0, 0xcc);
+            for (index, &byte) in program.iter().enumerate() {
+                write_port(code, 1, byte);
+                write_port(code, 0, index as u8);
+            }
+            write_port(code, 1, 0);
+            write_port(code, 2, 0);
+            write_port(code, 3, 4);
+            write_port(code, 0, program.len() as u8 + 1);
+        }
+
+        let first_driver = [0x5f, 0xc0, 0xff]; // SPC700 JMP $FFC0.
+        let second_driver = [0x8f, 0x42, 0xf4, 0xef]; // MOV $F4,#$42; SLEEP.
+        let mut code = Vec::new();
+        upload(&mut code, &first_driver);
+        let first_upload_instructions = (code.len() / 5) * 2;
+        // Give the host-clocked SPC700 time to reenter the IPL; ordinary
+        // 65816 NOPs are intentionally part of the cartridge's program.
+        code.extend(std::iter::repeat_n(0xea, 48));
+        let before_second = code.len();
+        // Capture the second IPL's $AA readiness via a real CPU bus read.
+        code.extend_from_slice(&[0xad, 0x40, 0x21, 0x8d, 0x10, 0x00]);
+        upload(&mut code, &second_driver);
+        let second_upload_instructions = 2 + ((code.len() - before_second - 6) / 5) * 2;
+        code.extend_from_slice(&[0x80, 0xfe]); // Stable 65816 idle loop.
+
+        let mut rom = rom_bytes();
+        rom[0x7ffc] = 0;
+        rom[0x7ffd] = 0x80;
+        rom[..code.len()].copy_from_slice(&code);
+        let mut original = Emulator::default();
+        original.load_rom(Cartridge::from_bytes(rom, None).unwrap());
+        original.enable_isolated_apu_driver_probe().unwrap();
+        // Pre-existing BRR/audio sample RAM survives a full $FFC0 restart.
+        original.apu.write_spc_ram(0x2300, 0x7a);
+
+        for _ in 0..first_upload_instructions {
+            original.step_instruction().unwrap();
+        }
+        for _ in 0..48 {
+            original.step_instruction().unwrap();
+        }
+        assert_eq!(original.cpu_registers().pc, 0x8000 + before_second as u16);
+        assert_eq!(original.isolated_apu_upload().unwrap().entrypoint(), None);
+        assert_eq!(original.apu_to_cpu_ports()[0], 0xaa);
+        assert_eq!(original.apu_to_cpu_ports()[1], 0xbb);
+        assert_eq!(original.apu.read_spc_ram(0x2300), 0x7a);
+
+        // Snapshot with the second boot IPL ready but before its host-side
+        // upload, then compare deterministic CPU/APU continuation.
+        let snapshot = original.save_state().unwrap();
+        let mut resumed = Emulator::default();
+        resumed.enable_isolated_apu_driver_probe().unwrap();
+        resumed.load_state(&snapshot).unwrap();
+        assert!(resumed.isolated_apu_driver_probe_enabled());
+
+        for _ in 0..second_upload_instructions {
+            original.step_instruction().unwrap();
+            resumed.step_instruction().unwrap();
+        }
+        for instance in [&original, &resumed] {
+            assert_eq!(instance.peek_wram_u8(0x7e0010), Some(0xaa));
+            assert_eq!(instance.isolated_apu_upload().unwrap().entrypoint(), Some(0x0400));
+            assert_eq!(
+                instance.isolated_apu_upload().unwrap().bytes_written(),
+                second_driver.len() as u64
+            );
+            assert_eq!(instance.apu.read_spc_ram(0x2300), 0x7a);
+            for (index, &byte) in second_driver.iter().enumerate() {
+                assert_eq!(instance.apu.read_spc_ram(0x0400 + index as u16), byte);
+            }
+        }
+
+        for _ in 0..100 {
+            original.step_instruction().unwrap();
+            resumed.step_instruction().unwrap();
+        }
+        assert_eq!(original.apu.read_apu_port(0).unwrap(), 0x42);
+        assert_eq!(resumed.apu.read_apu_port(0).unwrap(), 0x42);
+        assert!(
+            original.isolated_apu_spc700_status().unwrap().instructions >= 2,
+            "the second uploaded driver must execute actual instructions"
+        );
+        assert_eq!(
+            serde_json::to_value(&original.apu).unwrap(),
+            serde_json::to_value(&resumed.apu).unwrap()
+        );
+    }
+
+    #[test]
     fn loading_diagnostic_state_cannot_enable_host_sound_without_explicit_opt_in() {
         let mut diagnostic = Emulator::default();
         diagnostic.load_rom(Cartridge::from_bytes(rom_bytes(), None).unwrap());

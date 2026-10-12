@@ -9,7 +9,7 @@ use std::cell::RefCell;
 
 use serde::Deserialize;
 use starbyte_core::{
-    apu::spc700::Spc700,
+    apu::spc700::{Spc700, Spc700HaltState},
     bus::{AccessKind, BusEvent},
 };
 
@@ -152,7 +152,33 @@ fn spc700_matches_independent_single_step_cpu_memory_and_bus_cases() {
                 "{label}: RAM at {address:04X}"
             );
         }
-        assert_eq!(trace.len(), case.cycles.len(), "{label}: cycle count");
+        let is_standby = matches!(label.get(..2), Some("EF" | "FF"));
+        if is_standby {
+            // SingleStepTests records two additional read/wait idle polls
+            // after SLEEP/STOP. Those four cycles are not part of the
+            // three-cycle instruction, and Starbyte intentionally exposes
+            // its halted idle steps separately instead of fetching ROM.
+            // Compare only the complete instruction trace and explicitly
+            // verify the reference's out-of-scope poll pattern.
+            assert_eq!(trace.len(), 3, "{label}: standby instruction cycles");
+            assert_eq!(case.cycles.len(), 7, "{label}: reference includes idle polls");
+            assert_eq!(
+                cpu.halt_state(),
+                if label.starts_with("EF") {
+                    Spc700HaltState::Sleeping
+                } else {
+                    Spc700HaltState::Stopped
+                },
+                "{label}: halted state"
+            );
+            for pair in case.cycles[3..].chunks_exact(2) {
+                assert_eq!(pair[0].2, "read", "{label}: post-halt read");
+                assert_eq!(pair[0].0, Some(cpu.pc), "{label}: post-halt address");
+                assert_eq!(pair[1].2, "wait", "{label}: post-halt wait");
+            }
+        } else {
+            assert_eq!(trace.len(), case.cycles.len(), "{label}: cycle count");
+        }
         for (index, (actual, expected)) in trace.iter().zip(&case.cycles).enumerate() {
             check_cycle(actual, expected, label, index);
         }

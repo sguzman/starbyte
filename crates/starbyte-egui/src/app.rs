@@ -519,7 +519,7 @@ impl StarbyteApp {
             for &action in input_actions() {
                 if let Some(binding) = self.config.input.keyboard_bindings.get(action)
                     && let Some(key) = parse_egui_key(binding)
-                    && ctx.input(|input| input.key_down(key))
+                    && ctx.input(|input| gameplay_key_active(input, key))
                 {
                     set_controller_flag(&mut state, action, true);
                 }
@@ -2140,6 +2140,32 @@ mod playback_tests {
     }
 
     #[test]
+    fn rapid_keyboard_tap_is_not_lost_between_emulation_frames() {
+        let ctx = egui::Context::default();
+        let key_event = |pressed| egui::Event::Key {
+            key: egui::Key::B,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        };
+        let input = egui::RawInput {
+            events: vec![key_event(true), key_event(false)],
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| {
+            let (held, observed) = ctx.input(|input| {
+                (input.key_down(egui::Key::B), super::gameplay_key_active(input, egui::Key::B))
+            });
+            assert!(!held, "the key is released within this UI frame");
+            assert!(observed, "the press edge must still reach the game");
+        });
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            assert!(!ctx.input(|input| super::gameplay_key_active(input, egui::Key::B)));
+        });
+    }
+
+    #[test]
     fn automatic_input_preserves_gamepad_during_keyboard_text_focus() {
         use super::controller_input_sources;
         use starbyte_core::manifest::InputDeviceMode;
@@ -2367,6 +2393,12 @@ fn normalize_query(input: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// A press and release between two UI ticks must still reach one SNES
+/// controller snapshot; ordinary held keys continue to work as before.
+fn gameplay_key_active(input: &egui::InputState, key: egui::Key) -> bool {
+    input.key_down(key) || input.key_pressed(key)
 }
 
 /// Decide which physical inputs may control the emulated pad.

@@ -15,6 +15,7 @@
 - [x] Reuse CPU bus-event trace allocation during normal game execution, retaining observed bus traces; deterministic parity regression included (native speed measurement pending).
 - [x] Reuse SPC700 bus-event trace allocation during uploaded sound-driver execution; preserve conformance tracing and save-state identity (commercial audio and performance measurements remain unverified).
 - [x] Replace F5/F8 in-memory quick-state JSON encode/decode with direct emulator snapshots; keep full cartridge checks and persistent disk-state JSON compatibility (native responsiveness not yet measured).
+- [x] Preserve keyboard press edges even when pressed and released within a single egui input frame, preventing missed sub-frame taps (native input latency remains unmeasured).
 - [ ] Measure and improve frame pacing, latency, pauses and save stability during sustained play.
 - [x] Isolate ROM materialization from the cover-download worker and expose an explicit Play Selected action and visible job feedback (hosted CI passed at `9fe41ff5`; native Wayland launch still unverified).
 - [x] Add core frame instruction-progress guard and GUI 1.5-second wall-clock budget with frame/PC diagnostics to prevent indefinite synchronous stalls (native test pending).

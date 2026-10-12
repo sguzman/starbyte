@@ -4,6 +4,10 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## Short keyboard taps captured for gameplay (October 12; CI pending)
+
+Keyboard SNES button mapping now accepts either the current held state or the key-press edge from the current egui input frame. This prevents a short press+release, entirely between two 60 Hz emulation updates, from disappearing. It does not latch buttons across multiple emulated frames or affect typing-focused controls, which remain gated by input source selection. An egui raw-input regression supplies key-down and key-up events in one frame and checks that the next frame no longer sees that press. Native Wayland latency is still unmeasured.
+
 ## Automatic input and text-field isolation (October 12; CI pending)
 
 The native frontend's Auto keyboard+gamepad mode no longer discards all game input when a search or settings text field has focus. Keyboard-to-SNES controls are suppressed while typing or recording a new key binding, but physical gamepads remain enabled and their held buttons remain visible to the emulated controller. Keyboard-only mode continues to suppress in-game controls while editing text, and Gamepad-only mode is unchanged. A focused source-selection regression covers all three modes, keyboard focus, and rebinding. Native Wayland/gamepad acceptance remains open.

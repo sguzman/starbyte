@@ -62,7 +62,6 @@ impl StickAxes {
     }
 }
 
-
 fn is_compact_layout(width: f32, height: f32) -> bool {
     width < COMPACT_LAYOUT_WIDTH || height < 640.0
 }
@@ -501,30 +500,34 @@ impl StarbyteApp {
 
     fn effective_controller_state(&self, ctx: &egui::Context) -> ControllerState {
         // Do not trigger in-game buttons while typing into the library search or settings.
-        if self.config.input.active_device == InputDeviceMode::Keyboard
+        if self.config.input.active_device != InputDeviceMode::Gamepad
             && ctx.wants_keyboard_input()
         {
             return ControllerState::default();
         }
         let mut state = self.held_input;
-        match self.config.input.active_device {
-            InputDeviceMode::Keyboard => {
-                for &action in input_actions() {
-                    if let Some(binding) = self.config.input.keyboard_bindings.get(action)
-                        && let Some(key) = parse_egui_key(binding)
-                        && ctx.input(|input| input.key_down(key))
-                    {
-                        set_controller_flag(&mut state, action, true);
-                    }
+        if matches!(
+            self.config.input.active_device,
+            InputDeviceMode::Auto | InputDeviceMode::Keyboard
+        ) {
+            for &action in input_actions() {
+                if let Some(binding) = self.config.input.keyboard_bindings.get(action)
+                    && let Some(key) = parse_egui_key(binding)
+                    && ctx.input(|input| input.key_down(key))
+                {
+                    set_controller_flag(&mut state, action, true);
                 }
             }
-            InputDeviceMode::Gamepad => {
-                for &action in input_actions() {
-                    if let Some(binding) = self.config.input.gamepad_bindings.get(action)
-                        && self.gamepad_buttons_down.contains(binding)
-                    {
-                        set_controller_flag(&mut state, action, true);
-                    }
+        }
+        if matches!(
+            self.config.input.active_device,
+            InputDeviceMode::Auto | InputDeviceMode::Gamepad
+        ) {
+            for &action in input_actions() {
+                if let Some(binding) = self.config.input.gamepad_bindings.get(action)
+                    && self.gamepad_buttons_down.contains(binding)
+                {
+                    set_controller_flag(&mut state, action, true);
                 }
             }
         }
@@ -1289,10 +1292,16 @@ impl StarbyteApp {
     fn draw_input_settings(&mut self, ui: &mut egui::Ui) {
         egui::ComboBox::from_label("Active Device")
             .selected_text(match self.config.input.active_device {
+                InputDeviceMode::Auto => "Automatic (Keyboard + Gamepad)",
                 InputDeviceMode::Keyboard => "Keyboard",
                 InputDeviceMode::Gamepad => "Gamepad",
             })
             .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut self.config.input.active_device,
+                    InputDeviceMode::Auto,
+                    "Automatic (Keyboard + Gamepad)",
+                );
                 ui.selectable_value(
                     &mut self.config.input.active_device,
                     InputDeviceMode::Keyboard,

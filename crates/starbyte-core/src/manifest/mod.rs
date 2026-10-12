@@ -183,6 +183,9 @@ impl Default for VideoSettings {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InputDeviceMode {
+    /// Both keyboard and gamepad can drive controller 1, without switching
+    /// devices between menu and gameplay.
+    Auto,
     /// Keyboard bindings drive the controller state.
     Keyboard,
     /// A connected gamepad drives the controller state.
@@ -191,7 +194,7 @@ pub enum InputDeviceMode {
 
 impl Default for InputDeviceMode {
     fn default() -> Self {
-        Self::Keyboard
+        Self::Auto
     }
 }
 
@@ -212,7 +215,7 @@ pub struct InputSettings {
 impl Default for InputSettings {
     fn default() -> Self {
         Self {
-            active_device: InputDeviceMode::Keyboard,
+            active_device: InputDeviceMode::Auto,
             keyboard_bindings: default_keyboard_bindings(),
             gamepad_bindings: default_gamepad_bindings(),
         }
@@ -513,6 +516,22 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{AppMode, AssetConfig, LibraryViewMode, RuntimeConfig, choose_user_directory};
+
+    #[test]
+    fn new_player_input_defaults_to_keyboard_and_gamepad_auto_mode() {
+        use super::{InputDeviceMode, InputSettings};
+        let settings = InputSettings::default();
+        assert_eq!(settings.active_device, InputDeviceMode::Auto);
+        assert_eq!(InputDeviceMode::default(), InputDeviceMode::Auto);
+        assert_eq!(
+            serde_json::to_string(&settings.active_device).unwrap(),
+            "\"auto\""
+        );
+        assert_eq!(
+            serde_json::from_str::<InputDeviceMode>("\"keyboard\"").unwrap(),
+            InputDeviceMode::Keyboard
+        );
+    }
 
     #[test]
     fn asset_config_resolves_default_paths() {

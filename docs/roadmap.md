@@ -31,7 +31,7 @@
 - [x] Discover local ~/Games/Roms/SNES when present; persist source directory in config and rescan alongside cached snapshots on restart (CI pending).
 - [x] Add local, bounded Recent Games menu with deduplication and safe missing-file handling (source; native verification pending).
 - [x] Allow a single local ROM to be opened through a native file picker or drag-and-drop without preconfiguring a library directory (implemented; native desktop verification remains open).
-- [ ] Improve gamepad/keyboard remapping, reconnection, key focus and full-screen transitions on Wayland.
+- [ ] Improve gamepad/keyboard remapping, reconnection, key focus and full-screen transitions on Wayland. New installs default to automatic combined keyboard/gamepad input; the left analog stick now drives directional controls with a deadzone. Native device confirmation remains open.
 - [x] Track held buttons per connected gamepad and clear unplugged pad state without releasing other controllers (source; hardware test pending).
 - [x] Export native-resolution PNG screenshots with F12 and a Play View toolbar action (implemented; real-game verification remains open).
 - [ ] Explore optional shaders, rewind and session history only after the core loop is comfortable.

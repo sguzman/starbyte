@@ -107,6 +107,10 @@ struct Voice {
     /// ADSR attack/decay/sustain progress; release is tracked separately.
     #[serde(default)]
     envelope_phase: EnvelopePhase,
+    /// ENDX becomes observable when an end-marked BRR block enters the
+    /// decoder, rather than only after its last sample has been played.
+    #[serde(default)]
+    end_event_pending: bool,
 }
 
 /// ADSR phases. Direct and sliding GAIN can override the envelope at any time.
@@ -133,6 +137,7 @@ impl Default for Voice {
             older: 0,
             envelope: 0,
             envelope_phase: EnvelopePhase::Attack,
+            end_event_pending: false,
         }
     }
 }
@@ -415,7 +420,10 @@ impl Voice {
         // division. Its output sample also clears the low bit before PMON,
         // OUTX and channel-volume processing.
         let result = (((i32::from(waveform) * self.envelope) >> 11) as i16) & !1;
-        let mut ended_block = false;
+        // KON's initial block is decoded before the next DSP tick; latch
+        // its END flag when that first tick runs. Later blocks are decoded
+        // during pitch progression and can raise ENDX in the same tick.
+        let mut ended_block = std::mem::take(&mut self.end_event_pending);
         // S-DSP saturates its interpolation position at $7FFF after
         // applying PMON. A high positive modulator can almost double
         // the 14-bit voice pitch, but cannot advance more than seven
@@ -430,8 +438,8 @@ impl Voice {
                 self.index = 0;
                 self.past_samples.copy_from_slice(&self.samples[13..16]);
                 if self.header & 1 != 0 {
-                    // ENDX records the BRR end event even for looping voices.
-                    ended_block = true;
+                    // End/loop changes the decoder address after the block
+                    // plays; ENDX was already raised when it was decoded.
                     if self.header & 2 == 0 {
                         self.active = false;
                         break;
@@ -444,6 +452,7 @@ impl Voice {
                     self.address = self.address.wrapping_add(9);
                 }
                 self.decode_block(ram);
+                ended_block |= std::mem::take(&mut self.end_event_pending);
             }
         }
         (result, ended_block)
@@ -526,6 +535,7 @@ impl Voice {
 
     fn decode_block(&mut self, ram: &[u8]) {
         self.header = read_ram(ram, self.address);
+        self.end_event_pending = self.header & 1 != 0;
         let shift = u32::from(self.header >> 4);
         let filter = (self.header >> 2) & 3;
         for i in 0..BRR_SAMPLES_PER_BLOCK {
@@ -1399,23 +1409,73 @@ mod tests {
     }
 
     #[test]
-    fn looping_voice_endx_is_latched_cleared_and_reasserted_at_next_loop() {
+    fn looping_voice_endx_is_latched_on_decode_and_reasserted_on_loop() {
         let (mut dsp, mut ram) = looping_sample();
         dsp.write_register(0x4c, 1, &ram);
-        for _ in 0..15 {
-            dsp.next_stereo_pair(&mut ram);
-        }
+        // KON has cleared the flag; the first DSP tick decodes the
+        // initially keyed end/loop block.
         assert_eq!(dsp.read_register(0x7c) & 1, 0);
         dsp.next_stereo_pair(&mut ram);
         assert_eq!(dsp.read_register(0x7c) & 1, 1);
         dsp.write_register(0x7c, 0xff, &ram);
         assert_eq!(dsp.read_register(0x7c) & 1, 0);
+        // No further end flag until the decoder reaches the loop block.
+        for _ in 0..14 {
+            dsp.next_stereo_pair(&mut ram);
+        }
+        assert_eq!(dsp.read_register(0x7c) & 1, 0);
+        dsp.next_stereo_pair(&mut ram);
+        assert_eq!(dsp.read_register(0x7c) & 1, 1);
+        dsp.write_register(0x7c, 0, &ram);
+        assert_eq!(dsp.read_register(0x7c) & 1, 0);
+        // Clearing ENDX mid-block must not reassert until another decode.
         dsp.next_stereo_pair(&mut ram);
         assert_eq!(dsp.read_register(0x7c) & 1, 0);
+    }
+
+    #[test]
+    fn endx_latches_at_beginning_of_later_end_block_not_after_playback() {
+        let (mut dsp, mut ram) = looping_sample();
+        ram[0x300] = 0xc0; // First BRR block has no END marker.
+        ram[0x309] = 0xc3; // Second block ends and loops back.
+        ram[0x202] = 0x09;
+        ram[0x203] = 0x03;
+        ram[0x30a..0x312].fill(0x77);
+        dsp.write_register(0x4c, 1, &ram);
         for _ in 0..15 {
             dsp.next_stereo_pair(&mut ram);
         }
+        assert_eq!(dsp.read_register(0x7c) & 1, 0);
+        // Crossing to the second block decodes its header immediately.
+        dsp.next_stereo_pair(&mut ram);
         assert_eq!(dsp.read_register(0x7c) & 1, 1);
+        dsp.write_register(0x7c, 0xff, &ram);
+        // The pending bit must not spontaneously relatch on save/restore.
+        let saved = serde_json::to_string(&dsp).unwrap();
+        let mut restored: Dsp = serde_json::from_str(&saved).unwrap();
+        let mut ram_after = ram.clone();
+        for _ in 0..8 {
+            assert_eq!(
+                dsp.next_stereo_pair(&mut ram),
+                restored.next_stereo_pair(&mut ram_after)
+            );
+            assert_eq!(dsp.read_register(0x7c), restored.read_register(0x7c));
+        }
+    }
+
+    #[test]
+    fn one_shot_end_marker_is_visible_before_final_audio_sample() {
+        let (mut dsp, mut ram) = looping_sample();
+        ram[0x300] = 0xc1; // One final BRR block, no loop.
+        dsp.write_register(0x4c, 1, &ram);
+        assert_eq!(dsp.read_register(0x7c) & 1, 0);
+        dsp.next_stereo_pair(&mut ram);
+        assert_eq!(dsp.read_register(0x7c) & 1, 1);
+        dsp.write_register(0x7c, 0, &ram);
+        for _ in 0..20 {
+            dsp.next_stereo_pair(&mut ram);
+        }
+        assert_eq!(dsp.read_register(0x7c) & 1, 0);
     }
 
     #[test]

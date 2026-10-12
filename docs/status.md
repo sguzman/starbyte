@@ -4,6 +4,10 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## BRR ENDX decode timing (October 12; CI pending)
+
+S-DSP `ENDX` now latches when a voice begins decoding an end-marked BRR block, not only when the last sample of that block has finished playback. This matters to sound drivers that poll voice-end flags before choosing the next note or effect. The first keyed block raises its pending end event on the following DSP tick (KON still clears the old flag), while a later block can raise the event on the decode transition. The end/loop and PCM progression stay unchanged. Targeted tests cover one-shot and looping samples, ENDX acknowledgement, a later end-marked block and save-state continuation. Hardware reference: [fullsnes S-DSP ENDX behavior](https://patrickjohnston.org/ASM/ROM%20data/snestek.htm). This remains sample-stepped rather than a cycle-exact DSP pipeline; no commercial audio claim is made.
+
 ## IPL boot-pointer memory fidelity (October 12; CI pending)
 
 The opt-in IPL transfer decoder now mirrors each accepted block/entry address into SPC direct-page $00/$01, as the hardware boot loader's `MOVW $00,YA` does. At each 256-byte transfer-index rollover it also increments the high byte of that live pointer. These bytes are observable by an uploaded sound driver after handoff; previously they remained stale even when the decoder had accepted the correct address internally. TEST RAM-write protection still gates these pointer writes. Tests cover initial transfer, index wrap, block replacement, entrypoint handoff, zero-marker fall-through and actual APU mailbox traffic. The legacy production sound bootstrap is unchanged. Commercial-ROM upload/audio acceptance is still unverified.

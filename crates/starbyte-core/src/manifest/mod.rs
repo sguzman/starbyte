@@ -229,6 +229,25 @@ pub struct CheatSettings {
     pub enabled_by_game: BTreeMap<String, Vec<String>>,
     /// Whether cheats should be visible in the library by default.
     pub show_cheat_badges: bool,
+    /// Optional local Cheatarium checkout. No network requests are made for this source.
+    #[serde(default)]
+    pub cheatarium_root: Option<PathBuf>,
+}
+
+impl CheatSettings {
+    /// Resolve the local SNES index from a configured checkout, expanding a leading ~/.
+    #[must_use]
+    pub fn cheatarium_snes_index(&self) -> Option<PathBuf> {
+        let root = self.cheatarium_root.as_ref()?;
+        let expanded = root
+            .to_str()
+            .and_then(|value| value.strip_prefix("~/"))
+            .and_then(|suffix| {
+                std::env::var_os("HOME").map(|home| PathBuf::from(home).join(suffix))
+            })
+            .unwrap_or_else(|| root.clone());
+        Some(expanded.join("generated").join("v1").join("snes.json.gz"))
+    }
 }
 
 /// Persistent library-management settings.
@@ -603,6 +622,7 @@ mod tests {
             .recent_roms
             .push(temp_dir.path().join("game.sfc"));
         config.mode = AppMode::Prod;
+        config.cheats.cheatarium_root = Some(PathBuf::from("~/Code/Text/cheatarium"));
         config.ui.show_log_panel = false;
         config.ui.details_panel_width = 512.0;
         config
@@ -616,6 +636,17 @@ mod tests {
         assert_eq!(loaded.library.rom_dirs.len(), 1);
         assert_eq!(loaded.library.recent_roms.len(), 1);
         assert_eq!(loaded.mode, AppMode::Prod);
+        assert_eq!(
+            loaded.cheats.cheatarium_root.as_deref(),
+            Some(std::path::Path::new("~/Code/Text/cheatarium"))
+        );
+        assert_eq!(
+            loaded.cheats.cheatarium_snes_index(),
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .map(|home| home.join("Code/Text/cheatarium/generated/v1/snes.json.gz"))
+                .or_else(|| Some(PathBuf::from("~/Code/Text/cheatarium/generated/v1/snes.json.gz")))
+        );
         assert!(!loaded.ui.show_log_panel);
         assert_eq!(loaded.ui.details_panel_width, 512.0);
         assert_eq!(
@@ -650,6 +681,13 @@ mod tests {
                 .path()
                 .ends_with("settings.toml")
         );
+    }
+
+    #[test]
+    fn missing_cheatarium_setting_is_optional_in_legacy_config() {
+        let config: super::RuntimeConfig = toml::from_str("[cheats]\nshow_cheat_badges = true\n").unwrap();
+        assert!(config.cheats.cheatarium_root.is_none());
+        assert!(config.cheats.cheatarium_snes_index().is_none());
     }
 
     #[test]

@@ -1644,9 +1644,14 @@ mod tests {
         assert_eq!(apu.read_spc_bus(0x00f3) & 1, 1);
         apu.write_spc_bus(0x00f3, 0xff);
         assert_eq!(apu.read_spc_bus(0x00f3) & 1, 0);
-        // Re-key-on starts BRR sample zero; otherwise this exact test
-        // duration can straddle an unrelated previous loop boundary.
+        // Re-key-on clears ENDX, then the first decoder tick exposes
+        // the end-marked BRR header before its last sample has played.
         apu.write_dsp_register(0x4c, 1);
+        assert_eq!(apu.read_spc_bus(0x00f3) & 1, 0);
+        apu.append_dsp_audio(1_000, &mut audio);
+        assert_eq!(apu.read_spc_bus(0x00f3) & 1, 1);
+        // Software acknowledgement stays clear until the next loop.
+        apu.write_spc_bus(0x00f3, 0xff);
         apu.append_dsp_audio(1_000, &mut audio);
         assert_eq!(apu.read_spc_bus(0x00f3) & 1, 0);
         apu.append_dsp_audio(21_477, &mut audio);

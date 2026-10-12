@@ -76,9 +76,9 @@ enum Command {
     Compliance(ComplianceArgs),
     /// Search a local Cheatarium SNES index without activating any codes.
     Cheatarium {
-        /// Explicit path to a local Cheatarium snes.json.gz bundle.
+        /// Optional direct SNES index override; otherwise use cheats.cheatarium_root from config.
         #[arg(long)]
-        index: PathBuf,
+        index: Option<PathBuf>,
         /// Candidate game title; not a verified cartridge match.
         #[arg(long)]
         title: String,
@@ -403,7 +403,17 @@ fn main() -> Result<()> {
             title,
             json,
             limit,
-        } => cheatarium::search(&index, &title, limit, json),
+        } => {
+            let index = if let Some(index) = index {
+                index
+            } else {
+                load_runtime_config(&assets)?
+                    .cheats
+                    .cheatarium_snes_index()
+                    .context("Configure [cheats].cheatarium_root or pass --index to search Cheatarium")?
+            };
+            cheatarium::search(&index, &title, limit, json)
+        },
         Command::Library(args) => run_library(args, assets),
         Command::Run(args) => run_rom(args, assets),
         Command::PrintConfig { format } => print_config(format),
@@ -443,8 +453,10 @@ fn capabilities_manifest() -> serde_json::Value {
             },
             {
                 "name": "cheatarium_candidate_search",
-                "argv": ["cheatarium", "--index", "<local_snes_index_json_gz>", "--title", "<game_title>", "--json"],
-                "side_effects": "read_explicit_local_index_only",
+                "argv": ["cheatarium", "--title", "<game_title>", "--json"],
+                "optional_override": ["--index", "<local_snes_index_json_gz>"],
+                "configured_source": "cheats.cheatarium_root/generated/v1/snes.json.gz",
+                "side_effects": "read_configured_local_index_only",
                 "game_identity": "filename_candidate_not_rom_verified",
                 "activates_cheats": false
             },

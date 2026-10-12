@@ -325,6 +325,13 @@ impl Emulator {
         self.apu.enable_isolated_host_clocked_driver()
     }
 
+    /// Whether this emulator instance explicitly opted into sound-driver
+    /// clocking. Ordinary gameplay never enables this path implicitly.
+    #[must_use]
+    pub fn isolated_apu_driver_probe_enabled(&self) -> bool {
+        self.apu.isolated_host_clocked_driver_enabled()
+    }
+
     /// Read the explicitly enabled sound-driver upload progress, if any.
     #[must_use]
     pub fn isolated_apu_upload(&self) -> Option<&IplUpload> {

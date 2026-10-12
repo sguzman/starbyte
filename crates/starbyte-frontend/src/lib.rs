@@ -123,19 +123,20 @@ impl FrontendSession {
             .assets()
             .save_root()
             .join(format!("{identity}.srm"));
-        let stored_save = if !isolated_audio_probe && expected_save_len > 0 && new_save_path.exists() {
-            let data = std::fs::read(&new_save_path)
-                .with_context(|| format!("failed reading SRAM {}", new_save_path.display()))?;
-            anyhow::ensure!(
-                data.len() == expected_save_len,
-                "invalid SRAM length for {}: expected {expected_save_len}, got {}",
-                new_save_path.display(),
-                data.len()
-            );
-            Some(data)
-        } else {
-            None
-        };
+        let stored_save =
+            if !isolated_audio_probe && expected_save_len > 0 && new_save_path.exists() {
+                let data = std::fs::read(&new_save_path)
+                    .with_context(|| format!("failed reading SRAM {}", new_save_path.display()))?;
+                anyhow::ensure!(
+                    data.len() == expected_save_len,
+                    "invalid SRAM length for {}: expected {expected_save_len}, got {}",
+                    new_save_path.display(),
+                    data.len()
+                );
+                Some(data)
+            } else {
+                None
+            };
 
         // Preserve the old game's pending SRAM before replacing the cartridge.
         self.flush_save_ram()?;
@@ -665,7 +666,7 @@ mod tests {
             .load_rom_with_isolated_audio_probe(&rom_path)
             .unwrap();
         assert!(session.emulator().isolated_apu_upload().is_some());
-        assert!(session.emulator().apu.isolated_host_clocked_driver_enabled());
+        assert!(session.emulator().isolated_apu_driver_probe_enabled());
         assert_eq!(session.emulator().save_ram().unwrap()[0], 0);
         assert!(session.save_ram_path().is_none());
         assert!(!session.has_state_slot(1));
@@ -676,7 +677,7 @@ mod tests {
         assert_eq!(fs::read(&existing_slot).unwrap(), original_slot);
 
         session.load_rom(&rom_path).unwrap();
-        assert!(!session.emulator().apu.isolated_host_clocked_driver_enabled());
+        assert!(!session.emulator().isolated_apu_driver_probe_enabled());
         assert!(session.emulator().isolated_apu_upload().is_none());
         assert_eq!(session.emulator().save_ram().unwrap()[0], 0x5a);
         assert_eq!(session.save_ram_path(), Some(save_path));

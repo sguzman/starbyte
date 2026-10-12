@@ -210,23 +210,19 @@ mod speaker_cli_tests {
         ])
         .unwrap();
         assert!(probe.experimental_sound_driver);
-        assert!(Args::try_parse_from([
-            "starbyte-egui",
-            "--experimental-sound-driver",
-        ])
-        .is_err());
-        assert!(Args::try_parse_from([
-            "starbyte-egui",
-            "--demo",
-            "--experimental-sound-driver",
-        ])
-        .is_err());
-        assert!(Args::try_parse_from([
-            "starbyte-egui",
-            "--speaker-test",
-            "--experimental-sound-driver",
-        ])
-        .is_err());
+        assert!(Args::try_parse_from(["starbyte-egui", "--experimental-sound-driver",]).is_err());
+        assert!(
+            Args::try_parse_from(["starbyte-egui", "--demo", "--experimental-sound-driver",])
+                .is_err()
+        );
+        assert!(
+            Args::try_parse_from([
+                "starbyte-egui",
+                "--speaker-test",
+                "--experimental-sound-driver",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

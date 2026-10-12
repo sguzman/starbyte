@@ -2,6 +2,8 @@ SPC700 single-step fixtures provenance
 Source: https://github.com/SingleStepTests/spc700/tree/main/v1
 Cases: first 12 inputs from each of 00, 7a, 9a, af, c6, c7, d7, 8f, 4c, 5c,
        e8, 8d, cd, 2f, f0, d0, 3f, 6f, cf and 9e.
+Additional cases: first 8 from each opcode 01 through 3e (hex), except 2f.
+Total: 728 reference steps over 81 distinct opcode values.
 The fixture contains reference CPU and bus data; no commercial ROMs or user data.
 
 MIT License

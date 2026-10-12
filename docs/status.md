@@ -4,6 +4,14 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## First physical Hyprland Super Mario World GUI success (2026-10-12)
+
+A local **500-frame** opt-in GUI smoke at commit `bafbd83` successfully opened an actual Starbyte native window under the user's Hyprland session and automatically exited with code **0** at the requested frame limit. The user directly reported seeing gameplay on screen for several seconds; the log contains `STARBYTE_NATIVE_SMOKE_OK frame=500`, not a crash. The 500-frame duration intentionally bounds the test and must not be confused with an unexpected shutdown.
+
+The native sound metrics were identical to the earlier 500-frame headless SMW probe: **266,229 stereo sample pairs**, **131,848 nonzero pairs**, peak magnitude **11,743**, first sound frame **71**, **2,177,389 SPC700 instructions** and **11,974 uploaded bytes**. The background Rodio/CPAL worker reported `audio_device_status=opened` and `audio_worker_spawned=true`, establishing that the default OS audio output device was successfully initialized, **not** that audible music was heard. The native gamepad subsystem enumerated a **Nintendo Pro Controller**, but no physical button input was tested. The library scan independently found 675 ROM entries with two rejected files; neither interrupted play. The egui-winit clipboard emitted a nonfatal X11-backend timeout warning in this Wayland-only invocation, but the GUI continued normally.
+
+The original checkout and modified lockfile were preserved by the temporary detached worktree. No copyrighted ROM, generated audio, personal filesystem path or private log was committed. Remaining native acceptance gates are audible speaker output, longer open-ended play, controller mapping, fullscreen/focus and pacing on real hardware.
+
 ## Background OS audio-device feedback (2026-10-12; CI pending)
 
 The speaker worker now publishes a read-only, atomic last-open result to the native GUI smoke report: `opened`, `open_failed`, or `not_attempted` (with `worker_not_started` if playback never needed a worker). It reports successful initialization of the default Rodio/CPAL output separately from nonzero DSP PCM and from worker-thread creation. An unavailable device continues to be nonfatal and is retried under the existing cooldown. The status neither certifies audible output nor measures latency, dropout or physical Hyprland playback. A device-free unit test exercises initial, failure and success visibility.

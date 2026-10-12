@@ -245,16 +245,17 @@ mod speaker_cli_tests {
         let normal = Args::try_parse_from(["starbyte-egui"]).unwrap();
         assert_eq!(normal.exit_after_frames, None);
         assert!(validate_frame_exit_args(&normal).is_ok());
-        let missing = Args::try_parse_from([
-            "starbyte-egui",
-            "--exit-after-frames",
-            "30",
-        ])
-        .unwrap();
+        let missing = Args::try_parse_from(["starbyte-egui", "--exit-after-frames", "30"]).unwrap();
         assert!(validate_frame_exit_args(&missing).is_err());
         for flags in [
             vec!["starbyte-egui", "--demo", "--exit-after-frames", "30"],
-            vec!["starbyte-egui", "--rom", "fixture.sfc", "--exit-after-frames", "500"],
+            vec![
+                "starbyte-egui",
+                "--rom",
+                "fixture.sfc",
+                "--exit-after-frames",
+                "500",
+            ],
             vec![
                 "starbyte-egui",
                 "--rom",
@@ -272,8 +273,13 @@ mod speaker_cli_tests {
             Args::try_parse_from(["starbyte-egui", "--demo", "--exit-after-frames", "0"]).is_err()
         );
         assert!(
-            Args::try_parse_from(["starbyte-egui", "--speaker-test", "--exit-after-frames", "5"])
-                .is_err()
+            Args::try_parse_from([
+                "starbyte-egui",
+                "--speaker-test",
+                "--exit-after-frames",
+                "5"
+            ])
+            .is_err()
         );
     }
 

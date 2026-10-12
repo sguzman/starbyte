@@ -266,6 +266,14 @@ impl Apu {
         &mut self,
         trace: &mut Vec<crate::bus::BusEvent>,
     ) -> Result<()> {
+        // The real IPL ROM is not redistributable. An opt-in uploaded driver
+        // can nevertheless jump back to its two documented boot entries.
+        // Treat this as a bootstrap transition, never an opcode dispatch.
+        if self.reenter_isolated_ipl_if_requested() {
+            trace.clear();
+            return Ok(());
+        }
+
         // The read/write callbacks require access to the APU while its
         // SPC700 interpreter is temporarily moved out.
         let mut cpu = std::mem::take(&mut self.spc700);
@@ -286,6 +294,42 @@ impl Apu {
             apu.spc700_steps = apu.spc700_steps.saturating_add(1);
         }
         result
+    }
+
+    /// Re-arm the isolated loader when a sound driver returns to the built-in
+    /// IPL ($FFC0 resets stack/zero page, $FFC9 skips that initialization).
+    ///
+    /// This fallback is only used when there is no user-supplied IPL ROM,
+    /// the ROM overlay is enabled, and an uploaded program is running.
+    /// A real IPL binary still takes the interpreter path instead.
+    fn reenter_isolated_ipl_if_requested(&mut self) -> bool {
+        let pc = self.spc700.pc;
+        if !matches!(pc, 0xffc0 | 0xffc9)
+            || !self.ipl_overlay_enabled
+            || self.ipl_rom.is_some()
+            || self.ipl_upload.as_ref().and_then(IplUpload::entrypoint).is_none()
+        {
+            return false;
+        }
+
+        if pc == 0xffc0 {
+            // IPL's startup loop clears only $00-$EF, not the entire 64 KiB
+            // ARAM. Retain previous samples and DSP state for later uploads.
+            self.spc_ram[..0x00f0].fill(0);
+            self.spc700.load_state(pc, 0, 0, 0, 0xef, 0x02);
+        }
+        // Re-entered IPL advertises readiness on output ports 0 and 1.
+        // Ports 2/3 are not touched by the boot routine.
+        self.apu_to_cpu_ports[0] = 0xaa;
+        self.apu_to_cpu_ports[1] = 0xbb;
+        self.ipl_upload.as_mut().unwrap().reset();
+        self.spc700_steps = 0;
+        self.isolated_spc_master_phase = 0;
+        self.host_clocked_spc_phase = 0;
+        self.host_clocked_spc_credit = 0;
+        // The caller's explicit driver-probe opt-in is retained. A later
+        // upload can hand off another driver without needing to rearm it.
+        true
     }
 
     /// Execute up to `instruction_limit` uploaded SPC700 instructions and
@@ -322,6 +366,11 @@ impl Apu {
                 break;
             }
             let cpu_cycles = self.execute_spc_program_instruction_reuse()?;
+            if cpu_cycles == 0 {
+                // Returned to the IPL loader; no more uploaded instructions
+                // run until another CPU-to-SPC handoff completes.
+                break;
+            }
             let numerator = u128::from(self.isolated_spc_master_phase)
                 + u128::from(cpu_cycles) * u128::from(NTSC_MASTER_CLOCK_HZ);
             let denominator = u128::from(SPC700_CLOCK_HZ);
@@ -401,9 +450,17 @@ impl Apu {
         let mut executed = 0;
         while self.host_clocked_spc_credit > 0
             && self.spc700.halt_state() == Spc700HaltState::Running
+            && self
+                .ipl_upload
+                .as_ref()
+                .and_then(IplUpload::entrypoint)
+                .is_some()
             && executed < 4096
         {
             let cpu_cycles = self.execute_spc_program_instruction_reuse()?;
+            if cpu_cycles == 0 {
+                break;
+            }
             self.host_clocked_spc_credit = self
                 .host_clocked_spc_credit
                 .saturating_sub(cpu_cycles as i64);
@@ -2719,6 +2776,98 @@ mod tests {
             Some(0x0400)
         );
         assert_eq!(restored.read_dsp_register(0x4c), 1);
+    }
+
+    // A genuine driver can return to the IPL to upload a second program or
+    // bank of BRR data. These original test programs avoid Nintendo firmware.
+    fn upload_reentry_test_program(apu: &mut Apu, program: &[u8]) {
+        for (port, value) in [(1, 1), (2, 0), (3, 4), (0, 0xcc)] {
+            apu.write_cpu_port(port, value).unwrap();
+        }
+        apu.step_master_cycles(6);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0xcc);
+        for (index, &byte) in program.iter().enumerate() {
+            apu.write_cpu_port(1, byte).unwrap();
+            apu.write_cpu_port(0, index as u8).unwrap();
+            apu.step_master_cycles(6);
+            assert_eq!(apu.read_spc_ram(0x0400 + index as u16), byte);
+        }
+        for (port, value) in [(1, 0), (2, 0), (3, 4), (0, program.len() as u8 + 1)] {
+            apu.write_cpu_port(port, value).unwrap();
+        }
+        apu.step_master_cycles(6);
+        assert_eq!(
+            apu.isolated_ipl_upload().unwrap().entrypoint(),
+            Some(0x0400)
+        );
+    }
+
+    #[test]
+    fn uploaded_driver_can_restart_ipl_and_upload_second_program() {
+        let mut apu = Apu::default();
+        apu.reset();
+        apu.enable_isolated_ipl_upload();
+        apu.enable_isolated_host_clocked_driver().unwrap();
+        // JMP $FFC0: return to IPL with its overlay enabled.
+        upload_reentry_test_program(&mut apu, &[0x5f, 0xc0, 0xff]);
+        apu.write_spc_ram(0x0020, 0xde);
+        apu.write_spc_ram(0x2300, 0x7a);
+        let executed = apu.execute_host_clocked_spc(2_000).unwrap();
+        assert_eq!(executed, 1, "only the driver JMP is dispatched");
+        assert_eq!(apu.isolated_ipl_upload().unwrap().entrypoint(), None);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0xaa);
+        assert_eq!(apu.read_apu_port(1).unwrap(), 0xbb);
+        assert_eq!(apu.read_spc_ram(0x0020), 0);
+        assert_eq!(apu.read_spc_ram(0x2300), 0x7a);
+        assert!(apu.isolated_host_clocked_driver_enabled());
+        assert_eq!(apu.execute_host_clocked_spc(1000).unwrap(), 0);
+
+        // Save and restore before the next IPL handshake; opt-in remains
+        // explicit and no first-driver instruction may be replayed.
+        let saved = serde_json::to_string(&apu).unwrap();
+        let mut resumed: Apu = serde_json::from_str(&saved).unwrap();
+        upload_reentry_test_program(&mut resumed, &[0x00, 0x2f, 0xfd]);
+        let executed = resumed.execute_host_clocked_spc(1_000).unwrap();
+        assert!(executed > 0);
+        assert!(resumed.isolated_spc700_status().unwrap().instructions > 0);
+        assert_eq!(resumed.read_spc_ram(0x2300), 0x7a);
+    }
+
+    #[test]
+    fn ipl_reentry_at_ffc9_preserves_zero_page_and_standalone_clock_stops() {
+        let mut apu = Apu::default();
+        apu.reset();
+        apu.enable_isolated_ipl_upload();
+        upload_reentry_test_program(&mut apu, &[0x5f, 0xc9, 0xff]);
+        apu.write_spc_ram(0x0020, 0xde);
+        let mut audio = Vec::new();
+        assert_eq!(
+            apu.run_isolated_uploaded_spc_program(100, &mut audio)
+                .unwrap(),
+            1
+        );
+        assert_eq!(apu.isolated_ipl_upload().unwrap().entrypoint(), None);
+        assert_eq!(apu.read_apu_port(0).unwrap(), 0xaa);
+        assert_eq!(apu.read_spc_ram(0x0020), 0xde);
+        assert!(audio.len() <= 16);
+        assert!(apu.run_isolated_uploaded_spc_program(1, &mut audio).is_err());
+    }
+
+    #[test]
+    fn disabled_ipl_overlay_does_not_fabricate_a_boot_restart() {
+        let mut apu = Apu::default();
+        apu.reset();
+        apu.enable_isolated_ipl_upload();
+        // MOV $F1,#0 (unmap IPL); JMP $FFC0 (now ordinary ARAM).
+        upload_reentry_test_program(&mut apu, &[0x8f, 0, 0xf1, 0x5f, 0xc0, 0xff]);
+        apu.write_spc_ram(0xffc0, 0x00); // NOP is legal in RAM.
+        let mut audio = Vec::new();
+        assert_eq!(apu.run_isolated_uploaded_spc_program(3, &mut audio).unwrap(), 3);
+        assert_eq!(
+            apu.isolated_ipl_upload().unwrap().entrypoint(),
+            Some(0x0400)
+        );
+        assert_ne!(apu.read_apu_port(0).unwrap(), 0xaa);
     }
 
     #[test]

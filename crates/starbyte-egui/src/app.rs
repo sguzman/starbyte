@@ -199,6 +199,8 @@ pub struct StarbyteApp {
     gilrs: Option<Gilrs>,
     gamepad_buttons_down: BTreeSet<String>,
     gamepad_buttons_by_id: HashMap<GamepadId, BTreeSet<String>>,
+    /// Unconsumed button press edges by physical controller.
+    queued_gamepad_presses: HashMap<GamepadId, BTreeSet<String>>,
     gamepad_sticks_by_id: HashMap<GamepadId, StickAxes>,
     pending_keyboard_bind: Option<String>,
     pending_gamepad_bind: Option<String>,
@@ -312,6 +314,7 @@ impl StarbyteApp {
             gilrs,
             gamepad_buttons_down: BTreeSet::new(),
             gamepad_buttons_by_id: HashMap::new(),
+            queued_gamepad_presses: HashMap::new(),
             gamepad_sticks_by_id: HashMap::new(),
             pending_keyboard_bind: None,
             pending_gamepad_bind: None,
@@ -567,7 +570,11 @@ impl StarbyteApp {
         if gamepad_enabled {
             for &action in input_actions() {
                 if let Some(binding) = self.config.input.gamepad_bindings.get(action)
-                    && self.gamepad_buttons_down.contains(binding)
+                    && gamepad_button_active(
+                        &self.gamepad_buttons_down,
+                        &self.queued_gamepad_presses,
+                        binding,
+                    )
                 {
                     set_controller_flag(&mut state, action, true);
                 }
@@ -626,6 +633,20 @@ impl StarbyteApp {
                         .entry(event.id)
                         .or_default()
                         .insert(name.clone());
+                    if self.pending_gamepad_bind.is_none()
+                        && (self.is_playing || self.pending_step_frames > 0)
+                        && matches!(
+                            self.config.input.active_device,
+                            InputDeviceMode::Auto | InputDeviceMode::Gamepad
+                        )
+                    {
+                        // A press followed by release in this very poll must
+                        // remain visible for the next SNES controller sample.
+                        self.queued_gamepad_presses
+                            .entry(event.id)
+                            .or_default()
+                            .insert(name.clone());
+                    }
                     if let Some(action) = self.pending_gamepad_bind.clone() {
                         new_binding = Some((action, name));
                     }
@@ -647,6 +668,7 @@ impl StarbyteApp {
                     // A controller cannot emit release events after unplugging.
                     // Clear only its held buttons, not those on other pads.
                     self.gamepad_buttons_by_id.remove(&event.id);
+                    self.queued_gamepad_presses.remove(&event.id);
                     self.gamepad_sticks_by_id.remove(&event.id);
                 }
                 _ => {}
@@ -709,6 +731,7 @@ impl StarbyteApp {
         // Consume each short press once; held keys are sampled again from
         // egui when subsequent emulation frames execute.
         self.queued_keyboard_presses.clear();
+        self.queued_gamepad_presses.clear();
         let started = Instant::now();
         match self.session.run_frame_with_timeout(GUI_FRAME_TIMEOUT) {
             Ok(()) => {
@@ -2098,6 +2121,10 @@ impl eframe::App for StarbyteApp {
         // Capture edges from every UI update, including repaint callbacks
         // that are too early for another NTSC emulation frame.
         self.capture_gameplay_key_presses(ctx, was_recording_binding);
+        // Do not replay short presses after a long pause or a new game.
+        if !self.is_playing && self.pending_step_frames == 0 {
+            self.queued_gamepad_presses.clear();
+        }
 
         if self.is_playing && self.session.snapshot().has_rom {
             self.pending_step_frames = 0;
@@ -2359,6 +2386,33 @@ mod playback_tests {
     }
 
     #[test]
+    fn brief_gamepad_press_survives_release_and_is_consumed_once() {
+        let mut held = std::collections::BTreeSet::new();
+        let mut queued = std::collections::HashMap::new();
+        held.insert("South".to_owned());
+        queued.insert(1_u8, std::collections::BTreeSet::from(["South".to_owned()]));
+        held.remove("South");
+        assert!(super::gamepad_button_active(&held, &queued, "South"));
+        // An emulated frame consumes the transient edge.
+        queued.clear();
+        assert!(!super::gamepad_button_active(&held, &queued, "South"));
+    }
+
+    #[test]
+    fn gamepad_disconnect_cancels_only_its_own_queued_press() {
+        let held = std::collections::BTreeSet::new();
+        let mut queued = std::collections::HashMap::from([
+            (1_u8, std::collections::BTreeSet::from(["South".to_owned()])),
+            (2_u8, std::collections::BTreeSet::from(["North".to_owned()])),
+        ]);
+        queued.remove(&1);
+        assert!(!super::gamepad_button_active(&held, &queued, "South"));
+        assert!(super::gamepad_button_active(&held, &queued, "North"));
+        queued.remove(&2);
+        assert!(!super::gamepad_button_active(&held, &queued, "North"));
+    }
+
+    #[test]
     fn unplugged_gamepad_releases_only_its_own_buttons() {
         let mut pads = std::collections::HashMap::new();
         pads.insert(1_u8, std::collections::BTreeSet::from(["South".to_owned()]));
@@ -2482,6 +2536,17 @@ fn pressed_button_labels(state: ControllerState) -> String {
     } else {
         held.join(" ")
     }
+}
+
+fn gamepad_button_active<K: Eq + std::hash::Hash>(
+    held: &BTreeSet<String>,
+    queued_by_controller: &HashMap<K, BTreeSet<String>>,
+    binding: &str,
+) -> bool {
+    held.contains(binding)
+        || queued_by_controller
+            .values()
+            .any(|pressed| pressed.contains(binding))
 }
 
 fn merged_gamepad_buttons<K: Eq + std::hash::Hash>(

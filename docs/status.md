@@ -4,6 +4,10 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## Transient gamepad press delivery (October 12; CI pending)
+
+The native gilrs controller poller now retains each physical button press across intermediate UI repaint updates until an actual emulated frame samples the controller. This prevents a press+release in a single poll, or between two SNES frames, from disappearing because only the final held-button set remained. The queue is scoped to each connected physical gamepad, is consumed once per emulated frame, is cleared when paused and is removed for the disconnected controller without disturbing another pad. Rebinding a gamepad button does not queue that same press as gameplay. Tests check transient release, one-time consumption and isolated disconnect. Native hardware validation is still outstanding.
+
 ## Queued keyboard taps across non-emulation repaint updates (October 12; CI pending)
 
 The frontend now holds keyboard press edges across egui repaint cycles until the next actual emulated frame, consuming each short press exactly once after submitting the SNES controller state. The earlier same-update `key_pressed` check missed a tap if no emulator frame was due in that update. Held keys continue to work normally, while text focus, key rebinding, pause and unloaded sessions discard pending taps. This is a desktop input fix with synthetic egui regressions for no-frame repaint persistence, one-time consumption and suppression. Native hardware latency remains unmeasured.

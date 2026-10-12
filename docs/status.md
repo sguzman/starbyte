@@ -4,6 +4,10 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## IPL boot-pointer memory fidelity (October 12; CI pending)
+
+The opt-in IPL transfer decoder now mirrors each accepted block/entry address into SPC direct-page $00/$01, as the hardware boot loader's `MOVW $00,YA` does. At each 256-byte transfer-index rollover it also increments the high byte of that live pointer. These bytes are observable by an uploaded sound driver after handoff; previously they remained stale even when the decoder had accepted the correct address internally. TEST RAM-write protection still gates these pointer writes. Tests cover initial transfer, index wrap, block replacement, entrypoint handoff, zero-marker fall-through and actual APU mailbox traffic. The legacy production sound bootstrap is unchanged. Commercial-ROM upload/audio acceptance is still unverified.
+
 ## New-cartridge sound-mode isolation (October 11; CI pending)
 
 Loading any new cartridge now explicitly disarms the previous isolated IPL transfer decoder and host-clocked sound-CPU execution before emulator reset. A plain reset within the same diagnostic can still retain a deliberately armed decoder, but an ordinary library game can never inherit it from the previously loaded experimental game. A core regression checks both status flags and the restored production bootstrap after cartridge replacement; the frontend checks restoration of ordinary disk-backed SRAM access. This was identified by an independent failed CI test and fixed at the emulator mode boundary.

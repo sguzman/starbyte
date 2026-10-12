@@ -178,6 +178,7 @@ impl IplUpload {
                     return UploadEvent::None;
                 }
                 self.destination = u16::from_le_bytes([cpu_ports[2], cpu_ports[3]]);
+                Self::write_pointer(ram, self.destination, ram_writable);
                 self.expected_index = 0;
                 self.entrypoint = None;
                 spc_ports[0] = token;
@@ -219,6 +220,9 @@ impl IplUpload {
                 // command. Repeated port-0 values are already ignored.
                 self.blocks_finished = self.blocks_finished.saturating_add(1);
                 let address = u16::from_le_bytes([cpu_ports[2], cpu_ports[3]]);
+                // The IPL's Start loop uses MOVW $00,YA for every block
+                // command, including an entrypoint handoff.
+                Self::write_pointer(ram, address, ram_writable);
                 spc_ports[0] = token;
                 if cpu_ports[1] == 0 {
                     self.entrypoint = Some(address);
@@ -249,6 +253,16 @@ impl IplUpload {
         }
     }
 
+    /// The real IPL keeps the active transfer/jump pointer in direct
+    /// page $00/$01. An uploaded driver may inspect these two bytes.
+    fn write_pointer(ram: &mut [u8], address: u16, ram_writable: bool) {
+        if ram_writable {
+            let [lo, hi] = address.to_le_bytes();
+            ram[0] = lo;
+            ram[1] = hi;
+        }
+    }
+
     fn write_byte(
         &mut self,
         token: u8,
@@ -264,6 +278,11 @@ impl IplUpload {
         }
         self.destination = address.wrapping_add(1);
         self.expected_index = token.wrapping_add(1);
+        // After Y wraps from $FF to $00 the IPL executes INC $01.
+        // It does not rewrite the whole pointer for each uploaded byte.
+        if token == u8::MAX && ram_writable {
+            ram[1] = ram[1].wrapping_add(1);
+        }
         self.bytes_written = self.bytes_written.saturating_add(1);
         spc_ports[0] = token;
         UploadEvent::ByteWritten { address, value }
@@ -344,6 +363,68 @@ mod tests {
         assert_eq!(h.transfer.bytes_written(), 0);
         assert_eq!(h.transfer.blocks_finished(), 0);
         assert_eq!(h.transfer.phase(), UploadPhase::Executable);
+    }
+
+    #[test]
+    fn ipl_direct_page_pointer_tracks_blocks_handoff_and_index_rollover() {
+        let mut h = Harness::new();
+        h.kick(0x12f0);
+        assert_eq!(&h.ram[..2], &[0xf0, 0x12]);
+        for index in 0..=255_u16 {
+            h.send_byte(index as u8, index as u8, 0x12f0 + index);
+            if index == 254 {
+                assert_eq!(&h.ram[..2], &[0xf0, 0x12]);
+            }
+        }
+        // The IPL increments only the high byte of its base pointer
+        // when the transfer index wraps to zero.
+        assert_eq!(&h.ram[..2], &[0xf0, 0x13]);
+        h.cpu[1] = 1;
+        h.cpu[2] = 0x78;
+        h.cpu[3] = 0x34;
+        assert_eq!(
+            h.send(2),
+            UploadEvent::NextBlock {
+                destination: 0x3478
+            }
+        );
+        assert_eq!(&h.ram[..2], &[0x78, 0x34]);
+        h.send_byte(0, 0xab, 0x3478);
+        h.cpu[1] = 0;
+        h.cpu[2] = 0xcd;
+        h.cpu[3] = 0xab;
+        assert_eq!(h.send(3), UploadEvent::EntryPoint { address: 0xabcd });
+        assert_eq!(&h.ram[..2], &[0xcd, 0xab]);
+        assert_eq!(h.ram[0x3478], 0xab);
+    }
+
+    #[test]
+    fn ipl_pointer_writes_honor_test_ram_protection() {
+        let mut h = Harness::new();
+        h.cpu = [0xcc, 1, 0x56, 0x34];
+        assert_eq!(
+            h.transfer
+                .observe_with_ram_writes(h.cpu, &mut h.spc, &mut h.ram, false),
+            UploadEvent::KickAccepted
+        );
+        assert_eq!(&h.ram[..2], &[0, 0]);
+        h.cpu = [0, 0x99, 0x56, 0x34];
+        assert_eq!(
+            h.transfer
+                .observe_with_ram_writes(h.cpu, &mut h.spc, &mut h.ram, false),
+            UploadEvent::ByteWritten {
+                address: 0x3456,
+                value: 0x99,
+            }
+        );
+        assert_eq!(&h.ram[..2], &[0, 0]);
+        h.cpu = [3, 0, 0x00, 0x20];
+        assert_eq!(
+            h.transfer
+                .observe_with_ram_writes(h.cpu, &mut h.spc, &mut h.ram, true),
+            UploadEvent::EntryPoint { address: 0x2000 }
+        );
+        assert_eq!(&h.ram[..2], &[0x00, 0x20]);
     }
 
     #[test]
@@ -451,6 +532,7 @@ mod tests {
                 value: 1,
             }
         );
+        assert_eq!(&h.ram[..2], &[0x00, 0x40]);
         assert_eq!(h.transfer.blocks_finished(), 1);
         assert_eq!(h.transfer.bytes_written(), 255);
         assert_eq!(h.transfer.bytes_stored(), 255);

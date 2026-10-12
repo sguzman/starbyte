@@ -2289,6 +2289,33 @@ mod tests {
     }
 
     #[test]
+    fn isolated_ipl_upload_exposes_boot_loader_pointer_in_spc_ram() {
+        let mut apu = Apu::default();
+        apu.reset();
+        apu.enable_isolated_ipl_upload();
+
+        for (port, value) in [(1, 1), (2, 0x34), (3, 0x12), (0, 0xcc)] {
+            apu.write_cpu_port(port, value).unwrap();
+        }
+        apu.step_master_cycles(6);
+        assert_eq!(apu.read_spc_ram(0), 0x34);
+        assert_eq!(apu.read_spc_ram(1), 0x12);
+
+        apu.write_cpu_port(1, 0x6f).unwrap();
+        apu.write_cpu_port(0, 0).unwrap();
+        apu.step_master_cycles(6);
+        assert_eq!(apu.read_spc_ram(0x1234), 0x6f);
+
+        for (port, value) in [(1, 0), (2, 0x78), (3, 0x56), (0, 2)] {
+            apu.write_cpu_port(port, value).unwrap();
+        }
+        apu.step_master_cycles(6);
+        assert_eq!(apu.isolated_ipl_upload().unwrap().entrypoint(), Some(0x5678));
+        assert_eq!(apu.spc700.pc, 0x5678);
+        assert_eq!((apu.read_spc_ram(0), apu.read_spc_ram(1)), (0x78, 0x56));
+    }
+
+    #[test]
     fn isolated_ipl_upload_to_output_mailboxes_clobbers_the_index_ack() {
         let mut apu = Apu::default();
         apu.reset();

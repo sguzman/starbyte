@@ -221,6 +221,7 @@ pub struct StarbyteApp {
     loaded_game_id: Option<String>,
     show_properties: bool,
     rom_dir_input: String,
+    cheatarium_root_input: String,
     logs: SharedLogBuffer,
     jobs: Vec<JobRecord>,
     next_job_id: u64,
@@ -330,6 +331,12 @@ impl StarbyteApp {
             status_line
         };
         let audio_muted = config.audio.mute_on_startup;
+        let cheatarium_root_input = config
+            .cheats
+            .cheatarium_root
+            .as_ref()
+            .map(|root| root.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let mut app = Self {
             assets,
             config,
@@ -351,6 +358,7 @@ impl StarbyteApp {
             loaded_game_id: None,
             show_properties: false,
             rom_dir_input: String::new(),
+            cheatarium_root_input,
             logs,
             jobs: Vec::new(),
             next_job_id: 1,
@@ -1340,6 +1348,34 @@ impl StarbyteApp {
                         .changed()
                     {
                         self.persist_config();
+                    }
+                    ui.separator();
+                    ui.label("Local Cheatarium checkout");
+                    ui.horizontal(|ui| {
+                        ui.text_edit_singleline(&mut self.cheatarium_root_input);
+                        if ui.button("Save Path").clicked() {
+                            let root = self.cheatarium_root_input.trim();
+                            self.config.cheats.cheatarium_root =
+                                (!root.is_empty()).then(|| PathBuf::from(root));
+                            self.persist_config();
+                            self.status_line = "Cheatarium source path saved.".to_owned();
+                        }
+                        if ui.button("Browse").clicked()
+                            && let Some(root) = rfd::FileDialog::new().pick_folder()
+                        {
+                            self.cheatarium_root_input = root.display().to_string();
+                            self.config.cheats.cheatarium_root = Some(root);
+                            self.persist_config();
+                            self.status_line = "Cheatarium source path saved.".to_owned();
+                        }
+                    });
+                    if let Some(path) = self.config.cheats.cheatarium_snes_index() {
+                        ui.label(format!("SNES index: {}", path.display()));
+                        if !path.is_file() {
+                            ui.label("Local index not found at the configured path.");
+                        }
+                    } else {
+                        ui.label("Set a local checkout to use Cheatarium's SNES index.");
                     }
                 });
 

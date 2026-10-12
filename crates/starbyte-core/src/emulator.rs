@@ -62,6 +62,7 @@ impl EmulatorBuilder {
             apu: Apu::with_ipl_path(self.assets.spc700_ipl.clone()),
             frame_buffer: FrameBuffer::default(),
             pending_audio: AudioFrame::default(),
+            cpu_trace_scratch: Vec::new(),
             system: SystemBus::default(),
             assets: self.assets,
         }
@@ -75,6 +76,7 @@ pub struct Emulator {
     apu: Apu,
     frame_buffer: FrameBuffer,
     pending_audio: AudioFrame,
+    cpu_trace_scratch: Vec<BusEvent>,
     system: SystemBus,
     assets: AssetConfig,
 }
@@ -107,6 +109,7 @@ impl Emulator {
             self.cpu.registers.pc = vector;
         }
         self.pending_audio = AudioFrame::default();
+        self.cpu_trace_scratch.clear();
         self.frame_buffer = FrameBuffer::default();
     }
 
@@ -184,10 +187,15 @@ impl Emulator {
         }
     }
 
-    /// Step one instruction in the placeholder model.
+    /// Run a normal game instruction using reusable bus-trace allocation.
     pub fn step_instruction(&mut self) -> Result<()> {
-        let _ = self.step_instruction_with_trace()?;
-        Ok(())
+        if self.system.cartridge().is_none() {
+            return Err(Error::InvalidRom("no ROM loaded".to_owned()));
+        }
+        self.system.sync_apu_ports_from_runtime(&self.apu);
+        self.cpu
+            .step_with_bus_into(&mut self.system, &mut self.cpu_trace_scratch)?;
+        self.finish_cpu_step(self.cpu_trace_scratch.len())
     }
 
     /// Step one instruction and return the captured CPU bus events.
@@ -195,24 +203,23 @@ impl Emulator {
         if self.system.cartridge().is_none() {
             return Err(Error::InvalidRom("no ROM loaded".to_owned()));
         }
-
         self.system.sync_apu_ports_from_runtime(&self.apu);
         let trace = self.cpu.step_with_bus(&mut self.system)?;
+        self.finish_cpu_step(trace.len())?;
+        Ok(trace)
+    }
+
+    /// Advance all other subsystems identically with or without a CPU trace.
+    fn finish_cpu_step(&mut self, bus_events: usize) -> Result<()> {
         self.system.sync_apu_ports_to_runtime(&mut self.apu);
-        // WAI and STP produce no CPU bus accesses while idling, but the
-        // console's PPU/APU clocks must continue advancing. Count one
-        // internal CPU cycle for each empty instruction-step trace.
-        let master_cycles = (trace.len() as u64)
+        // WAI and STP idle cycles have no bus events but advance hardware time.
+        let master_cycles = (bus_events as u64)
             .max(1)
             .saturating_mul(CPU_BUS_CYCLE_MASTER_CYCLES);
-        // In the explicit sound-driver probe, clock SPC instructions and
-        // DSP samples in small host quanta rather than granting a full 65816
-        // instruction's timer credit before the sound CPU gets to run.
-        // Production gameplay does not execute commercial SPC programs.
         self.advance_apu_for_cpu_step(master_cycles)?;
         self.system.sync_apu_ports_from_runtime(&self.apu);
         self.system.advance_master_clocks(master_cycles);
-        Ok(trace)
+        Ok(())
     }
 
     /// Borrow the current framebuffer.
@@ -779,6 +786,28 @@ mod tests {
         );
         assert_eq!(emulator.host_read_u8(0x004218), 0x80);
         assert_eq!(emulator.host_read_u8(0x004219), 0x10);
+    }
+
+    #[test]
+    fn reusable_cpu_trace_matches_observed_execution_during_gameplay() {
+        let mut rom = rom_bytes();
+        rom[0x7ffc] = 0;
+        rom[0x7ffd] = 0x80;
+        // LDA #$2A; STA $20; INC $20; BRA back to LDA.
+        rom[..8].copy_from_slice(&[0xa9, 0x2a, 0x85, 0x20, 0xe6, 0x20, 0x80, 0xf8]);
+        let cart = Cartridge::from_bytes(rom, None).unwrap();
+        let mut normal = Emulator::default();
+        normal.load_rom(cart);
+        let mut observed = normal.clone();
+        for _ in 0..48 {
+            normal.step_instruction().unwrap();
+            let events = observed.step_instruction_with_trace().unwrap();
+            assert_eq!(normal.cpu_trace_scratch, events);
+            assert_eq!(normal.cpu.registers, observed.cpu.registers);
+            assert_eq!(normal.timing().master_clock, observed.timing().master_clock);
+        }
+        assert!(normal.cpu_trace_scratch.capacity() > 0);
+        assert_eq!(normal.save_state().unwrap(), observed.save_state().unwrap());
     }
 
     #[test]

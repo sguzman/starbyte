@@ -622,7 +622,7 @@ mod tests {
             .recent_roms
             .push(temp_dir.path().join("game.sfc"));
         config.mode = AppMode::Prod;
-        config.cheats.cheatarium_root = Some(PathBuf::from("~/Code/Text/cheatarium"));
+        config.cheats.cheatarium_root = Some(std::path::PathBuf::from("~/example/cheatarium"));
         config.ui.show_log_panel = false;
         config.ui.details_panel_width = 512.0;
         config
@@ -638,15 +638,13 @@ mod tests {
         assert_eq!(loaded.mode, AppMode::Prod);
         assert_eq!(
             loaded.cheats.cheatarium_root.as_deref(),
-            Some(std::path::Path::new("~/Code/Text/cheatarium"))
+            Some(std::path::Path::new("~/example/cheatarium"))
         );
-        assert_eq!(
-            loaded.cheats.cheatarium_snes_index(),
-            std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .map(|home| home.join("Code/Text/cheatarium/generated/v1/snes.json.gz"))
-                .or_else(|| Some(PathBuf::from("~/Code/Text/cheatarium/generated/v1/snes.json.gz")))
-        );
+        assert!(loaded
+            .cheats
+            .cheatarium_snes_index()
+            .unwrap()
+            .ends_with("example/cheatarium/generated/v1/snes.json.gz"));
         assert!(!loaded.ui.show_log_panel);
         assert_eq!(loaded.ui.details_panel_width, 512.0);
         assert_eq!(

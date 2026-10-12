@@ -211,6 +211,8 @@ pub struct StarbyteApp {
     show_performance_overlay: bool,
     show_input_overlay: bool,
     pending_step_frames: u32,
+    /// Explicitly requested bounded native window smoke; never persistent.
+    exit_after_frames: Option<u64>,
     last_sram_flush: Instant,
     show_compact_settings: bool,
     show_compact_session: bool,
@@ -226,6 +228,7 @@ impl StarbyteApp {
         startup_rom_dirs: Vec<PathBuf>,
         experimental_sound_driver: bool,
         prefer_dark_mode_override: Option<bool>,
+        exit_after_frames: Option<u64>,
         logs: SharedLogBuffer,
     ) -> Result<Self> {
         if let Some(prefer_dark_mode) = prefer_dark_mode_override {
@@ -325,6 +328,7 @@ impl StarbyteApp {
             show_performance_overlay: false,
             show_input_overlay: false,
             pending_step_frames: 0,
+            exit_after_frames,
             last_sram_flush: Instant::now(),
             show_compact_settings: false,
             show_compact_session: false,
@@ -2147,6 +2151,16 @@ impl eframe::App for StarbyteApp {
             }
         } else {
             ctx.request_repaint_after(Duration::from_millis(100));
+        }
+
+        if let Some(limit) = self.exit_after_frames
+            && self.session.snapshot().frame >= limit
+        {
+            self.exit_after_frames = None;
+            let frame = self.session.snapshot().frame;
+            info!(frame, "native GUI smoke completed");
+            println!("STARBYTE_NATIVE_SMOKE_OK frame={frame}");
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
 
         if self.session.snapshot().has_rom

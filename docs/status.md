@@ -4,6 +4,12 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## Automated native Wayland smoke (2026-10-12; CI pending)
+
+A bounded `starbyte-egui --demo --exit-after-frames 30` probe now requests a real native egui window under a **Weston headless Wayland compositor** and closes cleanly after 30 completed SNES frames. The Linux CI job builds the GUI and runs this probe with Mesa software rendering, no X11 DISPLAY and an isolated temporary config/cache, rejecting launch failures, hangs, early emulator errors and missing completion markers. The same frame limit can be paired with an explicit user-owned `--rom` and `--experimental-sound-driver` for later native acceptance; it is never persisted or automatically enabled.
+
+**Boundary:** virtual Weston checks native Wayland window startup and frame progression, not the user's real Hyprland session, physical controllers, full-screen/tiled behavior, live speakers, or SMW sound fidelity. The new CI job has not yet completed.
+
 ## First commercial-ROM-generated sound (2026-10-12; local acceptance probe)
 
 A user-provided local, no-save-RAM **Super Mario World** ROM completed all **500 of 500 headless frames** at commit `18cc86b`, with `--apu-upload-probe --apu-execute-driver --audio-wav` explicitly enabled. The attached private diagnostics contain 500 `starbyte.frame_log.v1` records, a completed `starbyte.run_report.v1` and a valid 32 kHz, 16-bit, stereo WAV of 266,229 sample pairs (8.320 seconds). No proprietary ROM bytes, game audio or private filesystem paths are committed.

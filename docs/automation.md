@@ -2,6 +2,12 @@
 
 Starbyte is designed to be straightforward for AI coding agents to build, test and inspect. **It does not currently implement an MCP server**. The initial supported interface is the local Rust CLI.
 
+## Native GUI smoke automation
+
+The desktop accepts `--exit-after-frames N` together with either `--demo` or an explicit `--rom PATH`. It creates an actual native window, renders game frames under the compositor, and requests a clean close after at least N completed emulated frames, printing `STARBYTE_NATIVE_SMOKE_OK frame=N`. An emulation error or a compositor hang **never** produces that marker. The option is diagnostic-only, nonpersistent, and cannot run without a startup ROM/demo or with `--speaker-test`.
+
+Linux GitHub Actions runs `starbyte-egui --demo --exit-after-frames 30` inside a virtual Weston headless Wayland session with software OpenGL and isolated config/cache. This does not prove that the same build works under physical Hyprland, that audio reaches the OS speakers, or that any commercial game is playable. To bound a local experimental sound run, use `--rom /path/to/user/game.zip --experimental-sound-driver --exit-after-frames 500`; the opt-in sound driver still disables persistent SRAM/slots and must never turn on implicitly.
+
 ## Discover commands
 
 ```sh

@@ -40,6 +40,11 @@ struct Args {
     #[arg(long, requires = "rom", conflicts_with_all = ["demo", "speaker_test"])]
     experimental_sound_driver: bool,
 
+    /// CI/diagnostic only: close the native GUI cleanly once N emulated
+    /// frames have completed. Requires a startup ROM or built-in demo.
+    #[arg(long, conflicts_with = "speaker_test", value_parser = clap::value_parser!(u64).range(1..))]
+    exit_after_frames: Option<u64>,
+
     /// Optional library ROM directory to add on startup. May be provided multiple times.
     #[arg(long = "rom-dir")]
     rom_dirs: Vec<PathBuf>,
@@ -63,6 +68,7 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    validate_frame_exit_args(&args)?;
     if args.speaker_test {
         crate::audio::AudioOutput::test_speakers()?;
         println!("Speaker probe finished (440 Hz stereo test tone).");
@@ -135,6 +141,7 @@ fn main() -> Result<()> {
                 rom_dirs.clone(),
                 args.experimental_sound_driver,
                 prefer_dark_mode_override,
+                args.exit_after_frames,
                 log_lines.clone(),
             )
             .map_err(|error| std::io::Error::other(error.to_string()))?;
@@ -142,6 +149,14 @@ fn main() -> Result<()> {
         }),
     )
     .map_err(|error| anyhow::anyhow!("failed to launch egui frontend: {error}"))
+}
+
+fn validate_frame_exit_args(args: &Args) -> Result<()> {
+    anyhow::ensure!(
+        args.exit_after_frames.is_none() || args.demo || args.rom.is_some(),
+        "--exit-after-frames requires --demo or --rom"
+    );
+    Ok(())
 }
 
 fn load_runtime_config(assets: &AssetConfig) -> Result<RuntimeConfig> {
@@ -185,7 +200,7 @@ fn discover_snes_library(config: &mut RuntimeConfig, home: &std::path::Path) -> 
 mod speaker_cli_tests {
     use clap::Parser;
 
-    use super::Args;
+    use super::{Args, validate_frame_exit_args};
 
     #[test]
     fn no_rom_speaker_probe_requires_explicit_opt_in() {
@@ -222,6 +237,43 @@ mod speaker_cli_tests {
                 "--experimental-sound-driver",
             ])
             .is_err()
+        );
+    }
+
+    #[test]
+    fn bounded_native_smoke_requires_a_startup_game_or_demo() {
+        let normal = Args::try_parse_from(["starbyte-egui"]).unwrap();
+        assert_eq!(normal.exit_after_frames, None);
+        assert!(validate_frame_exit_args(&normal).is_ok());
+        let missing = Args::try_parse_from([
+            "starbyte-egui",
+            "--exit-after-frames",
+            "30",
+        ])
+        .unwrap();
+        assert!(validate_frame_exit_args(&missing).is_err());
+        for flags in [
+            vec!["starbyte-egui", "--demo", "--exit-after-frames", "30"],
+            vec!["starbyte-egui", "--rom", "fixture.sfc", "--exit-after-frames", "500"],
+            vec![
+                "starbyte-egui",
+                "--rom",
+                "fixture.sfc",
+                "--experimental-sound-driver",
+                "--exit-after-frames",
+                "500",
+            ],
+        ] {
+            let args = Args::try_parse_from(flags).unwrap();
+            assert!(validate_frame_exit_args(&args).is_ok());
+            assert!(args.exit_after_frames.unwrap() > 0);
+        }
+        assert!(
+            Args::try_parse_from(["starbyte-egui", "--demo", "--exit-after-frames", "0"]).is_err()
+        );
+        assert!(
+            Args::try_parse_from(["starbyte-egui", "--speaker-test", "--exit-after-frames", "5"])
+                .is_err()
         );
     }
 

@@ -90,10 +90,18 @@ fn spc700_matches_independent_single_step_cpu_memory_and_bus_cases() {
         include_str!("fixtures/spc700_ref_68_6e.json"),
         include_str!("fixtures/spc700_ref_70_77.json"),
         include_str!("fixtures/spc700_ref_78_7f.json"),
+        include_str!("fixtures/spc700_ref_80_87.json"),
+        include_str!("fixtures/spc700_ref_88_8e.json"),
+        include_str!("fixtures/spc700_ref_90_97.json"),
+        include_str!("fixtures/spc700_ref_98_9f.json"),
+        include_str!("fixtures/spc700_ref_a0_a7.json"),
+        include_str!("fixtures/spc700_ref_a8_ae.json"),
+        include_str!("fixtures/spc700_ref_b0_b7.json"),
+        include_str!("fixtures/spc700_ref_b8_bf.json"),
     ] {
         references.extend(serde_json::from_str::<Vec<ReferenceStep>>(fixture).unwrap());
     }
-    assert_eq!(references.len(), 1208, "reference fixture truncated");
+    assert_eq!(references.len(), 1680, "reference fixture truncated");
     for case in references {
         let label = case.name.as_str();
         let mut cpu = Spc700::default();

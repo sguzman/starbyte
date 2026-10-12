@@ -576,11 +576,7 @@ impl StarbyteApp {
         state
     }
 
-    fn capture_gameplay_key_presses(
-        &mut self,
-        ctx: &egui::Context,
-        was_recording_binding: bool,
-    ) {
+    fn capture_gameplay_key_presses(&mut self, ctx: &egui::Context, was_recording_binding: bool) {
         let (keyboard_enabled, _) = controller_input_sources(
             self.config.input.active_device,
             ctx.wants_keyboard_input(),

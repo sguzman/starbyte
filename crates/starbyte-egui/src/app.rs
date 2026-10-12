@@ -2226,9 +2226,7 @@ impl eframe::App for StarbyteApp {
             );
             println!(
                 "STARBYTE_NATIVE_SMOKE_OK frame={frame} audio_pairs={} audio_nonzero_pairs={} audio_peak={} audio_first_nonzero_frame={first_audio_frame} spc_instructions={spc_instructions} uploaded_spc_bytes={uploaded_spc_bytes} audio_worker_spawned={audio_worker_spawned}",
-                metrics.stereo_pairs,
-                metrics.nonzero_pairs,
-                metrics.peak_absolute,
+                metrics.stereo_pairs, metrics.nonzero_pairs, metrics.peak_absolute,
             );
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
@@ -2258,8 +2256,8 @@ mod playback_tests {
 
     use super::{
         FRAME_INTERVAL, FrameClock, FramePerformance, NativeSmokeAudioMetrics, Vec2, egui,
-        fit_game_size, is_compact_layout,
-        merged_gamepad_buttons, pressed_button_labels, record_recent_rom, write_png_screenshot,
+        fit_game_size, is_compact_layout, merged_gamepad_buttons, pressed_button_labels,
+        record_recent_rom, write_png_screenshot,
     };
 
     #[test]

@@ -3745,7 +3745,7 @@ mod placeholder_tests {
             (0x8001_u16, 2_u64),
             (0x8002, 4),
             (0x8003, 7),
-            (0x8003, 8), // halted: one bounded idle cycle
+            (0x8003, 9), // halted: one read/wait bus pair, no instruction
         ] {
             cpu.step_with_memory(
                 |address| ram[usize::from(address)],
@@ -3757,7 +3757,7 @@ mod placeholder_tests {
         }
         let saved = serde_json::to_string(&cpu).unwrap();
         let restored: Spc700 = serde_json::from_str(&saved).unwrap();
-        assert_eq!(restored.cycles(), 8);
+        assert_eq!(restored.cycles(), 9);
         cpu.load_state(0x8000, 0, 0, 0, 0xef, 0);
         assert_eq!(cpu.cycles(), 0);
     }

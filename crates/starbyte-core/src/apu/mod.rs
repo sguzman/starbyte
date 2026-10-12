@@ -307,7 +307,11 @@ impl Apu {
         if !matches!(pc, 0xffc0 | 0xffc9)
             || !self.ipl_overlay_enabled
             || self.ipl_rom.is_some()
-            || self.ipl_upload.as_ref().and_then(IplUpload::entrypoint).is_none()
+            || self
+                .ipl_upload
+                .as_ref()
+                .and_then(IplUpload::entrypoint)
+                .is_none()
         {
             return false;
         }
@@ -2850,7 +2854,10 @@ mod tests {
         assert_eq!(apu.read_apu_port(0).unwrap(), 0xaa);
         assert_eq!(apu.read_spc_ram(0x0020), 0xde);
         assert!(audio.len() <= 16);
-        assert!(apu.run_isolated_uploaded_spc_program(1, &mut audio).is_err());
+        assert!(
+            apu.run_isolated_uploaded_spc_program(1, &mut audio)
+                .is_err()
+        );
     }
 
     #[test]
@@ -2862,7 +2869,11 @@ mod tests {
         upload_reentry_test_program(&mut apu, &[0x8f, 0, 0xf1, 0x5f, 0xc0, 0xff]);
         apu.write_spc_ram(0xffc0, 0x00); // NOP is legal in RAM.
         let mut audio = Vec::new();
-        assert_eq!(apu.run_isolated_uploaded_spc_program(3, &mut audio).unwrap(), 3);
+        assert_eq!(
+            apu.run_isolated_uploaded_spc_program(3, &mut audio)
+                .unwrap(),
+            3
+        );
         assert_eq!(
             apu.isolated_ipl_upload().unwrap().entrypoint(),
             Some(0x0400)

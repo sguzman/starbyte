@@ -12,7 +12,8 @@ use anyhow::{Context, Result};
 use sha1::{Digest, Sha1};
 
 use starbyte_core::{
-    Emulator, EmulatorBuilder, cartridge::Cartridge, input::ControllerState, manifest::AssetConfig,
+    Emulator, EmulatorBuilder, cartridge::Cartridge, emulator::SaveState, input::ControllerState,
+    manifest::AssetConfig,
 };
 
 pub use self::library::{
@@ -64,7 +65,7 @@ pub struct FrontendSession {
     rom_path: Option<PathBuf>,
     cartridge_identity: Option<String>,
     active_cheat_patches: Vec<CheatPatch>,
-    quick_state: Option<String>,
+    quick_state: Option<SaveState>,
     /// Last SRAM image successfully read from or written to disk.
     last_saved_ram: Option<Vec<u8>>,
     /// Isolated sound-driver compatibility run: never read/write user SRAM
@@ -200,7 +201,7 @@ impl FrontendSession {
     /// The slot is discarded whenever another ROM is loaded or the app closes.
     pub fn quick_save(&mut self) -> Result<()> {
         anyhow::ensure!(self.rom_path.is_some(), "No ROM loaded for quick save");
-        self.quick_state = Some(self.emulator.save_state().context("quick save failed")?);
+        self.quick_state = Some(self.emulator.capture_state());
         Ok(())
     }
 
@@ -214,10 +215,11 @@ impl FrontendSession {
     pub fn quick_load(&mut self) -> Result<()> {
         let state = self
             .quick_state
-            .as_deref()
-            .context("No quick save in this session")?;
+            .as_ref()
+            .context("No quick save in this session")?
+            .clone();
         self.emulator
-            .load_state(state)
+            .restore_state(state)
             .context("quick load failed")?;
         self.emulator.refresh_framebuffer();
         self.apply_active_cheats();

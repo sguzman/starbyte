@@ -251,20 +251,34 @@ impl Emulator {
         self.system.load_save_ram(bytes)
     }
 
-    /// Serialize a save-state snapshot.
-    pub fn save_state(&self) -> Result<String> {
-        serde_json::to_string_pretty(&SaveState {
+    /// Capture an in-memory state without encoding the cartridge as JSON.
+    ///
+    /// Intended for ephemeral F5/F8 quick saves. Disk slots still use the
+    /// versioned JSON format returned by `save_state`.
+    #[must_use]
+    pub fn capture_state(&self) -> SaveState {
+        SaveState {
             version: SAVE_STATE_VERSION,
             cpu: self.cpu.clone(),
             apu: self.apu.clone(),
             system: self.system.clone(),
-        })
-        .map_err(Into::into)
+        }
     }
 
-    /// Restore a save-state snapshot.
+    /// Serialize a save-state snapshot in the existing disk-compatible format.
+    pub fn save_state(&self) -> Result<String> {
+        serde_json::to_string_pretty(&self.capture_state()).map_err(Into::into)
+    }
+
+    /// Restore a serialized disk snapshot.
     pub fn load_state(&mut self, state: &str) -> Result<()> {
-        let state: SaveState = serde_json::from_str(state)?;
+        let decoded: SaveState = serde_json::from_str(state)?;
+        self.restore_state(decoded)
+    }
+
+    /// Restore an in-memory quick snapshot through the same cartridge and
+    /// opt-in sound-driver safety checks used for persistent disk states.
+    pub fn restore_state(&mut self, state: SaveState) -> Result<()> {
         if state.version != SAVE_STATE_VERSION {
             return Err(Error::InvalidRom(format!(
                 "unsupported save-state version {}",
@@ -551,6 +565,30 @@ mod tests {
         let mut restored = Emulator::default();
         restored.load_state(&state).unwrap();
         assert_eq!(restored.save_state().unwrap(), state);
+    }
+
+    #[test]
+    fn in_memory_quick_state_restores_identically_to_disk_json() {
+        let mut rom = rom_bytes();
+        rom[0x7ffc] = 0;
+        rom[0x7ffd] = 0x80;
+        rom[0] = 0xea;
+        let cart = Cartridge::from_bytes(rom, None).unwrap();
+        let mut original = Emulator::default();
+        original.load_rom(cart);
+        original.step_instruction().unwrap();
+
+        let snapshot = original.capture_state();
+        let disk_state = original.save_state().unwrap();
+        let mut from_memory = Emulator::default();
+        from_memory.restore_state(snapshot).unwrap();
+        let mut from_disk = Emulator::default();
+        from_disk.load_state(&disk_state).unwrap();
+
+        assert_eq!(from_memory.save_state().unwrap(), disk_state);
+        assert_eq!(from_disk.save_state().unwrap(), disk_state);
+        assert_eq!(from_memory.cpu_registers(), from_disk.cpu_registers());
+        assert_eq!(from_memory.timing().master_clock, from_disk.timing().master_clock);
     }
 
     #[test]

@@ -73,7 +73,7 @@ fn check_cycle(
 fn spc700_matches_independent_single_step_cpu_memory_and_bus_cases() {
     let references: Vec<ReferenceStep> =
         serde_json::from_str(include_str!("fixtures/spc700_singlestep.json")).unwrap();
-    assert_eq!(references.len(), 120, "reference fixture truncated");
+    assert_eq!(references.len(), 240, "reference fixture truncated");
     for case in references {
         let label = case.name.as_str();
         let mut cpu = Spc700::default();

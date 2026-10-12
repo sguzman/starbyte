@@ -131,6 +131,30 @@ pub struct CheatEntry {
     pub enabled: bool,
 }
 
+impl CheatEntry {
+    /// Whether Starbyte can actually execute this code instead of merely listing it.
+    ///
+    /// Cheatarium Game Genie substitutions and unresolved compound codes need
+    /// separate device-specific execution, not direct SNES memory writes.
+    #[must_use]
+    pub fn can_execute(&self) -> bool {
+        if !self.source.starts_with("Cheatarium /") {
+            return true; // Preserve the existing legacy cheat-provider behavior.
+        }
+        if !matches!(
+            self.kind.as_str(),
+            "raw-snes-address-value" | "action-replay" | "pro-action-replay"
+        ) {
+            return false;
+        }
+        let bytes = self.code.as_bytes();
+        bytes.len() == 8
+            && bytes.iter().all(u8::is_ascii_hexdigit)
+            && bytes[0] == b'7'
+            && matches!(bytes[1], b'E' | b'e' | b'F' | b'f')
+    }
+}
+
 /// Installed/missing state for one library entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -914,6 +938,11 @@ fn cheatarium_candidates(
                     .to_owned(),
                 enabled: enabled_ids.contains(&id),
             });
+            if let Some(last) = matches.last_mut()
+                && !last.can_execute()
+            {
+                last.enabled = false;
+            }
         }
     }
     matches
@@ -1211,7 +1240,7 @@ fn load_cached_cheats(
     let mut cheats: Vec<CheatEntry> = read_json_or_default(cheat_cache_path(cache_root, game_id))?;
     let enabled_ids = enabled_ids.into_iter().collect::<BTreeSet<_>>();
     for cheat in &mut cheats {
-        cheat.enabled = enabled_ids.contains(&cheat.id);
+        cheat.enabled = enabled_ids.contains(&cheat.id) && cheat.can_execute();
     }
     Ok(cheats)
 }
@@ -2133,6 +2162,14 @@ mod tests {
         assert_eq!(cheats[0].id, "cheatarium:source-1:3");
         assert_eq!(cheats[0].kind, "raw-snes-address-value");
         assert!(!cheats[0].enabled);
+        assert!(cheats[0].can_execute());
+        let mut unsupported = cheats[0].clone();
+        unsupported.kind = "game-genie".to_owned();
+        unsupported.code = "DDB4-6F07".to_owned();
+        assert!(!unsupported.can_execute());
+        unsupported.kind = "raw-snes-address-value".to_owned();
+        unsupported.code = "7E0DBE09+7E0DBD09".to_owned();
+        assert!(!unsupported.can_execute());
     }
 
     #[test]

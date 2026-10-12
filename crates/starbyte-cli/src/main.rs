@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::json;
 use starbyte_frontend::{LibraryFilter, LibraryService, LibraryTarget};
-use tracing::{Level, info};
+use tracing::{Level, info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
 
 use starbyte_core::{

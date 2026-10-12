@@ -1450,7 +1450,10 @@ mod tests {
         }
         for instance in [&original, &resumed] {
             assert_eq!(instance.peek_wram_u8(0x7e0010), Some(0xaa));
-            assert_eq!(instance.isolated_apu_upload().unwrap().entrypoint(), Some(0x0400));
+            assert_eq!(
+                instance.isolated_apu_upload().unwrap().entrypoint(),
+                Some(0x0400)
+            );
             assert_eq!(
                 instance.isolated_apu_upload().unwrap().bytes_written(),
                 second_driver.len() as u64

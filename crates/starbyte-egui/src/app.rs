@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::Result;
 use eframe::egui::{self, ColorImage, RichText, TextureHandle, TextureOptions, Vec2};
-use gilrs::{EventType, GamepadId, Gilrs};
+use gilrs::{Axis, EventType, GamepadId, Gilrs};
 use image::ImageReader;
 use tracing::{debug, info, warn};
 
@@ -34,6 +34,34 @@ const FRAME_INTERVAL: Duration = Duration::from_nanos(16_639_357);
 // with a diagnostic rather than freezing until the process is killed.
 const GUI_FRAME_TIMEOUT: Duration = Duration::from_millis(1_500);
 const COMPACT_LAYOUT_WIDTH: f32 = 960.0;
+/// Treat a deflected primary analog stick like the SNES D-pad, including
+/// controllers that report directional input as axes rather than buttons.
+const GAMEPAD_STICK_DEADZONE: f32 = 0.5;
+
+#[derive(Debug, Default, Clone, Copy)]
+struct StickAxes {
+    x: f32,
+    y: f32,
+}
+
+impl StickAxes {
+    fn dpad_buttons(self) -> BTreeSet<String> {
+        let mut buttons = BTreeSet::new();
+        if self.x <= -GAMEPAD_STICK_DEADZONE {
+            buttons.insert("DPadLeft".to_owned());
+        } else if self.x >= GAMEPAD_STICK_DEADZONE {
+            buttons.insert("DPadRight".to_owned());
+        }
+        // Gilrs' normalized LeftStickY is positive when pushed upward.
+        if self.y >= GAMEPAD_STICK_DEADZONE {
+            buttons.insert("DPadUp".to_owned());
+        } else if self.y <= -GAMEPAD_STICK_DEADZONE {
+            buttons.insert("DPadDown".to_owned());
+        }
+        buttons
+    }
+}
+
 
 fn is_compact_layout(width: f32, height: f32) -> bool {
     width < COMPACT_LAYOUT_WIDTH || height < 640.0
@@ -127,6 +155,7 @@ pub struct StarbyteApp {
     gilrs: Option<Gilrs>,
     gamepad_buttons_down: BTreeSet<String>,
     gamepad_buttons_by_id: HashMap<GamepadId, BTreeSet<String>>,
+    gamepad_sticks_by_id: HashMap<GamepadId, StickAxes>,
     pending_keyboard_bind: Option<String>,
     pending_gamepad_bind: Option<String>,
     is_playing: bool,
@@ -238,6 +267,7 @@ impl StarbyteApp {
             gilrs,
             gamepad_buttons_down: BTreeSet::new(),
             gamepad_buttons_by_id: HashMap::new(),
+            gamepad_sticks_by_id: HashMap::new(),
             pending_keyboard_bind: None,
             pending_gamepad_bind: None,
             is_playing: start_playing,
@@ -545,15 +575,27 @@ impl StarbyteApp {
                         buttons.remove(&format!("{button:?}"));
                     }
                 }
+                EventType::AxisChanged(axis, value, _) => {
+                    let stick = self.gamepad_sticks_by_id.entry(event.id).or_default();
+                    match axis {
+                        Axis::LeftStickX => stick.x = value,
+                        Axis::LeftStickY => stick.y = value,
+                        _ => {}
+                    }
+                }
                 EventType::Disconnected => {
                     // A controller cannot emit release events after unplugging.
                     // Clear only its held buttons, not those on other pads.
                     self.gamepad_buttons_by_id.remove(&event.id);
+                    self.gamepad_sticks_by_id.remove(&event.id);
                 }
                 _ => {}
             }
         }
         self.gamepad_buttons_down = merged_gamepad_buttons(&self.gamepad_buttons_by_id);
+        for stick in self.gamepad_sticks_by_id.values() {
+            self.gamepad_buttons_down.extend(stick.dpad_buttons());
+        }
         if let Some((action, name)) = new_binding {
             self.config
                 .input
@@ -2067,6 +2109,37 @@ mod playback_tests {
             ..Default::default()
         };
         assert_eq!(pressed_button_labels(state), "Start Up A");
+    }
+
+    #[test]
+    fn primary_gamepad_stick_drives_cardinal_and_diagonal_snes_directions() {
+        use super::StickAxes;
+        let neutral = StickAxes { x: 0.15, y: -0.3 }.dpad_buttons();
+        assert!(neutral.is_empty());
+        let up_right = StickAxes { x: 0.8, y: 0.9 }.dpad_buttons();
+        assert!(up_right.contains("DPadUp"));
+        assert!(up_right.contains("DPadRight"));
+        assert!(!up_right.contains("DPadDown"));
+        assert!(!up_right.contains("DPadLeft"));
+        let down_left = StickAxes { x: -0.75, y: -1.0 }.dpad_buttons();
+        assert!(down_left.contains("DPadDown"));
+        assert!(down_left.contains("DPadLeft"));
+        assert!(StickAxes::default().dpad_buttons().is_empty());
+    }
+
+    #[test]
+    fn stick_directions_combine_with_physical_pad_buttons() {
+        use super::StickAxes;
+        let pads = std::collections::HashMap::from([(
+            1_u8,
+            std::collections::BTreeSet::from(["South".to_owned(), "DPadUp".to_owned()]),
+        )]);
+        let mut pressed = merged_gamepad_buttons(&pads);
+        pressed.extend(StickAxes { x: -0.8, y: 0.0 }.dpad_buttons());
+        assert!(pressed.contains("South"));
+        assert!(pressed.contains("DPadUp"));
+        assert!(pressed.contains("DPadLeft"));
+        assert_eq!(pressed.len(), 3);
     }
 
     #[test]

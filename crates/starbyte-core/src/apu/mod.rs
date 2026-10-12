@@ -793,10 +793,13 @@ mod tests {
             let cycles_after_halt = apu.spc700.cycles();
             for _ in 0..5 {
                 let idle = apu.execute_spc_program_instruction().unwrap();
-                assert_eq!(idle.len(), 1);
+                assert_eq!(idle.len(), 2);
+                assert_eq!(idle[0].access, crate::bus::AccessKind::Read);
+                assert_eq!(idle[0].address, 0x0401);
+                assert_eq!(idle[1].access, crate::bus::AccessKind::Wait);
                 assert_eq!(apu.spc700.pc, 0x0401);
             }
-            assert_eq!(apu.spc700.cycles(), cycles_after_halt + 5);
+            assert_eq!(apu.spc700.cycles(), cycles_after_halt + 10);
             assert_eq!(apu.status().spc700_steps, 1);
         }
     }

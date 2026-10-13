@@ -3058,9 +3058,7 @@ impl eframe::App for StarbyteApp {
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| self.draw_top_bar(ui, ctx, compact));
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label(self.status_line.as_str());
                 if self.play_view && self.session.snapshot().has_rom {
-                    ui.separator();
                     let fps = if !self.is_playing {
                         "FPS: paused".to_owned()
                     } else {
@@ -3071,7 +3069,9 @@ impl eframe::App for StarbyteApp {
                     ui.label(RichText::new(fps).monospace()).on_hover_text(
                         "Completed emulated frames per real second (rolling 2 seconds). This is not GPU or display FPS. Enable Timing for frame-time and hitch details.",
                     );
+                    ui.separator();
                 }
+                ui.label(self.status_line.as_str());
                 let active = self
                     .jobs
                     .iter()

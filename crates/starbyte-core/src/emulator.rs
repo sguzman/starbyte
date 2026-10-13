@@ -395,6 +395,12 @@ impl Emulator {
         self.system.set_rom_read_patches(patches);
     }
 
+    /// Observe count of cartridge reads served by enabled ROM substitutions.
+    #[must_use]
+    pub const fn rom_read_patch_hits(&self) -> u64 {
+        self.system.rom_read_patch_hits()
+    }
+
     /// Host-side write access used by bootstrap tests and regression fixtures.
     pub fn host_write_u8(&mut self, address: u32, value: u8) {
         self.system.write(address, value);

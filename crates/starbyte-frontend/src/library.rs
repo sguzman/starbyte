@@ -1185,7 +1185,11 @@ fn labeled_rom_is_demo(title: &str) -> bool {
 }
 
 fn title_match_score(local: &LocalRomInfo, metadata: &GameMetadata) -> Option<usize> {
-    let local_filename = local.rom_path.file_stem().and_then(|name| name.to_str()).unwrap_or("");
+    let local_filename = local
+        .rom_path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
     let local_label = if local_filename.is_empty() {
         local.archive_member_path.as_deref().unwrap_or(&local.title)
     } else {
@@ -1193,10 +1197,7 @@ fn title_match_score(local: &LocalRomInfo, metadata: &GameMetadata) -> Option<us
     };
     let wanted_region = labeled_rom_region(local_label);
     let candidate_region = labeled_rom_region(&metadata.title);
-    if wanted_region.is_some()
-        && candidate_region.is_some()
-        && wanted_region != candidate_region
-    {
+    if wanted_region.is_some() && candidate_region.is_some() && wanted_region != candidate_region {
         return None;
     }
     if labeled_rom_is_demo(&metadata.title) && !labeled_rom_is_demo(local_label) {

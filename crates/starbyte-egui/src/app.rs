@@ -510,6 +510,8 @@ pub struct StarbyteApp {
     cheat_sort: CheatSort,
     cheat_sort_descending: bool,
     cheat_visibility: CheatVisibility,
+    /// Search needs durable keyboard focus; a menu popup closes on text clicks.
+    show_cheats_window: bool,
     selected_game_id: Option<String>,
     loaded_game_id: Option<String>,
     show_properties: bool,
@@ -681,6 +683,7 @@ impl StarbyteApp {
             cheat_sort: CheatSort::default(),
             cheat_sort_descending: false,
             cheat_visibility: CheatVisibility::default(),
+            show_cheats_window: false,
             selected_game_id: None,
             loaded_game_id: None,
             show_properties: false,
@@ -1994,7 +1997,9 @@ impl StarbyteApp {
                     SoundSessionMode::Persistent => "Sound (on)",
                 };
                 ui.menu_button(sound_label, |ui| self.draw_audio_controls(ui));
-                ui.menu_button("Cheats", |ui| self.draw_play_cheats_menu(ui));
+                if ui.button("Cheats").clicked() {
+                    self.show_cheats_window = !self.show_cheats_window;
+                }
                 if ui
                     .checkbox(&mut self.show_performance_overlay, "Timing")
                     .changed()
@@ -3415,6 +3420,20 @@ impl eframe::App for StarbyteApp {
         });
         if self.play_view {
             egui::CentralPanel::default().show(ctx, |ui| self.draw_play_view(ui));
+            if self.show_cheats_window {
+                // egui menu popups are transient: clicking a TextEdit inside a
+                // menu dismisses the popup before the user can type. Use a
+                // persistent floating window with real text-input focus.
+                let mut open = self.show_cheats_window;
+                egui::Window::new("Game Cheats")
+                    .id(egui::Id::new("starbyte_game_cheats_window"))
+                    .open(&mut open)
+                    .resizable(true)
+                    .default_width(500.0)
+                    .default_height(490.0)
+                    .show(ctx, |ui| self.draw_play_cheats_menu(ui));
+                self.show_cheats_window = open;
+            }
         } else {
             if !compact {
                 self.draw_log_panel(ctx);

@@ -1672,7 +1672,9 @@ impl StarbyteApp {
                 let emulated_fps = self.frame_rate.fps(now);
                 if (frame_spike_reportable(timing)
                     || self.frame_rate.last_gap_ms >= FRAME_PACING_LOG_THRESHOLD_MS
-                    || emulated_fps.is_some_and(|fps| fps < 55.0))
+                    || emulated_fps.is_some_and(|fps| {
+                        fps < speed_target_fps(self.last_effective_speed_percent) * (55.0 / 60.1)
+                    }))
                     && now.saturating_duration_since(self.last_frame_spike_log)
                         >= FRAME_SPIKE_LOG_INTERVAL
                 {
@@ -3665,7 +3667,7 @@ impl eframe::App for StarbyteApp {
             let now = Instant::now();
             let interval = speed_frame_interval(speed);
             let late_by = now.saturating_duration_since(self.frame_clock.next_frame_at);
-            let frame_limit = if speed == 100 {
+            let frame_limit = if speed <= 100 {
                 MAX_NORMAL_CATCHUP_FRAMES
             } else {
                 MAX_ACCELERATED_FRAMES

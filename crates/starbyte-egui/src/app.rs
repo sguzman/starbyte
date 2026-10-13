@@ -382,6 +382,28 @@ fn tab_fast_forward_active(
     window_focused && !text_focused && !editing_binding && tab_held
 }
 
+/// Intercept Tab before egui turns it into keyboard focus traversal.
+/// Do not hijack Tab in dialogs, text editors, or key binding capture.
+fn route_fast_forward_tab(input: &mut egui::RawInput, intercept: bool, held: &mut bool) {
+    if !intercept || !input.focused {
+        *held = false;
+        return;
+    }
+    input.events.retain(|event| {
+        if let egui::Event::Key {
+            key: egui::Key::Tab,
+            pressed,
+            ..
+        } = event
+        {
+            *held = *pressed;
+            false
+        } else {
+            true
+        }
+    });
+}
+
 /// Cumulative PCM evidence for an explicitly bounded native GUI smoke.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct NativeSmokeAudioMetrics {
@@ -600,6 +622,8 @@ pub struct StarbyteApp {
     frame_clock: FrameClock,
     /// Last applied speed, used to reset pacing and flush old-speed audio.
     last_effective_speed_percent: u16,
+    /// Tab is consumed before egui's keyboard-navigation handler sees it.
+    tab_fast_forward_held: bool,
     frame_performance: FramePerformance,
     frame_rate: FrameRateMeter,
     last_frame_spike_log: Instant,
@@ -773,6 +797,7 @@ impl StarbyteApp {
             play_view: has_loaded_rom,
             frame_clock: FrameClock::new(Instant::now()),
             last_effective_speed_percent: initial_speed,
+            tab_fast_forward_held: false,
             frame_performance: FramePerformance::default(),
             frame_rate: FrameRateMeter::default(),
             last_frame_spike_log: Instant::now(),
@@ -2066,14 +2091,12 @@ impl StarbyteApp {
         // lock: egui nests another lock there and can deadlock native Wayland.
         let text_focused = ctx.wants_keyboard_input();
         let binding = self.pending_keyboard_bind.is_some() || self.pending_gamepad_bind.is_some();
-        let holding_tab = ctx.input(|input| {
-            tab_fast_forward_active(
-                input.focused,
-                text_focused,
-                binding,
-                input.key_down(egui::Key::Tab),
-            )
-        });
+        let holding_tab = tab_fast_forward_active(
+            ctx.input(|input| input.focused),
+            text_focused,
+            binding,
+            self.tab_fast_forward_held,
+        );
         if holding_tab {
             normalized_fast_forward_speed(self.config.video.fast_forward_speed_percent)
         } else {
@@ -3453,6 +3476,18 @@ impl StarbyteApp {
 }
 
 impl eframe::App for StarbyteApp {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // Eframe calls this before egui sees the key events. Otherwise Tab
+        // navigates toolbar buttons rather than functioning as fast-forward.
+        let active = self.play_view
+            && self.is_playing
+            && self.session.snapshot().has_rom
+            && self.pending_keyboard_bind.is_none()
+            && self.pending_gamepad_bind.is_none()
+            && !ctx.wants_keyboard_input();
+        route_fast_forward_tab(raw_input, active, &mut self.tab_fast_forward_held);
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Theme is installed at construction and when the user changes it.
         // Replacing egui visuals on every repaint invalidates unnecessary UI
@@ -4157,6 +4192,51 @@ mod playback_tests {
         meter.record(start + Duration::from_secs(3));
         assert_eq!(meter.completed_at.len(), 1);
         assert_eq!(meter.fps(start + Duration::from_secs(3)), None);
+    }
+
+    #[test]
+    fn tab_fast_forward_intercepts_navigation_but_preserves_other_key_events() {
+        use super::route_fast_forward_tab;
+        let tab = |pressed| egui::Event::Key {
+            key: egui::Key::Tab,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let a = egui::Event::Text("keep".to_owned());
+        let mut held = false;
+        let mut input = egui::RawInput {
+            events: vec![tab(true), a.clone()],
+            ..Default::default()
+        };
+        route_fast_forward_tab(&mut input, true, &mut held);
+        assert!(held);
+        assert_eq!(input.events, vec![a]);
+        let mut subsequent_frame = egui::RawInput::default();
+        route_fast_forward_tab(&mut subsequent_frame, true, &mut held);
+        assert!(held, "held Tab continues through repaint-only frames");
+        let mut release = egui::RawInput {
+            events: vec![tab(false)],
+            ..Default::default()
+        };
+        route_fast_forward_tab(&mut release, true, &mut held);
+        assert!(!held);
+        assert!(release.events.is_empty());
+        let mut text_editing = egui::RawInput {
+            events: vec![tab(true)],
+            ..Default::default()
+        };
+        route_fast_forward_tab(&mut text_editing, false, &mut held);
+        assert!(!held);
+        assert_eq!(text_editing.events, vec![tab(true)]);
+        let mut unfocused = egui::RawInput {
+            focused: false,
+            events: vec![tab(true)],
+            ..Default::default()
+        };
+        route_fast_forward_tab(&mut unfocused, true, &mut held);
+        assert!(!held);
     }
 
     #[test]

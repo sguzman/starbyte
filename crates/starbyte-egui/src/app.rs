@@ -1240,6 +1240,47 @@ impl StarbyteApp {
                 .as_ref()
                 .map_or(0, AudioOutput::submitted_nonzero_frames),
         ));
+        ui.separator();
+        ui.label("Live game-audio output check:");
+        if ui
+            .add_enabled(
+                self.config.audio.enabled
+                    && !self.audio_muted
+                    && self.config.audio.volume > 0.0,
+                egui::Button::new("Play 440 Hz through game audio worker"),
+            )
+            .on_hover_text(
+                "A short original test tone uses the SAME Rodio output stream, sink, and volume as the game's PCM. Game audio pauses briefly, not video or saved progress.",
+            )
+            .clicked()
+        {
+            if self.audio_output.is_none() {
+                match AudioOutput::start() {
+                    Ok(output) => {
+                        self.audio_output = Some(output);
+                        self.sync_audio_volume();
+                    }
+                    Err(error) => {
+                        self.status_line = format!("Could not start audio worker: {error}");
+                    }
+                }
+            }
+            if let Some(output) = &self.audio_output {
+                self.status_line = if output.enqueue_live_test_tone() {
+                    "440 Hz live-worker tone queued. Listen for a short beep.".to_owned()
+                } else {
+                    "Live-worker audio queue busy; tone not submitted. Try once more.".to_owned()
+                };
+            }
+        }
+        ui.label(format!(
+            "Live-worker test tones submitted to mixer: {} (hearing is still unverified)",
+            self.audio_output
+                .as_ref()
+                .map_or(0, AudioOutput::test_tones_submitted)
+        ));
+        ui.separator();
+        ui.label("Independent OS speaker check (separate stream):");
         let speaker_test_running = matches!(&self.speaker_probe, SpeakerProbeState::Running(_));
         if ui
             .add_enabled(

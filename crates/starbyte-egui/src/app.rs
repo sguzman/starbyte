@@ -2933,10 +2933,7 @@ mod playback_tests {
             (1_u8, BTreeSet::from(["South".to_owned()])),
             (2_u8, BTreeSet::from(["North".to_owned()])),
         ]);
-        let mut suppressed = HashMap::from([(
-            1_u8,
-            BTreeSet::from(["South".to_owned()]),
-        )]);
+        let mut suppressed = HashMap::from([(1_u8, BTreeSet::from(["South".to_owned()]))]);
         let active = merged_gamepad_buttons_excluding(&pads, &suppressed);
         assert!(!active.contains("South"));
         assert!(active.contains("North"));

@@ -1140,9 +1140,18 @@ mod tests {
         let original = bus.read(0x008000);
         bus.write(0x7e0010, 0x27);
         bus.set_rom_read_patches(&[
-            RomReadPatch { address: 0x008000, value: 0xA5 },
-            RomReadPatch { address: 0x7e0010, value: 0xFF },
-            RomReadPatch { address: 0x002100, value: 0xFF },
+            RomReadPatch {
+                address: 0x008000,
+                value: 0xA5,
+            },
+            RomReadPatch {
+                address: 0x7e0010,
+                value: 0xFF,
+            },
+            RomReadPatch {
+                address: 0x002100,
+                value: 0xFF,
+            },
         ]);
         assert_eq!(bus.read(0x008000), 0xA5);
         assert_eq!(bus.read(0x7e0010), 0x27);
@@ -1157,8 +1166,14 @@ mod tests {
         let mut bus = SystemBus::default();
         bus.install_cartridge(make_cart(Mapper::LoRom));
         bus.set_rom_read_patches(&[
-            RomReadPatch { address: 0x008000, value: 0xAA },
-            RomReadPatch { address: 0x008000, value: 0xBB },
+            RomReadPatch {
+                address: 0x008000,
+                value: 0xAA,
+            },
+            RomReadPatch {
+                address: 0x008000,
+                value: 0xBB,
+            },
         ]);
         assert_eq!(bus.read(0x008000), 0xBB);
         assert_ne!(bus.read(0x808000), 0xBB);
@@ -1172,7 +1187,10 @@ mod tests {
     fn rom_read_substitution_is_not_serialized_into_guest_state() {
         let mut bus = SystemBus::default();
         bus.install_cartridge(make_cart(Mapper::LoRom));
-        bus.set_rom_read_patches(&[RomReadPatch { address: 0x008000, value: 0xCA }]);
+        bus.set_rom_read_patches(&[RomReadPatch {
+            address: 0x008000,
+            value: 0xCA,
+        }]);
         let serialized = serde_json::to_string(&bus).unwrap();
         assert!(!serialized.contains("rom_read_patches"));
         let mut restored: SystemBus = serde_json::from_str(&serialized).unwrap();

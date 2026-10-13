@@ -4301,8 +4301,14 @@ mod playback_tests {
 
         assert_eq!(audio_pitch_factor(AudioPitchMode::Preserve, 175, 400), 1.0);
         assert_eq!(audio_pitch_factor(AudioPitchMode::Preserve, 75, 50), 1.0);
-        assert_eq!(audio_pitch_factor(AudioPitchMode::FollowSpeed, 100, 300), 3.0);
-        assert_eq!(audio_pitch_factor(AudioPitchMode::FollowSpeed, 100, 50), 0.5);
+        assert_eq!(
+            audio_pitch_factor(AudioPitchMode::FollowSpeed, 100, 300),
+            3.0
+        );
+        assert_eq!(
+            audio_pitch_factor(AudioPitchMode::FollowSpeed, 100, 50),
+            0.5
+        );
         assert_eq!(audio_pitch_factor(AudioPitchMode::Custom, 150, 300), 1.5);
         assert_eq!(audio_pitch_factor(AudioPitchMode::Custom, 150, 50), 1.5);
         assert_eq!(audio_pitch_factor(AudioPitchMode::Custom, 999, 100), 2.0);

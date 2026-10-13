@@ -1168,7 +1168,7 @@ impl StarbyteApp {
                 self.play_view = true;
                 self.refresh_framebuffer(ctx);
                 self.status_line = if enabled {
-                    "Isolated experimental sound test: saves disabled, game restarted.".to_owned()
+                    "Isolated audio: loaded existing SRAM read-only; disk saves disabled.".to_owned()
                 } else {
                     "Normal gameplay restored from your existing save data.".to_owned()
                 };
@@ -1210,7 +1210,7 @@ impl StarbyteApp {
         if isolated {
             ui.colored_label(
                 egui::Color32::YELLOW,
-                "EXPERIMENTAL sound driver: disk SRAM and save slots isolated.",
+                "EXPERIMENTAL sound driver: SRAM loaded read-only; no disk saves.",
             );
         } else {
             ui.label("Normal SNES sound driver is not yet emulated. Game music is silent.");
@@ -1276,7 +1276,7 @@ impl StarbyteApp {
             }
         }
         if isolated {
-            ui.label("This test does not read or write your normal save progress.");
+            ui.label("Your existing SRAM progress was copied at startup. Changes in this test are never saved.");
             if ui.button("Return to normal game and saves").clicked() {
                 self.restart_game_with_audio_probe(false, ui.ctx());
             }
@@ -1288,7 +1288,7 @@ impl StarbyteApp {
             } else {
                 ui.colored_label(
                     egui::Color32::YELLOW,
-                    "Restarts from the beginning. Existing saves stay untouched, but saves are disabled during this test. Sound and performance may be unstable.",
+                    "Restarts the game using a read-only copy of existing battery SRAM. Neither SRAM changes nor disk slots are saved during the test. Sound and performance may be unstable.",
                 );
                 ui.horizontal(|ui| {
                     if ui.button("Restart isolated with sound").clicked() {

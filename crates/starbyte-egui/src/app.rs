@@ -2077,12 +2077,22 @@ impl StarbyteApp {
                 if entry.cheats.is_empty() {
                     ui.label("No cheats cached for this title.");
                 } else {
+                    ui.label("Cheatarium matches are title candidates, not verified for this ROM.");
                     for cheat in entry.cheats {
                         let mut enabled = cheat.enabled;
-                        if ui.checkbox(&mut enabled, cheat.name.as_str()).changed() {
+                        if ui
+                            .add_enabled(
+                                cheat.can_execute(),
+                                egui::Checkbox::new(&mut enabled, cheat.name.as_str()),
+                            )
+                            .changed()
+                        {
                             self.toggle_cheat(&entry.game_id, &cheat.id, enabled);
                         }
-                        ui.label(RichText::new(cheat.code).small());
+                        ui.label(RichText::new(format!("{} [{}] {}", cheat.code, cheat.kind, cheat.source)).small());
+                        if !cheat.can_execute() {
+                            ui.label(RichText::new("Read-only: unsupported code format.").small());
+                        }
                     }
                 }
             });

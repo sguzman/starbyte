@@ -60,6 +60,27 @@ impl SessionSnapshot {
     }
 }
 
+/// How a frontend runs the game sound driver and handles user saves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SoundSessionMode {
+    /// Existing compatibility runtime: stable saves, no commercial music.
+    Compatibility,
+    /// Experimental SPC700 execution with a read-only copy of battery SRAM.
+    Isolated,
+    /// Opt-in SPC700 execution with persistent battery SRAM and isolated sound slots.
+    Persistent,
+}
+
+impl SoundSessionMode {
+    fn driver_enabled(self) -> bool {
+        self != Self::Compatibility
+    }
+
+    fn saves_isolated(self) -> bool {
+        self == Self::Isolated
+    }
+}
+
 /// Frontend-agnostic emulator session used by UI shells.
 #[derive(Debug)]
 pub struct FrontendSession {
@@ -71,9 +92,8 @@ pub struct FrontendSession {
     quick_state: Option<SaveState>,
     /// Last SRAM image successfully read from or written to disk.
     last_saved_ram: Option<Vec<u8>>,
-    /// Isolated sound-driver compatibility run: never read/write user SRAM
-    /// or durable save slots while experimental emulation is active.
-    isolated_audio_probe: bool,
+    /// Sound execution is separate from whether disk saves are writable.
+    sound_mode: SoundSessionMode,
 }
 
 impl FrontendSession {
@@ -89,7 +109,7 @@ impl FrontendSession {
             active_rom_patches: Vec::new(),
             quick_state: None,
             last_saved_ram: None,
-            isolated_audio_probe: false,
+            sound_mode: SoundSessionMode::Compatibility,
         })
     }
 
@@ -98,7 +118,7 @@ impl FrontendSession {
     where
         P: AsRef<Path>,
     {
-        self.load_rom_inner(rom_path.as_ref(), false)
+        self.load_rom_inner(rom_path.as_ref(), SoundSessionMode::Compatibility)
     }
 
     /// Explicitly opt a single loaded ROM into host-clocked SPC700 sound
@@ -109,10 +129,29 @@ impl FrontendSession {
     where
         P: AsRef<Path>,
     {
-        self.load_rom_inner(rom_path.as_ref(), true)
+        self.load_rom_inner(rom_path.as_ref(), SoundSessionMode::Isolated)
     }
 
-    fn load_rom_inner(&mut self, rom_path: &Path, isolated_audio_probe: bool) -> Result<()> {
+    /// Opt into commercial sound-driver emulation without disabling battery
+    /// save persistence. Sound-enabled disk slots use a distinct namespace
+    /// so they can never replace legacy compatibility-mode snapshots.
+    ///
+    /// This remains an explicit preview: never silently enable it for
+    /// an existing player's installation before native acceptance.
+    pub fn load_rom_with_persistent_audio<P>(&mut self, rom_path: P) -> Result<()>
+    where
+        P: AsRef<Path>,
+    {
+        self.load_rom_inner(rom_path.as_ref(), SoundSessionMode::Persistent)
+    }
+
+    /// Current independent sound/save policy for the loaded cartridge.
+    #[must_use]
+    pub const fn sound_session_mode(&self) -> SoundSessionMode {
+        self.sound_mode
+    }
+
+    fn load_rom_inner(&mut self, rom_path: &Path, sound_mode: SoundSessionMode) -> Result<()> {
         let path = rom_path.to_path_buf();
         let cartridge = Cartridge::load(&path)
             .with_context(|| format!("failed to load ROM at {}", path.display()))?;
@@ -151,12 +190,12 @@ impl FrontendSession {
         // Isolated audio reuses a private copy of SRAM only. It never writes
         // the user's .srm file or reads/writes durable save-state slots.
         self.emulator.load_rom(cartridge);
-        if isolated_audio_probe {
+        if sound_mode.driver_enabled() {
             self.emulator
                 .enable_isolated_apu_driver_probe()
-                .context("could not initialize opt-in SPC700 sound-driver probe")?;
+                .context("could not initialize opt-in SPC700 sound-driver execution")?;
         }
-        self.isolated_audio_probe = isolated_audio_probe;
+        self.sound_mode = sound_mode;
         self.cartridge_identity = Some(identity);
         self.quick_state = None;
         self.rom_path = Some(path);
@@ -168,7 +207,7 @@ impl FrontendSession {
                 .load_save_ram(bytes)
                 .context("could not restore SRAM")?;
         }
-        self.last_saved_ram = if isolated_audio_probe {
+        self.last_saved_ram = if sound_mode.saves_isolated() {
             None
         } else {
             self.emulator.save_ram()
@@ -238,7 +277,7 @@ impl FrontendSession {
 
     /// Return the current cartridge's on-disk SRAM location, if present.
     pub fn save_ram_path(&self) -> Option<PathBuf> {
-        if self.isolated_audio_probe {
+        if self.sound_mode.saves_isolated() {
             return None;
         }
         let identity = self.cartridge_identity.as_deref()?;
@@ -273,19 +312,20 @@ impl FrontendSession {
     /// paths or game titles; SHA-1 is for local naming, not authentication.
     pub fn state_slot_path(&self, slot: u8) -> Result<PathBuf> {
         anyhow::ensure!(
-            !self.isolated_audio_probe,
-            "durable save slots are disabled in experimental sound-driver mode"
+            !self.sound_mode.saves_isolated(),
+            "durable save slots are disabled in isolated sound-driver mode"
         );
         anyhow::ensure!((1..=3).contains(&slot), "save slot must be 1, 2, or 3");
         let identity = self
             .cartridge_identity
             .as_deref()
             .context("No ROM loaded for save slots")?;
-        Ok(self
-            .emulator
-            .assets()
-            .state_root()
-            .join(format!("{identity}.slot{slot}.state.json")))
+        let filename = if self.sound_mode == SoundSessionMode::Persistent {
+            format!("{identity}.sound.slot{slot}.state.json")
+        } else {
+            format!("{identity}.slot{slot}.state.json")
+        };
+        Ok(self.emulator.assets().state_root().join(filename))
     }
 
     /// Whether a game-scoped persistent slot currently exists.

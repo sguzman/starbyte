@@ -587,8 +587,11 @@ impl LibraryService {
                 .collect();
             let cheats = if let Some(source_records) = &local_cheatarium {
                 let cheats = cheatarium_candidates(source_records, &entry, &enabled_ids);
-                write_json(cheat_cache_path(&self.cache_root(), &entry.game_id), &cheats)
-                    .map(|()| cheats)
+                write_json(
+                    cheat_cache_path(&self.cache_root(), &entry.game_id),
+                    &cheats,
+                )
+                .map(|()| cheats)
             } else {
                 self.cheat_provider.refresh_cheats(
                     &self.client,

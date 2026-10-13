@@ -24,6 +24,9 @@ const MAX_PENDING_FRAMES: usize = 6;
 const AUDIO_RETRY_DELAY: Duration = Duration::from_secs(10);
 /// A slow device open must never replay seconds-old game audio.
 const MAX_FRAME_AGE: Duration = Duration::from_millis(150);
+/// The test tone occupies the real game output sink for a quarter second;
+/// suppress regular emulated PCM until it has completed playing.
+const TEST_TONE_EXCLUSIVE: Duration = Duration::from_millis(300);
 
 /// Last known hardware output discovery state of the desktop worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +63,12 @@ enum AudioMessage {
         queued_at: Instant,
         pcm: Vec<i16>,
     },
+    /// Original generated sine burst, routed through the *same* Rodio stream
+    /// and sink as real game PCM (unlike a separately opened speaker probe).
+    TestTone {
+        generation: u64,
+        queued_at: Instant,
+    },
     Clear,
 }
 
@@ -76,6 +85,9 @@ pub struct AudioOutput {
     /// Frames with nonzero PCM actually appended to Rodio's mixer.
     /// Distinguishes stream activity from a steady flow of silent buffers.
     submitted_nonzero_frames: Arc<AtomicU64>,
+    /// Number of separate test-tone bursts actually submitted to the same
+    /// Rodio sink. Never included in game-PCM counters.
+    test_tones_submitted: Arc<AtomicU64>,
 }
 
 impl AudioOutput {
@@ -91,6 +103,8 @@ impl AudioOutput {
         let shared_submitted_frames = Arc::clone(&submitted_frames);
         let submitted_nonzero_frames = Arc::new(AtomicU64::new(0));
         let shared_nonzero_frames = Arc::clone(&submitted_nonzero_frames);
+        let test_tones_submitted = Arc::new(AtomicU64::new(0));
+        let shared_test_tones = Arc::clone(&test_tones_submitted);
         // The GUI must not join this thread: the bounded channel owns its
         // lifecycle and disconnects when the last AudioOutput is dropped.
         let _audio_thread = thread::Builder::new()
@@ -103,6 +117,7 @@ impl AudioOutput {
                     shared_volume_bits,
                     shared_submitted_frames,
                     shared_nonzero_frames,
+                    shared_test_tones,
                 )
             })
             .context("could not spawn background audio thread")?;
@@ -113,6 +128,7 @@ impl AudioOutput {
             volume_bits,
             submitted_frames,
             submitted_nonzero_frames,
+            test_tones_submitted,
         })
     }
 
@@ -132,6 +148,24 @@ impl AudioOutput {
     /// a physical speaker was unmuted, routed correctly, or audible.
     pub fn submitted_nonzero_frames(&self) -> u64 {
         self.submitted_nonzero_frames.load(Ordering::Acquire)
+    }
+
+    /// Number of generated speaker checks delivered to the live game sink.
+    /// A counter increase confirms software delivery, not physical audibility.
+    pub fn test_tones_submitted(&self) -> u64 {
+        self.test_tones_submitted.load(Ordering::Acquire)
+    }
+
+    /// Request a quarter-second, gentle 440 Hz beep through the same audio
+    /// device, stream, sink and volume as the running game. Nonblocking; the
+    /// worker briefly suppresses game PCM so queue trimming cannot cut it off.
+    pub fn enqueue_live_test_tone(&self) -> bool {
+        self.sender
+            .try_send(AudioMessage::TestTone {
+                generation: self.generation.load(Ordering::Acquire),
+                queued_at: Instant::now(),
+            })
+            .is_ok()
     }
 
     /// Update the mixer level without opening an audio device or waiting
@@ -227,10 +261,12 @@ fn audio_worker(
     volume_bits: Arc<AtomicU32>,
     submitted_frames: Arc<AtomicU64>,
     submitted_nonzero_frames: Arc<AtomicU64>,
+    test_tones_submitted: Arc<AtomicU64>,
 ) {
     let mut device: Option<PlaybackDevice> = None;
     let mut retry_after: Option<Instant> = None;
     let mut active_generation = generation.load(Ordering::Acquire);
+    let mut tone_until: Option<Instant> = None;
 
     for message in receiver {
         let newest_generation = generation.load(Ordering::Acquire);
@@ -238,23 +274,32 @@ fn audio_worker(
             if let Some(output) = &device {
                 output.clear();
             }
+            tone_until = None;
             active_generation = newest_generation;
         }
 
-        let AudioMessage::Frame {
-            generation: frame_generation,
-            queued_at,
-            pcm,
-        } = message
-        else {
-            continue;
+        let (frame_generation, queued_at, pcm, is_test_tone) = match message {
+            AudioMessage::Frame {
+                generation,
+                queued_at,
+                pcm,
+            } => (generation, queued_at, pcm, false),
+            AudioMessage::TestTone {
+                generation,
+                queued_at,
+            } => (generation, queued_at, speaker_test_tone(), true),
+            AudioMessage::Clear => continue,
         };
-        if frame_generation != active_generation || !frame_is_fresh(queued_at, Instant::now()) {
+        let now = Instant::now();
+        if frame_generation != active_generation || !frame_is_fresh(queued_at, now) {
+            continue;
+        }
+        if !is_test_tone && tone_until.is_some_and(|end| now < end) {
             continue;
         }
         if device.is_none()
             && pcm.iter().any(|&sample| sample != 0)
-            && retry_ready(retry_after, Instant::now())
+            && (is_test_tone || retry_ready(retry_after, now))
         {
             match PlaybackDevice::open_default() {
                 Ok(output) => {
@@ -277,11 +322,21 @@ fn audio_worker(
                 output.clear();
                 active_generation = newest_generation;
             } else if frame_is_fresh(queued_at, Instant::now()) {
-                let volume = f32::from_bits(volume_bits.load(Ordering::Acquire));
-                output.enqueue(&pcm, normalize_volume(volume));
-                submitted_frames.fetch_add(1, Ordering::Release);
-                if pcm.iter().any(|&sample| sample != 0) {
-                    submitted_nonzero_frames.fetch_add(1, Ordering::Release);
+                let volume = normalize_volume(f32::from_bits(volume_bits.load(Ordering::Acquire)));
+                if is_test_tone {
+                    // Remove queued gameplay sources and protect this short
+                    // check from frame-pruning while it plays. Video and
+                    // emulation continue at full speed.
+                    output.clear();
+                    output.enqueue(&pcm, volume);
+                    tone_until = Some(Instant::now() + TEST_TONE_EXCLUSIVE);
+                    test_tones_submitted.fetch_add(1, Ordering::Release);
+                } else {
+                    output.enqueue(&pcm, volume);
+                    submitted_frames.fetch_add(1, Ordering::Release);
+                    if pcm.iter().any(|&sample| sample != 0) {
+                        submitted_nonzero_frames.fetch_add(1, Ordering::Release);
+                    }
                 }
             }
         }
@@ -348,6 +403,7 @@ mod tests {
         assert_eq!(output.device_status(), AudioDeviceStatus::NotAttempted);
         assert_eq!(output.submitted_frames(), 0);
         assert_eq!(output.submitted_nonzero_frames(), 0);
+        assert_eq!(output.test_tones_submitted(), 0);
         assert_eq!(output.device_status().label(), "not_attempted");
         // Only the real playback thread can set these in production; avoid
         // requiring a physical speaker in this deterministic unit test.
@@ -422,6 +478,16 @@ mod tests {
         let after = output.generation.load(Ordering::Acquire);
         assert_eq!(after, before + 1);
         output.enqueue(&[0, 0]);
+    }
+
+    #[test]
+    fn test_tone_is_queued_on_game_worker_without_counting_as_game_pcm() {
+        let output = AudioOutput::start().unwrap();
+        assert!(output.enqueue_live_test_tone());
+        // The speaker test is not a game-produced nonzero audio frame.
+        assert_eq!(output.submitted_nonzero_frames(), 0);
+        // A CI runner may have no sound device; the worker's own counters
+        // are the only source of truth for actual Rodio submissions.
     }
 
     #[test]

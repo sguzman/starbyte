@@ -244,6 +244,37 @@ pub struct CheatSettings {
 }
 
 impl CheatSettings {
+    /// Look for one existing, local Cheatarium checkout without knowing a
+    /// player's directory names. Limit discovery to a few conventional source
+    /// roots and one arbitrary grouping directory (e.g. Code/<category>/).
+    /// An explicit configured path always takes precedence over discovery.
+    pub fn discover_local_checkout(home: &Path) -> Option<PathBuf> {
+        const GROUPS: &[&str] = &["Code", "Projects", "Source", "src", "repos"];
+        let is_checkout = |path: &Path| {
+            path.join("generated/v1/snes.json.gz").is_file()
+        };
+        if is_checkout(&home.join("cheatarium")) {
+            return Some(home.join("cheatarium"));
+        }
+        for group in GROUPS {
+            let root = home.join(group);
+            let direct = root.join("cheatarium");
+            if is_checkout(&direct) {
+                return Some(direct);
+            }
+            // Filesystem access is bounded: do not recursively crawl HOME.
+            if let Ok(children) = fs::read_dir(&root) {
+                for child in children.take(256).flatten() {
+                    let candidate = child.path().join("cheatarium");
+                    if is_checkout(&candidate) {
+                        return Some(candidate);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Resolve the local SNES index from a configured checkout, expanding a leading ~/.
     #[must_use]
     pub fn cheatarium_snes_index(&self) -> Option<PathBuf> {
@@ -544,6 +575,17 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{AppMode, AssetConfig, LibraryViewMode, RuntimeConfig, choose_user_directory};
+
+    #[test]
+    fn cheatarium_auto_discovery_finds_nested_checkout_without_a_fixed_player_path() {
+        use super::CheatSettings;
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("Code").join("collections").join("cheatarium");
+        std::fs::create_dir_all(root.join("generated/v1")).unwrap();
+        std::fs::write(root.join("generated/v1/snes.json.gz"), b"fixture").unwrap();
+        assert_eq!(CheatSettings::discover_local_checkout(dir.path()), Some(root));
+        assert!(CheatSettings::discover_local_checkout(&dir.path().join("absent")).is_none());
+    }
 
     #[test]
     fn gamepad_reset_preserves_keyboard_mapping_and_active_device() {

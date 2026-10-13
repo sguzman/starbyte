@@ -1359,6 +1359,11 @@ impl StarbyteApp {
                                 (!root.is_empty()).then(|| PathBuf::from(root));
                             self.persist_config();
                             self.status_line = "Cheatarium source path saved.".to_owned();
+                            if self.config.cheats.cheatarium_snes_index().is_some_and(|index| index.is_file()) {
+                                self.queue_job(WorkerCommandKind::RefreshCheats {
+                                    target: LibraryTarget::default(),
+                                });
+                            }
                         }
                         if ui.button("Browse").clicked()
                             && let Some(root) = rfd::FileDialog::new().pick_folder()
@@ -1367,6 +1372,11 @@ impl StarbyteApp {
                             self.config.cheats.cheatarium_root = Some(root);
                             self.persist_config();
                             self.status_line = "Cheatarium source path saved.".to_owned();
+                            if self.config.cheats.cheatarium_snes_index().is_some_and(|index| index.is_file()) {
+                                self.queue_job(WorkerCommandKind::RefreshCheats {
+                                    target: LibraryTarget::default(),
+                                });
+                            }
                         }
                     });
                     if let Some(path) = self.config.cheats.cheatarium_snes_index() {

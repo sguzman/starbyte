@@ -1273,7 +1273,14 @@ impl StarbyteApp {
         if self
             .jobs
             .iter()
-            .any(|job| job.label == "Refresh Cheats" && job.state != "done")
+            .any(|job| job.label == "Refresh Cheats" && job.state == "failed")
+        {
+            return "Local cheat refresh failed. Check the Jobs panel for the error.";
+        }
+        if self
+            .jobs
+            .iter()
+            .any(|job| job.label == "Refresh Cheats" && matches!(job.state, "queued" | "running"))
         {
             return "Local cheat refresh is still in progress. No results displayed yet.";
         }

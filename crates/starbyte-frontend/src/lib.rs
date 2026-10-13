@@ -960,7 +960,10 @@ mod tests {
         };
         let mut session = FrontendSession::new(assets).unwrap();
         session.load_rom(&rom).unwrap();
-        assert_eq!(session.sound_session_mode(), SoundSessionMode::Compatibility);
+        assert_eq!(
+            session.sound_session_mode(),
+            SoundSessionMode::Compatibility
+        );
         let original_sram_path = session.save_ram_path().unwrap();
         let mut ram = session.emulator().save_ram().unwrap();
         ram[0] = 0x42;
@@ -996,7 +999,10 @@ mod tests {
         assert_eq!(fs::read(&legacy_slot).unwrap(), legacy_bytes);
 
         session.load_rom(&rom).unwrap();
-        assert_eq!(session.sound_session_mode(), SoundSessionMode::Compatibility);
+        assert_eq!(
+            session.sound_session_mode(),
+            SoundSessionMode::Compatibility
+        );
         assert!(!session.emulator().isolated_apu_driver_probe_enabled());
         assert_eq!(session.emulator().save_ram().unwrap()[0], 0x42);
         assert_eq!(session.state_slot_path(1).unwrap(), legacy_slot);

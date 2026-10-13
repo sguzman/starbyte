@@ -3687,31 +3687,54 @@ mod playback_tests {
             events,
             ..egui::RawInput::default()
         };
-        draw(&ctx, &mut window_open, &mut search, &mut input_rect, input(vec![]));
+        draw(
+            &ctx,
+            &mut window_open,
+            &mut search,
+            &mut input_rect,
+            input(vec![]),
+        );
         assert!(window_open);
         assert!(input_rect.width() > 0.0 && input_rect.height() > 0.0);
         let pos = input_rect.center();
-        draw(&ctx, &mut window_open, &mut search, &mut input_rect, input(vec![
-            egui::Event::PointerMoved(pos),
-            egui::Event::PointerButton {
-                pos,
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: egui::Modifiers::NONE,
-            },
-        ]));
-        draw(&ctx, &mut window_open, &mut search, &mut input_rect, input(vec![
-            egui::Event::PointerButton {
+        draw(
+            &ctx,
+            &mut window_open,
+            &mut search,
+            &mut input_rect,
+            input(vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]),
+        );
+        draw(
+            &ctx,
+            &mut window_open,
+            &mut search,
+            &mut input_rect,
+            input(vec![egui::Event::PointerButton {
                 pos,
                 button: egui::PointerButton::Primary,
                 pressed: false,
                 modifiers: egui::Modifiers::NONE,
-            },
-        ]));
-        draw(&ctx, &mut window_open, &mut search, &mut input_rect, input(vec![
-            egui::Event::Text("coins".to_owned()),
-        ]));
-        assert!(window_open, "clicking cheat search must not close the window");
+            }]),
+        );
+        draw(
+            &ctx,
+            &mut window_open,
+            &mut search,
+            &mut input_rect,
+            input(vec![egui::Event::Text("coins".to_owned())]),
+        );
+        assert!(
+            window_open,
+            "clicking cheat search must not close the window"
+        );
         assert_eq!(search, "coins", "search must accept typed characters");
     }
 

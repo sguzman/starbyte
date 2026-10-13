@@ -1149,6 +1149,9 @@ impl StarbyteApp {
                 .map(|entry| entry.cheats.clone())
         });
         self.clear_audio();
+        // Discard the old worker's device/submission counters. A sound test
+        // must report *this session's* PCM delivery, not a prior ROM's.
+        self.audio_output = None;
         let result = if enabled {
             self.session.load_rom_with_isolated_audio_probe(&path)
         } else {
@@ -1226,10 +1229,13 @@ impl StarbyteApp {
             self.last_audio_pairs, self.last_audio_nonzero_pairs, self.audio_nonzero_pairs_total
         ));
         ui.label(format!(
-            "OS audio device: {}",
+            "OS audio device: {}; mixer frames submitted: {}",
             self.audio_output
                 .as_ref()
-                .map_or("not attempted", |output| output.device_status().label())
+                .map_or("not attempted", |output| output.device_status().label()),
+            self.audio_output
+                .as_ref()
+                .map_or(0, AudioOutput::submitted_frames),
         ));
         let speaker_test_running = matches!(&self.speaker_probe, SpeakerProbeState::Running(_));
         if ui
@@ -1436,6 +1442,7 @@ impl StarbyteApp {
             }
         };
         self.clear_audio();
+        self.audio_output = None;
         match self.session.load_rom(&resolved) {
             Ok(()) => {
                 let matching = self
@@ -3094,6 +3101,9 @@ impl eframe::App for StarbyteApp {
                         self.config.audio.volume,
                         self.audio_nonzero_pairs_total,
                         self.audio_output.as_ref().map(AudioOutput::device_status),
+                        self.audio_output
+                            .as_ref()
+                            .map_or(0, AudioOutput::submitted_frames),
                     );
                     ui.label(RichText::new(audio_status).monospace()).on_hover_text(
                         "Normal mode has no executing SNES sound CPU. Open Sound and choose Try experimental game audio for a save-isolated sound test. Device-open and PCM counters are not proof of physical audibility.",
@@ -3327,27 +3337,31 @@ mod playback_tests {
         use crate::audio::AudioDeviceStatus;
 
         assert_eq!(
-            audio_playback_status(false, true, false, 1.0, 500, Some(AudioDeviceStatus::Opened)),
+            audio_playback_status(false, true, false, 1.0, 500, Some(AudioDeviceStatus::Opened), 4),
             "Sound: SILENT (compatibility)"
         );
         assert_eq!(
-            audio_playback_status(true, true, false, 1.0, 0, None),
+            audio_playback_status(true, true, false, 1.0, 0, None, 0),
             "Sound: waiting for PCM (experimental)"
         );
         assert_eq!(
-            audio_playback_status(true, true, false, 1.0, 530, Some(AudioDeviceStatus::OpenFailed)),
+            audio_playback_status(true, true, false, 1.0, 530, Some(AudioDeviceStatus::OpenFailed), 0),
             "Sound: PCM present; OS device FAILED"
         );
         assert_eq!(
-            audio_playback_status(true, true, false, 1.0, 530, Some(AudioDeviceStatus::Opened)),
-            "Sound: PCM sent to OS (not verified audible)"
+            audio_playback_status(true, true, false, 1.0, 530, Some(AudioDeviceStatus::Opened), 1),
+            "Sound: PCM submitted (audibility unknown)"
         );
         assert_eq!(
-            audio_playback_status(true, false, false, 1.0, 530, Some(AudioDeviceStatus::Opened)),
+            audio_playback_status(true, true, false, 1.0, 530, Some(AudioDeviceStatus::Opened), 0),
+            "Sound: OS device open; PCM not yet submitted"
+        );
+        assert_eq!(
+            audio_playback_status(true, false, false, 1.0, 530, Some(AudioDeviceStatus::Opened), 1),
             "Sound: MUTED (experimental)"
         );
         assert_eq!(
-            audio_playback_status(true, true, true, 1.0, 530, Some(AudioDeviceStatus::Opened)),
+            audio_playback_status(true, true, true, 1.0, 530, Some(AudioDeviceStatus::Opened), 1),
             "Sound: MUTED (experimental)"
         );
     }
@@ -3967,6 +3981,7 @@ fn audio_playback_status(
     volume: f32,
     nonzero_pairs_total: u64,
     device: Option<AudioDeviceStatus>,
+    submitted_frames: u64,
 ) -> &'static str {
     if !experimental {
         return "Sound: SILENT (compatibility)";
@@ -3981,7 +3996,10 @@ fn audio_playback_status(
         None => "Sound: PCM present; no audio worker",
         Some(AudioDeviceStatus::NotAttempted) => "Sound: PCM present; opening device",
         Some(AudioDeviceStatus::OpenFailed) => "Sound: PCM present; OS device FAILED",
-        Some(AudioDeviceStatus::Opened) => "Sound: PCM sent to OS (not verified audible)",
+        Some(AudioDeviceStatus::Opened) if submitted_frames == 0 => {
+            "Sound: OS device open; PCM not yet submitted"
+        }
+        Some(AudioDeviceStatus::Opened) => "Sound: PCM submitted (audibility unknown)",
     }
 }
 

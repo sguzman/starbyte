@@ -24,7 +24,7 @@ use starbyte_core::{
 };
 use starbyte_frontend::{
     FrontendSession, InstalledStatus, LibraryEntry, LibraryFilter, LibraryService, LibrarySnapshot,
-    LibraryTarget,
+    LibraryTarget, SoundSessionMode,
 };
 
 // NTSC SNES video: 341 dots/scanline × 262 lines × 4 master clocks/dot
@@ -1136,7 +1136,7 @@ impl StarbyteApp {
     /// Restart a game in the explicit isolated sound-driver test mode.
     /// The frontend flushes ordinary SRAM before switching, then disables
     /// disk SRAM/slots while probing. This is never enabled automatically.
-    fn restart_game_with_audio_probe(&mut self, enabled: bool, ctx: &egui::Context) {
+    fn restart_game_with_audio_mode(&mut self, mode: SoundSessionMode, ctx: &egui::Context) {
         let Some(path) = self.session.loaded_rom_path().map(Path::to_path_buf) else {
             self.status_line = "Load a game before testing experimental audio.".to_owned();
             return;
@@ -1152,10 +1152,10 @@ impl StarbyteApp {
         // Discard the old worker's device/submission counters. A sound test
         // must report *this session's* PCM delivery, not a prior ROM's.
         self.audio_output = None;
-        let result = if enabled {
-            self.session.load_rom_with_isolated_audio_probe(&path)
-        } else {
-            self.session.load_rom(&path)
+        let result = match mode {
+            SoundSessionMode::Compatibility => self.session.load_rom(&path),
+            SoundSessionMode::Isolated => self.session.load_rom_with_isolated_audio_probe(&path),
+            SoundSessionMode::Persistent => self.session.load_rom_with_persistent_audio(&path),
         };
         match result {
             Ok(()) => {
@@ -1175,11 +1175,16 @@ impl StarbyteApp {
                 self.is_playing = true;
                 self.play_view = true;
                 self.refresh_framebuffer(ctx);
-                self.status_line = if enabled {
-                    "Isolated audio: loaded existing SRAM read-only; disk saves disabled."
-                        .to_owned()
-                } else {
-                    "Normal gameplay restored from your existing save data.".to_owned()
+                self.status_line = match mode {
+                    SoundSessionMode::Compatibility => {
+                        "Silent compatibility gameplay restored with existing save progress.".to_owned()
+                    }
+                    SoundSessionMode::Isolated => {
+                        "Isolated sound: SRAM read-only; disk save slots disabled.".to_owned()
+                    }
+                    SoundSessionMode::Persistent => {
+                        "Sound + saves preview: battery SRAM enabled; sound-specific disk slots.".to_owned()
+                    }
                 };
             }
             Err(error) => {
@@ -1215,15 +1220,25 @@ impl StarbyteApp {
             }
         }
         ui.separator();
-        let isolated = self.session.emulator().isolated_apu_driver_probe_enabled();
-        if isolated {
-            ui.colored_label(
-                egui::Color32::YELLOW,
-                "EXPERIMENTAL sound driver: SRAM loaded read-only; no disk saves.",
-            );
-        } else {
-            ui.label("Normal SNES sound driver is not yet emulated. Game music is silent.");
+        let mode = self.session.sound_session_mode();
+        match mode {
+            SoundSessionMode::Compatibility => {
+                ui.label("Compatibility mode: normal game sound is not yet enabled.");
+            }
+            SoundSessionMode::Isolated => {
+                ui.colored_label(
+                    egui::Color32::YELLOW,
+                    "Sound isolated: SRAM read-only; no disk saves.",
+                );
+            }
+            SoundSessionMode::Persistent => {
+                ui.colored_label(
+                    egui::Color32::YELLOW,
+                    "SOUND + SAVES PREVIEW: SRAM persists; separate sound-mode disk slots.",
+                );
+            }
         }
+        let isolated = mode != SoundSessionMode::Compatibility;
         ui.label(format!(
             "DSP last frame: {} stereo pairs, {} nonzero; session total nonzero: {}",
             self.last_audio_pairs, self.last_audio_nonzero_pairs, self.audio_nonzero_pairs_total
@@ -1331,30 +1346,41 @@ impl StarbyteApp {
                 ui.label("SPC700: waiting for the game's sound-program handoff");
             }
         }
-        if isolated {
-            ui.label("Your existing SRAM progress was copied at startup. Changes in this test are never saved.");
-            if ui.button("Return to normal game and saves").clicked() {
-                self.restart_game_with_audio_probe(false, ui.ctx());
-            }
-        } else if self.session.snapshot().has_rom {
-            if !self.confirm_experimental_audio {
-                if ui.button("Try experimental game audio...").clicked() {
-                    self.confirm_experimental_audio = true;
+        match mode {
+            SoundSessionMode::Isolated => {
+                ui.label("Your SRAM was copied read-only at startup. Test changes are never saved.");
+                if ui.button("Return to silent compatibility and saves").clicked() {
+                    self.restart_game_with_audio_mode(SoundSessionMode::Compatibility, ui.ctx());
                 }
-            } else {
-                ui.colored_label(
-                    egui::Color32::YELLOW,
-                    "Restarts the game using a read-only copy of existing battery SRAM. Neither SRAM changes nor disk slots are saved during the test. Sound and performance may be unstable.",
-                );
-                ui.horizontal(|ui| {
-                    if ui.button("Restart isolated with sound").clicked() {
-                        self.restart_game_with_audio_probe(true, ui.ctx());
+            }
+            SoundSessionMode::Persistent => {
+                ui.label("Experimental sound runs with writable battery SRAM. Disk save slots are separate from the old silent slots.");
+                if ui.button("Return to silent compatibility").clicked() {
+                    self.restart_game_with_audio_mode(SoundSessionMode::Compatibility, ui.ctx());
+                }
+            }
+            SoundSessionMode::Compatibility if self.session.snapshot().has_rom => {
+                if !self.confirm_experimental_audio {
+                    if ui.button("Try experimental game audio...").clicked() {
+                        self.confirm_experimental_audio = true;
+                    }
+                } else {
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        "Preview: sound can stutter or fail. Both choices restart the loaded ROM. Existing SRAM and old disk slots are preserved.",
+                    );
+                    if ui.button("Sound + saves (preview)").clicked() {
+                        self.restart_game_with_audio_mode(SoundSessionMode::Persistent, ui.ctx());
+                    }
+                    if ui.button("Read-only sound diagnostic").clicked() {
+                        self.restart_game_with_audio_mode(SoundSessionMode::Isolated, ui.ctx());
                     }
                     if ui.button("Cancel").clicked() {
                         self.confirm_experimental_audio = false;
                     }
-                });
+                }
             }
+            SoundSessionMode::Compatibility => {}
         }
     }
 
@@ -1759,10 +1785,10 @@ impl StarbyteApp {
                 if ui.button("Screenshot (F12)").clicked() {
                     self.save_screenshot();
                 }
-                let sound_label = if self.session.emulator().isolated_apu_driver_probe_enabled() {
-                    "Sound (experimental)"
-                } else {
-                    "Sound (silent)"
+                let sound_label = match self.session.sound_session_mode() {
+                    SoundSessionMode::Compatibility => "Sound (silent)",
+                    SoundSessionMode::Isolated => "Sound (isolated)",
+                    SoundSessionMode::Persistent => "Sound + saves (preview)",
                 };
                 ui.menu_button(sound_label, |ui| self.draw_audio_controls(ui));
                 ui.menu_button("Cheats", |ui| self.draw_play_cheats_menu(ui));

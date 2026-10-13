@@ -327,7 +327,10 @@ impl FrontendSession {
     pub fn set_active_cheats(&mut self, cheats: &[CheatEntry]) -> usize {
         self.active_cheat_patches.clear();
         self.active_rom_patches.clear();
-        for cheat in cheats.iter().filter(|cheat| cheat.enabled && cheat.can_execute()) {
+        for cheat in cheats
+            .iter()
+            .filter(|cheat| cheat.enabled && cheat.can_execute())
+        {
             if cheat.source.starts_with("Cheatarium /") && cheat.kind == "game-genie" {
                 if let Some(patch) = decode_single_game_genie(&cheat.code) {
                     self.active_rom_patches.push(patch);

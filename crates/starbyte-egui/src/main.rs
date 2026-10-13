@@ -3,6 +3,7 @@
 mod app;
 mod audio;
 mod logging;
+mod pitch;
 mod worker;
 
 use std::{env, path::PathBuf};

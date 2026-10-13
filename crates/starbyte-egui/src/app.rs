@@ -361,6 +361,16 @@ impl StarbyteApp {
             }
         }
 
+        // A checkout already present on disk should work on first launch.
+        // Persist discovery once; never replace a path the player configured.
+        if config.cheats.cheatarium_root.is_none()
+            && let Some(home) = std::env::var_os("HOME")
+            && let Some(found) =
+                starbyte_core::manifest::CheatSettings::discover_local_checkout(Path::new(&home))
+        {
+            info!(path = %found.display(), "discovered local Cheatarium checkout");
+            config.cheats.cheatarium_root = Some(found);
+        }
         let cache_root = resolve_cache_root(&config, &assets);
         apply_theme(&cc.egui_ctx, config.prefer_dark_mode);
         info!(
@@ -1609,11 +1619,27 @@ impl StarbyteApp {
                     });
                     if let Some(path) = self.config.cheats.cheatarium_snes_index() {
                         ui.label(format!("SNES index: {}", path.display()));
-                        if !path.is_file() {
-                            ui.label("Local index not found at the configured path.");
+                        if path.is_file() {
+                            ui.label("Local SNES index found. Cheat candidates refresh on startup.");
+                            if ui.button("Reload local cheats").clicked() {
+                                self.queue_job(WorkerCommandKind::RefreshCheats {
+                                    target: LibraryTarget {
+                                        installed_only: true,
+                                        ..LibraryTarget::default()
+                                    },
+                                });
+                            }
+                        } else {
+                            ui.colored_label(
+                                egui::Color32::YELLOW,
+                                "Cheatarium index not found. Check the checkout path above.",
+                            );
                         }
                     } else {
-                        ui.label("Set a local checkout to use Cheatarium's SNES index.");
+                        ui.colored_label(
+                            egui::Color32::YELLOW,
+                            "Cheatarium source not configured. Select its local checkout folder.",
+                        );
                     }
                 });
 

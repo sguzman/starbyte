@@ -3711,7 +3711,16 @@ mod playback_tests {
         );
         assert!(window_open);
         assert!(input_rect.width() > 0.0 && input_rect.height() > 0.0);
-        eprintln!("cheat-focus initial: {:?}", ctx.memory(|memory| memory.focused()));
+        // egui hit-testing becomes authoritative after the first layout frame.
+        // A real player clicks after the cheats window has been painted.
+        draw(
+            &ctx,
+            &mut window_open,
+            &mut search,
+            &mut input_rect,
+            input(vec![]),
+            &mut focus_pending,
+        );
         let pos = input_rect.center();
         draw(
             &ctx,
@@ -3750,7 +3759,6 @@ mod playback_tests {
             input(vec![egui::Event::Text("coins".to_owned())]),
             &mut focus_pending,
         );
-        eprintln!("cheat-focus after input: {:?}; query={search:?}", ctx.memory(|memory| memory.focused()));
         assert!(
             window_open,
             "clicking cheat search must not close the window"

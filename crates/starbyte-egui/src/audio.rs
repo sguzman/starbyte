@@ -367,7 +367,7 @@ fn audio_worker(
             AudioMessage::Clear => {
                 continuity.reset();
                 continue;
-            },
+            }
         };
         let now = Instant::now();
         if frame_generation != active_generation
@@ -493,8 +493,8 @@ mod tests {
     };
 
     use super::{
-        AudioDeviceStatus, AudioMessage, AudioOutput, PlaybackContinuity, frame_is_fresh, normalize_volume,
-        pcm16_stereo_to_float, retry_ready, speaker_test_tone,
+        AudioDeviceStatus, AudioMessage, AudioOutput, PlaybackContinuity, frame_is_fresh,
+        normalize_volume, pcm16_stereo_to_float, retry_ready, speaker_test_tone,
     };
 
     #[test]

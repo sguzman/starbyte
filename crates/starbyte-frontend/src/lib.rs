@@ -947,6 +947,93 @@ mod tests {
     }
 
     #[test]
+    fn persistent_sound_mode_saves_sram_without_overwriting_legacy_state_slots() {
+        use super::SoundSessionMode;
+
+        let dir = tempdir().unwrap();
+        let rom = dir.path().join("sound-persistent.sfc");
+        fs::write(&rom, synthetic_rom_bytes()).unwrap();
+        let assets = AssetConfig {
+            save_dir: Some(dir.path().join("save")),
+            state_dir: Some(dir.path().join("states")),
+            ..AssetConfig::default()
+        };
+        let mut session = FrontendSession::new(assets).unwrap();
+        session.load_rom(&rom).unwrap();
+        assert_eq!(session.sound_session_mode(), SoundSessionMode::Compatibility);
+        let original_sram_path = session.save_ram_path().unwrap();
+        let mut ram = session.emulator().save_ram().unwrap();
+        ram[0] = 0x42;
+        session.emulator.load_save_ram(&ram).unwrap();
+        session.flush_save_ram().unwrap();
+        let legacy_slot = session.save_state_slot(1).unwrap();
+        let legacy_bytes = fs::read(&legacy_slot).unwrap();
+
+        session.load_rom_with_persistent_audio(&rom).unwrap();
+        assert_eq!(session.sound_session_mode(), SoundSessionMode::Persistent);
+        assert!(session.emulator().isolated_apu_driver_probe_enabled());
+        assert_eq!(session.emulator().save_ram().unwrap()[0], 0x42);
+        assert_eq!(session.save_ram_path(), Some(original_sram_path.clone()));
+        assert!(!session.has_state_slot(1));
+        let sound_slot = session.save_state_slot(1).unwrap();
+        assert_ne!(legacy_slot, sound_slot);
+        assert!(sound_slot.is_file());
+        assert_eq!(fs::read(&legacy_slot).unwrap(), legacy_bytes);
+
+        ram[0] = 0x99;
+        session.emulator.load_save_ram(&ram).unwrap();
+        session.flush_save_ram().unwrap();
+        assert_eq!(fs::read(&original_sram_path).unwrap()[0], 0x99);
+        session.quick_save().unwrap();
+        session.quick_load().unwrap();
+        session.load_state_slot(1).unwrap();
+        assert!(session.emulator().isolated_apu_driver_probe_enabled());
+        assert_eq!(session.emulator().save_ram().unwrap()[0], 0x42);
+        // Flush restored RAM as usual; loading sound-mode state does not
+        // rewrite legacy files or redirect SRAM into a private temp copy.
+        session.flush_save_ram().unwrap();
+        assert_eq!(fs::read(&original_sram_path).unwrap()[0], 0x42);
+        assert_eq!(fs::read(&legacy_slot).unwrap(), legacy_bytes);
+
+        session.load_rom(&rom).unwrap();
+        assert_eq!(session.sound_session_mode(), SoundSessionMode::Compatibility);
+        assert!(!session.emulator().isolated_apu_driver_probe_enabled());
+        assert_eq!(session.emulator().save_ram().unwrap()[0], 0x42);
+        assert_eq!(session.state_slot_path(1).unwrap(), legacy_slot);
+        session.load_state_slot(1).unwrap();
+        assert!(!session.emulator().isolated_apu_driver_probe_enabled());
+    }
+
+    #[test]
+    fn changing_from_persistent_sound_to_isolated_never_writes_probe_ram() {
+        let dir = tempdir().unwrap();
+        let rom = dir.path().join("sound-isolated.sfc");
+        fs::write(&rom, synthetic_rom_bytes()).unwrap();
+        let assets = AssetConfig {
+            save_dir: Some(dir.path().join("save")),
+            state_dir: Some(dir.path().join("states")),
+            ..Default::default()
+        };
+        let mut session = FrontendSession::new(assets).unwrap();
+        session.load_rom_with_persistent_audio(&rom).unwrap();
+        let save = session.save_ram_path().unwrap();
+        let mut ram = session.emulator().save_ram().unwrap();
+        ram[0] = 0x5a;
+        session.emulator.load_save_ram(&ram).unwrap();
+        // Entering a read-only diagnostic first commits pending persistent
+        // progress, then imports it privately.
+        session.load_rom_with_isolated_audio_probe(&rom).unwrap();
+        assert_eq!(fs::read(&save).unwrap()[0], 0x5a);
+        assert_eq!(session.emulator().save_ram().unwrap()[0], 0x5a);
+        ram[0] = 0xbe;
+        session.emulator.load_save_ram(&ram).unwrap();
+        session.flush_save_ram().unwrap();
+        assert_eq!(fs::read(&save).unwrap()[0], 0x5a);
+        session.load_rom_with_persistent_audio(&rom).unwrap();
+        assert_eq!(session.emulator().save_ram().unwrap()[0], 0x5a);
+    }
+
+    #[test]
     fn cheat_parser_supports_raw_ram_patch_formats() {
         assert_eq!(parse_cheat_patches("7E1A2B09").len(), 1);
         assert_eq!(parse_cheat_patches("7E1A2B:09").len(), 1);

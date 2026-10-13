@@ -321,7 +321,9 @@ fn audio_worker(
             if newest_generation != frame_generation {
                 output.clear();
                 active_generation = newest_generation;
-            } else if frame_is_fresh(queued_at, Instant::now()) {
+            } else if is_test_tone || frame_is_fresh(queued_at, Instant::now()) {
+                // A manually requested beep is still useful after a slow
+                // initial device open; only game PCM has strict freshness.
                 let volume = normalize_volume(f32::from_bits(volume_bits.load(Ordering::Acquire)));
                 if is_test_tone {
                     // Remove queued gameplay sources and protect this short

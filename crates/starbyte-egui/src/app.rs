@@ -3438,7 +3438,13 @@ mod playback_tests {
         load_rom_with_default_sound(&mut session, &rom).unwrap();
         assert_eq!(session.sound_session_mode(), SoundSessionMode::Persistent);
         assert!(session.emulator().isolated_apu_driver_probe_enabled());
-        assert!(session.state_slot_path(1).unwrap().to_string_lossy().ends_with(".sound.slot1.state.json"));
+        assert!(
+            session
+                .state_slot_path(1)
+                .unwrap()
+                .to_string_lossy()
+                .ends_with(".sound.slot1.state.json")
+        );
 
         // The old silent mode is an explicit fallback, not the desktop default.
         session.load_rom(&rom).unwrap();

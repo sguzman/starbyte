@@ -2169,6 +2169,72 @@ mod tests {
     }
 
     #[test]
+    fn configured_cheatarium_refresh_is_offline_and_keeps_local_source() {
+        use flate2::{Compression, GzBuilder};
+        use starbyte_core::manifest::AssetConfig;
+
+        let dir = tempdir().unwrap();
+        let checkout = dir.path().join("cheatarium");
+        let index_dir = checkout.join("generated/v1");
+        fs::create_dir_all(&index_dir).unwrap();
+        let mut compressed = GzBuilder::new()
+            .mtime(0)
+            .write(Vec::new(), Compression::fast());
+        compressed
+            .write_all(
+                serde_json::to_string(&serde_json::json!({
+                    "schema_version": 1,
+                    "platform": "snes",
+                    "records": [{
+                        "id": "local-source:1",
+                        "title_hint": "STARBYTE VALID GAME (USA)",
+                        "provenance": {"source_id": "local-fixture"},
+                        "codes": [{
+                            "ordinal": 0,
+                            "description": "ROM substitution",
+                            "code": "DDB4-6F07",
+                            "role": "code",
+                            "snes_decode": {"format": "game-genie"}
+                        }]
+                    }]
+                }))
+                .unwrap()
+                .as_bytes(),
+            )
+            .unwrap();
+        fs::write(index_dir.join("snes.json.gz"), compressed.finish().unwrap()).unwrap();
+
+        let rom_dir = dir.path().join("roms");
+        fs::create_dir_all(&rom_dir).unwrap();
+        fs::write(
+            rom_dir.join("game.sfc"),
+            synthetic_rom_bytes(b"STARBYTE VALID GAME  "),
+        )
+        .unwrap();
+        let mut config = RuntimeConfig::default();
+        config.cheats.cheatarium_root = Some(checkout.clone());
+        config.advanced.providers.enable_network = false;
+        config.library.rom_dirs.push(rom_dir);
+        let assets = AssetConfig {
+            cache_dir: Some(dir.path().join("starbyte-cache")),
+            ..Default::default()
+        };
+        let mut service = LibraryService::new(config, assets).unwrap();
+        assert_eq!(service.refresh_cheats(&Default::default()).unwrap(), 1);
+        let entries = service.snapshot(LibraryFilter::default()).unwrap().entries;
+        let game = entries
+            .iter()
+            .find(|entry| entry.display_title.contains("STARBYTE VALID GAME"))
+            .unwrap();
+        assert_eq!(game.cheats.len(), 1);
+        assert_eq!(game.cheats[0].source, "Cheatarium / local-fixture");
+        assert_eq!(game.cheats[0].kind, "game-genie");
+        assert!(game.cheats[0].can_execute());
+        assert!(!game.cheats[0].enabled);
+        assert!(index_dir.join("snes.json.gz").is_file());
+    }
+
+    #[test]
     fn snes_game_genie_decode_matches_cheatarium_reference_vectors() {
         use super::decode_single_game_genie;
         assert_eq!(

@@ -879,6 +879,9 @@ mod tests {
         let mut bytes = synthetic_rom_bytes();
         // DDB4-6F07 decodes to $00:9E25 -> $00, a LoROM cartridge read.
         bytes[0x1E25] = 0x64;
+        // LDA $9E25; STA $0010; BRA * -- this probes actual CPU bus reads,
+        // not only host inspection of the patched cartridge address.
+        bytes[..8].copy_from_slice(&[0xAD, 0x25, 0x9E, 0x8D, 0x10, 0x00, 0x80, 0xFE]);
         fs::write(&rom_path, bytes).unwrap();
 
         let mut session = FrontendSession::new(Default::default()).unwrap();
@@ -897,6 +900,8 @@ mod tests {
         assert_eq!(session.host_read_u8(0x009E25), 0x00);
         assert_eq!(session.host_read_u8(0x809E25), 0x64);
         assert_eq!(session.emulator().cartridge().unwrap().rom()[0x1E25], 0x64);
+        session.run_frame().unwrap();
+        assert_eq!(session.host_read_u8(0x7E0010), 0x00);
 
         // Both restore paths keep the host's chosen cheats, not the saved game's.
         session.quick_save().unwrap();

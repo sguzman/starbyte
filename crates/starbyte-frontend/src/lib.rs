@@ -351,6 +351,14 @@ impl FrontendSession {
         self.emulator.set_rom_read_patches(&[]);
     }
 
+    /// Number of ROM reads observed using the current Game Genie patches.
+    ///
+    /// A positive count confirms runtime interception, not the cheat's effect.
+    #[must_use]
+    pub fn rom_cheat_read_hits(&self) -> u64 {
+        self.emulator.rom_read_patch_hits()
+    }
+
     /// Snapshot current session status for a host shell.
     #[must_use]
     pub fn snapshot(&self) -> SessionSnapshot {

@@ -453,6 +453,12 @@ pub struct StarbyteApp {
     show_compact_logs: bool,
 }
 
+// Regular desktop game loads use audible emulation with writable SRAM.
+// Keep the old silent compatibility path available only as an explicit fallback.
+fn load_rom_with_default_sound(session: &mut FrontendSession, path: &Path) -> Result<()> {
+    session.load_rom_with_persistent_audio(path)
+}
+
 impl StarbyteApp {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
@@ -511,7 +517,7 @@ impl StarbyteApp {
             if experimental_sound_driver {
                 session.load_rom_with_isolated_audio_probe(&path)?;
             } else {
-                session.load_rom(&path)?;
+                load_rom_with_default_sound(&mut session, &path)?;
             }
             record_recent_rom(&mut config.library.recent_roms, path.as_path());
             match session.run_frame_with_timeout(GUI_FRAME_TIMEOUT) {
@@ -736,7 +742,7 @@ impl StarbyteApp {
                     rom_path,
                 } => match {
                     self.clear_audio();
-                    self.session.load_rom(&rom_path)
+                    load_rom_with_default_sound(&mut self.session, &rom_path)
                 } {
                     Ok(()) => {
                         self.loaded_game_id = Some(entry.game_id.clone());
@@ -1133,9 +1139,9 @@ impl StarbyteApp {
         }
     }
 
-    /// Restart a game in the explicit isolated sound-driver test mode.
-    /// The frontend flushes ordinary SRAM before switching, then disables
-    /// disk SRAM/slots while probing. This is never enabled automatically.
+    /// Restart a game in the selected sound/save policy.
+    /// The frontend flushes writable SRAM before switching modes. The
+    /// read-only diagnostic remains opt-in; silent compatibility is a fallback.
     fn restart_game_with_audio_mode(&mut self, mode: SoundSessionMode, ctx: &egui::Context) {
         let Some(path) = self.session.loaded_rom_path().map(Path::to_path_buf) else {
             self.status_line = "Load a game before testing experimental audio.".to_owned();
@@ -1377,7 +1383,7 @@ impl StarbyteApp {
             }
             SoundSessionMode::Persistent => {
                 ui.label("Experimental sound runs with writable battery SRAM. Disk save slots are separate from the old silent slots.");
-                if ui.button("Return to silent compatibility").clicked() {
+                if ui.button("Use silent compatibility fallback").clicked() {
                     self.restart_game_with_audio_mode(SoundSessionMode::Compatibility, ui.ctx());
                 }
             }
@@ -1535,7 +1541,7 @@ impl StarbyteApp {
         };
         self.clear_audio();
         self.audio_output = None;
-        match self.session.load_rom(&resolved) {
+        match load_rom_with_default_sound(&mut self.session, &resolved) {
             Ok(()) => {
                 let matching = self
                     .library_snapshot
@@ -1810,7 +1816,7 @@ impl StarbyteApp {
                 let sound_label = match self.session.sound_session_mode() {
                     SoundSessionMode::Compatibility => "Sound (silent)",
                     SoundSessionMode::Isolated => "Sound (isolated)",
-                    SoundSessionMode::Persistent => "Sound + saves (preview)",
+                    SoundSessionMode::Persistent => "Sound (on)",
                 };
                 ui.menu_button(sound_label, |ui| self.draw_audio_controls(ui));
                 ui.menu_button("Cheats", |ui| self.draw_play_cheats_menu(ui));
@@ -3215,7 +3221,7 @@ impl eframe::App for StarbyteApp {
                             .map_or(0, AudioOutput::submitted_nonzero_frames),
                     );
                     ui.label(RichText::new(audio_status).monospace()).on_hover_text(
-                        "Normal mode has no executing SNES sound CPU. Open Sound and choose Try experimental game audio for a save-isolated sound test. Device-open and PCM counters are not proof of physical audibility.",
+                        "Sound and saves are enabled for ordinary game loads. Silent compatibility remains an explicit fallback in the Sound menu. Device-open and PCM counters do not prove physical audibility.",
                     );
                     ui.separator();
                 }
@@ -3411,9 +3417,34 @@ mod playback_tests {
     use super::{
         FRAME_INTERVAL, FrameClock, FramePerformance, FrameRateMeter, NativeSmokeAudioMetrics,
         SpeakerProbeState, Vec2, audible_output_volume, egui, fit_game_size,
-        frame_spike_reportable, is_compact_layout, merged_gamepad_buttons, pressed_button_labels,
-        record_recent_rom, write_png_screenshot,
+        frame_spike_reportable, is_compact_layout, load_rom_with_default_sound,
+        merged_gamepad_buttons, pressed_button_labels, record_recent_rom, write_png_screenshot,
     };
+
+    #[test]
+    fn ordinary_desktop_game_loads_enable_sound_and_keep_save_persistence() {
+        use starbyte_core::manifest::AssetConfig;
+        use starbyte_frontend::{FrontendSession, SoundSessionMode};
+
+        let dir = tempfile::tempdir().unwrap();
+        let rom = dir.path().join("desktop-default.sfc");
+        std::fs::write(&rom, starbyte_core::testing::demo::demo_rom_bytes()).unwrap();
+        let assets = AssetConfig {
+            save_dir: Some(dir.path().join("saves")),
+            state_dir: Some(dir.path().join("states")),
+            ..AssetConfig::default()
+        };
+        let mut session = FrontendSession::new(assets).unwrap();
+        load_rom_with_default_sound(&mut session, &rom).unwrap();
+        assert_eq!(session.sound_session_mode(), SoundSessionMode::Persistent);
+        assert!(session.emulator().isolated_apu_driver_probe_enabled());
+        assert!(session.state_slot_path(1).unwrap().to_string_lossy().ends_with(".sound.slot1.state.json"));
+
+        // The old silent mode is an explicit fallback, not the desktop default.
+        session.load_rom(&rom).unwrap();
+        assert_eq!(session.sound_session_mode(), SoundSessionMode::Compatibility);
+        assert!(!session.emulator().isolated_apu_driver_probe_enabled());
+    }
 
     #[test]
     fn speaker_probe_result_is_nonblocking_and_survives_until_retested() {

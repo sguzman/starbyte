@@ -3544,6 +3544,24 @@ mod playback_tests {
     }
 
     #[test]
+    fn frame_performance_distinguishes_ui_wake_and_texture_spikes() {
+        let mut stats = FramePerformance::default();
+        stats.record(Duration::from_millis(8));
+        stats.record_wake_lateness(Duration::from_millis(29));
+        stats.record_texture_upload(Duration::from_millis(5));
+        assert_eq!(stats.slow_frames, 0);
+        assert_eq!(stats.wakes_over_budget, 1);
+        assert_eq!(stats.peak_wake_late_ms, 29.0);
+        assert_eq!(stats.peak_texture_ms, 5.0);
+        stats.record_wake_lateness(Duration::from_millis(1));
+        stats.record_texture_upload(Duration::from_millis(2));
+        assert_eq!(stats.wakes_over_budget, 1);
+        assert_eq!(stats.peak_wake_late_ms, 29.0);
+        assert_eq!(stats.peak_texture_ms, 5.0);
+        assert_eq!(stats.last_wake_late_ms, 1.0);
+    }
+
+    #[test]
     fn frame_performance_counts_over_budget_without_accumulating_lag() {
         let mut stats = FramePerformance::default();
         stats.record(Duration::from_millis(10));

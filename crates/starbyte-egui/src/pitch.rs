@@ -105,9 +105,10 @@ impl PitchStretch {
         }
         // Bound memory during long game sessions. A lookback margin permits
         // cross-correlation on the next chunk without retaining old minutes.
+        let available = self.base_frame + self.input.len() / CHANNELS;
         let keep_from = (self.next_analysis.floor() as usize)
             .saturating_sub(SEARCH)
-            .min(self.base_frame + self.input.len() / CHANNELS);
+            .min(available.saturating_sub(WINDOW + SEARCH));
         let dropped = keep_from.saturating_sub(self.base_frame);
         if dropped > 0 {
             self.input.drain(..dropped * CHANNELS);

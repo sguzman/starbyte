@@ -68,6 +68,11 @@ pub struct Dsp {
     echo_history: [[i16; 2]; 8],
     #[serde(default)]
     echo_history_index: usize,
+    /// Keep the historical immediate start in synthetic DSP fixtures.
+    /// Explicit game-driver execution enables the hardware's five empty
+    /// samples, preserving compatibility of older portable snapshots.
+    #[serde(default)]
+    hardware_key_on_timing: bool,
 }
 
 impl Default for Dsp {
@@ -88,6 +93,7 @@ impl Default for Dsp {
             echo_delay_bytes: 0,
             echo_history: [[0; 2]; 8],
             echo_history_index: 0,
+            hardware_key_on_timing: false,
         }
     }
 }
@@ -151,6 +157,12 @@ impl Default for Voice {
 }
 
 impl Dsp {
+    /// Enable the five-empty-sample KON delay for explicitly opted-in
+    /// sound-driver execution. Default synthetic mixer tests remain unchanged.
+    pub(super) fn set_hardware_key_on_timing(&mut self, enabled: bool) {
+        self.hardware_key_on_timing = enabled;
+    }
+
     /// Stop the voices and restore power-on register values.
     pub fn reset(&mut self) {
         *self = Self::default();
@@ -394,7 +406,11 @@ impl Dsp {
             active: true,
             address: start,
             envelope: 0,
-            startup_delay: KEY_ON_EMPTY_SAMPLES,
+            startup_delay: if self.hardware_key_on_timing {
+                KEY_ON_EMPTY_SAMPLES
+            } else {
+                0
+            },
             ..Voice::default()
         };
         voice.decode_block(ram);
@@ -658,7 +674,7 @@ mod tests {
         dsp.write_register(0x5c, 0b01, &ram);
         dsp.write_register(0x4c, 0b11, &ram);
         let mut remaining_voice_audible = false;
-        for _ in 0..(usize::from(KEY_ON_EMPTY_SAMPLES) + 10) {
+        for _ in 0..5 {
             remaining_voice_audible |= dsp.next_stereo_pair(&mut ram).0 > 1000;
         }
         assert!(remaining_voice_audible, "voice 1 should remain audible");
@@ -684,7 +700,7 @@ mod tests {
         dsp.write_register(0x5c, 0, &ram);
         dsp.write_register(0x4c, 0b01, &ram);
         let mut rekey_audible = false;
-        for _ in 0..(usize::from(KEY_ON_EMPTY_SAMPLES) + 10) {
+        for _ in 0..5 {
             rekey_audible |= dsp.next_stereo_pair(&mut ram).0 > 1000;
         }
         assert!(rekey_audible);
@@ -1388,6 +1404,7 @@ mod tests {
     #[test]
     fn kon_has_five_empty_samples_and_restores_exactly_mid_startup() {
         let (mut dsp, mut ram) = looping_sample();
+        dsp.set_hardware_key_on_timing(true);
         dsp.write_register(0x4c, 1, &ram);
         for remaining in (1..=KEY_ON_EMPTY_SAMPLES).rev() {
             assert_eq!(dsp.voices[0].startup_delay, remaining);
@@ -1414,6 +1431,7 @@ mod tests {
     #[test]
     fn kon_startup_delay_is_serialized_and_does_not_restart_a_note() {
         let (mut dsp, mut ram) = looping_sample();
+        dsp.set_hardware_key_on_timing(true);
         dsp.write_register(0x4c, 1, &ram);
         for _ in 0..2 {
             dsp.next_stereo_pair(&mut ram);
@@ -1444,7 +1462,7 @@ mod tests {
             let (left, right) = dsp.next_stereo_pair(&mut ram);
             // Four-tap Gaussian interpolation takes three decoded samples
             // to fill its startup window.
-            if tick >= usize::from(KEY_ON_EMPTY_SAMPLES) + 3 {
+            if tick >= 3 {
                 assert!(left > 1000);
             }
             assert_eq!(left, right);
@@ -1472,7 +1490,7 @@ mod tests {
         dsp.write_register(0x4c, 0b10, &ram);
         for tick in 0..48 {
             let (left, right) = dsp.next_stereo_pair(&mut ram);
-            if tick >= usize::from(KEY_ON_EMPTY_SAMPLES) + 6 {
+            if tick >= 6 {
                 assert!(left < -1000, "voice one must retain its own loop source");
             }
             assert_eq!(right, 0);
@@ -1484,13 +1502,9 @@ mod tests {
     fn looping_voice_endx_is_latched_on_decode_and_reasserted_on_loop() {
         let (mut dsp, mut ram) = looping_sample();
         dsp.write_register(0x4c, 1, &ram);
-        // A newly keyed voice waits five empty sample periods before the
-        // BRR decoder's initial end/loop block becomes visible.
+        // The immediate-start synthetic mixer publishes the BRR end marker
+        // on the first live sample. Opt-in game audio tests cover the delay.
         assert_eq!(dsp.read_register(0x7c) & 1, 0);
-        for _ in 0..KEY_ON_EMPTY_SAMPLES {
-            dsp.next_stereo_pair(&mut ram);
-            assert_eq!(dsp.read_register(0x7c) & 1, 0);
-        }
         dsp.next_stereo_pair(&mut ram);
         assert_eq!(dsp.read_register(0x7c) & 1, 1);
         dsp.write_register(0x7c, 0xff, &ram);
@@ -1518,7 +1532,7 @@ mod tests {
         ram[0x203] = 0x03;
         ram[0x30a..0x312].fill(0x77);
         dsp.write_register(0x4c, 1, &ram);
-        for _ in 0..(15 + usize::from(KEY_ON_EMPTY_SAMPLES)) {
+        for _ in 0..15 {
             dsp.next_stereo_pair(&mut ram);
         }
         assert_eq!(dsp.read_register(0x7c) & 1, 0);
@@ -1545,10 +1559,6 @@ mod tests {
         ram[0x300] = 0xc1; // One final BRR block, no loop.
         dsp.write_register(0x4c, 1, &ram);
         assert_eq!(dsp.read_register(0x7c) & 1, 0);
-        for _ in 0..KEY_ON_EMPTY_SAMPLES {
-            dsp.next_stereo_pair(&mut ram);
-            assert_eq!(dsp.read_register(0x7c) & 1, 0);
-        }
         dsp.next_stereo_pair(&mut ram);
         assert_eq!(dsp.read_register(0x7c) & 1, 1);
         dsp.write_register(0x7c, 0, &ram);
@@ -1563,9 +1573,9 @@ mod tests {
         let (mut dsp, mut ram) = looping_sample();
         ram[0x300] = 0xc1; // End without loop.
         dsp.write_register(0x4c, 1, &ram);
-        for tick in 0..(16 + usize::from(KEY_ON_EMPTY_SAMPLES)) {
+        for tick in 0..16 {
             let output = dsp.next_stereo_pair(&mut ram).0;
-            if tick >= usize::from(KEY_ON_EMPTY_SAMPLES) + 3 {
+            if tick >= 3 {
                 assert!(output > 0);
             }
         }

@@ -2129,7 +2129,12 @@ mod tests {
         let entries = service.snapshot(LibraryFilter::default()).unwrap().entries;
         let entry = entries
             .iter()
-            .find(|entry| entry.local.as_ref().is_some_and(|local| local.rom_path == archive))
+            .find(|entry| {
+                entry
+                    .local
+                    .as_ref()
+                    .is_some_and(|local| local.rom_path == archive)
+            })
             .unwrap();
         assert_eq!(entry.cheats.len(), 1);
         assert_eq!(entry.cheats[0].name, "Example ROM substitution");

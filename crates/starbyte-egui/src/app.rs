@@ -286,6 +286,10 @@ pub struct StarbyteApp {
     /// Session mute defaults from persisted startup preference, then follows
     /// the live in-game Sound menu without rewriting that preference.
     audio_muted: bool,
+    /// Confirmation is deliberately per-session and not persisted.
+    confirm_experimental_audio: bool,
+    last_audio_pairs: usize,
+    last_audio_nonzero_pairs: usize,
     worker: AppWorker,
     library_snapshot: LibrarySnapshot,
     framebuffer_texture: Option<TextureHandle>,
@@ -440,6 +444,9 @@ impl StarbyteApp {
             session,
             audio_output: None,
             audio_muted,
+            confirm_experimental_audio: false,
+            last_audio_pairs: 0,
+            last_audio_nonzero_pairs: 0,
             worker,
             library_snapshot: cached_snapshot.unwrap_or_else(empty_snapshot),
             framebuffer_texture: None,
@@ -1004,6 +1011,56 @@ impl StarbyteApp {
         }
     }
 
+    /// Restart a game in the explicit isolated sound-driver test mode.
+    /// The frontend flushes ordinary SRAM before switching, then disables
+    /// disk SRAM/slots while probing. This is never enabled automatically.
+    fn restart_game_with_audio_probe(&mut self, enabled: bool, ctx: &egui::Context) {
+        let Some(path) = self.session.loaded_rom_path().map(Path::to_path_buf) else {
+            self.status_line = "Load a game before testing experimental audio.".to_owned();
+            return;
+        };
+        let old_cheats = self.loaded_game_id.as_ref().and_then(|game_id| {
+            self.library_snapshot
+                .entries
+                .iter()
+                .find(|entry| &entry.game_id == game_id)
+                .map(|entry| entry.cheats.clone())
+        });
+        self.clear_audio();
+        let result = if enabled {
+            self.session.load_rom_with_isolated_audio_probe(&path)
+        } else {
+            self.session.load_rom(&path)
+        };
+        match result {
+            Ok(()) => {
+                if let Some(cheats) = old_cheats {
+                    self.session.set_active_cheats(&cheats);
+                }
+                self.playback_error = None;
+                self.frame_clock.reset(Instant::now());
+                self.frame_performance = FramePerformance::default();
+                self.pending_step_frames = 0;
+                self.queued_gamepad_presses.clear();
+                self.queued_keyboard_presses.clear();
+                self.last_audio_pairs = 0;
+                self.last_audio_nonzero_pairs = 0;
+                self.is_playing = true;
+                self.play_view = true;
+                self.refresh_framebuffer(ctx);
+                self.status_line = if enabled {
+                    "Isolated experimental sound test: saves disabled, game restarted.".to_owned()
+                } else {
+                    "Normal gameplay restored from your existing save data.".to_owned()
+                };
+            }
+            Err(error) => {
+                self.record_playback_error(&error.to_string());
+            }
+        }
+        self.confirm_experimental_audio = false;
+    }
+
     fn draw_audio_controls(&mut self, ui: &mut egui::Ui) {
         let enabled_changed = ui
             .checkbox(&mut self.config.audio.enabled, "Sound enabled")
@@ -1027,6 +1084,65 @@ impl StarbyteApp {
             }
             if enabled_changed || volume_changed {
                 self.persist_config();
+            }
+        }
+        ui.separator();
+        let isolated = self.session.emulator().isolated_apu_driver_probe_enabled();
+        if isolated {
+            ui.colored_label(
+                egui::Color32::YELLOW,
+                "EXPERIMENTAL sound driver: disk SRAM and save slots isolated.",
+            );
+        } else {
+            ui.label("Normal SNES sound driver is not yet emulated. Game music is silent.");
+        }
+        ui.label(format!(
+            "DSP last frame: {} stereo pairs, {} nonzero",
+            self.last_audio_pairs, self.last_audio_nonzero_pairs
+        ));
+        ui.label(format!(
+            "OS audio device: {}",
+            self.audio_output
+                .as_ref()
+                .map_or("not attempted", |output| output.device_status().label())
+        ));
+        if ui.button("Test speakers (440 Hz)").clicked() {
+            let result = std::thread::Builder::new()
+                .name("starbyte-speaker-probe".to_owned())
+                .spawn(|| {
+                    if let Err(error) = AudioOutput::test_speakers() {
+                        warn!("speaker probe failed: {error}");
+                    }
+                });
+            self.status_line = if result.is_ok() {
+                "Speaker probe started; check your speakers (not a game-sound test).".to_owned()
+            } else {
+                "Could not start the speaker probe thread.".to_owned()
+            };
+        }
+        if isolated {
+            ui.label("This test does not read or write your normal save progress.");
+            if ui.button("Return to normal game and saves").clicked() {
+                self.restart_game_with_audio_probe(false, ui.ctx());
+            }
+        } else if self.session.snapshot().has_rom {
+            if !self.confirm_experimental_audio {
+                if ui.button("Try experimental game audio...").clicked() {
+                    self.confirm_experimental_audio = true;
+                }
+            } else {
+                ui.colored_label(
+                    egui::Color32::YELLOW,
+                    "Restarts from the beginning. Existing saves stay untouched, but saves are disabled during this test. Sound and performance may be unstable.",
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("Restart isolated with sound").clicked() {
+                        self.restart_game_with_audio_probe(true, ui.ctx());
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.confirm_experimental_audio = false;
+                    }
+                });
             }
         }
     }
@@ -1097,6 +1213,12 @@ impl StarbyteApp {
                     );
                 }
                 self.refresh_framebuffer(ctx);
+                let pcm = &self.session.emulator().audio_samples().samples;
+                self.last_audio_pairs = pcm.len() / 2;
+                self.last_audio_nonzero_pairs = pcm
+                    .chunks_exact(2)
+                    .filter(|pair| pair[0] != 0 || pair[1] != 0)
+                    .count();
                 self.enqueue_current_audio();
                 self.status_line = self.session.snapshot().status_line();
             }

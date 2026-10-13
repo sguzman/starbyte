@@ -570,6 +570,31 @@ mod tests {
     }
 
     #[test]
+    fn gamepad_custom_axis_binding_survives_disk_config_roundtrip() {
+        use super::InputDeviceMode;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        let mut config = RuntimeConfig::default();
+        config.input.active_device = InputDeviceMode::Gamepad;
+        config
+            .input
+            .gamepad_bindings
+            .insert("b".to_owned(), "RightStickY-".to_owned());
+        config.save_to_path(&path).unwrap();
+        let loaded = RuntimeConfig::load_or_default(&path).unwrap();
+        assert_eq!(loaded.input.active_device, InputDeviceMode::Gamepad);
+        assert_eq!(
+            loaded.input.gamepad_bindings.get("b").map(String::as_str),
+            Some("RightStickY-")
+        );
+        assert_eq!(
+            loaded.input.gamepad_bindings.get("up").map(String::as_str),
+            Some("DPadUp")
+        );
+    }
+
+    #[test]
     fn new_player_input_defaults_to_keyboard_and_gamepad_auto_mode() {
         use super::{InputDeviceMode, InputSettings};
         let settings = InputSettings::default();

@@ -1610,9 +1610,18 @@ impl StarbyteApp {
                         ui_wake_late_ms = timing.last_wake_late_ms,
                         texture_submit_ms = timing.last_texture_ms,
                         active_audio_pairs = self.last_audio_nonzero_pairs,
-                        audio_producer_drops = self.audio_output.as_ref().map_or(0, AudioOutput::producer_dropped_frames),
-                        audio_worker_drops = self.audio_output.as_ref().map_or(0, AudioOutput::worker_dropped_frames),
-                        audio_sink_empty_on_pcm = self.audio_output.as_ref().map_or(0, AudioOutput::sink_empty_on_pcm),
+                        audio_producer_drops = self
+                            .audio_output
+                            .as_ref()
+                            .map_or(0, AudioOutput::producer_dropped_frames),
+                        audio_worker_drops = self
+                            .audio_output
+                            .as_ref()
+                            .map_or(0, AudioOutput::worker_dropped_frames),
+                        audio_sink_empty_on_pcm = self
+                            .audio_output
+                            .as_ref()
+                            .map_or(0, AudioOutput::sink_empty_on_pcm),
                         "Starbyte frame pacing spike (CPU, UI scheduling, texture, audio queue)"
                     );
                     self.last_frame_spike_log = now;

@@ -16,6 +16,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Format
         run: cargo fmt --all -- --check
+      - name: Chrono diagnostic script syntax and CLI
+        run: |
+          python3 -m py_compile scripts/qa-chrono-usa.py
+          python3 scripts/qa-chrono-usa.py --help
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked
   test:

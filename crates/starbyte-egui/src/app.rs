@@ -1525,6 +1525,12 @@ impl StarbyteApp {
 
         ui.separator();
         ui.heading("Cheats");
+        if self.loaded_game_id.as_deref() == Some(entry.game_id.as_str()) {
+            ui.label(format!(
+                "Game Genie ROM-read matches: {} (bus observations, not proof of gameplay effect)",
+                self.session.rom_cheat_read_hits()
+            ));
+        }
         if entry.cheats.is_empty() {
             ui.label("No cached cheats for this title.");
         } else {
@@ -2125,6 +2131,12 @@ impl StarbyteApp {
                 }
                 ui.separator();
                 ui.heading("Cheats");
+                if self.loaded_game_id.as_deref() == Some(entry.game_id.as_str()) {
+                    ui.label(format!(
+                        "Game Genie ROM-read matches: {} (bus observations, not proof of gameplay effect)",
+                        self.session.rom_cheat_read_hits()
+                    ));
+                }
                 if entry.cheats.is_empty() {
                     ui.label("No cheats cached for this title.");
                 } else {

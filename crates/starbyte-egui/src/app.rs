@@ -3711,6 +3711,7 @@ mod playback_tests {
         );
         assert!(window_open);
         assert!(input_rect.width() > 0.0 && input_rect.height() > 0.0);
+        eprintln!("cheat-focus initial: {:?}", ctx.memory(|memory| memory.focused()));
         let pos = input_rect.center();
         draw(
             &ctx,
@@ -3749,6 +3750,7 @@ mod playback_tests {
             input(vec![egui::Event::Text("coins".to_owned())]),
             &mut focus_pending,
         );
+        eprintln!("cheat-focus after input: {:?}; query={search:?}", ctx.memory(|memory| memory.focused()));
         assert!(
             window_open,
             "clicking cheat search must not close the window"

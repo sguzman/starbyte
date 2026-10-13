@@ -3448,7 +3448,10 @@ mod playback_tests {
 
         // The old silent mode is an explicit fallback, not the desktop default.
         session.load_rom(&rom).unwrap();
-        assert_eq!(session.sound_session_mode(), SoundSessionMode::Compatibility);
+        assert_eq!(
+            session.sound_session_mode(),
+            SoundSessionMode::Compatibility
+        );
         assert!(!session.emulator().isolated_apu_driver_probe_enabled());
     }
 

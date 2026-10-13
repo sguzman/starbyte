@@ -23,8 +23,8 @@ use starbyte_core::{
     manifest::{AssetConfig, InputDeviceMode, LibraryViewMode, RuntimeConfig},
 };
 use starbyte_frontend::{
-    FrontendSession, InstalledStatus, LibraryEntry, LibraryFilter, LibraryService, LibrarySnapshot,
-    LibraryTarget, SoundSessionMode,
+    CheatEntry, FrontendSession, InstalledStatus, LibraryEntry, LibraryFilter, LibraryService,
+    LibrarySnapshot, LibraryTarget, SoundSessionMode,
 };
 
 // NTSC SNES video: 341 dots/scanline × 262 lines × 4 master clocks/dot
@@ -388,6 +388,89 @@ struct JobRecord {
     detail: String,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum CheatSort {
+    #[default]
+    Name,
+    Kind,
+    Source,
+    Code,
+    Status,
+}
+
+impl CheatSort {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Name => "Name",
+            Self::Kind => "Type",
+            Self::Source => "Source",
+            Self::Code => "Code",
+            Self::Status => "Enabled",
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum CheatVisibility {
+    #[default]
+    All,
+    Enabled,
+    Available,
+    Unavailable,
+}
+
+impl CheatVisibility {
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Enabled => "Enabled",
+            Self::Available => "Usable",
+            Self::Unavailable => "Unsupported",
+        }
+    }
+}
+
+fn filtered_sorted_cheats<'a>(
+    cheats: &'a [CheatEntry],
+    query: &str,
+    visibility: CheatVisibility,
+    sort: CheatSort,
+    descending: bool,
+) -> Vec<&'a CheatEntry> {
+    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    let mut results: Vec<&CheatEntry> = cheats
+        .iter()
+        .filter(|cheat| match visibility {
+            CheatVisibility::All => true,
+            CheatVisibility::Enabled => cheat.enabled,
+            CheatVisibility::Available => cheat.can_execute(),
+            CheatVisibility::Unavailable => !cheat.can_execute(),
+        })
+        .filter(|cheat| {
+            words.is_empty() || {
+                let fields = format!(
+                    "{} {} {} {}",
+                    cheat.name, cheat.code, cheat.kind, cheat.source
+                )
+                .to_lowercase();
+                words.iter().all(|word| fields.contains(word))
+            }
+        })
+        .collect();
+    results.sort_by(|left, right| {
+        let primary = match sort {
+            CheatSort::Name => left.name.to_lowercase().cmp(&right.name.to_lowercase()),
+            CheatSort::Kind => left.kind.to_lowercase().cmp(&right.kind.to_lowercase()),
+            CheatSort::Source => left.source.to_lowercase().cmp(&right.source.to_lowercase()),
+            CheatSort::Code => left.code.to_lowercase().cmp(&right.code.to_lowercase()),
+            CheatSort::Status => left.enabled.cmp(&right.enabled),
+        };
+        let primary = if descending { primary.reverse() } else { primary };
+        primary.then_with(|| left.name.cmp(&right.name)).then_with(|| left.id.cmp(&right.id))
+    });
+    results
+}
+
 pub struct StarbyteApp {
     assets: AssetConfig,
     config: RuntimeConfig,
@@ -415,6 +498,10 @@ pub struct StarbyteApp {
     status_line: String,
     playback_error: Option<String>,
     search_query: String,
+    cheat_search_query: String,
+    cheat_sort: CheatSort,
+    cheat_sort_descending: bool,
+    cheat_visibility: CheatVisibility,
     selected_game_id: Option<String>,
     loaded_game_id: Option<String>,
     show_properties: bool,
@@ -582,6 +669,10 @@ impl StarbyteApp {
             status_line,
             playback_error: startup_error,
             search_query: String::new(),
+            cheat_search_query: String::new(),
+            cheat_sort: CheatSort::default(),
+            cheat_sort_descending: false,
+            cheat_visibility: CheatVisibility::default(),
             selected_game_id: None,
             loaded_game_id: None,
             show_properties: false,
@@ -1705,19 +1796,8 @@ impl StarbyteApp {
     }
 
     fn draw_play_cheats_menu(&mut self, ui: &mut egui::Ui) {
-        ui.set_min_width(365.0);
-        ui.heading("Cheats from local Cheatarium");
-        ui.label("Candidates load automatically; only codes you enable are applied.");
-        if let Some(path) = self.config.cheats.cheatarium_snes_index() {
-            if path.is_file() {
-                ui.label("Local cheat source: found");
-            } else {
-                ui.colored_label(egui::Color32::YELLOW, "Local cheat source: index missing");
-            }
-        } else {
-            ui.colored_label(egui::Color32::YELLOW, "Local cheat source: not configured");
-        }
-
+        ui.set_min_width(420.0);
+        ui.heading("Cheats");
         let game = self
             .loaded_game_id
             .as_ref()
@@ -1728,52 +1808,116 @@ impl StarbyteApp {
                     .find(|entry| &entry.game_id == id)
             })
             .cloned();
-        if ui.button("Reload Cheats").clicked() {
-            self.queue_job(WorkerCommandKind::RefreshCheats {
-                target: LibraryTarget {
-                    game_id: self.loaded_game_id.clone(),
-                    installed_only: true,
-                    ..LibraryTarget::default()
-                },
-            });
-        }
-        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label("Cheatarium");
+            if ui.button("Reload").clicked() {
+                self.queue_job(WorkerCommandKind::RefreshCheats {
+                    target: LibraryTarget {
+                        game_id: self.loaded_game_id.clone(),
+                        installed_only: true,
+                        ..LibraryTarget::default()
+                    },
+                });
+            }
+        });
         let Some(entry) = game else {
             ui.label("Loaded game not yet indexed. Check Library or wait for local scan.");
             return;
         };
-        ui.label(format!(
-            "{}: {} candidates",
-            entry.display_title,
-            entry.cheats.len()
-        ));
         if entry.cheats.is_empty() {
             ui.label(self.empty_cheat_explanation());
             return;
         }
-        egui::ScrollArea::vertical()
-            .max_height(350.0)
-            .show(ui, |ui| {
-                for cheat in entry.cheats {
-                    let executable = cheat.can_execute();
-                    let mut enabled = cheat.enabled;
-                    if ui
-                        .add_enabled(
-                            executable,
-                            egui::Checkbox::new(&mut enabled, cheat.name.as_str()),
-                        )
-                        .changed()
-                    {
-                        self.toggle_cheat(&entry.game_id, &cheat.id, enabled);
+        ui.add(
+            egui::TextEdit::singleline(&mut self.cheat_search_query)
+                .hint_text("Search name, code, type, or source...")
+                .desired_width(f32::INFINITY),
+        );
+        ui.horizontal_wrapped(|ui| {
+            egui::ComboBox::from_id_salt("play_cheat_sort")
+                .selected_text(format!("Sort: {}", self.cheat_sort.label()))
+                .show_ui(ui, |ui| {
+                    for field in [
+                        CheatSort::Name,
+                        CheatSort::Kind,
+                        CheatSort::Source,
+                        CheatSort::Code,
+                        CheatSort::Status,
+                    ] {
+                        ui.selectable_value(&mut self.cheat_sort, field, field.label());
                     }
-                    ui.label(RichText::new(format!("{} [{}]", cheat.code, cheat.kind)).small());
-                    if !executable {
+                });
+            if ui
+                .button(if self.cheat_sort_descending { "Descending" } else { "Ascending" })
+                .clicked()
+            {
+                self.cheat_sort_descending = !self.cheat_sort_descending;
+            }
+            egui::ComboBox::from_id_salt("play_cheat_visibility")
+                .selected_text(format!("Show: {}", self.cheat_visibility.label()))
+                .show_ui(ui, |ui| {
+                    for filter in [
+                        CheatVisibility::All,
+                        CheatVisibility::Enabled,
+                        CheatVisibility::Available,
+                        CheatVisibility::Unavailable,
+                    ] {
+                        ui.selectable_value(&mut self.cheat_visibility, filter, filter.label());
+                    }
+                });
+            if ui.small_button("Reset").clicked() {
+                self.cheat_search_query.clear();
+                self.cheat_sort = CheatSort::default();
+                self.cheat_sort_descending = false;
+                self.cheat_visibility = CheatVisibility::default();
+            }
+        });
+        let matches = filtered_sorted_cheats(
+            &entry.cheats,
+            &self.cheat_search_query,
+            self.cheat_visibility,
+            self.cheat_sort,
+            self.cheat_sort_descending,
+        );
+        let enabled_count = entry.cheats.iter().filter(|cheat| cheat.enabled).count();
+        ui.label(format!(
+            "{} of {} cheats shown | {} enabled",
+            matches.len(), entry.cheats.len(), enabled_count
+        ));
+        ui.separator();
+        if matches.is_empty() {
+            ui.label("No cheats match these filters.");
+        } else {
+            // Render visible rows only: large Cheatarium lists should not
+            // create hundreds of offscreen egui widgets each repaint.
+            egui::ScrollArea::vertical()
+                .id_salt("play_cheat_results")
+                .max_height(350.0)
+                .show_rows(ui, 45.0, matches.len(), |ui, range| {
+                    for cheat in &matches[range] {
+                        let executable = cheat.can_execute();
+                        let mut enabled = cheat.enabled;
+                        if ui
+                            .add_enabled(
+                                executable,
+                                egui::Checkbox::new(&mut enabled, cheat.name.as_str()),
+                            )
+                            .changed()
+                        {
+                            self.toggle_cheat(&entry.game_id, &cheat.id, enabled);
+                        }
                         ui.label(
-                            RichText::new("Unsupported or unresolved code (read-only)").small(),
+                            RichText::new(format!(
+                                "{} [{}]{} ",
+                                cheat.code,
+                                cheat.kind,
+                                if executable { "" } else { " | unsupported" }
+                            ))
+                            .small(),
                         );
                     }
-                }
-            });
+                });
+        }
     }
 
     fn draw_top_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, compact: bool) {
@@ -3419,6 +3563,7 @@ mod playback_tests {
         SpeakerProbeState, Vec2, audible_output_volume, egui, fit_game_size,
         frame_spike_reportable, is_compact_layout, load_rom_with_default_sound,
         merged_gamepad_buttons, pressed_button_labels, record_recent_rom, write_png_screenshot,
+        CheatSort, CheatVisibility, filtered_sorted_cheats,
     };
 
     #[test]
@@ -3453,6 +3598,38 @@ mod playback_tests {
             SoundSessionMode::Compatibility
         );
         assert!(!session.emulator().isolated_apu_driver_probe_enabled());
+    }
+
+    #[test]
+    fn cheat_menu_filters_searches_and_sorts_without_changing_enabled_flags() {
+        use starbyte_frontend::CheatEntry;
+        let make = |id: &str, name: &str, kind: &str, enabled: bool, source: &str| CheatEntry {
+            id: id.to_owned(),
+            game_id: "test".to_owned(),
+            name: name.to_owned(),
+            code: format!("CODE-{id}"),
+            source: source.to_owned(),
+            kind: kind.to_owned(),
+            enabled,
+        };
+        let cheats = vec![
+            make("1", "Extra Lives", "game-genie", false, "Local"),
+            make("2", "Infinite Coins", "raw", true, "Local"),
+            make("3", "Unlock Level", "raw", false, "Local"),
+        ];
+        let sorted = filtered_sorted_cheats(&cheats, "", CheatVisibility::All, CheatSort::Name, false);
+        assert_eq!(sorted.iter().map(|item| item.name.as_str()).collect::<Vec<_>>(), vec!["Extra Lives", "Infinite Coins", "Unlock Level"]);
+        let reversed = filtered_sorted_cheats(&cheats, "", CheatVisibility::All, CheatSort::Name, true);
+        assert_eq!(reversed[0].name, "Unlock Level");
+        let enabled = filtered_sorted_cheats(&cheats, "", CheatVisibility::Enabled, CheatSort::Name, false);
+        assert_eq!(enabled.len(), 1);
+        assert_eq!(enabled[0].name, "Infinite Coins");
+        let search = filtered_sorted_cheats(&cheats, "LOCAL COINS", CheatVisibility::All, CheatSort::Kind, false);
+        assert_eq!(search.len(), 1);
+        assert_eq!(search[0].id, "2");
+        let code_search = filtered_sorted_cheats(&cheats, "code-1", CheatVisibility::All, CheatSort::Code, false);
+        assert_eq!(code_search[0].name, "Extra Lives");
+        assert!(cheats[1].enabled);
     }
 
     #[test]

@@ -551,11 +551,21 @@ mod tests {
 
         let mut input = InputSettings::default();
         input.active_device = InputDeviceMode::Gamepad;
-        input.keyboard_bindings.insert("a".to_owned(), "Space".to_owned());
-        input.gamepad_bindings.insert("a".to_owned(), "LeftStickX+".to_owned());
+        input
+            .keyboard_bindings
+            .insert("a".to_owned(), "Space".to_owned());
+        input
+            .gamepad_bindings
+            .insert("a".to_owned(), "LeftStickX+".to_owned());
         input.reset_gamepad_bindings();
-        assert_eq!(input.gamepad_bindings.get("a").map(String::as_str), Some("East"));
-        assert_eq!(input.keyboard_bindings.get("a").map(String::as_str), Some("Space"));
+        assert_eq!(
+            input.gamepad_bindings.get("a").map(String::as_str),
+            Some("East")
+        );
+        assert_eq!(
+            input.keyboard_bindings.get("a").map(String::as_str),
+            Some("Space")
+        );
         assert_eq!(input.active_device, InputDeviceMode::Gamepad);
     }
 

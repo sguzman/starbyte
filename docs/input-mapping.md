@@ -11,7 +11,8 @@ Open **Settings → Input** and select **Gamepad** or **Automatic (Keyboard + Ga
 - Left and right analog sticks can also be assigned explicitly as positive/negative X/Y directions. Stick capture requires crossing a stronger threshold to reject small calibration drift.
 - The left stick additionally acts as a virtual SNES D-pad by default, with a neutral deadzone. The physical D-pad does not depend on stick emulation.
 - A captured button or stick direction is held out of gameplay until released or returned to neutral, so the control used for rebinding does not also trigger an immediate in-game action.
-- **Cancel Rebind** aborts capture. **Reset Pad Defaults** restores the standard layout without changing keyboard bindings. **Save Input** persists the active device selection.
+- **Cancel Rebind** aborts capture. **Unbind** removes an individual SNES action's physical gamepad assignment. **Reset Pad Defaults** restores the standard layout without changing keyboard bindings. **Save Input** persists the active device selection.
+- The settings page includes a live **Mapped SNES buttons** preview, so you can confirm that pressing a physical control maps to the intended SNES action without loading a commercial ROM.
 
 Bindings are saved in the normal Starbyte user config under `[input.gamepad_bindings]`, not in the ROM or Cheatarium. Rebinding the same physical button to more than one SNES action is currently allowed; such a button can trigger multiple actions, so inspect each mapping if inputs appear coupled.
 

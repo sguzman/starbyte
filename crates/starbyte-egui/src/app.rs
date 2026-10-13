@@ -1492,6 +1492,9 @@ impl StarbyteApp {
                 self.frame_performance = FramePerformance::default();
                 self.frame_rate.reset();
                 self.frame_clock.reset(Instant::now());
+                self.last_audio_pairs = 0;
+                self.last_audio_nonzero_pairs = 0;
+                self.audio_nonzero_pairs_total = 0;
                 self.last_sram_flush = Instant::now();
                 self.status_line = format!("Loaded {}", path.display());
             }

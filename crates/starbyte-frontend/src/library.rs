@@ -515,6 +515,14 @@ impl LibraryService {
         let enabled_by_game = &self.config.cheats.enabled_by_game;
         let mut entries =
             merge_library_entries(&local_roms, &metadata, self.cache_root(), enabled_by_game)?;
+        // Cached cheats may predate the migration from the old remote provider.
+        // Never surface or activate them under the local-only contract.
+        for entry in &mut entries {
+            entry.cheats.retain(|cheat| {
+                self.config.cheats.cheatarium_root.is_some()
+                    && cheat.source.starts_with("Cheatarium /")
+            });
+        }
 
         let total_count = entries.len();
         let installed_count = entries
@@ -2028,6 +2036,38 @@ mod tests {
                 .join("manifests/library-snapshot.json")
                 .exists()
         );
+    }
+
+    #[test]
+    fn snapshot_hides_legacy_downloaded_cheats_without_cheatarium_source() {
+        let dir = tempdir().unwrap();
+        let mut config = RuntimeConfig::default();
+        let rom_dir = dir.path().join("roms");
+        fs::create_dir_all(&rom_dir).unwrap();
+        fs::write(
+            rom_dir.join("example.sfc"),
+            synthetic_rom_bytes(b"STARBYTE VALID GAME  "),
+        )
+        .unwrap();
+        config.library.rom_dirs.push(rom_dir);
+        let assets = starbyte_core::manifest::AssetConfig {
+            cache_dir: Some(dir.path().join("cache")),
+            ..Default::default()
+        };
+        let service = LibraryService::new(config, assets).unwrap();
+        let game_id = super::game_id_for_title("STARBYTE VALID GAME");
+        let entries = vec![super::CheatEntry {
+            id: "old-remote-code".to_owned(),
+            game_id: game_id.clone(),
+            name: "Outdated provider cache".to_owned(),
+            code: "7E001099".to_owned(),
+            source: "libretro-database".to_owned(),
+            kind: "Action Replay".to_owned(),
+            enabled: true,
+        }];
+        write_json(cheat_cache_path(&service.cache_root(), &game_id), &entries).unwrap();
+        let snapshot = service.snapshot(LibraryFilter::default()).unwrap();
+        assert!(snapshot.entries.iter().all(|entry| entry.cheats.is_empty()));
     }
 
     #[test]

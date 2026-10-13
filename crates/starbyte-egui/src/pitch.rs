@@ -166,7 +166,10 @@ mod tests {
 
     fn zero_crossing_hz(samples: &[f32]) -> f32 {
         let mono: Vec<f32> = samples.chunks_exact(2).map(|pair| pair[0]).collect();
-        let crossings = mono.windows(2).filter(|p| p[0] <= 0.0 && p[1] > 0.0).count();
+        let crossings = mono
+            .windows(2)
+            .filter(|p| p[0] <= 0.0 && p[1] > 0.0)
+            .count();
         crossings as f32 * 32_000.0 / mono.len() as f32
     }
 

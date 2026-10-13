@@ -3083,7 +3083,8 @@ impl StarbyteApp {
             ui.label(format!(
                 "Emulated FPS: {fps} / {:.1}; 40ms+ frame gaps: {}; peak {:.1} ms",
                 speed_target_fps(self.last_effective_speed_percent),
-                self.frame_rate.hitches, self.frame_rate.peak_gap_ms
+                self.frame_rate.hitches,
+                self.frame_rate.peak_gap_ms
             ));
             ui.label(format!(
                 "Emulation: {:.1} ms/frame avg; {:.1} ms peak; {} of {} frames over 16.7 ms",

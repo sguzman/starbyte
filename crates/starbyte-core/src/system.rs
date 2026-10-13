@@ -1208,8 +1208,14 @@ mod tests {
         assert_eq!(bus.rom_read_patch_hits(), 1);
         // Per-frame reapplication of the same set must preserve hit history.
         bus.set_rom_read_patches(&[
-            RomReadPatch { address: 0x008000, value: 0xAA },
-            RomReadPatch { address: 0x008000, value: 0xBB },
+            RomReadPatch {
+                address: 0x008000,
+                value: 0xAA,
+            },
+            RomReadPatch {
+                address: 0x008000,
+                value: 0xBB,
+            },
         ]);
         assert_eq!(bus.rom_read_patch_hits(), 1);
         assert_ne!(bus.read(0x808000), 0xBB);

@@ -1523,7 +1523,10 @@ impl StarbyteApp {
                 {
                     self.toggle_cheat(&entry.game_id, &cheat.id, enabled);
                 }
-                ui.label(RichText::new(format!("{} [{}] {}", cheat.code, cheat.kind, cheat.source)).small());
+                ui.label(
+                    RichText::new(format!("{} [{}] {}", cheat.code, cheat.kind, cheat.source))
+                        .small(),
+                );
                 if !cheat.can_execute() {
                     ui.label(RichText::new("Read-only: unsupported code format.").small());
                 }
@@ -2089,7 +2092,13 @@ impl StarbyteApp {
                         {
                             self.toggle_cheat(&entry.game_id, &cheat.id, enabled);
                         }
-                        ui.label(RichText::new(format!("{} [{}] {}", cheat.code, cheat.kind, cheat.source)).small());
+                        ui.label(
+                            RichText::new(format!(
+                                "{} [{}] {}",
+                                cheat.code, cheat.kind, cheat.source
+                            ))
+                            .small(),
+                        );
                         if !cheat.can_execute() {
                             ui.label(RichText::new("Read-only: unsupported code format.").small());
                         }

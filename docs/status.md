@@ -4,6 +4,10 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## Audio queue loss visibility (2026-10-13; CI pending)
+
+The dedicated Rodio worker retains a bounded, nonblocking PCM queue. The Sound menu now exposes **full-queue producer drops** and **stale/expired worker drops** separately from generated nonzero PCM, OS device-open status, and successfully submitted mixer buffers. A producer drop means the UI-to-audio queue reached its capacity; a worker drop means an outdated generation/late frame or deliberate diagnostic tone exclusion prevented playback. These are direct queue accounting counters, not proof of a physical underrun or audio quality. A device-free regression uses a deliberately full bounded channel to verify producer accounting. Cross-correlate these counts with the independent emulation, UI-wake and texture timing counters when investigating intermittent sound stutter.
+
 ## Opt-in sound with normal save persistence (implementation under CI, 2026-10-13)
 
 The frontend now distinguishes three sound/save policies: **Compatibility** (original silent gameplay with existing SRAM and disk slots), **Isolated** (explicit sound-driver test with read-only SRAM and no disk slots), and **Persistent** (explicit sound-enabled preview with battery SRAM persistence and a separate disk-slot namespace). Sound execution is no longer intrinsically tied to disabling saves. Existing ordinary disk slots retain their `<rom-id>.slotN.state.json` filenames; sound-mode slots are stored as `<rom-id>.sound.slotN.state.json`. Mode changes flush pending writable SRAM, and switching into a read-only diagnostic imports the last saved SRAM without ever writing the diagnostic's mutations.

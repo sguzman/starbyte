@@ -884,7 +884,12 @@ mod tests {
         bytes[..8].copy_from_slice(&[0xAD, 0x25, 0x9E, 0x8D, 0x10, 0x00, 0x80, 0xFE]);
         fs::write(&rom_path, bytes).unwrap();
 
-        let mut session = FrontendSession::new(Default::default()).unwrap();
+        let mut session = FrontendSession::new(AssetConfig {
+            state_dir: Some(dir.path().join("states")),
+            save_dir: Some(dir.path().join("saves")),
+            ..Default::default()
+        })
+        .unwrap();
         session.load_rom(&rom_path).unwrap();
         assert_eq!(session.host_read_u8(0x009E25), 0x64);
         let mut cheat = CheatEntry {

@@ -1284,7 +1284,7 @@ impl StarbyteApp {
         {
             return "Local cheat refresh is still in progress. No results displayed yet.";
         }
-        "No matching cheats cached for this game. Choose Reload Cheats to retry title matching.";
+        "No matching cheats cached for this game. Choose Reload Cheats to retry title matching."
     }
 
     fn draw_play_cheats_menu(&mut self, ui: &mut egui::Ui) {

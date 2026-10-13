@@ -474,13 +474,12 @@ impl Apu {
         // clock quantum as well to prevent an accidentally huge time advance
         // from monopolizing the GUI or diagnostics.
         let mut executed = 0;
+        // Entry-point validity was checked before entering the loop. If a
+        // driver re-enters the IPL, instruction execution returns zero cycles
+        // and exits below. Re-reading the upload state for every opcode adds
+        // needless work to the sound-enabled frame's hottest path.
         while self.host_clocked_spc_credit > 0
             && self.spc700.halt_state() == Spc700HaltState::Running
-            && self
-                .ipl_upload
-                .as_ref()
-                .and_then(IplUpload::entrypoint)
-                .is_some()
             && executed < 4096
         {
             let cpu_cycles = self.execute_spc_program_instruction_reuse()?;

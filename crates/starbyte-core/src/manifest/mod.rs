@@ -155,6 +155,16 @@ impl Default for AudioSettings {
     }
 }
 
+/// Default playback at native NTSC speed (percent).
+const fn default_playback_speed_percent() -> u16 {
+    100
+}
+
+/// Default temporary fast-forward speed while Tab is held (percent).
+const fn default_fast_forward_speed_percent() -> u16 {
+    300
+}
+
 /// Persistent video options for frontend shells.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoSettings {
@@ -166,6 +176,12 @@ pub struct VideoSettings {
     pub scale: u32,
     /// Whether vsync should be requested.
     pub vsync: bool,
+    /// Normal desktop playback speed, 50 through 300 percent.
+    #[serde(default = "default_playback_speed_percent")]
+    pub playback_speed_percent: u16,
+    /// Temporary playback speed when holding Tab, 100 through 400 percent.
+    #[serde(default = "default_fast_forward_speed_percent")]
+    pub fast_forward_speed_percent: u16,
 }
 
 impl Default for VideoSettings {
@@ -175,6 +191,8 @@ impl Default for VideoSettings {
             integer_scale: true,
             scale: 3,
             vsync: true,
+            playback_speed_percent: default_playback_speed_percent(),
+            fast_forward_speed_percent: default_fast_forward_speed_percent(),
         }
     }
 }
@@ -794,6 +812,20 @@ mod tests {
             toml::from_str("[cheats]\nshow_cheat_badges = true\n").unwrap();
         assert!(config.cheats.cheatarium_root.is_none());
         assert!(config.cheats.cheatarium_snes_index().is_none());
+    }
+
+    #[test]
+    fn video_speed_defaults_survive_legacy_toml() {
+        let old: super::RuntimeConfig = toml::from_str("[video]\nvsync = true\n").unwrap();
+        assert_eq!(old.video.playback_speed_percent, 100);
+        assert_eq!(old.video.fast_forward_speed_percent, 300);
+        let mut chosen = old;
+        chosen.video.playback_speed_percent = 75;
+        chosen.video.fast_forward_speed_percent = 400;
+        let round_trip: super::RuntimeConfig =
+            toml::from_str(&toml::to_string(&chosen).unwrap()).unwrap();
+        assert_eq!(round_trip.video.playback_speed_percent, 75);
+        assert_eq!(round_trip.video.fast_forward_speed_percent, 400);
     }
 
     #[test]

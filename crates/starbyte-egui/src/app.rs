@@ -37,6 +37,8 @@ const COMPACT_LAYOUT_WIDTH: f32 = 960.0;
 /// Treat a deflected primary analog stick like the SNES D-pad, including
 /// controllers that report directional input as axes rather than buttons.
 const GAMEPAD_STICK_DEADZONE: f32 = 0.5;
+/// Avoid binding from minor stick drift or calibration noise.
+const GAMEPAD_BIND_AXIS_THRESHOLD: f32 = 0.75;
 
 #[derive(Debug, Default, Clone, Copy)]
 struct StickAxes {
@@ -59,6 +61,44 @@ impl StickAxes {
             buttons.insert("DPadDown".to_owned());
         }
         buttons
+    }
+
+    /// Bindable positive/negative stick axes share the same names used by
+    /// gilrs event capture. The left stick also supplies virtual D-pad input.
+    fn axis_bindings(self, prefix: &str) -> BTreeSet<String> {
+        let mut active = BTreeSet::new();
+        if self.x <= -GAMEPAD_STICK_DEADZONE {
+            active.insert(format!("{prefix}X-"));
+        } else if self.x >= GAMEPAD_STICK_DEADZONE {
+            active.insert(format!("{prefix}X+"));
+        }
+        if self.y <= -GAMEPAD_STICK_DEADZONE {
+            active.insert(format!("{prefix}Y-"));
+        } else if self.y >= GAMEPAD_STICK_DEADZONE {
+            active.insert(format!("{prefix}Y+"));
+        }
+        active
+    }
+}
+
+/// Capture stick direction only when an axis first crosses the intentional
+/// binding threshold; small drift must never create a binding.
+fn gamepad_axis_binding(axis: Axis, before: f32, after: f32) -> Option<&'static str> {
+    let (positive, negative) = match axis {
+        Axis::LeftStickX => ("LeftStickX+", "LeftStickX-"),
+        Axis::LeftStickY => ("LeftStickY+", "LeftStickY-"),
+        Axis::RightStickX => ("RightStickX+", "RightStickX-"),
+        Axis::RightStickY => ("RightStickY+", "RightStickY-"),
+        _ => return None,
+    };
+    if before < GAMEPAD_BIND_AXIS_THRESHOLD && after >= GAMEPAD_BIND_AXIS_THRESHOLD {
+        Some(positive)
+    } else if before > -GAMEPAD_BIND_AXIS_THRESHOLD
+        && after <= -GAMEPAD_BIND_AXIS_THRESHOLD
+    {
+        Some(negative)
+    } else {
+        None
     }
 }
 
@@ -2662,6 +2702,40 @@ mod playback_tests {
             controller_input_sources(InputDeviceMode::Gamepad, true, true),
             (false, true)
         );
+    }
+
+    #[test]
+    fn stick_axis_binding_requires_deliberate_threshold_crossing() {
+        use super::{Axis, gamepad_axis_binding};
+        assert_eq!(gamepad_axis_binding(Axis::LeftStickX, 0.2, 0.5), None);
+        assert_eq!(
+            gamepad_axis_binding(Axis::LeftStickX, 0.65, 0.85),
+            Some("LeftStickX+")
+        );
+        assert_eq!(gamepad_axis_binding(Axis::LeftStickX, 0.85, 0.9), None);
+        assert_eq!(
+            gamepad_axis_binding(Axis::LeftStickY, -0.4, -0.88),
+            Some("LeftStickY-")
+        );
+        assert_eq!(
+            gamepad_axis_binding(Axis::RightStickY, 0.1, 0.9),
+            Some("RightStickY+")
+        );
+        assert_eq!(gamepad_axis_binding(Axis::LeftZ, 0.0, 1.0), None);
+    }
+
+    #[test]
+    fn stick_axes_are_bindable_without_sacrificing_virtual_dpad() {
+        use super::StickAxes;
+        let stick = StickAxes { x: -0.9, y: 0.9 };
+        let axes = stick.axis_bindings("LeftStick");
+        assert!(axes.contains("LeftStickX-"));
+        assert!(axes.contains("LeftStickY+"));
+        assert!(!axes.contains("LeftStickX+"));
+        let pad = stick.dpad_buttons();
+        assert!(pad.contains("DPadLeft"));
+        assert!(pad.contains("DPadUp"));
+        assert!(StickAxes::default().axis_bindings("RightStick").is_empty());
     }
 
     #[test]

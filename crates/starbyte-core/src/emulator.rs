@@ -456,13 +456,6 @@ impl Emulator {
         self.system.timing()
     }
 
-    /// Show the host controller bits and last emulated SNES auto-read result.
-    /// This is side-effect-free and suitable for native input diagnostics.
-    #[must_use]
-    pub const fn joypad_status(&self) -> (u16, u16, bool) {
-        self.system.joypad_status()
-    }
-
     /// Set controller-1 state from a host/frontend.
     pub fn set_controller1(&mut self, state: crate::input::ControllerState) {
         self.system.set_controller1(state);

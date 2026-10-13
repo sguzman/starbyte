@@ -1294,9 +1294,16 @@ impl StarbyteApp {
             ui.colored_label(egui::Color32::YELLOW, "Local cheat source: not configured");
         }
 
-        let game = self.loaded_game_id.as_ref().and_then(|id| {
-            self.library_snapshot.entries.iter().find(|entry| &entry.game_id == id)
-        }).cloned();
+        let game = self
+            .loaded_game_id
+            .as_ref()
+            .and_then(|id| {
+                self.library_snapshot
+                    .entries
+                    .iter()
+                    .find(|entry| &entry.game_id == id)
+            })
+            .cloned();
         if ui.button("Reload Cheats").clicked() {
             self.queue_job(WorkerCommandKind::RefreshCheats {
                 target: LibraryTarget {
@@ -1311,30 +1318,38 @@ impl StarbyteApp {
             ui.label("Loaded game not yet indexed. Check Library or wait for local scan.");
             return;
         };
-        ui.label(format!("{}: {} candidates", entry.display_title, entry.cheats.len()));
+        ui.label(format!(
+            "{}: {} candidates",
+            entry.display_title,
+            entry.cheats.len()
+        ));
         if entry.cheats.is_empty() {
             ui.label(self.empty_cheat_explanation());
             return;
         }
-        egui::ScrollArea::vertical().max_height(350.0).show(ui, |ui| {
-            for cheat in entry.cheats {
-                let executable = cheat.can_execute();
-                let mut enabled = cheat.enabled;
-                if ui
-                    .add_enabled(
-                        executable,
-                        egui::Checkbox::new(&mut enabled, cheat.name.as_str()),
-                    )
-                    .changed()
-                {
-                    self.toggle_cheat(&entry.game_id, &cheat.id, enabled);
+        egui::ScrollArea::vertical()
+            .max_height(350.0)
+            .show(ui, |ui| {
+                for cheat in entry.cheats {
+                    let executable = cheat.can_execute();
+                    let mut enabled = cheat.enabled;
+                    if ui
+                        .add_enabled(
+                            executable,
+                            egui::Checkbox::new(&mut enabled, cheat.name.as_str()),
+                        )
+                        .changed()
+                    {
+                        self.toggle_cheat(&entry.game_id, &cheat.id, enabled);
+                    }
+                    ui.label(RichText::new(format!("{} [{}]", cheat.code, cheat.kind)).small());
+                    if !executable {
+                        ui.label(
+                            RichText::new("Unsupported or unresolved code (read-only)").small(),
+                        );
+                    }
                 }
-                ui.label(RichText::new(format!("{} [{}]", cheat.code, cheat.kind)).small());
-                if !executable {
-                    ui.label(RichText::new("Unsupported or unresolved code (read-only)").small());
-                }
-            }
-        });
+            });
     }
 
     fn draw_top_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, compact: bool) {
@@ -1381,7 +1396,10 @@ impl StarbyteApp {
                 {
                     ctx.request_repaint();
                 }
-                if ui.checkbox(&mut self.show_input_overlay, "Input Diagnostics").changed() {
+                if ui
+                    .checkbox(&mut self.show_input_overlay, "Input Diagnostics")
+                    .changed()
+                {
                     ctx.request_repaint();
                 }
                 if ui.button("Fullscreen").clicked() {
@@ -1741,7 +1759,9 @@ impl StarbyteApp {
                     if let Some(path) = self.config.cheats.cheatarium_snes_index() {
                         ui.label(format!("SNES index: {}", path.display()));
                         if path.is_file() {
-                            ui.label("Local SNES index found. Cheat candidates refresh on startup.");
+                            ui.label(
+                                "Local SNES index found. Cheat candidates refresh on startup.",
+                            );
                             if ui.button("Reload local cheats").clicked() {
                                 self.queue_job(WorkerCommandKind::RefreshCheats {
                                     target: LibraryTarget {
@@ -2183,14 +2203,22 @@ impl StarbyteApp {
             let physical = if self.gamepad_buttons_down.is_empty() {
                 "none".to_owned()
             } else {
-                self.gamepad_buttons_down.iter().cloned().collect::<Vec<_>>().join(", ")
+                self.gamepad_buttons_down
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
             };
             let label = format!(
                 "SNES mapped: {}\nPhysical: {}\nHost bits: {host:04X} | game latched: {latched:04X}{}{}",
                 pressed_button_labels(self.effective_controller_state(ui.ctx())),
                 physical,
                 if busy { " (reading)" } else { "" },
-                if focused { "" } else { "\nWindow unfocused: click Starbyte" }
+                if focused {
+                    ""
+                } else {
+                    "\nWindow unfocused: click Starbyte"
+                }
             );
             ui.painter().text(
                 rect.left_top() + egui::vec2(12.0, 12.0),
@@ -3164,7 +3192,10 @@ mod playback_tests {
             Some(std::path::PathBuf::from("test/cheatarium"))
         );
         assert_eq!(live.advanced.providers.last_cheat_refresh_unix, Some(123));
-        assert_eq!(live.advanced.providers.last_metadata_refresh_unix, Some(200));
+        assert_eq!(
+            live.advanced.providers.last_metadata_refresh_unix,
+            Some(200)
+        );
     }
 
     #[test]
@@ -3530,10 +3561,14 @@ fn merge_worker_refresh_bookkeeping(live: &mut RuntimeConfig, worker: &RuntimeCo
         current.last_metadata_refresh_unix,
         incoming.last_metadata_refresh_unix,
     );
-    current.last_cover_refresh_unix =
-        newest_timestamp(current.last_cover_refresh_unix, incoming.last_cover_refresh_unix);
-    current.last_cheat_refresh_unix =
-        newest_timestamp(current.last_cheat_refresh_unix, incoming.last_cheat_refresh_unix);
+    current.last_cover_refresh_unix = newest_timestamp(
+        current.last_cover_refresh_unix,
+        incoming.last_cover_refresh_unix,
+    );
+    current.last_cheat_refresh_unix = newest_timestamp(
+        current.last_cheat_refresh_unix,
+        incoming.last_cheat_refresh_unix,
+    );
 }
 
 fn newest_timestamp(current: Option<u64>, incoming: Option<u64>) -> Option<u64> {

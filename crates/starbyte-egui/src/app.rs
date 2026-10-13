@@ -1715,9 +1715,18 @@ impl StarbyteApp {
                 );
             });
 
-        if ui.button("Save Input").clicked() {
-            self.persist_config();
-        }
+        ui.horizontal(|ui| {
+            if ui.button("Save Input").clicked() {
+                self.persist_config();
+            }
+            if ui.button("Reset Pad Defaults").clicked() {
+                self.config.input.reset_gamepad_bindings();
+                self.pending_gamepad_bind = None;
+                self.queued_gamepad_presses.clear();
+                self.persist_config();
+                self.status_line = "Restored default gamepad bindings.".to_owned();
+            }
+        });
         ui.separator();
 
         ui.label("Keyboard Bindings");
@@ -1748,13 +1757,19 @@ impl StarbyteApp {
             let devices: Vec<_> = gilrs
                 .gamepads()
                 .filter(|(_, pad)| pad.is_connected())
-                .map(|(_, pad)| pad.name().to_owned())
+                .map(|(id, pad)| (id, pad.name().to_owned()))
                 .collect();
             if devices.is_empty() {
                 ui.label("No connected controller detected by Starbyte.");
             } else {
-                for device in devices {
-                    ui.label(device);
+                for (id, name) in devices {
+                    ui.label(name);
+                    let left = self.gamepad_sticks_by_id.get(&id).copied().unwrap_or_default();
+                    let right = self.gamepad_right_sticks_by_id.get(&id).copied().unwrap_or_default();
+                    ui.label(format!(
+                        "Left stick X {:+.2} Y {:+.2} | Right stick X {:+.2} Y {:+.2}",
+                        left.x, left.y, right.x, right.y
+                    ));
                 }
             }
         } else {
@@ -1772,7 +1787,8 @@ impl StarbyteApp {
                     .join(", ")
             ));
         }
-        ui.label("Use Rebind Pad, then press a physical controller button.");
+        ui.label("Choose Rebind Pad, then press a button or push a stick direction fully.");
+        ui.label("Move an already-held stick back to center before binding its direction.");
         ui.separator();
         ui.label("Gamepad Bindings");
         for &action in input_actions() {
@@ -1789,14 +1805,21 @@ impl StarbyteApp {
                 if ui.button("Rebind Pad").clicked() {
                     self.pending_gamepad_bind = Some(action.to_string());
                     self.pending_keyboard_bind = None;
+                    self.queued_gamepad_presses.clear();
                 }
             });
         }
-        if let Some(action) = &self.pending_gamepad_bind {
-            ui.label(format!(
-                "Press a gamepad button to bind {}...",
-                action_label(action)
-            ));
+        if let Some(action) = self.pending_gamepad_bind.clone() {
+            ui.horizontal(|ui| {
+                ui.label(format!(
+                    "Press a button or move a stick to bind {}...",
+                    action_label(&action)
+                ));
+                if ui.button("Cancel Rebind").clicked() {
+                    self.pending_gamepad_bind = None;
+                    self.status_line = "Canceled gamepad rebinding.".to_owned();
+                }
+            });
         }
     }
 

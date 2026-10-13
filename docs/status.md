@@ -4,6 +4,12 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## Speaker-test feedback and experimental SPC700 visibility (2026-10-12; CI pending)
+
+The in-game Sound menu now receives the **result** of its asynchronous, independent 440 Hz speaker probe rather than reporting only thread launch. The probe button is disabled while the test runs, then displays either a device/playback initialization error or that the test finished without an OS error. This cannot establish what the person actually heard, nor the fidelity of game-generated PCM. It does not enable experimental sound drivers, access saved games, or block the GUI on a device open. Deterministic tests cover pending, successful, failed and disconnected probe notifications without requiring audio hardware.
+
+In explicit isolated-game-audio mode only, the Sound menu additionally displays uploaded sound-program bytes and real SPC700 instruction count, PC and halt state, or a message that the ROM has not handed off a driver. Normal-mode silence remains expected until commercial sound-driver execution is graduated safely. Native audible result and stutter reduction remain **unverified**, as tracked by [Issue #3](https://github.com/sguzman/starbyte/issues/3).
+
 ## Offline Cheatarium consumption and single-code SNES Game Genie (2026-10-12; latest CI pending)
 
 The desktop's Settings → Cheats can persist an optional user-selected local Cheatarium checkout in `[cheats].cheatarium_root`. Refresh Cheats now reads `generated/v1/snes.json.gz` from that checkout without downloading codes, and the CLI's read-only title search can use the same configured source without repeatedly passing `--index`. Title matching supplies **unverified candidates**, not identified ROM revisions. Source descriptions, formats and attribution remain visible. Original Cheatarium files and cartridges are never rewritten.

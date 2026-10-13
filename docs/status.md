@@ -4,6 +4,12 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## User gameplay feedback and rolling FPS instrumentation (2026-10-12; CI pending)
+
+After playing Super Mario World again on the native Hyprland build, the user reported **fewer heavy lag spikes**, with occasional stutter remaining; locally enabled cheats were remembered and applied on restart. Game audio was still not audible. This is user-reported progress, not a measured framerate, a resolved performance regression, or confirmation of commercial-game sound.
+
+Starbyte now measures **completed emulated frames per wall-clock second**, averaged over a rolling two-second window. The bottom status bar reports actual emulation FPS against the ~60.1 Hz NTSC target without requiring a diagnostic overlay. The optional Play View **Timing** overlay and Session panel report frame-completion gaps >=40 ms and peak frame gap alongside already separate core, scheduling and CPU texture-submit timings. The measurement deliberately does not claim GPU-present FPS, and it resets on pause/resume, new ROMs, isolated audio restarts and save-state loads. Deterministic tests cover stable cadence, hitch detection, stale samples and reset behavior. **Native timing improvement and actual sound remain unverified; full CI is pending.**
+
 ## Speaker-test feedback and experimental SPC700 visibility (2026-10-12; CI pending)
 
 The in-game Sound menu now receives the **result** of its asynchronous, independent 440 Hz speaker probe rather than reporting only thread launch. The probe button is disabled while the test runs, then displays either a device/playback initialization error or that the test finished without an OS error. This cannot establish what the person actually heard, nor the fidelity of game-generated PCM. It does not enable experimental sound drivers, access saved games, or block the GUI on a device open. Deterministic tests cover pending, successful, failed and disconnected probe notifications without requiring audio hardware.

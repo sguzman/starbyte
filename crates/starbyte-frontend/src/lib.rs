@@ -859,7 +859,12 @@ mod tests {
         rom[..cpu.len()].copy_from_slice(&cpu);
         fs::write(&rom_path, rom).unwrap();
 
-        let mut session = FrontendSession::new(AssetConfig::default()).unwrap();
+        let mut session = FrontendSession::new(AssetConfig {
+            save_dir: Some(dir.path().join("saves")),
+            state_dir: Some(dir.path().join("states")),
+            ..AssetConfig::default()
+        })
+        .unwrap();
         session
             .load_rom_with_isolated_audio_probe(&rom_path)
             .unwrap();
@@ -923,6 +928,37 @@ mod tests {
             "sound-with-saves preview must synthesize the uploaded BRR driver"
         );
         assert!(session.save_ram_path().is_some());
+
+        // A sound-mode disk state must restore not just SPC RAM and flags,
+        // but fractional SPC/DSP phase and the future BRR output sample-for-
+        // sample. This uses only an original synthetic driver (no game ROM).
+        let sound_slot = session.save_state_slot(1).unwrap();
+        assert!(sound_slot.is_file());
+        let saved_frame = session.snapshot().frame;
+        session.run_frame().unwrap();
+        let expected_first = session.emulator().audio_samples().samples.clone();
+        session.run_frame().unwrap();
+        let expected_second = session.emulator().audio_samples().samples.clone();
+        assert!(
+            expected_first.iter().any(|&sample| sample != 0)
+                || expected_second.iter().any(|&sample| sample != 0),
+            "sound-mode replay fixture must actually emit audio"
+        );
+        session.load_state_slot(1).unwrap();
+        assert_eq!(session.snapshot().frame, saved_frame);
+        assert!(session.emulator().isolated_apu_driver_probe_enabled());
+        session.run_frame().unwrap();
+        assert_eq!(
+            session.emulator().audio_samples().samples,
+            expected_first,
+            "first restored frame must reproduce the saved sound phase"
+        );
+        session.run_frame().unwrap();
+        assert_eq!(
+            session.emulator().audio_samples().samples,
+            expected_second,
+            "second restored frame must continue the same sound timeline"
+        );
     }
 
     #[test]

@@ -1060,9 +1060,9 @@ impl RomCandidate {
 /// Remove stale downloaded source records from both freshly built and disk-cached snapshots.
 fn retain_local_cheats(entries: &mut [LibraryEntry], source_configured: bool) {
     for entry in entries {
-        entry.cheats.retain(|cheat| {
-            source_configured && cheat.source.starts_with("Cheatarium /")
-        });
+        entry
+            .cheats
+            .retain(|cheat| source_configured && cheat.source.starts_with("Cheatarium /"));
     }
 }
 

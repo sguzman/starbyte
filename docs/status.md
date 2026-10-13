@@ -367,9 +367,11 @@ The commercial-ROM fixture recorder now uses the core's guarded frame runner for
 
 A test of a commercial game that stops within a few frames needs the exact game's name and diagnostic log before its root cause can be determined. Starbyte now surfaces a recoverable emulation error in Play View, pauses playback, and records the error in Logs; this cannot protect against native process crashes or Rust panics. A terminal backtrace is required for those. A successful native checkerboard still does not demonstrate commercial playability.
 
-## Cheatarium integration boundary
+## Cheatarium integration acceptance boundary
 
-The CLI already provides a **read-only candidate lookup** against a locally supplied, versioned Cheatarium SNES index (`starbyte-cli cheatarium --index PATH --title TITLE`). The lookup does not establish exact ROM identity or region, decode/apply cheat devices, alter a loaded cartridge, or enable any cheat. Interactive integration remains future work: require explicit cartridge/region matching, provenance display, user opt-in, and verified runtime execution before advertising usable cheats.
+The current desktop uses a persistent, locally selected Cheatarium checkout: both GUI refresh and read-only CLI lookup consume `generated/v1/snes.json.gz`. The obsolete Libretro cheat downloader has been removed. At launch, Starbyte refreshes local cheat candidates for installed games asynchronously if the configured index exists. Old online cheat caches are suppressed in both newly generated and previously saved snapshots.
+
+Supported individual SNES Game Genie codes replace matching cartridge-ROM bus reads without rewriting any ROM bytes; supported individual 7E/7F WRAM writes use a separate runtime path. The Game Details view reports matching ROM-read counts, distinguishing user activation from runtime interception. This does **not** verify the claimed cheat effect or exact game build, and no commercial ROM cheat effect has been verified. Unreviewed compound codes remain read-only. The independent Cheatarium SHA-256 release registry is currently empty, so exact revision matching must not be claimed. See [Cheatarium integration](cheatarium.md) for consumer details.
 
 ## Playability acceptance gates still open
 

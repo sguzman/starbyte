@@ -1168,7 +1168,8 @@ impl StarbyteApp {
                 self.play_view = true;
                 self.refresh_framebuffer(ctx);
                 self.status_line = if enabled {
-                    "Isolated audio: loaded existing SRAM read-only; disk saves disabled.".to_owned()
+                    "Isolated audio: loaded existing SRAM read-only; disk saves disabled."
+                        .to_owned()
                 } else {
                     "Normal gameplay restored from your existing save data.".to_owned()
                 };

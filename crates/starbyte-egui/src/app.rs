@@ -704,6 +704,11 @@ impl StarbyteApp {
     }
 
     fn effective_controller_state(&self, ctx: &egui::Context) -> ControllerState {
+        // Never route live controller input to gameplay when Hyprland has
+        // moved native window focus elsewhere.
+        if !ctx.input(|input| input.focused) {
+            return ControllerState::default();
+        }
         // Keyboard focus must not suppress an independent gamepad when the
         // default Auto input mode is active.
         let (keyboard_enabled, gamepad_enabled) = controller_input_sources(
@@ -779,7 +784,7 @@ impl StarbyteApp {
         }
     }
 
-    fn poll_gamepad_events(&mut self) {
+    fn poll_gamepad_events(&mut self, window_focused: bool) {
         let Some(gilrs) = self.gilrs.as_mut() else {
             return;
         };
@@ -792,7 +797,8 @@ impl StarbyteApp {
                         .entry(event.id)
                         .or_default()
                         .insert(name.clone());
-                    if self.pending_gamepad_bind.is_none()
+                    if window_focused
+                        && self.pending_gamepad_bind.is_none()
                         && self.pending_keyboard_bind.is_none()
                         && (self.is_playing || self.pending_step_frames > 0)
                         && matches!(
@@ -808,6 +814,7 @@ impl StarbyteApp {
                             .insert(name.clone());
                     }
                     if let Some(action) = self.pending_gamepad_bind.clone()
+                        && window_focused
                         && new_binding.is_none()
                     {
                         new_binding = Some((action, name.clone()));
@@ -871,7 +878,8 @@ impl StarbyteApp {
                     if let Some(suppressed) = self.captured_gamepad_inputs.get_mut(&event.id) {
                         release_captured_axis(suppressed, axis, value);
                     }
-                    if self.pending_gamepad_bind.is_none()
+                    if window_focused
+                        && self.pending_gamepad_bind.is_none()
                         && self.pending_keyboard_bind.is_none()
                         && (self.is_playing || self.pending_step_frames > 0)
                         && matches!(
@@ -890,6 +898,7 @@ impl StarbyteApp {
                         }
                     }
                     if let Some(action) = self.pending_gamepad_bind.clone()
+                        && window_focused
                         && new_binding.is_none()
                         && let Some(name) = gamepad_axis_binding(axis, before, value)
                     {
@@ -935,6 +944,11 @@ impl StarbyteApp {
         }
         self.gamepad_buttons_down =
             merged_gamepad_buttons_excluding(&by_id, &self.captured_gamepad_inputs);
+        if !window_focused {
+            // Transient presses from another workspace must not be replayed
+            // when the player returns to the emulator window.
+            self.queued_gamepad_presses.clear();
+        }
         if let Some((action, name)) = new_binding {
             self.config
                 .input
@@ -2443,7 +2457,7 @@ impl eframe::App for StarbyteApp {
         apply_theme(ctx, self.config.prefer_dark_mode);
         let was_recording_binding = self.pending_keyboard_bind.is_some();
         self.capture_keyboard_binding(ctx);
-        self.poll_gamepad_events();
+        self.poll_gamepad_events(ctx.input(|input| input.focused));
         self.poll_worker_events(ctx);
 
         // Drop a local ROM from the file manager to open it immediately.

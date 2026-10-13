@@ -570,24 +570,9 @@ impl StarbyteApp {
                     config,
                     status,
                 } => {
-                    // Worker jobs receive config snapshots from queue time.
-                    // Never overwrite live settings, especially recently saved
-                    // gamepad binds and the local Cheatarium checkout path.
-                    // Only merge monotonic provider refresh timestamps.
-                    let current = &mut self.config.advanced.providers;
-                    let incoming = &config.advanced.providers;
-                    current.last_metadata_refresh_unix = newest_timestamp(
-                        current.last_metadata_refresh_unix,
-                        incoming.last_metadata_refresh_unix,
-                    );
-                    current.last_cover_refresh_unix = newest_timestamp(
-                        current.last_cover_refresh_unix,
-                        incoming.last_cover_refresh_unix,
-                    );
-                    current.last_cheat_refresh_unix = newest_timestamp(
-                        current.last_cheat_refresh_unix,
-                        incoming.last_cheat_refresh_unix,
-                    );
+                    // Only merge non-destructive refresh bookkeeping. Worker
+                    // configs were cloned before the player's latest edits.
+                    merge_worker_refresh_bookkeeping(&mut self.config, &config);
                     self.persist_config();
                     self.library_snapshot = snapshot;
                     self.failed_cover_ids.clear();
@@ -3152,6 +3137,37 @@ mod playback_tests {
     }
 
     #[test]
+    fn stale_library_worker_cannot_overwrite_new_controller_or_cheat_path() {
+        use starbyte_core::manifest::{InputDeviceMode, RuntimeConfig};
+
+        let queued = RuntimeConfig::default();
+        let mut live = queued.clone();
+        live.input.active_device = InputDeviceMode::Gamepad;
+        live.input
+            .gamepad_bindings
+            .insert("start".to_owned(), "North".to_owned());
+        live.cheats.cheatarium_root = Some(std::path::PathBuf::from("test/cheatarium"));
+        live.advanced.providers.last_cheat_refresh_unix = Some(123);
+
+        let mut stale_worker = queued;
+        stale_worker.advanced.providers.last_metadata_refresh_unix = Some(200);
+        stale_worker.advanced.providers.last_cheat_refresh_unix = Some(100);
+        super::merge_worker_refresh_bookkeeping(&mut live, &stale_worker);
+
+        assert_eq!(live.input.active_device, InputDeviceMode::Gamepad);
+        assert_eq!(
+            live.input.gamepad_bindings.get("start").map(String::as_str),
+            Some("North")
+        );
+        assert_eq!(
+            live.cheats.cheatarium_root,
+            Some(std::path::PathBuf::from("test/cheatarium"))
+        );
+        assert_eq!(live.advanced.providers.last_cheat_refresh_unix, Some(123));
+        assert_eq!(live.advanced.providers.last_metadata_refresh_unix, Some(200));
+    }
+
+    #[test]
     fn worker_refresh_timestamp_merge_never_reverts_to_older_values() {
         use super::newest_timestamp;
         assert_eq!(newest_timestamp(None, None), None);
@@ -3507,6 +3523,19 @@ fn controller_input_sources(
 
 /// Shared bindings are valid but can produce surprising simultaneous SNES
 /// presses. Surface them as warnings rather than silently discarding a choice.
+fn merge_worker_refresh_bookkeeping(live: &mut RuntimeConfig, worker: &RuntimeConfig) {
+    let current = &mut live.advanced.providers;
+    let incoming = &worker.advanced.providers;
+    current.last_metadata_refresh_unix = newest_timestamp(
+        current.last_metadata_refresh_unix,
+        incoming.last_metadata_refresh_unix,
+    );
+    current.last_cover_refresh_unix =
+        newest_timestamp(current.last_cover_refresh_unix, incoming.last_cover_refresh_unix);
+    current.last_cheat_refresh_unix =
+        newest_timestamp(current.last_cheat_refresh_unix, incoming.last_cheat_refresh_unix);
+}
+
 fn newest_timestamp(current: Option<u64>, incoming: Option<u64>) -> Option<u64> {
     match (current, incoming) {
         (Some(left), Some(right)) => Some(left.max(right)),

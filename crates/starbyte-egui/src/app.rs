@@ -415,6 +415,9 @@ impl StarbyteApp {
         let start_playing = has_loaded_rom && startup_error.is_none();
         let worker = AppWorker::spawn(assets.clone());
         let gilrs = Gilrs::new().ok();
+        let has_connected_gamepad = gilrs
+            .as_ref()
+            .is_some_and(|backend| backend.gamepads().any(|(_, pad)| pad.is_connected()));
         let cached_snapshot = LibraryService::new(config.clone(), assets.clone())
             .ok()
             .and_then(|service| service.load_cached_snapshot().ok().flatten());
@@ -470,7 +473,7 @@ impl StarbyteApp {
             frame_clock: FrameClock::new(Instant::now()),
             frame_performance: FramePerformance::default(),
             show_performance_overlay: false,
-            show_input_overlay: false,
+            show_input_overlay: has_connected_gamepad,
             pending_step_frames: 0,
             exit_after_frames,
             native_smoke_audio,
@@ -1273,7 +1276,7 @@ impl StarbyteApp {
                 {
                     ctx.request_repaint();
                 }
-                if ui.checkbox(&mut self.show_input_overlay, "Input").changed() {
+                if ui.checkbox(&mut self.show_input_overlay, "Input Diagnostics").changed() {
                     ctx.request_repaint();
                 }
                 if ui.button("Fullscreen").clicked() {
@@ -2070,9 +2073,19 @@ impl StarbyteApp {
             );
         }
         if self.show_input_overlay {
+            let focused = ui.ctx().input(|input| input.focused);
+            let (host, latched, busy) = self.session.emulator().joypad_status();
+            let physical = if self.gamepad_buttons_down.is_empty() {
+                "none".to_owned()
+            } else {
+                self.gamepad_buttons_down.iter().cloned().collect::<Vec<_>>().join(", ")
+            };
             let label = format!(
-                "Controller 1: {}",
-                pressed_button_labels(self.effective_controller_state(ui.ctx()))
+                "SNES mapped: {}\nPhysical: {}\nHost bits: {host:04X} | game latched: {latched:04X}{}{}",
+                pressed_button_labels(self.effective_controller_state(ui.ctx())),
+                physical,
+                if busy { " (reading)" } else { "" },
+                if focused { "" } else { "\nWindow unfocused: click Starbyte" }
             );
             ui.painter().text(
                 rect.left_top() + egui::vec2(12.0, 12.0),

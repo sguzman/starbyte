@@ -11,9 +11,11 @@ use std::{
 use anyhow::{Context, Result};
 use sha1::{Digest, Sha1};
 
+use crate::library::decode_single_game_genie;
+
 use starbyte_core::{
     Emulator, EmulatorBuilder, cartridge::Cartridge, emulator::SaveState, input::ControllerState,
-    manifest::AssetConfig,
+    manifest::AssetConfig, system::RomReadPatch,
 };
 
 pub use self::library::{
@@ -65,6 +67,7 @@ pub struct FrontendSession {
     rom_path: Option<PathBuf>,
     cartridge_identity: Option<String>,
     active_cheat_patches: Vec<CheatPatch>,
+    active_rom_patches: Vec<RomReadPatch>,
     quick_state: Option<SaveState>,
     /// Last SRAM image successfully read from or written to disk.
     last_saved_ram: Option<Vec<u8>>,
@@ -83,6 +86,7 @@ impl FrontendSession {
             rom_path: None,
             cartridge_identity: None,
             active_cheat_patches: Vec::new(),
+            active_rom_patches: Vec::new(),
             quick_state: None,
             last_saved_ram: None,
             isolated_audio_probe: false,
@@ -153,6 +157,7 @@ impl FrontendSession {
         self.rom_path = Some(path);
         // Never replay the previous game's cheat patches into the new game.
         self.active_cheat_patches.clear();
+        self.active_rom_patches.clear();
         if let Some(ref bytes) = stored_save {
             self.emulator
                 .load_save_ram(bytes)
@@ -320,18 +325,27 @@ impl FrontendSession {
 
     /// Replace the active cheat set with the enabled cheats for the current game.
     pub fn set_active_cheats(&mut self, cheats: &[CheatEntry]) -> usize {
-        self.active_cheat_patches = cheats
-            .iter()
-            .filter(|cheat| cheat.enabled)
-            .flat_map(|cheat| parse_cheat_patches(&cheat.code))
-            .collect();
+        self.active_cheat_patches.clear();
+        self.active_rom_patches.clear();
+        for cheat in cheats.iter().filter(|cheat| cheat.enabled && cheat.can_execute()) {
+            if cheat.source.starts_with("Cheatarium /") && cheat.kind == "game-genie" {
+                if let Some(patch) = decode_single_game_genie(&cheat.code) {
+                    self.active_rom_patches.push(patch);
+                }
+            } else {
+                self.active_cheat_patches
+                    .extend(parse_cheat_patches(&cheat.code));
+            }
+        }
         self.apply_active_cheats();
-        self.active_cheat_patches.len()
+        self.active_cheat_patches.len() + self.active_rom_patches.len()
     }
 
     /// Disable all runtime-applied cheats for the current session.
     pub fn clear_active_cheats(&mut self) {
         self.active_cheat_patches.clear();
+        self.active_rom_patches.clear();
+        self.emulator.set_rom_read_patches(&[]);
     }
 
     /// Snapshot current session status for a host shell.
@@ -368,6 +382,9 @@ impl FrontendSession {
     }
 
     fn apply_active_cheats(&mut self) {
+        // Guest save-state restores replace the bus. Reapply host-managed ROM
+        // substitutions after restore and on subsequent gameplay frames.
+        self.emulator.set_rom_read_patches(&self.active_rom_patches);
         for patch in self.active_cheat_patches.iter().copied() {
             self.emulator.host_write_u8(patch.address, patch.value);
         }
@@ -850,6 +867,67 @@ mod tests {
         assert_eq!(parse_cheat_patches("7E1A2B:09").len(), 1);
         assert_eq!(parse_cheat_patches("7E1A2B 09").len(), 1);
         assert_eq!(parse_cheat_patches("7E1A2B09+C2B7-6D07").len(), 1);
+    }
+
+    #[test]
+    fn cheatarium_game_genie_changes_rom_reads_only_while_enabled() {
+        let dir = tempdir().unwrap();
+        let rom_path = dir.path().join("genie-test.sfc");
+        let mut bytes = synthetic_rom_bytes();
+        // DDB4-6F07 decodes to $00:9E25 -> $00, a LoROM cartridge read.
+        bytes[0x1E25] = 0x64;
+        fs::write(&rom_path, bytes).unwrap();
+
+        let mut session = FrontendSession::new(Default::default()).unwrap();
+        session.load_rom(&rom_path).unwrap();
+        assert_eq!(session.host_read_u8(0x009E25), 0x64);
+        let mut cheat = CheatEntry {
+            id: "one-life".to_owned(),
+            game_id: "snes-test".to_owned(),
+            name: "Game Genie substitution".to_owned(),
+            code: "DDB4-6F07".to_owned(),
+            source: "Cheatarium / test".to_owned(),
+            kind: "game-genie".to_owned(),
+            enabled: true,
+        };
+        assert_eq!(session.set_active_cheats(&[cheat.clone()]), 1);
+        assert_eq!(session.host_read_u8(0x009E25), 0x00);
+        assert_eq!(session.host_read_u8(0x809E25), 0x64);
+        assert_eq!(session.emulator().cartridge().unwrap().rom()[0x1E25], 0x64);
+
+        // Both restore paths keep the host's chosen cheats, not the saved game's.
+        session.quick_save().unwrap();
+        session.quick_load().unwrap();
+        assert_eq!(session.host_read_u8(0x009E25), 0x00);
+        let path = session.save_state_slot(1).unwrap();
+        session.load_state_slot(1).unwrap();
+        assert_eq!(session.host_read_u8(0x009E25), 0x00);
+        assert!(path.is_file());
+
+        cheat.enabled = false;
+        assert_eq!(session.set_active_cheats(&[cheat]), 0);
+        assert_eq!(session.host_read_u8(0x009E25), 0x64);
+    }
+
+    #[test]
+    fn cheatarium_rejects_unresolved_compound_genie_and_stale_cheats() {
+        let dir = tempdir().unwrap();
+        let rom_path = dir.path().join("genie-reject-test.sfc");
+        fs::write(&rom_path, synthetic_rom_bytes()).unwrap();
+        let mut session = FrontendSession::new(Default::default()).unwrap();
+        session.load_rom(&rom_path).unwrap();
+        let unreviewed = CheatEntry {
+            id: "compound".to_owned(),
+            game_id: "test".to_owned(),
+            name: "Unknown join".to_owned(),
+            code: "DDB4-6F07+D6B4-6F07".to_owned(),
+            source: "Cheatarium / test".to_owned(),
+            kind: "unverified".to_owned(),
+            enabled: true,
+        };
+        assert_eq!(session.set_active_cheats(&[unreviewed]), 0);
+        session.clear_active_cheats();
+        assert_eq!(session.host_read_u8(0x009E25), 0x00);
     }
 
     #[test]

@@ -593,7 +593,8 @@ impl StarbyteApp {
                 .cloned()
                 .unwrap_or_default();
             for cheat in &mut entry.cheats {
-                cheat.enabled = enabled.iter().any(|value| value == &cheat.id);
+                cheat.enabled =
+                    cheat.can_execute() && enabled.iter().any(|value| value == &cheat.id);
             }
         }
     }

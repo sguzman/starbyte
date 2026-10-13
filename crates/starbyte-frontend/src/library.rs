@@ -21,6 +21,7 @@ const MAX_ARCHIVED_ROM_BYTES: u64 = 64 * 1024 * 1024;
 use starbyte_core::{
     cartridge::{Cartridge, Region},
     manifest::{AssetConfig, LibraryViewMode, ProviderSettings, RuntimeConfig},
+    system::RomReadPatch,
 };
 
 /// Stable library identifier derived from a normalized game title.
@@ -141,6 +142,9 @@ impl CheatEntry {
         if !self.source.starts_with("Cheatarium /") {
             return true; // Preserve the existing legacy cheat-provider behavior.
         }
+        if self.kind == "game-genie" {
+            return decode_single_game_genie(&self.code).is_some();
+        }
         if !matches!(
             self.kind.as_str(),
             "raw-snes-address-value" | "action-replay" | "pro-action-replay"
@@ -153,6 +157,41 @@ impl CheatEntry {
             && bytes[0] == b'7'
             && matches!(bytes[1], b'E' | b'e' | b'F' | b'f')
     }
+}
+
+/// Decode one SNES Game Genie ROM-read substitution.
+///
+/// Follows the independently verified Cheatarium/Snes9x permutation; no
+/// cartridge is inspected and no code is automatically activated. Compound
+/// codes are deliberately not accepted until their composition is reviewed.
+pub(crate) fn decode_single_game_genie(code: &str) -> Option<RomReadPatch> {
+    const ALPHABET: &[u8; 16] = b"DF4709156BC8A23E";
+    let bytes = code.as_bytes();
+    if bytes.len() != 9 || bytes[4] != b'-' {
+        return None;
+    }
+    let mut parsed = 0_u32;
+    for (index, &symbol) in bytes.iter().enumerate() {
+        if index == 4 {
+            continue;
+        }
+        let digit = ALPHABET
+            .iter()
+            .position(|&candidate| candidate == symbol.to_ascii_uppercase())?;
+        parsed = (parsed << 4) | u32::try_from(digit).ok()?;
+    }
+    let a = parsed & 0x00FF_FFFF;
+    let address = ((a & 0x003c00) << 10)
+        | ((a & 0x00003c) << 14)
+        | ((a & 0xf00000) >> 8)
+        | ((a & 0x000003) << 10)
+        | ((a & 0x00c000) >> 6)
+        | ((a & 0x0f0000) >> 12)
+        | ((a & 0x0003c0) >> 6);
+    Some(RomReadPatch {
+        address,
+        value: (parsed >> 24) as u8,
+    })
 }
 
 /// Installed/missing state for one library entry.
@@ -2127,6 +2166,34 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn snes_game_genie_decode_matches_cheatarium_reference_vectors() {
+        use super::decode_single_game_genie;
+        assert_eq!(
+            decode_single_game_genie("DDB4-6F07"),
+            Some(starbyte_core::system::RomReadPatch {
+                address: 0x009E25,
+                value: 0x00,
+            })
+        );
+        assert_eq!(
+            decode_single_game_genie("d6b4-6f07"),
+            Some(starbyte_core::system::RomReadPatch {
+                address: 0x009E25,
+                value: 0x08,
+            })
+        );
+        assert_eq!(
+            decode_single_game_genie("C222-D4DD"),
+            Some(starbyte_core::system::RomReadPatch {
+                address: 0x00D0D8,
+                value: 0xAD,
+            })
+        );
+        assert!(decode_single_game_genie("DDB4-6F07+7E1E6B14").is_none());
+        assert!(decode_single_game_genie("DDB4-6F0X").is_none());
     }
 
     #[test]

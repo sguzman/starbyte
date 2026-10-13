@@ -3652,6 +3652,56 @@ mod playback_tests {
     }
 
     #[test]
+    fn floating_cheat_search_survives_pointer_focus_and_typing() {
+        // Regression for the old ui.menu_button("Cheats", ...) popup:
+        // a mouse click on its TextEdit dismissed the entire popup.
+        let ctx = egui::Context::default();
+        let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 700.0));
+        let mut window_open = true;
+        let mut search = String::new();
+        let mut input_rect = egui::Rect::NOTHING;
+        let mut show = |raw_input: egui::RawInput| {
+            ctx.run(raw_input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.label("Game running in the background");
+                });
+                egui::Window::new("Game Cheats")
+                    .id(egui::Id::new("starbyte_game_cheats_window"))
+                    .open(&mut window_open)
+                    .default_pos(egui::pos2(100.0, 100.0))
+                    .show(ctx, |ui| {
+                        let response = ui.add(egui::TextEdit::singleline(&mut search));
+                        input_rect = response.rect;
+                    });
+            });
+        };
+        let input = |events| egui::RawInput {
+            screen_rect: Some(screen_rect),
+            events,
+            ..egui::RawInput::default()
+        };
+        show(input(vec![]));
+        assert!(window_open);
+        assert!(input_rect.is_positive());
+        let pos = input_rect.center();
+        show(input(vec![egui::Event::PointerMoved(pos), egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        }]));
+        show(input(vec![egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]));
+        show(input(vec![egui::Event::Text("coins".to_owned())]));
+        assert!(window_open, "clicking cheat search must not close the window");
+        assert_eq!(search, "coins", "search must accept typed characters");
+    }
+
+    #[test]
     fn cheat_menu_filters_searches_and_sorts_without_changing_enabled_flags() {
         use starbyte_frontend::CheatEntry;
         let make = |id: &str, name: &str, kind: &str, enabled: bool, source: &str| CheatEntry {

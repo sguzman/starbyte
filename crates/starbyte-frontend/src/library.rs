@@ -1158,7 +1158,50 @@ fn merge_library_entries(
     Ok(entries)
 }
 
+/// Prefer the edition specified by the user's ZIP/file name over a fuzzy
+/// artwork-catalog variant. An NTSC header does not distinguish USA/Japan.
+/// No catalog label is proof of the underlying ROM's bytes.
+fn labeled_rom_region(title: &str) -> Option<&'static str> {
+    let lower = title.to_ascii_lowercase();
+    for (marker, name) in [
+        ("(usa)", "usa"),
+        ("(japan)", "japan"),
+        ("(europe)", "europe"),
+        ("(world)", "world"),
+    ] {
+        if lower.contains(marker) {
+            return Some(name);
+        }
+    }
+    None
+}
+
+fn labeled_rom_is_demo(title: &str) -> bool {
+    let lower = title.to_ascii_lowercase();
+    lower.contains("taikenban")
+        || lower.contains("sample rom")
+        || lower.contains("(demo)")
+        || lower.contains("(prototype)")
+}
+
 fn title_match_score(local: &LocalRomInfo, metadata: &GameMetadata) -> Option<usize> {
+    let local_filename = local.rom_path.file_stem().and_then(|name| name.to_str()).unwrap_or("");
+    let local_label = if local_filename.is_empty() {
+        local.archive_member_path.as_deref().unwrap_or(&local.title)
+    } else {
+        local_filename
+    };
+    let wanted_region = labeled_rom_region(local_label);
+    let candidate_region = labeled_rom_region(&metadata.title);
+    if wanted_region.is_some()
+        && candidate_region.is_some()
+        && wanted_region != candidate_region
+    {
+        return None;
+    }
+    if labeled_rom_is_demo(&metadata.title) && !labeled_rom_is_demo(local_label) {
+        return None;
+    }
     let local_titles = local_match_titles(local);
     let metadata_titles = metadata_match_titles(metadata);
     if local_titles.is_empty() || metadata_titles.is_empty() {
@@ -1173,7 +1216,16 @@ fn title_match_score(local: &LocalRomInfo, metadata: &GameMetadata) -> Option<us
             }
         }
     }
-    best_score
+    // When local names provide an explicit edition, give a matching catalog
+    // region precedence over undifferentiated art; otherwise preserve the
+    // existing title similarity score for regionless homebrew and cartridges.
+    best_score.map(|score| {
+        if wanted_region.is_some() && wanted_region == candidate_region {
+            score + 200
+        } else {
+            score
+        }
+    })
 }
 
 fn load_cached_cover(
@@ -2319,6 +2371,48 @@ mod tests {
         .unwrap();
         assert_eq!(entries[0].cheats.len(), 1);
         assert!(entries[0].cheats[0].enabled);
+    }
+
+    #[test]
+    fn chrono_trigger_usa_zip_does_not_match_japanese_demo_artwork() {
+        use super::{GameMetadata, LocalRomInfo, LocalRomSourceKind, title_match_score};
+        let local = LocalRomInfo {
+            game_id: "chrono-usa-local".to_owned(),
+            normalized_title: "chrono trigger".to_owned(),
+            title: "CHRONO TRIGGER".to_owned(),
+            rom_path: std::path::PathBuf::from("/games/Chrono Trigger (USA).zip"),
+            source_kind: LocalRomSourceKind::ZipArchiveMember,
+            archive_member_path: Some("Chrono Trigger.smc".to_owned()),
+            extracted_cache_path: None,
+            mapper: "HiRom".to_owned(),
+            coprocessor: None,
+            region: "NTSC".to_owned(),
+            file_size_bytes: 4_194_304,
+        };
+        let meta = |title: &str| GameMetadata {
+            game_id: title.to_owned(),
+            title: title.to_owned(),
+            normalized_title: super::normalize_title(title),
+            source: "libretro-thumbnails".to_owned(),
+            cover_url: None,
+            has_cheat_files: false,
+            fetched_at_unix: 0,
+        };
+        let usa = meta("Chrono Trigger (USA)");
+        let demo = meta("Chrono Trigger (Japan) (Taikenban Sample ROM)");
+        let japan = meta("Chrono Trigger (Japan)");
+        let generic = meta("Chrono Trigger");
+        assert_eq!(title_match_score(&local, &demo), None);
+        assert_eq!(title_match_score(&local, &japan), None);
+        assert!(title_match_score(&local, &usa) > title_match_score(&local, &generic));
+        let entries = super::merge_library_entries(
+            &[local],
+            &[demo, japan, generic, usa],
+            tempfile::tempdir().unwrap().path().to_path_buf(),
+            &std::collections::BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(entries[0].display_title, "Chrono Trigger (USA)");
     }
 
     #[test]

@@ -1296,6 +1296,15 @@ impl StarbyteApp {
                 .as_ref()
                 .map_or(0, AudioOutput::test_tones_submitted)
         ));
+        ui.label(format!(
+            "Game PCM losses: {} full-queue drops, {} stale/expired worker drops",
+            self.audio_output
+                .as_ref()
+                .map_or(0, AudioOutput::producer_dropped_frames),
+            self.audio_output
+                .as_ref()
+                .map_or(0, AudioOutput::worker_dropped_frames),
+        ));
         ui.separator();
         ui.label("Independent OS speaker check (separate stream):");
         let speaker_test_running = matches!(&self.speaker_probe, SpeakerProbeState::Running(_));

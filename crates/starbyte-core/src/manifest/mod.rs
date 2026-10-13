@@ -250,9 +250,7 @@ impl CheatSettings {
     /// An explicit configured path always takes precedence over discovery.
     pub fn discover_local_checkout(home: &Path) -> Option<PathBuf> {
         const GROUPS: &[&str] = &["Code", "Projects", "Source", "src", "repos"];
-        let is_checkout = |path: &Path| {
-            path.join("generated/v1/snes.json.gz").is_file()
-        };
+        let is_checkout = |path: &Path| path.join("generated/v1/snes.json.gz").is_file();
         if is_checkout(&home.join("cheatarium")) {
             return Some(home.join("cheatarium"));
         }
@@ -580,10 +578,17 @@ mod tests {
     fn cheatarium_auto_discovery_finds_nested_checkout_without_a_fixed_player_path() {
         use super::CheatSettings;
         let dir = tempdir().unwrap();
-        let root = dir.path().join("Code").join("collections").join("cheatarium");
+        let root = dir
+            .path()
+            .join("Code")
+            .join("collections")
+            .join("cheatarium");
         std::fs::create_dir_all(root.join("generated/v1")).unwrap();
         std::fs::write(root.join("generated/v1/snes.json.gz"), b"fixture").unwrap();
-        assert_eq!(CheatSettings::discover_local_checkout(dir.path()), Some(root));
+        assert_eq!(
+            CheatSettings::discover_local_checkout(dir.path()),
+            Some(root)
+        );
         assert!(CheatSettings::discover_local_checkout(&dir.path().join("absent")).is_none());
     }
 

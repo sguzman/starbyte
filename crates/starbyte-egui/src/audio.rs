@@ -70,6 +70,9 @@ pub struct AudioOutput {
     generation: Arc<AtomicU64>,
     device_status: Arc<AtomicU8>,
     volume_bits: Arc<AtomicU32>,
+    /// Number of fresh PCM frames actually appended to the OS mixer,
+    /// not merely sent to the worker or synthesized by the emulator.
+    submitted_frames: Arc<AtomicU64>,
 }
 
 impl AudioOutput {
@@ -81,6 +84,8 @@ impl AudioOutput {
         let shared_device_status = Arc::clone(&device_status);
         let volume_bits = Arc::new(AtomicU32::new(1.0_f32.to_bits()));
         let shared_volume_bits = Arc::clone(&volume_bits);
+        let submitted_frames = Arc::new(AtomicU64::new(0));
+        let shared_submitted_frames = Arc::clone(&submitted_frames);
         // The GUI must not join this thread: the bounded channel owns its
         // lifecycle and disconnects when the last AudioOutput is dropped.
         let _audio_thread = thread::Builder::new()
@@ -91,6 +96,7 @@ impl AudioOutput {
                     shared_generation,
                     shared_device_status,
                     shared_volume_bits,
+                    shared_submitted_frames,
                 )
             })
             .context("could not spawn background audio thread")?;
@@ -99,6 +105,7 @@ impl AudioOutput {
             generation,
             device_status,
             volume_bits,
+            submitted_frames,
         })
     }
 
@@ -106,6 +113,12 @@ impl AudioOutput {
     /// Opened does not prove sound reached the physical speakers.
     pub fn device_status(&self) -> AudioDeviceStatus {
         AudioDeviceStatus::from_raw(self.device_status.load(Ordering::Acquire))
+    }
+
+    /// Fresh PCM frames submitted to Rodio's playback sink by the worker.
+    /// This still cannot verify physical speaker audibility.
+    pub fn submitted_frames(&self) -> u64 {
+        self.submitted_frames.load(Ordering::Acquire)
     }
 
     /// Update the mixer level without opening an audio device or waiting
@@ -199,6 +212,7 @@ fn audio_worker(
     generation: Arc<AtomicU64>,
     device_status: Arc<AtomicU8>,
     volume_bits: Arc<AtomicU32>,
+    submitted_frames: Arc<AtomicU64>,
 ) {
     let mut device: Option<PlaybackDevice> = None;
     let mut retry_after: Option<Instant> = None;
@@ -251,6 +265,7 @@ fn audio_worker(
             } else if frame_is_fresh(queued_at, Instant::now()) {
                 let volume = f32::from_bits(volume_bits.load(Ordering::Acquire));
                 output.enqueue(&pcm, normalize_volume(volume));
+                submitted_frames.fetch_add(1, Ordering::Release);
             }
         }
     }
@@ -314,6 +329,7 @@ mod tests {
     fn device_open_status_is_distinct_from_worker_start_and_audio_emission() {
         let output = AudioOutput::start().unwrap();
         assert_eq!(output.device_status(), AudioDeviceStatus::NotAttempted);
+        assert_eq!(output.submitted_frames(), 0);
         assert_eq!(output.device_status().label(), "not_attempted");
         // Only the real playback thread can set these in production; avoid
         // requiring a physical speaker in this deterministic unit test.

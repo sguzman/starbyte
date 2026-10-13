@@ -14,6 +14,9 @@ const VOICE_COUNT: usize = 8;
 const REGISTER_COUNT: usize = 128;
 const BRR_SAMPLES_PER_BLOCK: usize = 16;
 const PITCH_UNIT: u32 = 0x1000;
+/// Hardware waits five 32 kHz DSP periods after KON before decoding advances.
+/// This prevents prematurely sounding/advancing a new BRR voice.
+const KEY_ON_EMPTY_SAMPLES: u8 = 5;
 /// Shared 32 kHz envelope clock wraps after 30,720 DSP sample periods.
 const ENVELOPE_COUNTER_WRAP: u16 = 30_720;
 /// SPC DSP envelope periods in audio samples. Rate zero never clocks.
@@ -111,6 +114,10 @@ struct Voice {
     /// decoder, rather than only after its last sample has been played.
     #[serde(default)]
     end_event_pending: bool,
+    /// Empty DSP sample slots immediately after KON; serialized for exact
+    /// replay through audio-driver quick saves.
+    #[serde(default)]
+    startup_delay: u8,
 }
 
 /// ADSR phases. Direct and sliding GAIN can override the envelope at any time.
@@ -138,6 +145,7 @@ impl Default for Voice {
             envelope: 0,
             envelope_phase: EnvelopePhase::Attack,
             end_event_pending: false,
+            startup_delay: 0,
         }
     }
 }
@@ -386,6 +394,7 @@ impl Dsp {
             active: true,
             address: start,
             envelope: 0,
+            startup_delay: KEY_ON_EMPTY_SAMPLES,
             ..Voice::default()
         };
         voice.decode_block(ram);
@@ -407,6 +416,12 @@ impl Voice {
         registers: &[u8],
     ) -> (i16, bool) {
         if !self.active {
+            return (0, false);
+        }
+        if self.startup_delay > 0 {
+            // A KON starts with five muted sample slots. Do not advance the
+            // BRR source, pitch or envelope or raise ENDX during those slots.
+            self.startup_delay -= 1;
             return (0, false);
         }
 
@@ -600,7 +615,7 @@ fn clamp_i16(value: i64) -> i16 {
 
 #[cfg(test)]
 mod tests {
-    use super::Dsp;
+    use super::{Dsp, KEY_ON_EMPTY_SAMPLES};
 
     fn looping_sample() -> (Dsp, Vec<u8>) {
         let mut ram = vec![0; 0x10000];
@@ -636,7 +651,7 @@ mod tests {
         dsp.write_register(0x5c, 0b01, &ram);
         dsp.write_register(0x4c, 0b11, &ram);
         let mut remaining_voice_audible = false;
-        for _ in 0..5 {
+        for _ in 0..(usize::from(KEY_ON_EMPTY_SAMPLES) + 10) {
             remaining_voice_audible |= dsp.next_stereo_pair(&mut ram).0 > 1000;
         }
         assert!(remaining_voice_audible, "voice 1 should remain audible");
@@ -662,7 +677,7 @@ mod tests {
         dsp.write_register(0x5c, 0, &ram);
         dsp.write_register(0x4c, 0b01, &ram);
         let mut rekey_audible = false;
-        for _ in 0..5 {
+        for _ in 0..(usize::from(KEY_ON_EMPTY_SAMPLES) + 10) {
             rekey_audible |= dsp.next_stereo_pair(&mut ram).0 > 1000;
         }
         assert!(rekey_audible);
@@ -1364,6 +1379,44 @@ mod tests {
     }
 
     #[test]
+    fn kon_has_five_empty_samples_and_restores_exactly_mid_startup() {
+        let (mut dsp, mut ram) = looping_sample();
+        dsp.write_register(0x4c, 1, &ram);
+        for remaining in (1..=KEY_ON_EMPTY_SAMPLES).rev() {
+            assert_eq!(dsp.voices[0].startup_delay, remaining);
+            assert_eq!(dsp.next_stereo_pair(&mut ram), (0, 0));
+            assert_eq!(dsp.read_register(0x08), 0);
+            assert_eq!(dsp.read_register(0x7c) & 1, 0);
+        }
+        assert_eq!(dsp.voices[0].startup_delay, 0);
+        let mut direct = dsp.clone();
+        let mut direct_ram = ram.clone();
+        // First live tick publishes the BRR end/loop event, still before
+        // the interpolator has collected three nonzero samples.
+        assert_eq!(dsp.next_stereo_pair(&mut ram), (0, 0));
+        assert_eq!(dsp.read_register(0x7c) & 1, 1);
+        assert_eq!(dsp.next_stereo_pair(&mut ram), direct.next_stereo_pair(&mut direct_ram));
+    }
+
+    #[test]
+    fn kon_startup_delay_is_serialized_and_does_not_restart_a_note() {
+        let (mut dsp, mut ram) = looping_sample();
+        dsp.write_register(0x4c, 1, &ram);
+        for _ in 0..2 {
+            dsp.next_stereo_pair(&mut ram);
+        }
+        let serialized = serde_json::to_string(&dsp).unwrap();
+        let mut restored: Dsp = serde_json::from_str(&serialized).unwrap();
+        let mut restored_ram = ram.clone();
+        assert_eq!(restored.voices[0].startup_delay, KEY_ON_EMPTY_SAMPLES - 2);
+        for _ in 0..48 {
+            assert_eq!(dsp.next_stereo_pair(&mut ram), restored.next_stereo_pair(&mut restored_ram));
+        }
+        assert_eq!(ram, restored_ram);
+        assert_eq!(serde_json::to_value(&dsp).unwrap(), serde_json::to_value(&restored).unwrap());
+    }
+
+    #[test]
     fn looping_brr_voice_generates_sample_data_and_stereo_volume() {
         let (mut dsp, mut ram) = looping_sample();
         assert_eq!(dsp.next_stereo_pair(&mut ram), (0, 0));
@@ -1372,7 +1425,7 @@ mod tests {
             let (left, right) = dsp.next_stereo_pair(&mut ram);
             // Four-tap Gaussian interpolation takes three decoded samples
             // to fill its startup window.
-            if tick >= 3 {
+            if tick >= usize::from(KEY_ON_EMPTY_SAMPLES) + 3 {
                 assert!(left > 1000);
             }
             assert_eq!(left, right);
@@ -1400,7 +1453,7 @@ mod tests {
         dsp.write_register(0x4c, 0b10, &ram);
         for tick in 0..48 {
             let (left, right) = dsp.next_stereo_pair(&mut ram);
-            if tick >= 6 {
+            if tick >= usize::from(KEY_ON_EMPTY_SAMPLES) + 6 {
                 assert!(left < -1000, "voice one must retain its own loop source");
             }
             assert_eq!(right, 0);
@@ -1412,9 +1465,13 @@ mod tests {
     fn looping_voice_endx_is_latched_on_decode_and_reasserted_on_loop() {
         let (mut dsp, mut ram) = looping_sample();
         dsp.write_register(0x4c, 1, &ram);
-        // KON has cleared the flag; the first DSP tick decodes the
-        // initially keyed end/loop block.
+        // A newly keyed voice waits five empty sample periods before the
+        // BRR decoder's initial end/loop block becomes visible.
         assert_eq!(dsp.read_register(0x7c) & 1, 0);
+        for _ in 0..KEY_ON_EMPTY_SAMPLES {
+            dsp.next_stereo_pair(&mut ram);
+            assert_eq!(dsp.read_register(0x7c) & 1, 0);
+        }
         dsp.next_stereo_pair(&mut ram);
         assert_eq!(dsp.read_register(0x7c) & 1, 1);
         dsp.write_register(0x7c, 0xff, &ram);
@@ -1442,7 +1499,7 @@ mod tests {
         ram[0x203] = 0x03;
         ram[0x30a..0x312].fill(0x77);
         dsp.write_register(0x4c, 1, &ram);
-        for _ in 0..15 {
+        for _ in 0..(15 + usize::from(KEY_ON_EMPTY_SAMPLES)) {
             dsp.next_stereo_pair(&mut ram);
         }
         assert_eq!(dsp.read_register(0x7c) & 1, 0);
@@ -1469,6 +1526,10 @@ mod tests {
         ram[0x300] = 0xc1; // One final BRR block, no loop.
         dsp.write_register(0x4c, 1, &ram);
         assert_eq!(dsp.read_register(0x7c) & 1, 0);
+        for _ in 0..KEY_ON_EMPTY_SAMPLES {
+            dsp.next_stereo_pair(&mut ram);
+            assert_eq!(dsp.read_register(0x7c) & 1, 0);
+        }
         dsp.next_stereo_pair(&mut ram);
         assert_eq!(dsp.read_register(0x7c) & 1, 1);
         dsp.write_register(0x7c, 0, &ram);
@@ -1483,9 +1544,9 @@ mod tests {
         let (mut dsp, mut ram) = looping_sample();
         ram[0x300] = 0xc1; // End without loop.
         dsp.write_register(0x4c, 1, &ram);
-        for tick in 0..16 {
+        for tick in 0..(16 + usize::from(KEY_ON_EMPTY_SAMPLES)) {
             let output = dsp.next_stereo_pair(&mut ram).0;
-            if tick >= 3 {
+            if tick >= usize::from(KEY_ON_EMPTY_SAMPLES) + 3 {
                 assert!(output > 0);
             }
         }

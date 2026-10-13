@@ -1202,7 +1202,10 @@ impl StarbyteApp {
         }
         if isolated {
             if let Some(upload) = self.session.emulator().isolated_apu_upload() {
-                ui.label(format!("Sound program uploaded: {} bytes", upload.bytes_written()));
+                ui.label(format!(
+                    "Sound program uploaded: {} bytes",
+                    upload.bytes_written()
+                ));
             }
             if let Some(status) = self.session.emulator().isolated_apu_spc700_status() {
                 ui.label(format!(
@@ -3163,10 +3166,10 @@ mod playback_tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        FRAME_INTERVAL, FrameClock, FramePerformance, NativeSmokeAudioMetrics, Vec2,
-        audible_output_volume, egui, fit_game_size, frame_spike_reportable, is_compact_layout,
-        merged_gamepad_buttons, pressed_button_labels, record_recent_rom, write_png_screenshot,
-        SpeakerProbeState,
+        FRAME_INTERVAL, FrameClock, FramePerformance, NativeSmokeAudioMetrics, SpeakerProbeState,
+        Vec2, audible_output_volume, egui, fit_game_size, frame_spike_reportable,
+        is_compact_layout, merged_gamepad_buttons, pressed_button_labels, record_recent_rom,
+        write_png_screenshot,
     };
 
     #[test]
@@ -3181,7 +3184,9 @@ mod playback_tests {
 
         let (sender, receiver) = std::sync::mpsc::channel();
         let mut failed = SpeakerProbeState::Running(receiver);
-        sender.send(Err("no default audio device".to_owned())).unwrap();
+        sender
+            .send(Err("no default audio device".to_owned()))
+            .unwrap();
         assert!(failed.poll());
         assert!(matches!(failed, SpeakerProbeState::Finished(Err(_))));
 

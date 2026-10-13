@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 
 /// Approximate PPU dot cycles per NTSC scanline.
 pub const DOTS_PER_SCANLINE: u16 = 341;
+/// First dot of horizontal blank on the NTSC SNES scanline.
+/// Simplified timing model: H-blank lasts from dot 274 to the scanline end.
+pub const HBLANK_START_DOT: u16 = 274;
 /// Approximate master clocks per PPU dot (1364 per NTSC scanline).
 /// The long-dot/short-scanline exceptions remain unsupported.
 pub const MASTER_CLOCKS_PER_DOT: u64 = 4;

@@ -816,7 +816,10 @@ mod tests {
 
     #[test]
     fn video_speed_defaults_survive_legacy_toml() {
-        let old: super::RuntimeConfig = toml::from_str("[video]\nfullscreen = false\ninteger_scale = true\nscale = 3\nvsync = true\n").unwrap();
+        let old: super::RuntimeConfig = toml::from_str(
+            "[video]\nfullscreen = false\ninteger_scale = true\nscale = 3\nvsync = true\n",
+        )
+        .unwrap();
         assert_eq!(old.video.playback_speed_percent, 100);
         assert_eq!(old.video.fast_forward_speed_percent, 300);
         let mut chosen = old;

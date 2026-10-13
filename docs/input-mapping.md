@@ -20,6 +20,12 @@ Bindings are saved in the normal Starbyte user config under `[input.gamepad_bind
 
 Short physical button and directional axis taps are buffered until the next emulation sample. Disconnected controllers have their held states and queued taps cleared independently. If Starbyte loses native window focus, gameplay is not sent fresh input and transient queued gamepad events are discarded. Returning to the window permits new input again.
 
+## Troubleshooting an unresponsive game
+
+With a controller connected, Starbyte enables the **Input Diagnostics** overlay in Play View. It shows the raw physical inputs seen by gilrs, the mapped SNES controller buttons, and the current emulator host/latched joypad bitfields. This distinguishes three very different cases: the controller is not delivering an event, a saved mapping does not produce the expected SNES action, or the game is not consuming a correctly latched input. A lost Wayland window focus is called out directly. The input overlay can be toggled in the Play View toolbar.
+
+Asynchronous library refreshes are not permitted to overwrite the live input or Cheatarium config with an old worker snapshot. Gamepad changes persist even when background library and cheat jobs complete. These are tested invariants, not physical controller acceptance results.
+
 ## Verification status
 
 CI can test button state merging, direction thresholds, event buffering, configuration persistence, per-device disconnect behavior and rebind-gesture suppression. It **cannot** establish that a particular real controller works under the player's Hyprland session. Native acceptance must still check the reference PXN P50L over USB, actual SNES input during gameplay, start/select/face-button orientation, sustained holds, short presses, simultaneous buttons and focus/reconnect behavior. Track the remaining work in [Issue #1](https://github.com/sguzman/starbyte/issues/1). Do not close the issue based only on these synthetic tests.

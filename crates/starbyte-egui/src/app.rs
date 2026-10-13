@@ -4169,11 +4169,23 @@ mod playback_tests {
             clock.take_due_frames(start + FRAME_INTERVAL * 2, FRAME_INTERVAL, 2),
             2
         );
-        assert_eq!(clock.time_until_next_frame(start + FRAME_INTERVAL * 2), FRAME_INTERVAL);
-        assert_eq!(clock.take_due_frames(start + Duration::from_secs(5), FRAME_INTERVAL, 2), 2);
-        assert_eq!(clock.time_until_next_frame(start + Duration::from_secs(5)), FRAME_INTERVAL);
+        assert_eq!(
+            clock.time_until_next_frame(start + FRAME_INTERVAL * 2),
+            FRAME_INTERVAL
+        );
+        assert_eq!(
+            clock.take_due_frames(start + Duration::from_secs(5), FRAME_INTERVAL, 2),
+            2
+        );
+        assert_eq!(
+            clock.time_until_next_frame(start + Duration::from_secs(5)),
+            FRAME_INTERVAL
+        );
         clock.reset(start);
-        assert_eq!(clock.take_due_frames(start + FRAME_INTERVAL, speed_frame_interval(400), 8), 5);
+        assert_eq!(
+            clock.take_due_frames(start + FRAME_INTERVAL, speed_frame_interval(400), 8),
+            5
+        );
     }
 
     #[test]

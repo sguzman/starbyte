@@ -1234,7 +1234,8 @@ impl StarbyteApp {
                 }
                 let uploaded = Instant::now();
                 self.refresh_framebuffer(ctx);
-                self.frame_performance.record_texture_upload(uploaded.elapsed());
+                self.frame_performance
+                    .record_texture_upload(uploaded.elapsed());
                 let pcm = &self.session.emulator().audio_samples().samples;
                 self.last_audio_pairs = pcm.len() / 2;
                 self.last_audio_nonzero_pairs = pcm
@@ -2476,8 +2477,7 @@ impl StarbyteApp {
             ));
             ui.label(format!(
                 "CPU framebuffer/texture submission: {:.1} ms last, {:.1} ms peak",
-                self.frame_performance.last_texture_ms,
-                self.frame_performance.peak_texture_ms
+                self.frame_performance.last_texture_ms, self.frame_performance.peak_texture_ms
             ));
         }
         ui.separator();

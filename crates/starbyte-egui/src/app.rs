@@ -1278,6 +1278,80 @@ impl StarbyteApp {
         }
     }
 
+    fn empty_cheat_explanation(&self) -> &'static str {
+        let Some(index) = self.config.cheats.cheatarium_snes_index() else {
+            return "Cheatarium is not configured. Settings → Cheats shows the local checkout path.";
+        };
+        if !index.is_file() {
+            return "Cheatarium index missing. Open Settings → Cheats and check the local checkout.";
+        }
+        if self
+            .jobs
+            .iter()
+            .any(|job| job.label == "Refresh Cheats" && job.state != "done")
+        {
+            return "Local cheat refresh is still in progress. No results displayed yet.";
+        }
+        "No matching cheats cached for this game. Choose Reload Cheats to retry title matching.";
+    }
+
+    fn draw_play_cheats_menu(&mut self, ui: &mut egui::Ui) {
+        ui.set_min_width(365.0);
+        ui.heading("Cheats from local Cheatarium");
+        ui.label("Candidates load automatically; only codes you enable are applied.");
+        if let Some(path) = self.config.cheats.cheatarium_snes_index() {
+            if path.is_file() {
+                ui.label("Local cheat source: found");
+            } else {
+                ui.colored_label(egui::Color32::YELLOW, "Local cheat source: index missing");
+            }
+        } else {
+            ui.colored_label(egui::Color32::YELLOW, "Local cheat source: not configured");
+        }
+
+        let game = self.loaded_game_id.as_ref().and_then(|id| {
+            self.library_snapshot.entries.iter().find(|entry| &entry.game_id == id)
+        }).cloned();
+        if ui.button("Reload Cheats").clicked() {
+            self.queue_job(WorkerCommandKind::RefreshCheats {
+                target: LibraryTarget {
+                    game_id: self.loaded_game_id.clone(),
+                    installed_only: true,
+                    ..LibraryTarget::default()
+                },
+            });
+        }
+        ui.separator();
+        let Some(entry) = game else {
+            ui.label("Loaded game not yet indexed. Check Library or wait for local scan.");
+            return;
+        };
+        ui.label(format!("{}: {} candidates", entry.display_title, entry.cheats.len()));
+        if entry.cheats.is_empty() {
+            ui.label(self.empty_cheat_explanation());
+            return;
+        }
+        egui::ScrollArea::vertical().max_height(350.0).show(ui, |ui| {
+            for cheat in entry.cheats {
+                let executable = cheat.can_execute();
+                let mut enabled = cheat.enabled;
+                if ui
+                    .add_enabled(
+                        executable,
+                        egui::Checkbox::new(&mut enabled, cheat.name.as_str()),
+                    )
+                    .changed()
+                {
+                    self.toggle_cheat(&entry.game_id, &cheat.id, enabled);
+                }
+                ui.label(RichText::new(format!("{} [{}]", cheat.code, cheat.kind)).small());
+                if !executable {
+                    ui.label(RichText::new("Unsupported or unresolved code (read-only)").small());
+                }
+            }
+        });
+    }
+
     fn draw_top_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, compact: bool) {
         ui.horizontal_wrapped(|ui| {
             if self.play_view {
@@ -1315,6 +1389,7 @@ impl StarbyteApp {
                     self.save_screenshot();
                 }
                 ui.menu_button("Sound", |ui| self.draw_audio_controls(ui));
+                ui.menu_button("Cheats", |ui| self.draw_play_cheats_menu(ui));
                 if ui
                     .checkbox(&mut self.show_performance_overlay, "Timing")
                     .changed()
@@ -1820,7 +1895,7 @@ impl StarbyteApp {
             ));
         }
         if entry.cheats.is_empty() {
-            ui.label("No cached cheats for this title.");
+            ui.label(self.empty_cheat_explanation());
         } else {
             ui.label("Cheatarium matches are title candidates, not verified for this ROM.");
             for cheat in entry.cheats {
@@ -2490,7 +2565,7 @@ impl StarbyteApp {
                     ));
                 }
                 if entry.cheats.is_empty() {
-                    ui.label("No cheats cached for this title.");
+                    ui.label(self.empty_cheat_explanation());
                 } else {
                     ui.label("Cheatarium matches are title candidates, not verified for this ROM.");
                     for cheat in entry.cheats {

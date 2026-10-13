@@ -517,12 +517,7 @@ impl LibraryService {
             merge_library_entries(&local_roms, &metadata, self.cache_root(), enabled_by_game)?;
         // Cached cheats may predate the migration from the old remote provider.
         // Never surface or activate them under the local-only contract.
-        for entry in &mut entries {
-            entry.cheats.retain(|cheat| {
-                self.config.cheats.cheatarium_root.is_some()
-                    && cheat.source.starts_with("Cheatarium /")
-            });
-        }
+        retain_local_cheats(&mut entries, self.config.cheats.cheatarium_root.is_some());
 
         let total_count = entries.len();
         let installed_count = entries
@@ -698,8 +693,12 @@ impl LibraryService {
             return Ok(None);
         }
         let text = fs::read_to_string(&path)?;
-        let snapshot = serde_json::from_str(&text)
+        let mut snapshot: LibrarySnapshot = serde_json::from_str(&text)
             .with_context(|| format!("failed to parse cached snapshot {}", path.display()))?;
+        retain_local_cheats(
+            &mut snapshot.entries,
+            self.config.cheats.cheatarium_root.is_some(),
+        );
         Ok(Some(snapshot))
     }
 
@@ -1055,6 +1054,15 @@ impl RomCandidate {
                 member_path,
             } => Ok(format!("{}::{member_path}", file_signature(archive_path)?)),
         }
+    }
+}
+
+/// Remove stale downloaded source records from both freshly built and disk-cached snapshots.
+fn retain_local_cheats(entries: &mut [LibraryEntry], source_configured: bool) {
+    for entry in entries {
+        entry.cheats.retain(|cheat| {
+            source_configured && cheat.source.starts_with("Cheatarium /")
+        });
     }
 }
 
@@ -2256,6 +2264,47 @@ mod tests {
             score_normalized_titles("acme animation factor", "acme animation factory usa")
                 >= Some(760)
         );
+    }
+
+    #[test]
+    fn cached_snapshot_never_reexposes_legacy_cheats() {
+        let dir = tempdir().unwrap();
+        let cache_root = dir.path().join("cache");
+        let assets = starbyte_core::manifest::AssetConfig {
+            cache_dir: Some(cache_root.clone()),
+            ..Default::default()
+        };
+        let service = LibraryService::new(RuntimeConfig::default(), assets).unwrap();
+        let snapshot = super::LibrarySnapshot {
+            entries: vec![super::LibraryEntry {
+                game_id: "game".to_owned(),
+                display_title: "Game".to_owned(),
+                installed_status: InstalledStatus::Missing,
+                local: None,
+                metadata: None,
+                cover: None,
+                cheats: vec![super::CheatEntry {
+                    id: "legacy".to_owned(),
+                    game_id: "game".to_owned(),
+                    name: "Old code".to_owned(),
+                    code: "7E001099".to_owned(),
+                    source: "libretro-database".to_owned(),
+                    kind: "Action Replay".to_owned(),
+                    enabled: true,
+                }],
+            }],
+            filter: LibraryFilter::default(),
+            total_count: 1,
+            installed_count: 0,
+            missing_count: 1,
+        };
+        write_json(
+            cache_root.join("manifests/library-snapshot.json"),
+            &snapshot,
+        )
+        .unwrap();
+        let loaded = service.load_cached_snapshot().unwrap().unwrap();
+        assert!(loaded.entries[0].cheats.is_empty());
     }
 
     #[test]

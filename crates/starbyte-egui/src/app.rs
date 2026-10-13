@@ -13,7 +13,7 @@ use image::ImageReader;
 use tracing::{debug, info, warn};
 
 use crate::{
-    audio::AudioOutput,
+    audio::{AudioDeviceStatus, AudioOutput},
     logging::SharedLogBuffer,
     worker::{AppWorker, WorkerCommand, WorkerCommandKind, WorkerEvent},
 };
@@ -402,6 +402,9 @@ pub struct StarbyteApp {
     confirm_experimental_audio: bool,
     last_audio_pairs: usize,
     last_audio_nonzero_pairs: usize,
+    /// Cumulative produced PCM signal in the current ROM/session. A quiet
+    /// frame must not erase evidence that real samples were generated.
+    audio_nonzero_pairs_total: u64,
     worker: AppWorker,
     library_snapshot: LibrarySnapshot,
     framebuffer_texture: Option<TextureHandle>,
@@ -562,6 +565,7 @@ impl StarbyteApp {
             confirm_experimental_audio: false,
             last_audio_pairs: 0,
             last_audio_nonzero_pairs: 0,
+            audio_nonzero_pairs_total: 0,
             worker,
             library_snapshot: cached_snapshot.unwrap_or_else(empty_snapshot),
             framebuffer_texture: None,
@@ -1164,6 +1168,7 @@ impl StarbyteApp {
                 self.queued_keyboard_presses.clear();
                 self.last_audio_pairs = 0;
                 self.last_audio_nonzero_pairs = 0;
+                self.audio_nonzero_pairs_total = 0;
                 self.is_playing = true;
                 self.play_view = true;
                 self.refresh_framebuffer(ctx);
@@ -1217,8 +1222,8 @@ impl StarbyteApp {
             ui.label("Normal SNES sound driver is not yet emulated. Game music is silent.");
         }
         ui.label(format!(
-            "DSP last frame: {} stereo pairs, {} nonzero",
-            self.last_audio_pairs, self.last_audio_nonzero_pairs
+            "DSP last frame: {} stereo pairs, {} nonzero; session total nonzero: {}",
+            self.last_audio_pairs, self.last_audio_nonzero_pairs, self.audio_nonzero_pairs_total
         ));
         ui.label(format!(
             "OS audio device: {}",
@@ -1379,6 +1384,9 @@ impl StarbyteApp {
                     .chunks_exact(2)
                     .filter(|pair| pair[0] != 0 || pair[1] != 0)
                     .count();
+                self.audio_nonzero_pairs_total = self
+                    .audio_nonzero_pairs_total
+                    .saturating_add(self.last_audio_nonzero_pairs as u64);
                 self.enqueue_current_audio();
                 let timing = self.frame_performance;
                 let now = Instant::now();
@@ -1697,7 +1705,12 @@ impl StarbyteApp {
                 if ui.button("Screenshot (F12)").clicked() {
                     self.save_screenshot();
                 }
-                ui.menu_button("Sound", |ui| self.draw_audio_controls(ui));
+                let sound_label = if self.session.emulator().isolated_apu_driver_probe_enabled() {
+                    "Sound (experimental)"
+                } else {
+                    "Sound (silent)"
+                };
+                ui.menu_button(sound_label, |ui| self.draw_audio_controls(ui));
                 ui.menu_button("Cheats", |ui| self.draw_play_cheats_menu(ui));
                 if ui
                     .checkbox(&mut self.show_performance_overlay, "Timing")
@@ -3071,6 +3084,18 @@ impl eframe::App for StarbyteApp {
                         "Completed emulated frames per real second (rolling 2 seconds). This is not GPU or display FPS. Enable Timing for frame-time and hitch details.",
                     );
                     ui.separator();
+                    let audio_status = audio_playback_status(
+                        self.session.emulator().isolated_apu_driver_probe_enabled(),
+                        self.config.audio.enabled,
+                        self.audio_muted,
+                        self.config.audio.volume,
+                        self.audio_nonzero_pairs_total,
+                        self.audio_output.as_ref().map(AudioOutput::device_status),
+                    );
+                    ui.label(RichText::new(audio_status).monospace()).on_hover_text(
+                        "Normal mode has no executing SNES sound CPU. Open Sound and choose Try experimental game audio for a save-isolated sound test. Device-open and PCM counters are not proof of physical audibility.",
+                    );
+                    ui.separator();
                 }
                 ui.label(self.status_line.as_str());
                 let active = self
@@ -3291,6 +3316,37 @@ mod playback_tests {
         let mut disconnected = SpeakerProbeState::Running(receiver);
         assert!(disconnected.poll());
         assert!(matches!(disconnected, SpeakerProbeState::Finished(Err(_))));
+    }
+
+    #[test]
+    fn playback_indicator_distinguishes_silent_shim_from_unverified_pcm() {
+        use super::audio_playback_status;
+        use crate::audio::AudioDeviceStatus;
+
+        assert_eq!(
+            audio_playback_status(false, true, false, 1.0, 500, Some(AudioDeviceStatus::Opened)),
+            "Sound: SILENT (compatibility)"
+        );
+        assert_eq!(
+            audio_playback_status(true, true, false, 1.0, 0, None),
+            "Sound: waiting for PCM (experimental)"
+        );
+        assert_eq!(
+            audio_playback_status(true, true, false, 1.0, 530, Some(AudioDeviceStatus::OpenFailed)),
+            "Sound: PCM present; OS device FAILED"
+        );
+        assert_eq!(
+            audio_playback_status(true, true, false, 1.0, 530, Some(AudioDeviceStatus::Opened)),
+            "Sound: PCM sent to OS (not verified audible)"
+        );
+        assert_eq!(
+            audio_playback_status(true, false, false, 1.0, 530, Some(AudioDeviceStatus::Opened)),
+            "Sound: MUTED (experimental)"
+        );
+        assert_eq!(
+            audio_playback_status(true, true, true, 1.0, 530, Some(AudioDeviceStatus::Opened)),
+            "Sound: MUTED (experimental)"
+        );
     }
 
     #[test]
@@ -3899,6 +3955,33 @@ mod playback_tests {
 }
 
 /// Persisted volume affects OS playback, not synthesis or WAV diagnostics.
+/// Report the *actual* audio pipeline state; frame sample counts alone
+/// do not establish working music or that the speaker rendered anything.
+fn audio_playback_status(
+    experimental: bool,
+    enabled: bool,
+    muted: bool,
+    volume: f32,
+    nonzero_pairs_total: u64,
+    device: Option<AudioDeviceStatus>,
+) -> &'static str {
+    if !experimental {
+        return "Sound: SILENT (compatibility)";
+    }
+    if !enabled || muted || !volume.is_finite() || volume <= 0.0 {
+        return "Sound: MUTED (experimental)";
+    }
+    if nonzero_pairs_total == 0 {
+        return "Sound: waiting for PCM (experimental)";
+    }
+    match device {
+        None => "Sound: PCM present; no audio worker",
+        Some(AudioDeviceStatus::NotAttempted) => "Sound: PCM present; opening device",
+        Some(AudioDeviceStatus::OpenFailed) => "Sound: PCM present; OS device FAILED",
+        Some(AudioDeviceStatus::Opened) => "Sound: PCM sent to OS (not verified audible)",
+    }
+}
+
 fn audible_output_volume(enabled: bool, muted: bool, volume: f32) -> f32 {
     if !enabled || muted || !volume.is_finite() {
         0.0

@@ -2577,6 +2577,18 @@ impl StarbyteApp {
     }
 
     fn draw_persistent_slots(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        match self.session.sound_session_mode() {
+            SoundSessionMode::Compatibility => {
+                ui.label("Compatibility slots (your existing game states)");
+            }
+            SoundSessionMode::Persistent => {
+                ui.label("Sound-mode slots (separate from existing compatibility slots)");
+            }
+            SoundSessionMode::Isolated => {
+                ui.label("Isolated audio: disk save/load is disabled. Your slots are untouched.");
+                return;
+            }
+        }
         for slot in 1..=3 {
             ui.horizontal(|ui| {
                 ui.label(format!("Slot {slot}"));

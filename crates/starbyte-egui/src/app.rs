@@ -1177,13 +1177,15 @@ impl StarbyteApp {
                 self.refresh_framebuffer(ctx);
                 self.status_line = match mode {
                     SoundSessionMode::Compatibility => {
-                        "Silent compatibility gameplay restored with existing save progress.".to_owned()
+                        "Silent compatibility gameplay restored with existing save progress."
+                            .to_owned()
                     }
                     SoundSessionMode::Isolated => {
                         "Isolated sound: SRAM read-only; disk save slots disabled.".to_owned()
                     }
                     SoundSessionMode::Persistent => {
-                        "Sound + saves preview: battery SRAM enabled; sound-specific disk slots.".to_owned()
+                        "Sound + saves preview: battery SRAM enabled; sound-specific disk slots."
+                            .to_owned()
                     }
                 };
             }
@@ -1348,8 +1350,13 @@ impl StarbyteApp {
         }
         match mode {
             SoundSessionMode::Isolated => {
-                ui.label("Your SRAM was copied read-only at startup. Test changes are never saved.");
-                if ui.button("Return to silent compatibility and saves").clicked() {
+                ui.label(
+                    "Your SRAM was copied read-only at startup. Test changes are never saved.",
+                );
+                if ui
+                    .button("Return to silent compatibility and saves")
+                    .clicked()
+                {
                     self.restart_game_with_audio_mode(SoundSessionMode::Compatibility, ui.ctx());
                 }
             }

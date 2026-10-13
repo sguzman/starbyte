@@ -7,7 +7,7 @@ Starbyte uses a player-configured, local Cheatarium checkout for SNES cheat sour
 cheatarium_root = "~/path/to/cheatarium"
 ```
 
-The native GUI exposes this as **Settings → Cheats → Local Cheatarium checkout**. Save a folder (or Browse), and Starbyte refreshes the library's cached cheat candidates from the local `generated/v1/snes.json.gz` when that index exists. It never downloads Cheatarium cheats or copies the collection into the Starbyte source tree. Other legacy Libretro provider behavior remains available only when no local Cheatarium checkout is configured.
+The native GUI exposes this as **Settings → Cheats → Local Cheatarium checkout**. Save a folder (or Browse), and Starbyte refreshes the library's cached cheat candidates from the local `generated/v1/snes.json.gz` when that index exists. It never downloads Cheatarium cheats or copies the collection into the Starbyte source tree. Cheat refresh now **requires** a configured local checkout: it never falls back to fetching Libretro cheat files, even if network artwork and metadata providers are enabled. Without a configured checkout, refreshing cheats returns an explicit setup error. Cached entries from the obsolete online cheat provider are hidden rather than presented as local cheats.
 
 The read-only CLI also uses the configured local index without requiring a path:
 

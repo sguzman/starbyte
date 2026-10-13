@@ -543,8 +543,7 @@ mod tests {
     use super::{
         AudioDeviceStatus, AudioMessage, AudioOutput, PlaybackContinuity, frame_is_fresh,
         normalize_pitch, normalize_playback_speed, normalize_volume, pcm16_stereo_to_float,
-        retry_ready,
-        set_sink_playback_speed, speaker_test_tone,
+        retry_ready, set_sink_playback_speed, speaker_test_tone,
     };
 
     #[test]

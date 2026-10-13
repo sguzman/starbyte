@@ -36,6 +36,8 @@ const FRAME_INTERVAL: Duration = Duration::from_nanos(16_639_357);
 const GUI_FRAME_TIMEOUT: Duration = Duration::from_millis(1_500);
 /// Log only actionable spikes rather than streaming telemetry every 60 Hz frame.
 const FRAME_SPIKE_LOG_THRESHOLD_MS: f32 = 40.0;
+/// Log intermittent sub-40ms pacing gaps that can still lower game FPS.
+const FRAME_PACING_LOG_THRESHOLD_MS: f32 = 20.0;
 const FRAME_SPIKE_LOG_INTERVAL: Duration = Duration::from_secs(5);
 /// Display frame completion rate over a bounded rolling window, not 1 / CPU-frame time.
 const FPS_WINDOW: Duration = Duration::from_secs(2);
@@ -1588,16 +1590,21 @@ impl StarbyteApp {
                 if self.is_playing {
                     self.frame_rate.record(now);
                 }
-                if frame_spike_reportable(timing)
+                if (frame_spike_reportable(timing)
+                    || self.frame_rate.last_gap_ms >= FRAME_PACING_LOG_THRESHOLD_MS)
                     && now.saturating_duration_since(self.last_frame_spike_log)
                         >= FRAME_SPIKE_LOG_INTERVAL
                 {
                     warn!(
+                        frame_gap_ms = self.frame_rate.last_gap_ms,
                         emulation_ms = timing.last_ms,
                         ui_wake_late_ms = timing.last_wake_late_ms,
                         texture_submit_ms = timing.last_texture_ms,
                         active_audio_pairs = self.last_audio_nonzero_pairs,
-                        "slow Starbyte frame (CPU, scheduler, and texture measured independently)"
+                        audio_producer_drops = self.audio_output.as_ref().map_or(0, AudioOutput::producer_dropped_frames),
+                        audio_worker_drops = self.audio_output.as_ref().map_or(0, AudioOutput::worker_dropped_frames),
+                        audio_sink_empty_on_pcm = self.audio_output.as_ref().map_or(0, AudioOutput::sink_empty_on_pcm),
+                        "Starbyte frame pacing spike (CPU, UI scheduling, texture, audio queue)"
                     );
                     self.last_frame_spike_log = now;
                 }
@@ -2824,8 +2831,9 @@ impl StarbyteApp {
                 .fps(Instant::now())
                 .map_or_else(|| "--".to_owned(), |fps| format!("{fps:.1}"));
             let label = format!(
-                "Emu FPS {fps} / 60.1 (2s) | 40ms+ frame gaps: {} | peak gap {:.1} ms\nEmulation {:.1} ms avg / {:.1} ms peak | {} slow frames\nUI late {:.1} ms / peak {:.1} ms ({} missed frames)\nTexture CPU {:.1} ms / peak {:.1} ms",
+                "Emu FPS {fps} / 60.1 (2s) | 40ms+ frame gaps: {} | last gap {:.1} / peak {:.1} ms\nEmulation {:.1} ms avg / {:.1} ms peak | {} slow frames\nUI late {:.1} ms / peak {:.1} ms ({} missed frames)\nTexture CPU {:.1} ms / peak {:.1} ms",
                 self.frame_rate.hitches,
+                self.frame_rate.last_gap_ms,
                 self.frame_rate.peak_gap_ms,
                 stats.avg_ms,
                 stats.peak_ms,

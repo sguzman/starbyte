@@ -1,8 +1,16 @@
 # Starbyte: current state
 
-**Updated:** 2026-10-12. **Project direction:** active development. **Product maturity:** experimental Rust SNES emulator, intended for comfortable Linux/Wayland play rather than cycle-perfect hardware accuracy.
+**Updated:** 2026-10-13. **Project direction:** active development. **Product maturity:** experimental Rust SNES emulator, intended for comfortable Linux/Wayland play rather than cycle-perfect hardware accuracy.
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
+
+## Native silent-gameplay report and sound pipeline diagnostics (2026-10-13)
+
+The player rebuilt the latest release and confirmed native Super Mario World remains responsive on the overworld, with **59.6 / 60.1 emulated FPS** visible in Play View and **no noticeable lag** in that session. They reported **no audible audio**. The screenshot's `Audio samples: 1066` is an unconditional **sample count**, not evidence of any nonzero PCM or speaker output. Crucially, the captured Play View did not expose which APU mode was running. The normal compatibility bootstrap is intentionally nonexecuting/silent, so a successful release rebuild does not by itself make game audio available. Do not infer the user activated isolated audio without evidence.
+
+To prevent further blind sound tests, the GUI now displays `Sound: SILENT (compatibility)` in the in-game status bar when the ordinary shim is selected, and labels the menu `Sound (silent)`. In explicitly opt-in mode, it displays whether output is disabled/muted, whether **any nonzero DSP PCM has been generated**, whether the default OS sound device opened or failed, and whether the background worker actually **submitted** any fresh buffers to Rodio's mixer. The Sound menu reports lifetime-to-session nonzero PCM pairs, last-frame nonzero pairs, device-open status and mixer-submitted frame count. The worker submission counter advances only after a nonstale buffer is appended; synthesizing PCM or successfully opening an OS device is not itself counted as submission. Counters and worker state are reset on ROM change or sound-mode restart so stale data from prior games cannot masquerade as success. Even mixer submission does not prove that the intended physical speaker played music. Deterministic tests verify the distinct audio-stage labels without requiring real hardware.
+
+**Remaining acceptance:** opt into the isolated game sound-driver mode (without writing battery SRAM) and distinguish `no SPC program` / `all-zero DSP output` / `device failed` / `no mixer submission` from `submitted but inaudible`. Only then prioritize SNES timing or Linux output routing accordingly. Do not promote experimental sound to default, or certify it audible, on synthetic CI results alone.
 
 ## User gameplay feedback and rolling FPS instrumentation (2026-10-12; CI pending)
 

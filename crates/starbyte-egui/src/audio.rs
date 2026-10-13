@@ -392,13 +392,17 @@ fn speaker_test_tone() -> Vec<i16> {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::atomic::Ordering,
+        sync::{
+            Arc,
+            atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering},
+            mpsc::sync_channel,
+        },
         time::{Duration, Instant},
     };
 
     use super::{
-        AudioDeviceStatus, AudioOutput, frame_is_fresh, normalize_volume, pcm16_stereo_to_float,
-        retry_ready, speaker_test_tone,
+        AudioDeviceStatus, AudioMessage, AudioOutput, frame_is_fresh, normalize_volume,
+        pcm16_stereo_to_float, retry_ready, speaker_test_tone,
     };
 
     #[test]
@@ -486,12 +490,26 @@ mod tests {
 
     #[test]
     fn test_tone_is_queued_on_game_worker_without_counting_as_game_pcm() {
-        let output = AudioOutput::start().unwrap();
+        // Intercept the bounded queue instead of spawning a worker that might
+        // contact ALSA/PipeWire; CI never needs physical audio hardware.
+        let (sender, receiver) = sync_channel(2);
+        let output = AudioOutput {
+            sender,
+            generation: Arc::new(AtomicU64::new(3)),
+            device_status: Arc::new(AtomicU8::new(0)),
+            volume_bits: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+            submitted_frames: Arc::new(AtomicU64::new(0)),
+            submitted_nonzero_frames: Arc::new(AtomicU64::new(0)),
+            test_tones_submitted: Arc::new(AtomicU64::new(0)),
+        };
         assert!(output.enqueue_live_test_tone());
-        // The speaker test is not a game-produced nonzero audio frame.
+        match receiver.try_recv().unwrap() {
+            AudioMessage::TestTone { generation, .. } => assert_eq!(generation, 3),
+            _ => panic!("the dedicated tone must travel through the live worker"),
+        }
+        assert_eq!(output.submitted_frames(), 0);
         assert_eq!(output.submitted_nonzero_frames(), 0);
-        // A CI runner may have no sound device; the worker's own counters
-        // are the only source of truth for actual Rodio submissions.
+        assert_eq!(output.test_tones_submitted(), 0);
     }
 
     #[test]

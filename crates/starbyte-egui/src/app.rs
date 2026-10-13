@@ -391,6 +391,22 @@ impl StarbyteApp {
             // prevent a fresh, asynchronous scan of newly added ZIP games.
             app.queue_job(WorkerCommandKind::RefreshSnapshot);
         }
+        // Cheatarium is a local data source, so changes to its checkout
+        // become visible on the next launch without a network request or a
+        // separate manual refresh. Keep this work off the UI thread.
+        if app
+            .config
+            .cheats
+            .cheatarium_snes_index()
+            .is_some_and(|index| index.is_file())
+        {
+            app.queue_job(WorkerCommandKind::RefreshCheats {
+                target: LibraryTarget {
+                    installed_only: true,
+                    ..LibraryTarget::default()
+                },
+            });
+        }
         Ok(app)
     }
 

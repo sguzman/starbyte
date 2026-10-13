@@ -93,9 +93,7 @@ fn gamepad_axis_binding(axis: Axis, before: f32, after: f32) -> Option<&'static 
     };
     if before < GAMEPAD_BIND_AXIS_THRESHOLD && after >= GAMEPAD_BIND_AXIS_THRESHOLD {
         Some(positive)
-    } else if before > -GAMEPAD_BIND_AXIS_THRESHOLD
-        && after <= -GAMEPAD_BIND_AXIS_THRESHOLD
-    {
+    } else if before > -GAMEPAD_BIND_AXIS_THRESHOLD && after <= -GAMEPAD_BIND_AXIS_THRESHOLD {
         Some(negative)
     } else {
         None
@@ -827,13 +825,15 @@ impl StarbyteApp {
                             before
                         }
                         Axis::RightStickX => {
-                            let stick = self.gamepad_right_sticks_by_id.entry(event.id).or_default();
+                            let stick =
+                                self.gamepad_right_sticks_by_id.entry(event.id).or_default();
                             let before = stick.x;
                             stick.x = value;
                             before
                         }
                         Axis::RightStickY => {
-                            let stick = self.gamepad_right_sticks_by_id.entry(event.id).or_default();
+                            let stick =
+                                self.gamepad_right_sticks_by_id.entry(event.id).or_default();
                             let before = stick.y;
                             stick.y = value;
                             before
@@ -872,15 +872,19 @@ impl StarbyteApp {
         let mut by_id = self.gamepad_buttons_by_id.clone();
         for (id, stick) in &self.gamepad_sticks_by_id {
             by_id.entry(*id).or_default().extend(stick.dpad_buttons());
-            by_id.entry(*id).or_default().extend(stick.axis_bindings("LeftStick"));
+            by_id
+                .entry(*id)
+                .or_default()
+                .extend(stick.axis_bindings("LeftStick"));
         }
         for (id, stick) in &self.gamepad_right_sticks_by_id {
-            by_id.entry(*id).or_default().extend(stick.axis_bindings("RightStick"));
+            by_id
+                .entry(*id)
+                .or_default()
+                .extend(stick.axis_bindings("RightStick"));
         }
-        self.gamepad_buttons_down = merged_gamepad_buttons_excluding(
-            &by_id,
-            &self.captured_gamepad_inputs,
-        );
+        self.gamepad_buttons_down =
+            merged_gamepad_buttons_excluding(&by_id, &self.captured_gamepad_inputs);
         if let Some((action, name)) = new_binding {
             self.config
                 .input
@@ -1764,8 +1768,16 @@ impl StarbyteApp {
             } else {
                 for (id, name) in devices {
                     ui.label(name);
-                    let left = self.gamepad_sticks_by_id.get(&id).copied().unwrap_or_default();
-                    let right = self.gamepad_right_sticks_by_id.get(&id).copied().unwrap_or_default();
+                    let left = self
+                        .gamepad_sticks_by_id
+                        .get(&id)
+                        .copied()
+                        .unwrap_or_default();
+                    let right = self
+                        .gamepad_right_sticks_by_id
+                        .get(&id)
+                        .copied()
+                        .unwrap_or_default();
                     ui.label(format!(
                         "Left stick X {:+.2} Y {:+.2} | Right stick X {:+.2} Y {:+.2}",
                         left.x, left.y, right.x, right.y

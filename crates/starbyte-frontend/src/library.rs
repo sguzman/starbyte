@@ -333,9 +333,6 @@ struct LibretroMetadataProvider;
 #[derive(Debug, Clone)]
 struct LibretroCoverProvider;
 
-#[derive(Debug, Clone)]
-struct LibretroCheatProvider;
-
 /// Library/catalog service shared by CLI and GUI shells.
 pub struct LibraryService {
     config: RuntimeConfig,
@@ -343,7 +340,6 @@ pub struct LibraryService {
     client: Client,
     metadata_provider: LibretroMetadataProvider,
     cover_provider: LibretroCoverProvider,
-    cheat_provider: LibretroCheatProvider,
 }
 
 impl std::fmt::Debug for LibraryService {
@@ -378,7 +374,6 @@ impl LibraryService {
             client,
             metadata_provider: LibretroMetadataProvider,
             cover_provider: LibretroCoverProvider,
-            cheat_provider: LibretroCheatProvider,
         })
     }
 
@@ -600,19 +595,19 @@ impl LibraryService {
     /// Refresh cached cheat files for the targeted entries.
     pub fn refresh_cheats(&mut self, target: &LibraryTarget) -> Result<usize> {
         info!(?target, "refreshing cheats cache");
+        // Cheats are strictly filesystem-backed. Never fall back to a
+        // network provider, even if metadata/cover networking is enabled.
+        let index = self
+            .config
+            .cheats
+            .cheatarium_snes_index()
+            .context("Configure Settings → Cheats → Local Cheatarium checkout first")?;
+        let source_records = read_cheatarium_records(&index)?;
         let snapshot = self.snapshot(LibraryFilter {
             installed_only: target.installed_only,
             view_mode: self.config.library.active_view,
             ..LibraryFilter::default()
         })?;
-        // Load the configured local source once, not once per ROM. The public
-        // project never hardcodes a player's checkout path or downloads these codes.
-        let local_cheatarium = self
-            .config
-            .cheats
-            .cheatarium_snes_index()
-            .map(|index| read_cheatarium_records(&index))
-            .transpose()?;
         let mut records = 0;
         for entry in select_entries(snapshot.entries, target) {
             let enabled_ids = self
@@ -624,22 +619,12 @@ impl LibraryService {
                 .unwrap_or_default()
                 .into_iter()
                 .collect();
-            let cheats = if let Some(source_records) = &local_cheatarium {
-                let cheats = cheatarium_candidates(source_records, &entry, &enabled_ids);
-                write_json(
-                    cheat_cache_path(&self.cache_root(), &entry.game_id),
-                    &cheats,
-                )
-                .map(|()| cheats)
-            } else {
-                self.cheat_provider.refresh_cheats(
-                    &self.client,
-                    &self.config.advanced.providers,
-                    &entry,
-                    &self.cache_root(),
-                    &enabled_ids,
-                )
-            };
+            let cheats = cheatarium_candidates(&source_records, &entry, &enabled_ids);
+            let result = write_json(
+                cheat_cache_path(&self.cache_root(), &entry.game_id),
+                &cheats,
+            );
+            let cheats = result.map(|()| cheats);
             match cheats {
                 Ok(cheats) => {
                     records += cheats.len();
@@ -988,76 +973,6 @@ fn cheatarium_candidates(
         }
     }
     matches
-}
-
-impl CheatProvider for LibretroCheatProvider {
-    fn refresh_cheats(
-        &self,
-        client: &Client,
-        settings: &ProviderSettings,
-        entry: &LibraryEntry,
-        cache_root: &Path,
-        enabled_ids: &BTreeSet<String>,
-    ) -> Result<Vec<CheatEntry>> {
-        if !settings.enable_network {
-            return Ok(Vec::new());
-        }
-
-        let response = client
-            .get(&settings.cheat_index_url)
-            .send()
-            .context("failed to request cheat index")?
-            .error_for_status()
-            .context("cheat index request returned an error status")?;
-        let tree: GitTreeResponse = response
-            .json()
-            .context("failed to parse cheat index response")?;
-        debug!(entries = tree.tree.len(), title = %entry.display_title, "received cheat tree response");
-        let mut cheats = Vec::new();
-        for node in tree.tree {
-            if !node
-                .path
-                .starts_with("cht/Nintendo - Super Nintendo Entertainment System/")
-                || !node.path.ends_with(".cht")
-                || node.kind != "blob"
-            {
-                continue;
-            }
-            let Some(stem) = Path::new(&node.path)
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-            else {
-                continue;
-            };
-            let base_title = strip_cheat_suffix(stem);
-            if normalize_title(&base_title) != normalize_title(&entry.display_title) {
-                continue;
-            }
-            let raw_url = format!(
-                "https://raw.githubusercontent.com/libretro/libretro-database/master/{}",
-                encode(&node.path)
-            );
-            let text = client
-                .get(&raw_url)
-                .send()
-                .with_context(|| format!("failed to request cheat file {raw_url}"))?
-                .error_for_status()
-                .with_context(|| format!("cheat request returned an error status for {raw_url}"))?
-                .text()
-                .context("failed to read cheat file text")?;
-            cheats.extend(parse_libretro_cheats(
-                entry.game_id.clone(),
-                &text,
-                stem,
-                enabled_ids,
-            ));
-        }
-
-        let cache_path = cheat_cache_path(cache_root, &entry.game_id);
-        write_json(cache_path, &cheats)?;
-        info!(game_id = %entry.game_id, cheats = cheats.len(), "cheat refresh completed");
-        Ok(cheats)
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1615,80 +1530,6 @@ fn select_entries(entries: Vec<LibraryEntry>, target: &LibraryTarget) -> Vec<Lib
         .collect()
 }
 
-fn parse_libretro_cheats(
-    game_id: GameId,
-    text: &str,
-    stem: &str,
-    enabled_ids: &BTreeSet<String>,
-) -> Vec<CheatEntry> {
-    let mut descriptions = BTreeMap::<usize, String>::new();
-    let mut codes = BTreeMap::<usize, String>::new();
-    for line in text.lines() {
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        let key = key.trim();
-        let value = value.trim().trim_matches('"').to_owned();
-        if let Some(index) = key
-            .strip_prefix("cheat")
-            .and_then(|rest| rest.split('_').next())
-            .and_then(|value| value.parse::<usize>().ok())
-        {
-            if key.ends_with("_desc") {
-                descriptions.insert(index, value);
-            } else if key.ends_with("_code") {
-                codes.insert(index, value);
-            }
-        }
-    }
-
-    descriptions
-        .into_iter()
-        .filter_map(|(index, name)| {
-            let code = codes.get(&index)?.clone();
-            let id = format!("{}-{}", game_id, slugify(&format!("{stem}-{index}")));
-            Some(CheatEntry {
-                id: id.clone(),
-                game_id: game_id.clone(),
-                name,
-                code,
-                source: "libretro-database".to_owned(),
-                kind: cheat_kind_from_stem(stem),
-                enabled: enabled_ids.contains(&id),
-            })
-        })
-        .collect()
-}
-
-fn cheat_kind_from_stem(stem: &str) -> String {
-    [
-        "Game Genie",
-        "Action Replay",
-        "Pro Action Replay",
-        "Gold Finger",
-    ]
-    .into_iter()
-    .find(|needle| stem.contains(needle))
-    .unwrap_or("Unknown")
-    .to_owned()
-}
-
-fn strip_cheat_suffix(stem: &str) -> String {
-    let mut trimmed = stem.to_owned();
-    for needle in [
-        " (Game Genie)",
-        " (Action Replay)",
-        " (Pro Action Replay)",
-        " (Gold Finger)",
-        " (diff)",
-    ] {
-        if trimmed.ends_with(needle) {
-            trimmed.truncate(trimmed.len().saturating_sub(needle.len()));
-        }
-    }
-    trimmed
-}
-
 fn slugify(input: &str) -> String {
     normalize_title(input).replace(' ', "-")
 }
@@ -2165,6 +2006,27 @@ mod tests {
             super::load_cached_cover(dir.path(), "missing", None)
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn cheat_refresh_without_configured_checkout_never_uses_network() {
+        let dir = tempdir().unwrap();
+        let mut config = RuntimeConfig::default();
+        // Even enabling remote artwork/metadata must not enable cheat downloads.
+        config.advanced.providers.enable_network = true;
+        let assets = starbyte_core::manifest::AssetConfig {
+            cache_dir: Some(dir.path().join("cache")),
+            ..Default::default()
+        };
+        let mut service = LibraryService::new(config, assets).unwrap();
+        let error = service.refresh_cheats(&Default::default()).unwrap_err();
+        assert!(error.to_string().contains("Local Cheatarium checkout"));
+        assert!(
+            !service
+                .cache_root()
+                .join("manifests/library-snapshot.json")
+                .exists()
         );
     }
 

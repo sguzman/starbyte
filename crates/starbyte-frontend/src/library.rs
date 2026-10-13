@@ -2302,6 +2302,8 @@ mod tests {
         let mut unsupported = cheats[0].clone();
         unsupported.kind = "game-genie".to_owned();
         unsupported.code = "DDB4-6F07".to_owned();
+        assert!(unsupported.can_execute());
+        unsupported.code = "DDB4-6F07+D6B4-6F07".to_owned();
         assert!(!unsupported.can_execute());
         unsupported.kind = "raw-snes-address-value".to_owned();
         unsupported.code = "7E0DBE09+7E0DBD09".to_owned();

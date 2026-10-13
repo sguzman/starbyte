@@ -33,6 +33,9 @@ const FRAME_INTERVAL: Duration = Duration::from_nanos(16_639_357);
 // A bad game frame can run on the egui thread: return control to Wayland
 // with a diagnostic rather than freezing until the process is killed.
 const GUI_FRAME_TIMEOUT: Duration = Duration::from_millis(1_500);
+/// Log only actionable spikes rather than streaming telemetry every 60 Hz frame.
+const FRAME_SPIKE_LOG_THRESHOLD_MS: f32 = 40.0;
+const FRAME_SPIKE_LOG_INTERVAL: Duration = Duration::from_secs(5);
 const COMPACT_LAYOUT_WIDTH: f32 = 960.0;
 /// Treat a deflected primary analog stick like the SNES D-pad, including
 /// controllers that report directional input as axes rather than buttons.
@@ -139,6 +142,12 @@ fn release_captured_axis(suppressed: &mut BTreeSet<String>, axis: Axis, value: f
     for name in names {
         suppressed.remove(*name);
     }
+}
+
+fn frame_spike_reportable(stats: FramePerformance) -> bool {
+    stats.last_ms >= FRAME_SPIKE_LOG_THRESHOLD_MS
+        || stats.last_wake_late_ms >= FRAME_SPIKE_LOG_THRESHOLD_MS
+        || stats.last_texture_ms >= FRAME_SPIKE_LOG_THRESHOLD_MS
 }
 
 fn is_compact_layout(width: f32, height: f32) -> bool {
@@ -344,6 +353,7 @@ pub struct StarbyteApp {
     play_view: bool,
     frame_clock: FrameClock,
     frame_performance: FramePerformance,
+    last_frame_spike_log: Instant,
     show_performance_overlay: bool,
     show_input_overlay: bool,
     pending_step_frames: u32,
@@ -499,6 +509,7 @@ impl StarbyteApp {
             play_view: has_loaded_rom,
             frame_clock: FrameClock::new(Instant::now()),
             frame_performance: FramePerformance::default(),
+            last_frame_spike_log: Instant::now(),
             show_performance_overlay: false,
             show_input_overlay: has_connected_gamepad,
             pending_step_frames: 0,
@@ -1243,6 +1254,21 @@ impl StarbyteApp {
                     .filter(|pair| pair[0] != 0 || pair[1] != 0)
                     .count();
                 self.enqueue_current_audio();
+                let timing = self.frame_performance;
+                let now = Instant::now();
+                if frame_spike_reportable(timing)
+                    && now.saturating_duration_since(self.last_frame_spike_log)
+                        >= FRAME_SPIKE_LOG_INTERVAL
+                {
+                    warn!(
+                        emulation_ms = timing.last_ms,
+                        ui_wake_late_ms = timing.last_wake_late_ms,
+                        texture_submit_ms = timing.last_texture_ms,
+                        active_audio_pairs = self.last_audio_nonzero_pairs,
+                        "slow Starbyte frame (CPU, scheduler, and texture measured independently)"
+                    );
+                    self.last_frame_spike_log = now;
+                }
                 self.status_line = self.session.snapshot().status_line();
             }
             Err(error) => self.record_playback_error(&error.to_string()),
@@ -3541,6 +3567,23 @@ mod playback_tests {
             std::path::PathBuf::from("starbyte-test-game-7.sfc")
         );
         assert_eq!(recent.iter().filter(|path| *path == &recent[0]).count(), 1);
+    }
+
+    #[test]
+    fn actionable_frame_spike_filter_is_thresholded() {
+        let mut stats = FramePerformance::default();
+        stats.record(Duration::from_millis(16));
+        stats.record_wake_lateness(Duration::from_millis(4));
+        stats.record_texture_upload(Duration::from_millis(2));
+        assert!(!frame_spike_reportable(stats));
+        stats.record_wake_lateness(Duration::from_millis(50));
+        assert!(frame_spike_reportable(stats));
+        stats.record_wake_lateness(Duration::ZERO);
+        stats.record_texture_upload(Duration::from_millis(45));
+        assert!(frame_spike_reportable(stats));
+        stats.record_texture_upload(Duration::ZERO);
+        stats.record(Duration::from_millis(55));
+        assert!(frame_spike_reportable(stats));
     }
 
     #[test]

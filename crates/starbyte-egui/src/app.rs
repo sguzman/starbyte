@@ -2913,6 +2913,48 @@ mod playback_tests {
     }
 
     #[test]
+    fn captured_gamepad_button_never_leaks_into_play_until_released() {
+        use std::collections::{BTreeSet, HashMap};
+
+        use super::merged_gamepad_buttons_excluding;
+        let pads = HashMap::from([
+            (1_u8, BTreeSet::from(["South".to_owned()])),
+            (2_u8, BTreeSet::from(["North".to_owned()])),
+        ]);
+        let mut suppressed = HashMap::from([(
+            1_u8,
+            BTreeSet::from(["South".to_owned()]),
+        )]);
+        let active = merged_gamepad_buttons_excluding(&pads, &suppressed);
+        assert!(!active.contains("South"));
+        assert!(active.contains("North"));
+        // A release from the same pad clears its suppression.
+        suppressed.get_mut(&1).unwrap().remove("South");
+        assert!(merged_gamepad_buttons_excluding(&pads, &suppressed).contains("South"));
+    }
+
+    #[test]
+    fn captured_stick_direction_and_virtual_dpad_wait_for_neutral() {
+        use std::collections::BTreeSet;
+
+        use super::{Axis, StickAxes, release_captured_axis, virtual_dpad_for_axis};
+        let name = "LeftStickX+";
+        let dpad = virtual_dpad_for_axis(name).unwrap();
+        assert_eq!(dpad, "DPadRight");
+        let mut suppressed = BTreeSet::from([name.to_owned(), dpad.to_owned()]);
+        let mut raw = StickAxes { x: 0.9, y: 0.0 }.axis_bindings("LeftStick");
+        raw.extend(StickAxes { x: 0.9, y: 0.0 }.dpad_buttons());
+        assert!(raw.contains(name));
+        assert!(raw.contains(dpad));
+        assert!(raw.is_superset(&suppressed));
+        release_captured_axis(&mut suppressed, Axis::LeftStickX, 0.6);
+        assert_eq!(suppressed.len(), 2);
+        release_captured_axis(&mut suppressed, Axis::LeftStickX, 0.0);
+        assert!(suppressed.is_empty());
+        assert!(virtual_dpad_for_axis("RightStickX+").is_none());
+    }
+
+    #[test]
     fn unplugged_gamepad_releases_only_its_own_buttons() {
         let mut pads = std::collections::HashMap::new();
         pads.insert(1_u8, std::collections::BTreeSet::from(["South".to_owned()]));

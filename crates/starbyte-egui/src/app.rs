@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     path::{Path, PathBuf},
     process::Command,
     sync::mpsc::{self, Receiver, TryRecvError},
@@ -37,6 +37,11 @@ const GUI_FRAME_TIMEOUT: Duration = Duration::from_millis(1_500);
 /// Log only actionable spikes rather than streaming telemetry every 60 Hz frame.
 const FRAME_SPIKE_LOG_THRESHOLD_MS: f32 = 40.0;
 const FRAME_SPIKE_LOG_INTERVAL: Duration = Duration::from_secs(5);
+/// Display frame completion rate over a bounded rolling window, not 1 / CPU-frame time.
+const FPS_WINDOW: Duration = Duration::from_secs(2);
+const FPS_WARMUP: Duration = Duration::from_millis(250);
+/// A whole-frame completion gap above this is a perceptible hitch.
+const FRAME_HITCH_THRESHOLD: Duration = Duration::from_millis(40);
 const COMPACT_LAYOUT_WIDTH: f32 = 960.0;
 /// Treat a deflected primary analog stick like the SNES D-pad, including
 /// controllers that report directional input as axes rather than buttons.
@@ -178,6 +183,56 @@ impl SpeakerProbeState {
         };
         *self = Self::Finished(result);
         true
+    }
+}
+
+/// Counts successful emulated frames completed per *wall-clock* second.
+/// Unlike 1 / core time, this includes frame scheduling, texture submission
+/// and audio queueing. It cannot measure GPU presentation or screen refresh.
+#[derive(Debug, Default)]
+struct FrameRateMeter {
+    completed_at: VecDeque<Instant>,
+    hitches: u64,
+    last_gap_ms: f32,
+    peak_gap_ms: f32,
+}
+
+impl FrameRateMeter {
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    fn record(&mut self, now: Instant) {
+        if let Some(previous) = self.completed_at.back() {
+            let gap = now.saturating_duration_since(*previous);
+            self.last_gap_ms = gap.as_secs_f32() * 1_000.0;
+            self.peak_gap_ms = self.peak_gap_ms.max(self.last_gap_ms);
+            if gap >= FRAME_HITCH_THRESHOLD {
+                self.hitches = self.hitches.saturating_add(1);
+            }
+        }
+        self.completed_at.push_back(now);
+        while self
+            .completed_at
+            .front()
+            .is_some_and(|first| now.saturating_duration_since(*first) > FPS_WINDOW)
+        {
+            self.completed_at.pop_front();
+        }
+    }
+
+    fn fps(&self, now: Instant) -> Option<f32> {
+        let cutoff = now.checked_sub(FPS_WINDOW).unwrap_or(now);
+        let first = self.completed_at.iter().position(|time| *time >= cutoff)?;
+        let frames = self.completed_at.len() - first;
+        if frames < 2 {
+            return None;
+        }
+        let elapsed = now.saturating_duration_since(self.completed_at[first]);
+        if elapsed < FPS_WARMUP {
+            return None;
+        }
+        Some((frames - 1) as f32 / elapsed.as_secs_f32())
     }
 }
 
@@ -381,6 +436,7 @@ pub struct StarbyteApp {
     play_view: bool,
     frame_clock: FrameClock,
     frame_performance: FramePerformance,
+    frame_rate: FrameRateMeter,
     last_frame_spike_log: Instant,
     show_performance_overlay: bool,
     show_input_overlay: bool,
@@ -538,6 +594,7 @@ impl StarbyteApp {
             play_view: has_loaded_rom,
             frame_clock: FrameClock::new(Instant::now()),
             frame_performance: FramePerformance::default(),
+            frame_rate: FrameRateMeter::default(),
             last_frame_spike_log: Instant::now(),
             show_performance_overlay: false,
             show_input_overlay: has_connected_gamepad,
@@ -695,6 +752,8 @@ impl StarbyteApp {
                         self.play_view = true;
                         self.frame_clock.reset(Instant::now());
                         self.frame_performance = FramePerformance::default();
+                self.frame_rate.reset();
+                        self.frame_rate.reset();
                         self.pending_step_frames = 0;
                         self.last_sram_flush = Instant::now();
                         let detail = format!("Loaded {}", rom_path.display());
@@ -1100,6 +1159,7 @@ impl StarbyteApp {
                 self.playback_error = None;
                 self.frame_clock.reset(Instant::now());
                 self.frame_performance = FramePerformance::default();
+                self.frame_rate.reset();
                 self.pending_step_frames = 0;
                 self.queued_gamepad_presses.clear();
                 self.queued_keyboard_presses.clear();
@@ -1289,6 +1349,7 @@ impl StarbyteApp {
         self.playback_error = Some(message);
         self.is_playing = false;
         self.pending_step_frames = 0;
+        self.frame_rate.reset();
     }
 
     fn run_frame(&mut self, ctx: &egui::Context) {
@@ -1321,6 +1382,9 @@ impl StarbyteApp {
                 self.enqueue_current_audio();
                 let timing = self.frame_performance;
                 let now = Instant::now();
+                if self.is_playing {
+                    self.frame_rate.record(now);
+                }
                 if frame_spike_reportable(timing)
                     && now.saturating_duration_since(self.last_frame_spike_log)
                         >= FRAME_SPIKE_LOG_INTERVAL
@@ -1418,6 +1482,7 @@ impl StarbyteApp {
                 self.play_view = true;
                 self.pending_step_frames = 0;
                 self.frame_performance = FramePerformance::default();
+                self.frame_rate.reset();
                 self.frame_clock.reset(Instant::now());
                 self.last_sram_flush = Instant::now();
                 self.status_line = format!("Loaded {}", path.display());
@@ -1613,6 +1678,7 @@ impl StarbyteApp {
                     if !self.is_playing {
                         self.clear_audio();
                     }
+                    self.frame_rate.reset();
                     self.frame_clock.reset(Instant::now());
                 }
                 if ui.button("Quick Save (F5)").clicked() {
@@ -1721,6 +1787,7 @@ impl StarbyteApp {
                 if !self.is_playing {
                     self.clear_audio();
                 }
+                self.frame_rate.reset();
                 self.frame_clock.reset(Instant::now());
             }
             if ui
@@ -2345,6 +2412,7 @@ impl StarbyteApp {
                 self.clear_audio();
                 self.refresh_framebuffer(ctx);
                 self.frame_clock.reset(Instant::now());
+                self.frame_rate.reset();
                 self.status_line = "Quick save restored (F8).".to_owned();
             }
             Err(error) => self.status_line = error.to_string(),
@@ -2364,6 +2432,7 @@ impl StarbyteApp {
                 self.clear_audio();
                 self.refresh_framebuffer(ctx);
                 self.frame_clock.reset(Instant::now());
+                self.frame_rate.reset();
                 self.status_line = format!("Restored disk slot {slot}.");
             }
             Err(error) => self.status_line = error.to_string(),
@@ -2473,8 +2542,14 @@ impl StarbyteApp {
         }
         if self.show_performance_overlay && self.frame_performance.samples > 0 {
             let stats = self.frame_performance;
+            let fps = self
+                .frame_rate
+                .fps(Instant::now())
+                .map_or_else(|| "--".to_owned(), |fps| format!("{fps:.1}"));
             let label = format!(
-                "Emulation {:.1} ms avg / {:.1} ms peak | {} slow frames\nUI late {:.1} ms / peak {:.1} ms ({} missed frames)\nTexture CPU {:.1} ms / peak {:.1} ms",
+                "Emu FPS {fps} / 60.1 (2s) | 40ms+ frame gaps: {} | peak gap {:.1} ms\nEmulation {:.1} ms avg / {:.1} ms peak | {} slow frames\nUI late {:.1} ms / peak {:.1} ms ({} missed frames)\nTexture CPU {:.1} ms / peak {:.1} ms",
+                self.frame_rate.hitches,
+                self.frame_rate.peak_gap_ms,
                 stats.avg_ms,
                 stats.peak_ms,
                 stats.slow_frames,
@@ -2553,6 +2628,14 @@ impl StarbyteApp {
             }
         });
         if self.frame_performance.samples > 0 {
+            let fps = self
+                .frame_rate
+                .fps(Instant::now())
+                .map_or_else(|| "--".to_owned(), |fps| format!("{fps:.1}"));
+            ui.label(format!(
+                "Emulated FPS: {fps} / 60.1; 40ms+ frame gaps: {}; peak {:.1} ms",
+                self.frame_rate.hitches, self.frame_rate.peak_gap_ms
+            ));
             ui.label(format!(
                 "Emulation: {:.1} ms/frame avg; {:.1} ms peak; {} of {} frames over 16.7 ms",
                 self.frame_performance.avg_ms,
@@ -2977,6 +3060,19 @@ impl eframe::App for StarbyteApp {
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(self.status_line.as_str());
+                if self.play_view && self.session.snapshot().has_rom {
+                    ui.separator();
+                    let fps = if !self.is_playing {
+                        "FPS: paused".to_owned()
+                    } else {
+                        self.frame_rate
+                            .fps(Instant::now())
+                            .map_or_else(|| "FPS: --".to_owned(), |value| format!("FPS: {value:.1} / 60.1"))
+                    };
+                    ui.label(RichText::new(fps).monospace()).on_hover_text(
+                        "Completed emulated frames per real second (rolling 2 seconds). This is not GPU or display FPS. Enable Timing for frame-time and hitch details.",
+                    );
+                }
                 let active = self
                     .jobs
                     .iter()
@@ -3166,7 +3262,8 @@ mod playback_tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        FRAME_INTERVAL, FrameClock, FramePerformance, NativeSmokeAudioMetrics, SpeakerProbeState,
+        FRAME_INTERVAL, FrameClock, FramePerformance, FrameRateMeter, NativeSmokeAudioMetrics,
+        SpeakerProbeState,
         Vec2, audible_output_volume, egui, fit_game_size, frame_spike_reportable,
         is_compact_layout, merged_gamepad_buttons, pressed_button_labels, record_recent_rom,
         write_png_screenshot,
@@ -3223,6 +3320,47 @@ mod playback_tests {
         metrics.record(4, &[0, 0]);
         assert_eq!(metrics.first_nonzero_frame, Some(2));
         assert_eq!(metrics.nonzero_pairs, 3);
+    }
+
+    #[test]
+    fn frame_rate_meter_reports_wall_clock_fps_and_measured_hitches() {
+        let start = Instant::now();
+        let mut meter = FrameRateMeter::default();
+        assert_eq!(meter.fps(start), None);
+        for frame in 0..=60 {
+            meter.record(start + Duration::from_millis(frame * 16));
+        }
+        let measured = meter.fps(start + Duration::from_millis(960)).unwrap();
+        assert!((measured - 62.5).abs() < 0.01);
+        assert_eq!(meter.hitches, 0);
+        assert_eq!(meter.last_gap_ms, 16.0);
+
+        // Wall-clock delay lowers effective FPS even if the emulator's CPU
+        // frame time is short. The gap is recorded as a hitch, not a CPU cost.
+        meter.record(start + Duration::from_millis(1_160));
+        let slower = meter.fps(start + Duration::from_millis(1_160)).unwrap();
+        assert!(slower < measured);
+        assert_eq!(meter.hitches, 1);
+        assert_eq!(meter.peak_gap_ms, 200.0);
+
+        meter.reset();
+        assert_eq!(meter.hitches, 0);
+        assert_eq!(meter.fps(start + Duration::from_secs(3)), None);
+        assert_eq!(meter.completed_at.len(), 0);
+    }
+
+    #[test]
+    fn frame_rate_meter_expires_old_frames_and_does_not_report_stale_fps() {
+        let start = Instant::now();
+        let mut meter = FrameRateMeter::default();
+        for frame in 0..60 {
+            meter.record(start + Duration::from_millis(frame * 16));
+        }
+        assert!(meter.fps(start + Duration::from_millis(960)).is_some());
+        assert_eq!(meter.fps(start + Duration::from_secs(3)), None);
+        meter.record(start + Duration::from_secs(3));
+        assert_eq!(meter.completed_at.len(), 1);
+        assert_eq!(meter.fps(start + Duration::from_secs(3)), None);
     }
 
     #[test]

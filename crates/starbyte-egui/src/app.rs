@@ -1635,7 +1635,11 @@ impl StarbyteApp {
         }
         if let Some(output) = &self.audio_output {
             output.set_volume(output_volume);
-            output.enqueue(samples);
+            // Per-buffer playback speed travels with DSP PCM into Rodio.
+            // Tempo and pitch change together, so the generated game sound
+            // stays audible through slow motion and held-Tab fast-forward.
+            let speed = f32::from(self.last_effective_speed_percent) / 100.0;
+            output.enqueue(samples, speed);
         }
     }
 
@@ -2080,7 +2084,7 @@ impl StarbyteApp {
                 .changed();
         }
         ui.separator();
-        ui.small("At modified speeds, speaker audio is muted rather than played at the wrong pitch. It returns at 1x.");
+        ui.small("Game music and effects follow the playback speed and pitch: fast = higher, slow = lower. The original pitch returns at 1x.");
         if changed {
             self.persist_config();
         }
@@ -3724,7 +3728,7 @@ impl eframe::App for StarbyteApp {
                     if !self.is_playing {
                         break;
                     }
-                    self.run_frame(ctx, speed == 100);
+                    self.run_frame(ctx, true);
                 }
             }
             if self.is_playing {

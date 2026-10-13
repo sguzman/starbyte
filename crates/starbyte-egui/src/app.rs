@@ -1897,7 +1897,8 @@ impl StarbyteApp {
                     self.pending_gamepad_bind = None;
                     self.queued_gamepad_presses.clear();
                     self.persist_config();
-                    self.status_line = format!("Unbound {} from the gamepad.", action_label(action));
+                    self.status_line =
+                        format!("Unbound {} from the gamepad.", action_label(action));
                 }
             });
         }

@@ -222,6 +222,14 @@ impl Default for InputSettings {
     }
 }
 
+impl InputSettings {
+    /// Restore the standard SNES-to-gilrs gamepad layout without altering
+    /// keyboard mappings or the currently selected input device.
+    pub fn reset_gamepad_bindings(&mut self) {
+        self.gamepad_bindings = default_gamepad_bindings();
+    }
+}
+
 /// Persistent cheat-management settings.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -536,6 +544,20 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{AppMode, AssetConfig, LibraryViewMode, RuntimeConfig, choose_user_directory};
+
+    #[test]
+    fn gamepad_reset_preserves_keyboard_mapping_and_active_device() {
+        use super::{InputDeviceMode, InputSettings};
+
+        let mut input = InputSettings::default();
+        input.active_device = InputDeviceMode::Gamepad;
+        input.keyboard_bindings.insert("a".to_owned(), "Space".to_owned());
+        input.gamepad_bindings.insert("a".to_owned(), "LeftStickX+".to_owned());
+        input.reset_gamepad_bindings();
+        assert_eq!(input.gamepad_bindings.get("a").map(String::as_str), Some("East"));
+        assert_eq!(input.keyboard_bindings.get("a").map(String::as_str), Some("Space"));
+        assert_eq!(input.active_device, InputDeviceMode::Gamepad);
+    }
 
     #[test]
     fn new_player_input_defaults_to_keyboard_and_gamepad_auto_mode() {

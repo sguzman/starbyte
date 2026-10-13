@@ -20,7 +20,7 @@ use crate::{
 
 use starbyte_core::{
     input::ControllerState,
-    manifest::{AssetConfig, InputDeviceMode, LibraryViewMode, RuntimeConfig},
+    manifest::{AssetConfig, AudioPitchMode, InputDeviceMode, LibraryViewMode, RuntimeConfig},
 };
 use starbyte_frontend::{
     CheatEntry, FrontendSession, InstalledStatus, LibraryEntry, LibraryFilter, LibraryService,
@@ -371,6 +371,14 @@ fn speed_label(percent: u16) -> String {
 
 fn speed_target_fps(percent: u16) -> f32 {
     60.0985 * f32::from(percent) / 100.0
+}
+
+fn audio_pitch_factor(mode: AudioPitchMode, percent: u16, speed: u16) -> f32 {
+    match mode {
+        AudioPitchMode::Preserve => 1.0,
+        AudioPitchMode::FollowSpeed => f32::from(speed) / 100.0,
+        AudioPitchMode::Custom => f32::from(percent.clamp(50, 200)) / 100.0,
+    }
 }
 
 fn tab_fast_forward_active(
@@ -1639,7 +1647,12 @@ impl StarbyteApp {
             // Tempo and pitch change together, so the generated game sound
             // stays audible through slow motion and held-Tab fast-forward.
             let speed = f32::from(self.last_effective_speed_percent) / 100.0;
-            output.enqueue(samples, speed);
+            let pitch = audio_pitch_factor(
+                self.config.audio.pitch_mode,
+                self.config.audio.pitch_percent,
+                self.last_effective_speed_percent,
+            );
+            output.enqueue(samples, speed, pitch);
         }
     }
 
@@ -2084,8 +2097,41 @@ impl StarbyteApp {
                 .changed();
         }
         ui.separator();
-        ui.small("Game music and effects follow the playback speed and pitch: fast = higher, slow = lower. The original pitch returns at 1x.");
+        ui.strong("Sound pitch (independent of speed)");
+        changed |= ui
+            .selectable_value(
+                &mut self.config.audio.pitch_mode,
+                AudioPitchMode::Preserve,
+                "Preserve original pitch",
+            )
+            .changed();
+        changed |= ui
+            .selectable_value(
+                &mut self.config.audio.pitch_mode,
+                AudioPitchMode::FollowSpeed,
+                "Follow game speed (classic varispeed)",
+            )
+            .changed();
+        changed |= ui
+            .selectable_value(
+                &mut self.config.audio.pitch_mode,
+                AudioPitchMode::Custom,
+                "Custom pitch",
+            )
+            .changed();
+        if self.config.audio.pitch_mode == AudioPitchMode::Custom {
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut self.config.audio.pitch_percent, 50..=200)
+                        .text("Pitch")
+                        .suffix("%"),
+                )
+                .changed();
+        }
+        ui.small("Preserve keeps music in tune while the game runs faster or slower. Custom pitch changes the notes without changing game speed.");
         if changed {
+            // Flush all PCM generated for the previous tempo/pitch pairing.
+            self.clear_audio();
             self.persist_config();
         }
     }
@@ -4246,6 +4292,20 @@ mod playback_tests {
         };
         route_fast_forward_tab(&mut unfocused, true, &mut held);
         assert!(!held);
+    }
+
+    #[test]
+    fn pitch_selection_is_independent_of_playback_speed() {
+        use super::audio_pitch_factor;
+        use starbyte_core::manifest::AudioPitchMode;
+
+        assert_eq!(audio_pitch_factor(AudioPitchMode::Preserve, 175, 400), 1.0);
+        assert_eq!(audio_pitch_factor(AudioPitchMode::Preserve, 75, 50), 1.0);
+        assert_eq!(audio_pitch_factor(AudioPitchMode::FollowSpeed, 100, 300), 3.0);
+        assert_eq!(audio_pitch_factor(AudioPitchMode::FollowSpeed, 100, 50), 0.5);
+        assert_eq!(audio_pitch_factor(AudioPitchMode::Custom, 150, 300), 1.5);
+        assert_eq!(audio_pitch_factor(AudioPitchMode::Custom, 150, 50), 1.5);
+        assert_eq!(audio_pitch_factor(AudioPitchMode::Custom, 999, 100), 2.0);
     }
 
     #[test]

@@ -88,6 +88,10 @@ pub struct AudioOutput {
     /// Number of separate test-tone bursts actually submitted to the same
     /// Rodio sink. Never included in game-PCM counters.
     test_tones_submitted: Arc<AtomicU64>,
+    /// Game buffers discarded at the bounded producer queue.
+    producer_dropped_frames: Arc<AtomicU64>,
+    /// Game buffers discarded as stale or superseded by the worker.
+    worker_dropped_frames: Arc<AtomicU64>,
 }
 
 impl AudioOutput {
@@ -105,6 +109,9 @@ impl AudioOutput {
         let shared_nonzero_frames = Arc::clone(&submitted_nonzero_frames);
         let test_tones_submitted = Arc::new(AtomicU64::new(0));
         let shared_test_tones = Arc::clone(&test_tones_submitted);
+        let producer_dropped_frames = Arc::new(AtomicU64::new(0));
+        let worker_dropped_frames = Arc::new(AtomicU64::new(0));
+        let shared_worker_drops = Arc::clone(&worker_dropped_frames);
         // The GUI must not join this thread: the bounded channel owns its
         // lifecycle and disconnects when the last AudioOutput is dropped.
         let _audio_thread = thread::Builder::new()
@@ -118,6 +125,7 @@ impl AudioOutput {
                     shared_submitted_frames,
                     shared_nonzero_frames,
                     shared_test_tones,
+                    shared_worker_drops,
                 )
             })
             .context("could not spawn background audio thread")?;
@@ -129,6 +137,8 @@ impl AudioOutput {
             submitted_frames,
             submitted_nonzero_frames,
             test_tones_submitted,
+            producer_dropped_frames,
+            worker_dropped_frames,
         })
     }
 
@@ -168,6 +178,16 @@ impl AudioOutput {
             .is_ok()
     }
 
+    /// Game buffers rejected by the full nonblocking UI-to-worker queue.
+    pub fn producer_dropped_frames(&self) -> u64 {
+        self.producer_dropped_frames.load(Ordering::Acquire)
+    }
+
+    /// Stale/superseded game buffers consumed but rejected by the worker.
+    pub fn worker_dropped_frames(&self) -> u64 {
+        self.worker_dropped_frames.load(Ordering::Acquire)
+    }
+
     /// Update the mixer level without opening an audio device or waiting
     /// on its thread. Applied to the next emulated audio buffer.
     pub fn set_volume(&self, volume: f32) {
@@ -181,11 +201,13 @@ impl AudioOutput {
         if samples.is_empty() || samples.len() % 2 != 0 {
             return;
         }
-        let _ = self.sender.try_send(AudioMessage::Frame {
+        if let Err(mpsc::TrySendError::Full(_)) = self.sender.try_send(AudioMessage::Frame {
             generation: self.generation.load(Ordering::Acquire),
             queued_at: Instant::now(),
             pcm: samples.to_vec(),
-        });
+        }) {
+            self.producer_dropped_frames.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// Mark every queued frame stale immediately, and wake an idle worker.
@@ -281,6 +303,7 @@ fn audio_worker(
     submitted_frames: Arc<AtomicU64>,
     submitted_nonzero_frames: Arc<AtomicU64>,
     test_tones_submitted: Arc<AtomicU64>,
+    worker_dropped_frames: Arc<AtomicU64>,
 ) {
     let mut device: Option<PlaybackDevice> = None;
     let mut retry_after: Option<Instant> = None;
@@ -313,9 +336,13 @@ fn audio_worker(
         if frame_generation != active_generation
             || (!is_test_tone && !frame_is_fresh(queued_at, now))
         {
+            if !is_test_tone {
+                worker_dropped_frames.fetch_add(1, Ordering::Relaxed);
+            }
             continue;
         }
         if !is_test_tone && tone_until.is_some_and(|end| now < end) {
+            worker_dropped_frames.fetch_add(1, Ordering::Relaxed);
             continue;
         }
         if device.is_none()
@@ -342,6 +369,9 @@ fn audio_worker(
             if newest_generation != frame_generation {
                 output.clear();
                 active_generation = newest_generation;
+                if !is_test_tone {
+                    worker_dropped_frames.fetch_add(1, Ordering::Relaxed);
+                }
             } else if is_test_tone || frame_is_fresh(queued_at, Instant::now()) {
                 // A manually requested beep is still useful after a slow
                 // initial device open; only game PCM has strict freshness.
@@ -361,6 +391,8 @@ fn audio_worker(
                         submitted_nonzero_frames.fetch_add(1, Ordering::Release);
                     }
                 }
+            } else {
+                worker_dropped_frames.fetch_add(1, Ordering::Relaxed);
             }
         }
     }
@@ -520,6 +552,8 @@ mod tests {
             submitted_frames: Arc::new(AtomicU64::new(0)),
             submitted_nonzero_frames: Arc::new(AtomicU64::new(0)),
             test_tones_submitted: Arc::new(AtomicU64::new(0)),
+            producer_dropped_frames: Arc::new(AtomicU64::new(0)),
+            worker_dropped_frames: Arc::new(AtomicU64::new(0)),
         };
         assert!(output.enqueue_live_test_tone());
         match receiver.try_recv().unwrap() {
@@ -529,6 +563,29 @@ mod tests {
         assert_eq!(output.submitted_frames(), 0);
         assert_eq!(output.submitted_nonzero_frames(), 0);
         assert_eq!(output.test_tones_submitted(), 0);
+    }
+
+    #[test]
+    fn producer_reports_full_queue_without_blocking_or_touching_speakers() {
+        let (sender, _receiver) = sync_channel(1);
+        let output = AudioOutput {
+            sender,
+            generation: Arc::new(AtomicU64::new(0)),
+            device_status: Arc::new(AtomicU8::new(0)),
+            volume_bits: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+            submitted_frames: Arc::new(AtomicU64::new(0)),
+            submitted_nonzero_frames: Arc::new(AtomicU64::new(0)),
+            test_tones_submitted: Arc::new(AtomicU64::new(0)),
+            producer_dropped_frames: Arc::new(AtomicU64::new(0)),
+            worker_dropped_frames: Arc::new(AtomicU64::new(0)),
+        };
+        output.enqueue(&[100, -100]);
+        output.enqueue(&[100, -100]);
+        assert_eq!(output.producer_dropped_frames(), 1);
+        assert_eq!(output.worker_dropped_frames(), 0);
+        assert_eq!(output.submitted_frames(), 0);
+        output.enqueue(&[1]); // invalid PCM never enters the queue
+        assert_eq!(output.producer_dropped_frames(), 1);
     }
 
     #[test]

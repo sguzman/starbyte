@@ -1596,12 +1596,15 @@ impl StarbyteApp {
                 if self.is_playing {
                     self.frame_rate.record(now);
                 }
+                let emulated_fps = self.frame_rate.fps(now);
                 if (frame_spike_reportable(timing)
-                    || self.frame_rate.last_gap_ms >= FRAME_PACING_LOG_THRESHOLD_MS)
+                    || self.frame_rate.last_gap_ms >= FRAME_PACING_LOG_THRESHOLD_MS
+                    || emulated_fps.is_some_and(|fps| fps < 55.0))
                     && now.saturating_duration_since(self.last_frame_spike_log)
                         >= FRAME_SPIKE_LOG_INTERVAL
                 {
                     warn!(
+                        emulated_fps = emulated_fps.unwrap_or(0.0),
                         frame_gap_ms = self.frame_rate.last_gap_ms,
                         emulation_ms = timing.last_ms,
                         ui_wake_late_ms = timing.last_wake_late_ms,

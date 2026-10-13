@@ -1400,9 +1400,15 @@ mod tests {
         let mut direct_ram = ram.clone();
         // First live tick publishes the BRR end/loop event, still before
         // the interpolator has collected three nonzero samples.
-        assert_eq!(dsp.next_stereo_pair(&mut ram), direct.next_stereo_pair(&mut direct_ram));
+        assert_eq!(
+            dsp.next_stereo_pair(&mut ram),
+            direct.next_stereo_pair(&mut direct_ram)
+        );
         assert_eq!(dsp.read_register(0x7c) & 1, 1);
-        assert_eq!(dsp.next_stereo_pair(&mut ram), direct.next_stereo_pair(&mut direct_ram));
+        assert_eq!(
+            dsp.next_stereo_pair(&mut ram),
+            direct.next_stereo_pair(&mut direct_ram)
+        );
     }
 
     #[test]
@@ -1417,10 +1423,16 @@ mod tests {
         let mut restored_ram = ram.clone();
         assert_eq!(restored.voices[0].startup_delay, KEY_ON_EMPTY_SAMPLES - 2);
         for _ in 0..48 {
-            assert_eq!(dsp.next_stereo_pair(&mut ram), restored.next_stereo_pair(&mut restored_ram));
+            assert_eq!(
+                dsp.next_stereo_pair(&mut ram),
+                restored.next_stereo_pair(&mut restored_ram)
+            );
         }
         assert_eq!(ram, restored_ram);
-        assert_eq!(serde_json::to_value(&dsp).unwrap(), serde_json::to_value(&restored).unwrap());
+        assert_eq!(
+            serde_json::to_value(&dsp).unwrap(),
+            serde_json::to_value(&restored).unwrap()
+        );
     }
 
     #[test]

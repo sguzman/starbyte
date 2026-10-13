@@ -102,6 +102,34 @@ fn gamepad_axis_binding(axis: Axis, before: f32, after: f32) -> Option<&'static 
     }
 }
 
+/// Which virtual directional button would be triggered by a left-stick
+/// gesture? Suppress both forms until that axis returns to neutral.
+fn virtual_dpad_for_axis(binding: &str) -> Option<&'static str> {
+    match binding {
+        "LeftStickX+" => Some("DPadRight"),
+        "LeftStickX-" => Some("DPadLeft"),
+        "LeftStickY+" => Some("DPadUp"),
+        "LeftStickY-" => Some("DPadDown"),
+        _ => None,
+    }
+}
+
+fn release_captured_axis(suppressed: &mut BTreeSet<String>, axis: Axis, value: f32) {
+    if value.abs() >= GAMEPAD_STICK_DEADZONE {
+        return;
+    }
+    let names: &[&str] = match axis {
+        Axis::LeftStickX => &["LeftStickX+", "LeftStickX-", "DPadLeft", "DPadRight"],
+        Axis::LeftStickY => &["LeftStickY+", "LeftStickY-", "DPadUp", "DPadDown"],
+        Axis::RightStickX => &["RightStickX+", "RightStickX-"],
+        Axis::RightStickY => &["RightStickY+", "RightStickY-"],
+        _ => &[],
+    };
+    for name in names {
+        suppressed.remove(*name);
+    }
+}
+
 fn is_compact_layout(width: f32, height: f32) -> bool {
     width < COMPACT_LAYOUT_WIDTH || height < 640.0
 }
@@ -271,6 +299,9 @@ pub struct StarbyteApp {
     /// Unconsumed button press edges by physical controller.
     queued_gamepad_presses: HashMap<GamepadId, BTreeSet<String>>,
     gamepad_sticks_by_id: HashMap<GamepadId, StickAxes>,
+    gamepad_right_sticks_by_id: HashMap<GamepadId, StickAxes>,
+    /// A newly captured input must be released before it can reach the game.
+    captured_gamepad_inputs: HashMap<GamepadId, BTreeSet<String>>,
     pending_keyboard_bind: Option<String>,
     pending_gamepad_bind: Option<String>,
     is_playing: bool,
@@ -407,6 +438,8 @@ impl StarbyteApp {
             gamepad_buttons_by_id: HashMap::new(),
             queued_gamepad_presses: HashMap::new(),
             gamepad_sticks_by_id: HashMap::new(),
+            gamepad_right_sticks_by_id: HashMap::new(),
+            captured_gamepad_inputs: HashMap::new(),
             pending_keyboard_bind: None,
             pending_gamepad_bind: None,
             is_playing: start_playing,
@@ -677,7 +710,10 @@ impl StarbyteApp {
                 }
             }
         }
-        if gamepad_enabled {
+        if gamepad_enabled
+            && self.pending_gamepad_bind.is_none()
+            && self.pending_keyboard_bind.is_none()
+        {
             for &action in input_actions() {
                 if let Some(binding) = self.config.input.gamepad_bindings.get(action)
                     && gamepad_button_active(
@@ -757,21 +793,68 @@ impl StarbyteApp {
                             .or_default()
                             .insert(name.clone());
                     }
-                    if let Some(action) = self.pending_gamepad_bind.clone() {
-                        new_binding = Some((action, name));
+                    if let Some(action) = self.pending_gamepad_bind.clone()
+                        && new_binding.is_none()
+                    {
+                        new_binding = Some((action, name.clone()));
+                        self.captured_gamepad_inputs
+                            .entry(event.id)
+                            .or_default()
+                            .insert(name);
                     }
                 }
                 EventType::ButtonReleased(button, _) => {
+                    let name = format!("{button:?}");
                     if let Some(buttons) = self.gamepad_buttons_by_id.get_mut(&event.id) {
-                        buttons.remove(&format!("{button:?}"));
+                        buttons.remove(&name);
+                    }
+                    if let Some(suppressed) = self.captured_gamepad_inputs.get_mut(&event.id) {
+                        suppressed.remove(&name);
                     }
                 }
                 EventType::AxisChanged(axis, value, _) => {
-                    let stick = self.gamepad_sticks_by_id.entry(event.id).or_default();
-                    match axis {
-                        Axis::LeftStickX => stick.x = value,
-                        Axis::LeftStickY => stick.y = value,
-                        _ => {}
+                    let before = match axis {
+                        Axis::LeftStickX => {
+                            let stick = self.gamepad_sticks_by_id.entry(event.id).or_default();
+                            let before = stick.x;
+                            stick.x = value;
+                            before
+                        }
+                        Axis::LeftStickY => {
+                            let stick = self.gamepad_sticks_by_id.entry(event.id).or_default();
+                            let before = stick.y;
+                            stick.y = value;
+                            before
+                        }
+                        Axis::RightStickX => {
+                            let stick = self.gamepad_right_sticks_by_id.entry(event.id).or_default();
+                            let before = stick.x;
+                            stick.x = value;
+                            before
+                        }
+                        Axis::RightStickY => {
+                            let stick = self.gamepad_right_sticks_by_id.entry(event.id).or_default();
+                            let before = stick.y;
+                            stick.y = value;
+                            before
+                        }
+                        _ => continue,
+                    };
+                    if let Some(suppressed) = self.captured_gamepad_inputs.get_mut(&event.id) {
+                        release_captured_axis(suppressed, axis, value);
+                    }
+                    if let Some(action) = self.pending_gamepad_bind.clone()
+                        && new_binding.is_none()
+                        && let Some(name) = gamepad_axis_binding(axis, before, value)
+                    {
+                        new_binding = Some((action, name.to_owned()));
+                        let captured = self.captured_gamepad_inputs.entry(event.id).or_default();
+                        captured.insert(name.to_owned());
+                        // Left stick also emulates DPad; never let the
+                        // gesture used for capture move Mario afterward.
+                        if let Some(dpad) = virtual_dpad_for_axis(name) {
+                            captured.insert(dpad.to_owned());
+                        }
                     }
                 }
                 EventType::Disconnected => {
@@ -780,14 +863,24 @@ impl StarbyteApp {
                     self.gamepad_buttons_by_id.remove(&event.id);
                     self.queued_gamepad_presses.remove(&event.id);
                     self.gamepad_sticks_by_id.remove(&event.id);
+                    self.gamepad_right_sticks_by_id.remove(&event.id);
+                    self.captured_gamepad_inputs.remove(&event.id);
                 }
                 _ => {}
             }
         }
-        self.gamepad_buttons_down = merged_gamepad_buttons(&self.gamepad_buttons_by_id);
-        for stick in self.gamepad_sticks_by_id.values() {
-            self.gamepad_buttons_down.extend(stick.dpad_buttons());
+        let mut by_id = self.gamepad_buttons_by_id.clone();
+        for (id, stick) in &self.gamepad_sticks_by_id {
+            by_id.entry(*id).or_default().extend(stick.dpad_buttons());
+            by_id.entry(*id).or_default().extend(stick.axis_bindings("LeftStick"));
         }
+        for (id, stick) in &self.gamepad_right_sticks_by_id {
+            by_id.entry(*id).or_default().extend(stick.axis_bindings("RightStick"));
+        }
+        self.gamepad_buttons_down = merged_gamepad_buttons_excluding(
+            &by_id,
+            &self.captured_gamepad_inputs,
+        );
         if let Some((action, name)) = new_binding {
             self.config
                 .input
@@ -2948,6 +3041,23 @@ fn merged_gamepad_buttons<K: Eq + std::hash::Hash>(
     by_controller
         .values()
         .flat_map(|buttons| buttons.iter().cloned())
+        .collect()
+}
+
+/// Rebinding consumes a real button/axis press until *that same gamepad*
+/// releases it. Other connected gamepads retain their independent inputs.
+fn merged_gamepad_buttons_excluding<K: Eq + std::hash::Hash>(
+    by_controller: &HashMap<K, BTreeSet<String>>,
+    suppressed: &HashMap<K, BTreeSet<String>>,
+) -> BTreeSet<String> {
+    by_controller
+        .iter()
+        .flat_map(|(id, buttons)| {
+            buttons
+                .iter()
+                .filter(move |button| !suppressed.get(id).is_some_and(|set| set.contains(*button)))
+                .cloned()
+        })
         .collect()
 }
 

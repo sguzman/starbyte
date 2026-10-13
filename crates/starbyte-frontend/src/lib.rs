@@ -134,20 +134,19 @@ impl FrontendSession {
         // experimental sound path must use the latest persisted progress,
         // not a disk image from before the last in-memory save.
         self.flush_save_ram()?;
-        let stored_save =
-            if expected_save_len > 0 && new_save_path.exists() {
-                let data = std::fs::read(&new_save_path)
-                    .with_context(|| format!("failed reading SRAM {}", new_save_path.display()))?;
-                anyhow::ensure!(
-                    data.len() == expected_save_len,
-                    "invalid SRAM length for {}: expected {expected_save_len}, got {}",
-                    new_save_path.display(),
-                    data.len()
-                );
-                Some(data)
-            } else {
-                None
-            };
+        let stored_save = if expected_save_len > 0 && new_save_path.exists() {
+            let data = std::fs::read(&new_save_path)
+                .with_context(|| format!("failed reading SRAM {}", new_save_path.display()))?;
+            anyhow::ensure!(
+                data.len() == expected_save_len,
+                "invalid SRAM length for {}: expected {expected_save_len}, got {}",
+                new_save_path.display(),
+                data.len()
+            );
+            Some(data)
+        } else {
+            None
+        };
 
         // Isolated audio reuses a private copy of SRAM only. It never writes
         // the user's .srm file or reads/writes durable save-state slots.

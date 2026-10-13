@@ -567,12 +567,25 @@ impl StarbyteApp {
                     config,
                     status,
                 } => {
-                    // Background metadata refresh must not erase games opened
-                    // since the asynchronous refresh began.
-                    let recent_roms = self.config.library.recent_roms.clone();
-                    self.config = config;
-                    self.config.library.recent_roms = recent_roms;
-                    self.cache_root = resolve_cache_root(&self.config, &self.assets);
+                    // Worker jobs receive config snapshots from queue time.
+                    // Never overwrite live settings, especially recently saved
+                    // gamepad binds and the local Cheatarium checkout path.
+                    // Only merge monotonic provider refresh timestamps.
+                    let current = &mut self.config.advanced.providers;
+                    let incoming = &config.advanced.providers;
+                    current.last_metadata_refresh_unix = newest_timestamp(
+                        current.last_metadata_refresh_unix,
+                        incoming.last_metadata_refresh_unix,
+                    );
+                    current.last_cover_refresh_unix = newest_timestamp(
+                        current.last_cover_refresh_unix,
+                        incoming.last_cover_refresh_unix,
+                    );
+                    current.last_cheat_refresh_unix = newest_timestamp(
+                        current.last_cheat_refresh_unix,
+                        incoming.last_cheat_refresh_unix,
+                    );
+                    self.persist_config();
                     self.library_snapshot = snapshot;
                     self.failed_cover_ids.clear();
                     self.update_snapshot_cheat_flags();
@@ -3006,6 +3019,16 @@ mod playback_tests {
     }
 
     #[test]
+    fn worker_refresh_timestamp_merge_never_reverts_to_older_values() {
+        use super::newest_timestamp;
+        assert_eq!(newest_timestamp(None, None), None);
+        assert_eq!(newest_timestamp(None, Some(10)), Some(10));
+        assert_eq!(newest_timestamp(Some(50), None), Some(50));
+        assert_eq!(newest_timestamp(Some(50), Some(10)), Some(50));
+        assert_eq!(newest_timestamp(Some(10), Some(50)), Some(50));
+    }
+
+    #[test]
     fn conflicting_gamepad_bindings_are_reported_without_discarding_user_mapping() {
         use std::collections::BTreeMap;
 
@@ -3351,6 +3374,14 @@ fn controller_input_sources(
 
 /// Shared bindings are valid but can produce surprising simultaneous SNES
 /// presses. Surface them as warnings rather than silently discarding a choice.
+fn newest_timestamp(current: Option<u64>, incoming: Option<u64>) -> Option<u64> {
+    match (current, incoming) {
+        (Some(left), Some(right)) => Some(left.max(right)),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    }
+}
+
 fn shared_gamepad_bindings(bindings: &BTreeMap<String, String>) -> Vec<(String, Vec<String>)> {
     let mut by_physical = BTreeMap::<String, Vec<String>>::new();
     for (action, physical) in bindings {

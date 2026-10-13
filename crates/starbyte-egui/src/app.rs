@@ -3095,7 +3095,8 @@ mod playback_tests {
 
     use super::{
         FRAME_INTERVAL, FrameClock, FramePerformance, NativeSmokeAudioMetrics, Vec2,
-        audible_output_volume, egui, fit_game_size, is_compact_layout, merged_gamepad_buttons,
+        audible_output_volume, egui, fit_game_size, frame_spike_reportable, is_compact_layout,
+        merged_gamepad_buttons,
         pressed_button_labels, record_recent_rom, write_png_screenshot,
     };
 

@@ -1902,6 +1902,12 @@ impl StarbyteApp {
                 }
             });
         }
+        for (physical, actions) in shared_gamepad_bindings(&self.config.input.gamepad_bindings) {
+            ui.label(format!(
+                "Shared input {physical}: {} will activate together.",
+                actions.join(", ")
+            ));
+        }
     }
 
     fn quick_save(&mut self) {
@@ -2962,6 +2968,24 @@ mod playback_tests {
     }
 
     #[test]
+    fn conflicting_gamepad_bindings_are_reported_without_discarding_user_mapping() {
+        use std::collections::BTreeMap;
+
+        use super::shared_gamepad_bindings;
+        let mut bindings = BTreeMap::from([
+            ("a".to_owned(), "South".to_owned()),
+            ("b".to_owned(), "South".to_owned()),
+            ("start".to_owned(), "Start".to_owned()),
+        ]);
+        assert_eq!(
+            shared_gamepad_bindings(&bindings),
+            vec![("South".to_owned(), vec!["A".to_owned(), "B".to_owned()])]
+        );
+        bindings.insert("b".to_owned(), "East".to_owned());
+        assert!(shared_gamepad_bindings(&bindings).is_empty());
+    }
+
+    #[test]
     fn primary_gamepad_stick_drives_cardinal_and_diagonal_snes_directions() {
         use super::StickAxes;
         let neutral = StickAxes { x: 0.15, y: -0.3 }.dpad_buttons();
@@ -3285,6 +3309,24 @@ fn controller_input_sources(
         && !binding_keyboard;
     let gamepad = matches!(mode, InputDeviceMode::Auto | InputDeviceMode::Gamepad);
     (keyboard, gamepad)
+}
+
+/// Shared bindings are valid but can produce surprising simultaneous SNES
+/// presses. Surface them as warnings rather than silently discarding a choice.
+fn shared_gamepad_bindings(bindings: &BTreeMap<String, String>) -> Vec<(String, Vec<String>)> {
+    let mut by_physical = BTreeMap::<String, Vec<String>>::new();
+    for (action, physical) in bindings {
+        if !physical.is_empty() {
+            by_physical
+                .entry(physical.clone())
+                .or_default()
+                .push(action_label(action).to_owned());
+        }
+    }
+    by_physical
+        .into_iter()
+        .filter(|(_, actions)| actions.len() > 1)
+        .collect()
 }
 
 fn input_actions() -> &'static [&'static str] {

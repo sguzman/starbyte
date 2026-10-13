@@ -1587,6 +1587,37 @@ impl StarbyteApp {
         }
 
         ui.separator();
+        ui.label("Connected Gamepads");
+        if let Some(gilrs) = self.gilrs.as_ref() {
+            let devices: Vec<_> = gilrs
+                .gamepads()
+                .filter(|(_, pad)| pad.is_connected())
+                .map(|(_, pad)| pad.name().to_owned())
+                .collect();
+            if devices.is_empty() {
+                ui.label("No connected controller detected by Starbyte.");
+            } else {
+                for device in devices {
+                    ui.label(device);
+                }
+            }
+        } else {
+            ui.label("Gamepad input backend could not initialize.");
+        }
+        if self.gamepad_buttons_down.is_empty() {
+            ui.label("Live buttons: none held");
+        } else {
+            ui.label(format!(
+                "Live buttons: {}",
+                self.gamepad_buttons_down
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        ui.label("Use Rebind Pad, then press a physical controller button.");
+        ui.separator();
         ui.label("Gamepad Bindings");
         for &action in input_actions() {
             ui.horizontal(|ui| {

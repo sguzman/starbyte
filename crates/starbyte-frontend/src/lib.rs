@@ -355,8 +355,7 @@ impl FrontendSession {
         let path = self.state_slot_path(slot)?;
         let data = std::fs::read_to_string(&path)
             .with_context(|| format!("failed to read save state {}", path.display()))?;
-        let state: SaveState = serde_json::from_str(&data)
-            .context("failed to parse disk state")?;
+        let state: SaveState = serde_json::from_str(&data).context("failed to parse disk state")?;
         let saved_sound_enabled = state.apu.isolated_host_clocked_driver_enabled();
         let current_sound_enabled = self.sound_mode.driver_enabled();
         anyhow::ensure!(
@@ -909,7 +908,10 @@ mod tests {
         // preview, not just in the previous read-only diagnostic mode.
         session.load_rom_with_persistent_audio(&rom_path).unwrap();
         session.run_frame().unwrap();
-        assert_eq!(session.sound_session_mode(), super::SoundSessionMode::Persistent);
+        assert_eq!(
+            session.sound_session_mode(),
+            super::SoundSessionMode::Persistent
+        );
         assert!(session.emulator().isolated_apu_driver_probe_enabled());
         assert!(
             session
@@ -1056,11 +1058,17 @@ mod tests {
         fs::copy(&silent_slot, &audio_slot).unwrap();
         assert!(session.load_state_slot(2).is_err());
         assert!(session.emulator().isolated_apu_driver_probe_enabled());
-        assert_eq!(session.sound_session_mode(), super::SoundSessionMode::Persistent);
+        assert_eq!(
+            session.sound_session_mode(),
+            super::SoundSessionMode::Persistent
+        );
         // Rejection must not remove the misplaced file or mutate the original.
         assert!(audio_slot.is_file());
         assert!(silent_slot.is_file());
-        assert_eq!(fs::read(&audio_slot).unwrap(), fs::read(&silent_slot).unwrap());
+        assert_eq!(
+            fs::read(&audio_slot).unwrap(),
+            fs::read(&silent_slot).unwrap()
+        );
     }
 
     #[test]

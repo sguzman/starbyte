@@ -195,13 +195,32 @@ impl AudioOutput {
         let _ = self.sender.try_send(AudioMessage::Clear);
     }
 
-    /// A standalone speaker probe. It uses original synthetic samples rather
-    /// than ROM data and never starts the production emulator or window.
+    /// A standalone 440 Hz speaker check using the SAME worker, stream and
+    /// sink that receive actual game PCM. No ROM, GUI or firmware is needed.
+    /// Success means the live worker appended the tone, not that physical
+    /// sound was heard. Wait until the tone has time to play before exit.
     pub fn test_speakers() -> Result<()> {
-        let output = PlaybackDevice::open_default()?;
-        output.enqueue(&speaker_test_tone(), 1.0);
-        thread::sleep(Duration::from_millis(350));
-        Ok(())
+        let output = Self::start()?;
+        output.set_volume(1.0);
+        anyhow::ensure!(
+            output.enqueue_live_test_tone(),
+            "speaker-test worker queue is full"
+        );
+        let started = Instant::now();
+        loop {
+            if output.test_tones_submitted() > 0 {
+                thread::sleep(Duration::from_millis(350));
+                return Ok(());
+            }
+            if output.device_status() == AudioDeviceStatus::OpenFailed {
+                anyhow::bail!("live speaker-test worker could not open an OS audio device");
+            }
+            anyhow::ensure!(
+                started.elapsed() < Duration::from_secs(5),
+                "live speaker-test worker did not submit PCM within five seconds"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 }
 

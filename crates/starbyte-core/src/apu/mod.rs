@@ -31,6 +31,25 @@ const SPC_RAM_BYTES: usize = 65_536;
 /// SPC700 instructions use a nominal 1.024 MHz cycle clock.
 const SPC700_CLOCK_HZ: u64 = 1_024_000;
 
+/// Advance either APU fractional sample clock without forcing a 128-bit
+/// division for every six-master-clock CPU bus quantum. These calls dominate
+/// opt-in SPC700 sound-frame scheduling. Oversized synthetic advances retain
+/// the previous exact 128-bit semantics; phases stay smaller than the master
+/// clock denominator across both paths.
+fn advance_fractional_clock(phase: &mut u64, master_cycles: u64, hz: u64) -> u128 {
+    if let Some(numerator) = master_cycles
+        .checked_mul(hz)
+        .and_then(|ticks| ticks.checked_add(*phase))
+    {
+        *phase = numerator % NTSC_MASTER_CLOCK_HZ;
+        return u128::from(numerator / NTSC_MASTER_CLOCK_HZ);
+    }
+
+    let numerator = u128::from(*phase) + u128::from(master_cycles) * u128::from(hz);
+    *phase = (numerator % u128::from(NTSC_MASTER_CLOCK_HZ)) as u64;
+    numerator / u128::from(NTSC_MASTER_CLOCK_HZ)
+}
+
 const fn ipl_overlay_default() -> bool {
     true
 }
@@ -442,10 +461,11 @@ impl Apu {
             return Ok(0);
         }
 
-        let numerator = u128::from(self.host_clocked_spc_phase)
-            + u128::from(master_cycles) * u128::from(SPC700_CLOCK_HZ);
-        self.host_clocked_spc_phase = (numerator % u128::from(NTSC_MASTER_CLOCK_HZ)) as u64;
-        let new_cycles = numerator / u128::from(NTSC_MASTER_CLOCK_HZ);
+        let new_cycles = advance_fractional_clock(
+            &mut self.host_clocked_spc_phase,
+            master_cycles,
+            SPC700_CLOCK_HZ,
+        );
         self.host_clocked_spc_credit = self
             .host_clocked_spc_credit
             .saturating_add(i64::try_from(new_cycles).unwrap_or(i64::MAX));
@@ -580,11 +600,12 @@ impl Apu {
     /// remainder avoids drift across CPU instructions, frames, and snapshots.
     /// This clock calculation does not run the SPC700.
     pub fn advance_dsp_sample_clock(&mut self, master_cycles: u64) -> usize {
-        let numerator = u128::from(self.dsp_sample_phase)
-            + u128::from(master_cycles) * u128::from(DSP_SAMPLE_RATE_HZ);
-        let denominator = u128::from(NTSC_MASTER_CLOCK_HZ);
-        self.dsp_sample_phase = (numerator % denominator) as u64;
-        usize::try_from(numerator / denominator).expect("DSP sample count exceeds platform usize")
+        let due = advance_fractional_clock(
+            &mut self.dsp_sample_phase,
+            master_cycles,
+            DSP_SAMPLE_RATE_HZ,
+        );
+        usize::try_from(due).expect("DSP sample count exceeds platform usize")
     }
 
     /// Write SPC700 RAM (separate from the SNES main CPU address space).
@@ -2196,6 +2217,41 @@ mod tests {
             resumed.advance_dsp_sample_clock(300),
             fresh.advance_dsp_sample_clock(300)
         );
+    }
+
+    #[test]
+    fn fractional_apu_clocks_match_exact_128_bit_reference_including_overflow() {
+        // Tiny quanta dominate real sound playback; oversized advances
+        // exercise the fallback without changing the historical semantics.
+        for frequency in [super::SPC700_CLOCK_HZ, super::DSP_SAMPLE_RATE_HZ] {
+            for initial_phase in [0, 1, super::NTSC_MASTER_CLOCK_HZ - 1] {
+                for clocks in [
+                    0,
+                    1,
+                    2,
+                    6,
+                    24,
+                    60,
+                    670,
+                    2_000,
+                    21_477_272,
+                    u32::MAX as u64,
+                    u64::MAX,
+                ] {
+                    let numerator = u128::from(initial_phase)
+                        + u128::from(clocks) * u128::from(frequency);
+                    let expected_count = numerator / u128::from(super::NTSC_MASTER_CLOCK_HZ);
+                    let expected_phase =
+                        (numerator % u128::from(super::NTSC_MASTER_CLOCK_HZ)) as u64;
+                    let mut phase = initial_phase;
+                    assert_eq!(
+                        super::advance_fractional_clock(&mut phase, clocks, frequency),
+                        expected_count
+                    );
+                    assert_eq!(phase, expected_phase);
+                }
+            }
+        }
     }
 
     #[test]

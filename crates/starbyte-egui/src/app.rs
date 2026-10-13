@@ -369,6 +369,10 @@ fn speed_label(percent: u16) -> String {
     format!("{:.2}x", f32::from(percent) / 100.0)
 }
 
+fn speed_target_fps(percent: u16) -> f32 {
+    60.0985 * f32::from(percent) / 100.0
+}
+
 fn tab_fast_forward_active(
     window_focused: bool,
     text_focused: bool,
@@ -2982,7 +2986,8 @@ impl StarbyteApp {
                 .fps(Instant::now())
                 .map_or_else(|| "--".to_owned(), |fps| format!("{fps:.1}"));
             let label = format!(
-                "Emu FPS {fps} / 60.1 (2s) | 40ms+ frame gaps: {} | last gap {:.1} / peak {:.1} ms\nEmulation {:.1} ms avg / {:.1} ms peak | {} slow frames\nUI late {:.1} ms / peak {:.1} ms ({} missed frames)\nTexture CPU {:.1} ms / peak {:.1} ms",
+                "Emu FPS {fps} / {:.1} (2s) | 40ms+ frame gaps: {} | last gap {:.1} / peak {:.1} ms\nEmulation {:.1} ms avg / {:.1} ms peak | {} slow frames\nUI late {:.1} ms / peak {:.1} ms ({} late wakeups)\nTexture CPU {:.1} ms / peak {:.1} ms",
+                speed_target_fps(self.last_effective_speed_percent),
                 self.frame_rate.hitches,
                 self.frame_rate.last_gap_ms,
                 self.frame_rate.peak_gap_ms,
@@ -3074,7 +3079,8 @@ impl StarbyteApp {
                 .fps(Instant::now())
                 .map_or_else(|| "--".to_owned(), |fps| format!("{fps:.1}"));
             ui.label(format!(
-                "Emulated FPS: {fps} / 60.1; 40ms+ frame gaps: {}; peak {:.1} ms",
+                "Emulated FPS: {fps} / {:.1}; 40ms+ frame gaps: {}; peak {:.1} ms",
+                speed_target_fps(self.last_effective_speed_percent),
                 self.frame_rate.hitches, self.frame_rate.peak_gap_ms
             ));
             ui.label(format!(
@@ -3085,7 +3091,7 @@ impl StarbyteApp {
                 self.frame_performance.samples,
             ));
             ui.label(format!(
-                "Late UI wake: {:.1} ms last, {:.1} ms peak; {} full-frame misses",
+                "Late UI wake: {:.1} ms last, {:.1} ms peak; {} full-frame late wakeups",
                 self.frame_performance.last_wake_late_ms,
                 self.frame_performance.peak_wake_late_ms,
                 self.frame_performance.wakes_over_budget
@@ -3506,7 +3512,12 @@ impl eframe::App for StarbyteApp {
                     } else {
                         self.frame_rate
                             .fps(Instant::now())
-                            .map_or_else(|| "FPS: --".to_owned(), |value| format!("FPS: {value:.1} / 60.1"))
+                            .map_or_else(|| "FPS: --".to_owned(), |value| {
+                                format!(
+                                    "FPS: {value:.1} / {:.1}",
+                                    speed_target_fps(self.last_effective_speed_percent)
+                                )
+                            })
                     };
                     ui.label(RichText::new(fps).monospace()).on_hover_text(
                         "Completed emulated frames per real second (rolling 2 seconds). This is not GPU or display FPS. Enable Timing for frame-time and hitch details.",

@@ -102,8 +102,9 @@ impl FrontendSession {
     }
 
     /// Explicitly opt a single loaded ROM into host-clocked SPC700 sound
-    /// execution for desktop compatibility diagnostics. Existing SRAM and
-    /// durable slots are never read or modified in this mode.
+    /// execution for desktop compatibility diagnostics. Existing SRAM is
+    /// loaded read-only into a private emulated copy, while durable slots
+    /// remain inaccessible and neither save format is written by the probe.
     pub fn load_rom_with_isolated_audio_probe<P>(&mut self, rom_path: P) -> Result<()>
     where
         P: AsRef<Path>,
@@ -128,8 +129,13 @@ impl FrontendSession {
             .assets()
             .save_root()
             .join(format!("{identity}.srm"));
+        // Flush the previous game before reading the selected cartridge's
+        // SRAM. In particular, switching the *same* running game into the
+        // experimental sound path must use the latest persisted progress,
+        // not a disk image from before the last in-memory save.
+        self.flush_save_ram()?;
         let stored_save =
-            if !isolated_audio_probe && expected_save_len > 0 && new_save_path.exists() {
+            if expected_save_len > 0 && new_save_path.exists() {
                 let data = std::fs::read(&new_save_path)
                     .with_context(|| format!("failed reading SRAM {}", new_save_path.display()))?;
                 anyhow::ensure!(
@@ -143,8 +149,8 @@ impl FrontendSession {
                 None
             };
 
-        // Preserve the old game's pending SRAM before replacing the cartridge.
-        self.flush_save_ram()?;
+        // Isolated audio reuses a private copy of SRAM only. It never writes
+        // the user's .srm file or reads/writes durable save-state slots.
         self.emulator.load_rom(cartridge);
         if isolated_audio_probe {
             self.emulator
@@ -852,7 +858,7 @@ mod tests {
     }
 
     #[test]
-    fn isolated_audio_probe_never_reads_or_overwrites_existing_sram_or_slots() {
+    fn isolated_audio_probe_loads_progress_read_only_and_never_overwrites_saves() {
         let dir = tempdir().unwrap();
         let rom_path = dir.path().join("sound-probe.sfc");
         fs::write(&rom_path, synthetic_rom_bytes()).unwrap();
@@ -879,12 +885,17 @@ mod tests {
             .unwrap();
         assert!(session.emulator().isolated_apu_upload().is_some());
         assert!(session.emulator().isolated_apu_driver_probe_enabled());
-        assert_eq!(session.emulator().save_ram().unwrap()[0], 0);
+        assert_eq!(session.emulator().save_ram().unwrap()[0], 0x5a);
         assert!(session.save_ram_path().is_none());
         assert!(!session.has_state_slot(1));
         assert!(session.save_state_slot(1).is_err());
         assert!(session.load_state_slot(1).is_err());
+        // Probe RAM is writable *inside emulation*, never as a durable save.
+        let mut private_ram = session.emulator().save_ram().unwrap();
+        private_ram[0] = 0xc3;
+        session.emulator.load_save_ram(&private_ram).unwrap();
         session.flush_save_ram().unwrap();
+        assert_eq!(session.emulator().save_ram().unwrap()[0], 0xc3);
         assert_eq!(fs::read(&save_path).unwrap(), existing_sram);
         assert_eq!(fs::read(&existing_slot).unwrap(), original_slot);
 

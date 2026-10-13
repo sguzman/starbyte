@@ -2,6 +2,8 @@
 
 This document tracks the compatibility push from bootstrap/test ROM behavior toward real commercial game boot and gameplay, using `Super Mario World` as the proving target. The goal is to improve general SNES subsystem behavior for LoROM commercial software rather than add game-specific hacks.
 
+**Named game backlog:** [Target SNES game compatibility](target-game-compatibility.md) is the agreed acceptance order. After Super Mario World, prioritize **Chrono Trigger**; do not conflate extensive SMW evidence with cross-title compatibility. Japanese cartridge versions and English fan patches must be evaluated separately. Radical Dreamers is tracked on a separate Satellaview path.
+
 ## Rules For Checking Boxes
 
 - [x] Mark a box complete only when the code is implemented and verified by a reproducible check.

@@ -1868,6 +1868,10 @@ impl StarbyteApp {
                     .join(", ")
             ));
         }
+        ui.label(format!(
+            "Mapped SNES buttons: {}",
+            pressed_button_labels(self.effective_controller_state(ui.ctx()))
+        ));
         ui.label("Choose Rebind Pad, then press a button or push a stick direction fully.");
         ui.label("Move an already-held stick back to center before binding its direction.");
         ui.separator();
@@ -1887,6 +1891,13 @@ impl StarbyteApp {
                     self.pending_gamepad_bind = Some(action.to_string());
                     self.pending_keyboard_bind = None;
                     self.queued_gamepad_presses.clear();
+                }
+                if ui.button("Unbind").clicked() {
+                    self.config.input.gamepad_bindings.remove(action);
+                    self.pending_gamepad_bind = None;
+                    self.queued_gamepad_presses.clear();
+                    self.persist_config();
+                    self.status_line = format!("Unbound {} from the gamepad.", action_label(action));
                 }
             });
         }

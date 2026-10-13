@@ -905,6 +905,7 @@ mod tests {
         assert_eq!(session.host_read_u8(0x009E25), 0x00);
         assert_eq!(session.host_read_u8(0x809E25), 0x64);
         assert_eq!(session.emulator().cartridge().unwrap().rom()[0x1E25], 0x64);
+        session.host_write_u8(0x7E0010, 0xFF);
         session.run_frame().unwrap();
         assert_eq!(session.host_read_u8(0x7E0010), 0x00);
 
@@ -920,6 +921,11 @@ mod tests {
         cheat.enabled = false;
         assert_eq!(session.set_active_cheats(&[cheat]), 0);
         assert_eq!(session.host_read_u8(0x009E25), 0x64);
+        // A clean unpatched replay must execute the same CPU program but
+        // store the actual cartridge byte, not the former Game Genie value.
+        session.load_rom(&rom_path).unwrap();
+        session.run_frame().unwrap();
+        assert_eq!(session.host_read_u8(0x7E0010), 0x64);
     }
 
     #[test]

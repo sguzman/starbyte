@@ -73,6 +73,12 @@ pub struct Dsp {
     /// samples, preserving compatibility of older portable snapshots.
     #[serde(default)]
     hardware_key_on_timing: bool,
+    /// The SPC700 writes KON asynchronously; the DSP polls at 16 kHz.
+    /// Only the latest pending write is observed on the next poll phase.
+    #[serde(default)]
+    pending_key_on: u8,
+    #[serde(default)]
+    key_on_poll_next: bool,
 }
 
 impl Default for Dsp {
@@ -94,6 +100,8 @@ impl Default for Dsp {
             echo_history: [[0; 2]; 8],
             echo_history_index: 0,
             hardware_key_on_timing: false,
+            pending_key_on: 0,
+            key_on_poll_next: false,
         }
     }
 }
@@ -161,6 +169,8 @@ impl Dsp {
     /// sound-driver execution. Default synthetic mixer tests remain unchanged.
     pub(super) fn set_hardware_key_on_timing(&mut self, enabled: bool) {
         self.hardware_key_on_timing = enabled;
+        self.pending_key_on = 0;
+        self.key_on_poll_next = enabled;
     }
 
     /// Stop the voices and restore power-on register values.
@@ -183,9 +193,15 @@ impl Dsp {
         match reg {
             0x4c => {
                 self.registers[reg] = value;
-                for index in 0..VOICE_COUNT {
-                    if value & (1 << index) != 0 {
-                        self.key_on(index, ram);
+                if self.hardware_key_on_timing {
+                    // The real DSP samples KON on alternate output ticks.
+                    // Writes before that poll overwrite the pending latch.
+                    self.pending_key_on = value;
+                } else {
+                    for index in 0..VOICE_COUNT {
+                        if value & (1 << index) != 0 {
+                            self.key_on(index, ram);
+                        }
                     }
                 }
             }
@@ -236,6 +252,17 @@ impl Dsp {
         } else {
             self.envelope_counter - 1
         };
+        if self.hardware_key_on_timing {
+            if self.key_on_poll_next {
+                let pending = std::mem::take(&mut self.pending_key_on);
+                for index in 0..VOICE_COUNT {
+                    if pending & (1 << index) != 0 {
+                        self.key_on(index, ram);
+                    }
+                }
+            }
+            self.key_on_poll_next = !self.key_on_poll_next;
+        }
         // SNES NON uses one common 15-bit Fibonacci LFSR for all voices.
         // FLG bits 0..4 select its clock rate from the envelope table.
         if envelope_rate_ready(self.registers[0x6c] & 0x1f, self.envelope_counter) {
@@ -1399,6 +1426,46 @@ mod tests {
             serde_json::to_value(&dsp).unwrap(),
             serde_json::to_value(&restored).unwrap()
         );
+    }
+
+    #[test]
+    fn experimental_kon_poll_coalesces_rapid_writes_and_preserves_phase() {
+        let (mut dsp, mut ram) = looping_sample();
+        dsp.set_hardware_key_on_timing(true);
+        // Hardware consumes only the last KON value before the poll.
+        dsp.write_register(0x4c, 0b01, &ram);
+        dsp.write_register(0x4c, 0b10, &ram);
+        assert!(!dsp.voices[0].active);
+        assert!(!dsp.voices[1].active);
+        dsp.next_stereo_pair(&mut ram); // First 16 kHz poll.
+        assert!(!dsp.voices[0].active);
+        assert!(dsp.voices[1].active);
+        assert_eq!(dsp.voices[1].startup_delay, KEY_ON_EMPTY_SAMPLES - 1);
+
+        dsp.write_register(0x4c, 0b01, &ram);
+        let snapshot = serde_json::to_string(&dsp).unwrap();
+        let mut restored: Dsp = serde_json::from_str(&snapshot).unwrap();
+        let mut restored_ram = ram.clone();
+        assert_eq!(dsp.pending_key_on, 0b01);
+        // Second sample is not a KON poll, so the new voice must wait.
+        assert_eq!(
+            dsp.next_stereo_pair(&mut ram),
+            restored.next_stereo_pair(&mut restored_ram)
+        );
+        assert!(!dsp.voices[0].active);
+        assert_eq!(dsp.pending_key_on, 0b01);
+        // Next sample polls the queued command, with identical replay.
+        assert_eq!(
+            dsp.next_stereo_pair(&mut ram),
+            restored.next_stereo_pair(&mut restored_ram)
+        );
+        assert!(dsp.voices[0].active);
+        assert_eq!(dsp.pending_key_on, 0);
+        assert_eq!(
+            serde_json::to_value(&dsp).unwrap(),
+            serde_json::to_value(&restored).unwrap()
+        );
+        assert_eq!(ram, restored_ram);
     }
 
     #[test]

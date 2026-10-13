@@ -512,6 +512,8 @@ pub struct StarbyteApp {
     cheat_visibility: CheatVisibility,
     /// Search needs durable keyboard focus; a menu popup closes on text clicks.
     show_cheats_window: bool,
+    /// Focus the search only when opening; do not steal focus from sort/filter.
+    cheat_search_focus_pending: bool,
     selected_game_id: Option<String>,
     loaded_game_id: Option<String>,
     show_properties: bool,
@@ -684,6 +686,7 @@ impl StarbyteApp {
             cheat_sort_descending: false,
             cheat_visibility: CheatVisibility::default(),
             show_cheats_window: false,
+            cheat_search_focus_pending: false,
             selected_game_id: None,
             loaded_game_id: None,
             show_properties: false,
@@ -1856,11 +1859,15 @@ impl StarbyteApp {
             ui.label(self.empty_cheat_explanation());
             return;
         }
-        ui.add(
+        let search_response = ui.add(
             egui::TextEdit::singleline(&mut self.cheat_search_query)
                 .hint_text("Search name, code, type, or source...")
                 .desired_width(f32::INFINITY),
         );
+        if self.cheat_search_focus_pending {
+            search_response.request_focus();
+            self.cheat_search_focus_pending = false;
+        }
         ui.horizontal_wrapped(|ui| {
             egui::ComboBox::from_id_salt("play_cheat_sort")
                 .selected_text(format!("Sort: {}", self.cheat_sort.label()))
@@ -1999,6 +2006,7 @@ impl StarbyteApp {
                 ui.menu_button(sound_label, |ui| self.draw_audio_controls(ui));
                 if ui.button("Cheats").clicked() {
                     self.show_cheats_window = !self.show_cheats_window;
+                    self.cheat_search_focus_pending = self.show_cheats_window;
                 }
                 if ui
                     .checkbox(&mut self.show_performance_overlay, "Timing")
@@ -3661,6 +3669,7 @@ mod playback_tests {
             search: &mut String,
             input_rect: &mut egui::Rect,
             input: egui::RawInput,
+            focus_pending: &mut bool,
         ) {
             let _ = ctx.run(input, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
@@ -3673,6 +3682,10 @@ mod playback_tests {
                     .show(ctx, |ui| {
                         let response = ui.add(egui::TextEdit::singleline(search));
                         *input_rect = response.rect;
+                        if *focus_pending {
+                            response.request_focus();
+                            *focus_pending = false;
+                        }
                     });
             });
         }
@@ -3682,6 +3695,7 @@ mod playback_tests {
         let mut window_open = true;
         let mut search = String::new();
         let mut input_rect = egui::Rect::NOTHING;
+        let mut focus_pending = true;
         let input = |events| egui::RawInput {
             screen_rect: Some(screen_rect),
             events,
@@ -3693,6 +3707,7 @@ mod playback_tests {
             &mut search,
             &mut input_rect,
             input(vec![]),
+            &mut focus_pending,
         );
         assert!(window_open);
         assert!(input_rect.width() > 0.0 && input_rect.height() > 0.0);
@@ -3711,6 +3726,7 @@ mod playback_tests {
                     modifiers: egui::Modifiers::NONE,
                 },
             ]),
+            &mut focus_pending,
         );
         draw(
             &ctx,
@@ -3723,6 +3739,7 @@ mod playback_tests {
                 pressed: false,
                 modifiers: egui::Modifiers::NONE,
             }]),
+            &mut focus_pending,
         );
         draw(
             &ctx,
@@ -3730,6 +3747,7 @@ mod playback_tests {
             &mut search,
             &mut input_rect,
             input(vec![egui::Event::Text("coins".to_owned())]),
+            &mut focus_pending,
         );
         assert!(
             window_open,

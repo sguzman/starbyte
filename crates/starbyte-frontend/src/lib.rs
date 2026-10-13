@@ -355,8 +355,18 @@ impl FrontendSession {
         let path = self.state_slot_path(slot)?;
         let data = std::fs::read_to_string(&path)
             .with_context(|| format!("failed to read save state {}", path.display()))?;
+        let state: SaveState = serde_json::from_str(&data)
+            .context("failed to parse disk state")?;
+        let saved_sound_enabled = state.apu.isolated_host_clocked_driver_enabled();
+        let current_sound_enabled = self.sound_mode.driver_enabled();
+        anyhow::ensure!(
+            saved_sound_enabled == current_sound_enabled,
+            "disk slot sound-mode mismatch: saved sound driver {}, active sound driver {}; switch to the corresponding game mode",
+            saved_sound_enabled,
+            current_sound_enabled
+        );
         self.emulator
-            .load_state(&data)
+            .restore_state(state)
             .context("failed to load saved state")?;
         self.emulator.refresh_framebuffer();
         self.apply_active_cheats();
@@ -1008,6 +1018,32 @@ mod tests {
         assert_eq!(session.state_slot_path(1).unwrap(), legacy_slot);
         session.load_state_slot(1).unwrap();
         assert!(!session.emulator().isolated_apu_driver_probe_enabled());
+    }
+
+    #[test]
+    fn importing_a_silent_disk_slot_into_sound_mode_is_rejected_before_mutation() {
+        let dir = tempdir().unwrap();
+        let rom = dir.path().join("audio-slot-validation.sfc");
+        fs::write(&rom, synthetic_rom_bytes()).unwrap();
+        let assets = AssetConfig {
+            state_dir: Some(dir.path().join("states")),
+            save_dir: Some(dir.path().join("saves")),
+            ..Default::default()
+        };
+        let mut session = FrontendSession::new(assets).unwrap();
+        session.load_rom(&rom).unwrap();
+        let silent_slot = session.save_state_slot(2).unwrap();
+        session.load_rom_with_persistent_audio(&rom).unwrap();
+        let audio_slot = session.state_slot_path(2).unwrap();
+        assert_ne!(audio_slot, silent_slot);
+        fs::copy(&silent_slot, &audio_slot).unwrap();
+        assert!(session.load_state_slot(2).is_err());
+        assert!(session.emulator().isolated_apu_driver_probe_enabled());
+        assert_eq!(session.sound_session_mode(), super::SoundSessionMode::Persistent);
+        // Rejection must not remove the misplaced file or mutate the original.
+        assert!(audio_slot.is_file());
+        assert!(silent_slot.is_file());
+        assert_eq!(fs::read(&audio_slot).unwrap(), fs::read(&silent_slot).unwrap());
     }
 
     #[test]

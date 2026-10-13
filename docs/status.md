@@ -4,6 +4,16 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## Native idle-game FPS and audio stutter (2026-10-13)
+
+The user confirmed Starbyte now **plays Super Mario World audio automatically** after the sound-default change, but also observed intermittent idle overworld dips to approximately **52.6 / 60.1 emulated FPS**, with simultaneous audio lag. This is a real native report, not a synthetic benchmark. Root cause remains unresolved: the core may be over budget, the egui frame wake may be delayed, texture submission may spike, or audio playback may starve as a consequence. Do not assume the audio worker or host scheduling is the cause without measurements.
+
+The guarded CPU loop now checks its 1.5-second wall-clock timeout once every 256 instructions instead of twice per CPU instruction, retaining the existing instruction-count guard, zero-duration error behavior, and a bounded deadline check interval. This removes redundant OS timer polling but is not proof of improved native FPS. The GUI timing overlay now shows its most recent frame gap, and rate-limited warning logs include emulated FPS, frame gaps, emulation milliseconds, UI wake lateness, texture submission cost, producer/worker audio queue drops, and empty-sink observations when a pacing gap exceeds 20 ms or rolling FPS drops below 55. These can distinguish likely causes in the next native run. CI and measured native results must still be separated.
+
+## Searchable and sortable Cheatarium play menu (2026-10-13)
+
+The in-game Cheats menu has case-insensitive, multiword search across name, code, type and source, plus sort by name/type/source/code/enabled status, ascending/descending direction, and All/Enabled/Usable/Unsupported filters. Results show total and enabled counts, and virtualized scrolling avoids materializing large offscreen lists. Selecting a checkbox still uses the original enabled-by-game persistence and live emulator patch sync. No new cheat codes are automatically activated. The new controls and search behavior have deterministic unit coverage; physical GUI acceptance is pending.
+
 ## Desktop sound enabled by default (2026-10-13)
 
 Ordinary desktop game loads now select the sound-enabled Persistent policy, including startup ROM, library Play, and direct Open ROM. This keeps writable battery SRAM and isolates sound-mode save-state slots; it does not silently switch to the read-only diagnostic. Silent compatibility remains available as a manual fallback from Sound, and the explicit experimental sound-driver CLI flag remains read-only. Added a desktop-path regression to verify default driver activation and fallback. This policy change still requires CI confirmation and native QA for stuttering; it does not establish broad sound accuracy.

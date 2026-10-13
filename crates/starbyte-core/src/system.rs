@@ -12,7 +12,8 @@ use crate::dma::DmaController;
 use crate::input::ControllerState;
 use crate::ppu::{FrameBuffer, Ppu};
 use crate::timing::{
-    DOTS_PER_SCANLINE, MASTER_CLOCKS_PER_DOT, NTSC_SCANLINES_PER_FRAME, TimingState,
+    DOTS_PER_SCANLINE, HBLANK_START_DOT, MASTER_CLOCKS_PER_DOT, NTSC_SCANLINES_PER_FRAME,
+    TimingState,
 };
 
 const WRAM_SIZE: usize = 128 * 1024;
@@ -785,7 +786,10 @@ impl SystemBus {
                 if self.timing.in_vblank() {
                     value |= 0x80;
                 }
-                if self.timing.dot == 0 {
+                // HVBJOY bit 6 is H-blank status, not a dot-zero pulse.
+                // Games poll this through most of the right-hand blanking
+                // interval (roughly dot 274 to the end of each scanline).
+                if self.timing.dot >= HBLANK_START_DOT {
                     value |= 0x40;
                 }
                 Some(value)
@@ -1900,6 +1904,45 @@ mod tests {
         assert!(bus.timing().in_vblank());
         assert_eq!(bus.read(0x004210) & 0x80, 0x80);
         assert_eq!(bus.read(0x004210) & 0x80, 0x00);
+    }
+
+    #[test]
+    fn hvbjoy_hblank_bit_stays_high_through_horizontal_blanking() {
+        use crate::timing::HBLANK_START_DOT;
+
+        let mut bus = SystemBus::default();
+        let dot_clocks = MASTER_CLOCKS_PER_DOT;
+        assert_eq!(bus.read(0x004212) & 0x40, 0);
+
+        bus.advance_master_clocks(u64::from(HBLANK_START_DOT - 1) * dot_clocks);
+        assert_eq!(bus.timing().dot, HBLANK_START_DOT - 1);
+        assert_eq!(bus.read(0x004212) & 0x40, 0);
+
+        bus.advance_master_clocks(dot_clocks);
+        assert_eq!(bus.timing().dot, HBLANK_START_DOT);
+        assert_eq!(bus.read(0x004212) & 0x40, 0x40);
+
+        bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE - HBLANK_START_DOT - 1) * dot_clocks);
+        assert_eq!(bus.timing().dot, DOTS_PER_SCANLINE - 1);
+        assert_eq!(bus.read(0x004212) & 0x40, 0x40);
+
+        bus.advance_master_clocks(dot_clocks);
+        assert_eq!(bus.timing().dot, 0);
+        assert_eq!(bus.read(0x004212) & 0x40, 0);
+    }
+
+    #[test]
+    fn hvbjoy_hblank_is_exposed_on_mirrored_io_banks_without_changing_vblank() {
+        let mut bus = SystemBus::default();
+        bus.advance_master_clocks(u64::from(HBLANK_START_DOT) * MASTER_CLOCKS_PER_DOT);
+        assert_eq!(bus.read(0x804212) & 0x40, 0x40);
+        assert_eq!(bus.read(0x004212) & 0x80, 0);
+        bus.advance_master_clocks(
+            u64::from(DOTS_PER_SCANLINE) * u64::from(crate::timing::VBLANK_START_SCANLINE)
+                * MASTER_CLOCKS_PER_DOT,
+        );
+        assert!(bus.timing().in_vblank());
+        assert_eq!(bus.read(0x004212) & 0x80, 0x80);
     }
 
     #[test]

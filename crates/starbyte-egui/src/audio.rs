@@ -668,7 +668,11 @@ mod tests {
         }
         for speed in [0.5, 1.0, 2.0, 3.0, 4.0] {
             match receiver.try_recv().unwrap() {
-                AudioMessage::Frame { pcm, speed: received, .. } => {
+                AudioMessage::Frame {
+                    pcm,
+                    speed: received,
+                    ..
+                } => {
                     assert_eq!(pcm, vec![123, -123]);
                     assert_eq!(received, speed);
                 }

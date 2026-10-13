@@ -13,7 +13,7 @@ use crate::cpu_65816::registers::Registers;
 use crate::error::{Error, Result};
 use crate::manifest::AssetConfig;
 use crate::ppu::FrameBuffer;
-use crate::system::{SystemBus, SystemBusObservability};
+use crate::system::{RomReadPatch, SystemBus, SystemBusObservability};
 use crate::timing::TimingState;
 
 const CPU_BUS_CYCLE_MASTER_CYCLES: u64 = 6;
@@ -386,6 +386,13 @@ impl Emulator {
     pub fn isolated_apu_test_latch(&self) -> Option<u8> {
         self.apu.isolated_ipl_upload()?;
         Some(self.apu.test_latch())
+    }
+
+    /// Replace cartridge-ROM substitutions supplied by the host cheat manager.
+    ///
+    /// These are intentionally not persisted in SNES save states.
+    pub fn set_rom_read_patches(&mut self, patches: &[RomReadPatch]) {
+        self.system.set_rom_read_patches(patches);
     }
 
     /// Host-side write access used by bootstrap tests and regression fixtures.

@@ -467,8 +467,14 @@ fn filtered_sorted_cheats<'a>(
             CheatSort::Code => left.code.to_lowercase().cmp(&right.code.to_lowercase()),
             CheatSort::Status => left.enabled.cmp(&right.enabled),
         };
-        let primary = if descending { primary.reverse() } else { primary };
-        primary.then_with(|| left.name.cmp(&right.name)).then_with(|| left.id.cmp(&right.id))
+        let primary = if descending {
+            primary.reverse()
+        } else {
+            primary
+        };
+        primary
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.id.cmp(&right.id))
     });
     results
 }
@@ -1855,7 +1861,11 @@ impl StarbyteApp {
                     }
                 });
             if ui
-                .button(if self.cheat_sort_descending { "Descending" } else { "Ascending" })
+                .button(if self.cheat_sort_descending {
+                    "Descending"
+                } else {
+                    "Ascending"
+                })
                 .clicked()
             {
                 self.cheat_sort_descending = !self.cheat_sort_descending;
@@ -1889,7 +1899,9 @@ impl StarbyteApp {
         let enabled_count = entry.cheats.iter().filter(|cheat| cheat.enabled).count();
         ui.label(format!(
             "{} of {} cheats shown | {} enabled",
-            matches.len(), entry.cheats.len(), enabled_count
+            matches.len(),
+            entry.cheats.len(),
+            enabled_count
         ));
         ui.separator();
         if matches.is_empty() {
@@ -3567,11 +3579,11 @@ mod playback_tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        FRAME_INTERVAL, FrameClock, FramePerformance, FrameRateMeter, NativeSmokeAudioMetrics,
-        SpeakerProbeState, Vec2, audible_output_volume, egui, fit_game_size,
-        frame_spike_reportable, is_compact_layout, load_rom_with_default_sound,
-        merged_gamepad_buttons, pressed_button_labels, record_recent_rom, write_png_screenshot,
-        CheatSort, CheatVisibility, filtered_sorted_cheats,
+        CheatSort, CheatVisibility, FRAME_INTERVAL, FrameClock, FramePerformance, FrameRateMeter,
+        NativeSmokeAudioMetrics, SpeakerProbeState, Vec2, audible_output_volume, egui,
+        filtered_sorted_cheats, fit_game_size, frame_spike_reportable, is_compact_layout,
+        load_rom_with_default_sound, merged_gamepad_buttons, pressed_button_labels,
+        record_recent_rom, write_png_screenshot,
     };
 
     #[test]
@@ -3625,17 +3637,43 @@ mod playback_tests {
             make("2", "Infinite Coins", "raw", true, "Local"),
             make("3", "Unlock Level", "raw", false, "Local"),
         ];
-        let sorted = filtered_sorted_cheats(&cheats, "", CheatVisibility::All, CheatSort::Name, false);
-        assert_eq!(sorted.iter().map(|item| item.name.as_str()).collect::<Vec<_>>(), vec!["Extra Lives", "Infinite Coins", "Unlock Level"]);
-        let reversed = filtered_sorted_cheats(&cheats, "", CheatVisibility::All, CheatSort::Name, true);
+        let sorted =
+            filtered_sorted_cheats(&cheats, "", CheatVisibility::All, CheatSort::Name, false);
+        assert_eq!(
+            sorted
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Extra Lives", "Infinite Coins", "Unlock Level"]
+        );
+        let reversed =
+            filtered_sorted_cheats(&cheats, "", CheatVisibility::All, CheatSort::Name, true);
         assert_eq!(reversed[0].name, "Unlock Level");
-        let enabled = filtered_sorted_cheats(&cheats, "", CheatVisibility::Enabled, CheatSort::Name, false);
+        let enabled = filtered_sorted_cheats(
+            &cheats,
+            "",
+            CheatVisibility::Enabled,
+            CheatSort::Name,
+            false,
+        );
         assert_eq!(enabled.len(), 1);
         assert_eq!(enabled[0].name, "Infinite Coins");
-        let search = filtered_sorted_cheats(&cheats, "LOCAL COINS", CheatVisibility::All, CheatSort::Kind, false);
+        let search = filtered_sorted_cheats(
+            &cheats,
+            "LOCAL COINS",
+            CheatVisibility::All,
+            CheatSort::Kind,
+            false,
+        );
         assert_eq!(search.len(), 1);
         assert_eq!(search[0].id, "2");
-        let code_search = filtered_sorted_cheats(&cheats, "code-1", CheatVisibility::All, CheatSort::Code, false);
+        let code_search = filtered_sorted_cheats(
+            &cheats,
+            "code-1",
+            CheatVisibility::All,
+            CheatSort::Code,
+            false,
+        );
         assert_eq!(code_search[0].name, "Extra Lives");
         assert!(cheats[1].enabled);
     }

@@ -2928,7 +2928,7 @@ mod playback_tests {
 
     #[test]
     fn short_stick_and_hat_taps_cross_gameplay_threshold() {
-        use super::{Axis, gamepad_axis_crossing, GAMEPAD_STICK_DEADZONE};
+        use super::{Axis, GAMEPAD_STICK_DEADZONE, gamepad_axis_crossing};
         assert_eq!(
             gamepad_axis_crossing(Axis::DPadX, 0.0, -1.0, GAMEPAD_STICK_DEADZONE),
             Some("DPadLeft")

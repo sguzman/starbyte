@@ -136,10 +136,12 @@ fn best_overlap_start(
         // A 2-frame stride bounds CPU work without materially changing
         // position selection for normal SNES sound frequencies.
         for i in (0..HOP * CHANNELS).step_by(4) {
-            let x = f64::from(tail[i]);
-            let y = f64::from(current[i]);
-            dot += x * y;
-            energy += y * y;
+            for channel in 0..CHANNELS {
+                let x = f64::from(tail[i + channel]);
+                let y = f64::from(current[i + channel]);
+                dot += x * y;
+                energy += y * y;
+            }
         }
         let score = dot / energy.sqrt();
         if score > best_score {

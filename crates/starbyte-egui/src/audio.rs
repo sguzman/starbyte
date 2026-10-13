@@ -295,7 +295,7 @@ impl PlaybackDevice {
         }
         self.sink.set_volume(volume);
         // Classic emulator tempo/pitch shift: 2x playback produces 2x pitch.
-        self.sink.set_speed(normalize_playback_speed(speed));
+        set_sink_playback_speed(&self.sink, speed);
         self.sink
             .append(SamplesBuffer::new(CHANNELS, DSP_SAMPLE_RATE, pcm));
         self.sink.play();
@@ -446,6 +446,11 @@ fn audio_worker(
     }
 }
 
+/// Set tempo and pitch together through Rodio's real sink control.
+fn set_sink_playback_speed(sink: &Sink, speed: f32) {
+    sink.set_speed(normalize_playback_speed(speed));
+}
+
 /// Keep audio pitch/speed finite and within the supported UI's 0.5-4x range.
 fn normalize_playback_speed(value: f32) -> f32 {
     if value.is_finite() {
@@ -511,7 +516,7 @@ mod tests {
     use super::{
         AudioDeviceStatus, AudioMessage, AudioOutput, PlaybackContinuity, frame_is_fresh,
         normalize_playback_speed, normalize_volume, pcm16_stereo_to_float, retry_ready,
-        speaker_test_tone,
+        set_sink_playback_speed, speaker_test_tone,
     };
 
     #[test]
@@ -646,6 +651,20 @@ mod tests {
         assert_eq!(output.submitted_frames(), 0);
         output.enqueue(&[1], 1.0); // invalid PCM never enters the queue
         assert_eq!(output.producer_dropped_frames(), 1);
+    }
+
+    #[test]
+    fn offline_rodio_sink_tracks_speed_and_returns_to_normal_pitch() {
+        // Rodio's unconnected sink exposes the real playback-speed control
+        // without opening ALSA, PipeWire or the system audio device.
+        let (sink, _queue) = rodio::Sink::new();
+        assert_eq!(sink.speed(), 1.0);
+        set_sink_playback_speed(&sink, 3.0);
+        assert_eq!(sink.speed(), 3.0);
+        set_sink_playback_speed(&sink, 0.5);
+        assert_eq!(sink.speed(), 0.5);
+        set_sink_playback_speed(&sink, 1.0);
+        assert_eq!(sink.speed(), 1.0);
     }
 
     #[test]

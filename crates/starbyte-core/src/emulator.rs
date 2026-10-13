@@ -20,6 +20,9 @@ const CPU_BUS_CYCLE_MASTER_CYCLES: u64 = 6;
 const SAVE_STATE_VERSION: u32 = 1;
 /// More than the maximum number of one-bus-access CPU steps in a frame.
 const MAX_INSTRUCTIONS_PER_FRAME: usize = 100_000;
+/// Bound wall-clock deadline checks without sampling the OS timer for every
+/// CPU opcode. Zero-length timeouts are still caught before instruction 1.
+const TIMEOUT_POLL_INTERVAL_INSTRUCTIONS: usize = 256;
 
 /// Serializable emulator state snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,7 +154,8 @@ impl Emulator {
         let mut instructions = 0_usize;
         while self.system.timing().frame == start_frame {
             if instructions >= MAX_INSTRUCTIONS_PER_FRAME
-                || timeout.is_some_and(|budget| started.elapsed() >= budget)
+                || (instructions % TIMEOUT_POLL_INTERVAL_INSTRUCTIONS == 0
+                    && timeout.is_some_and(|budget| started.elapsed() >= budget))
             {
                 return Err(self.frame_stalled(start_frame, instructions, started.elapsed()));
             }
@@ -164,9 +168,7 @@ impl Emulator {
                 self.step_instruction()?;
             }
             instructions += 1;
-            if self.system.timing().master_clock == before_clock
-                || timeout.is_some_and(|budget| started.elapsed() >= budget)
-            {
+            if self.system.timing().master_clock == before_clock {
                 return Err(self.frame_stalled(start_frame, instructions, started.elapsed()));
             }
         }

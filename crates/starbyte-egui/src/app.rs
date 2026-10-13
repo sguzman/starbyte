@@ -3337,7 +3337,15 @@ mod playback_tests {
         use crate::audio::AudioDeviceStatus;
 
         assert_eq!(
-            audio_playback_status(false, true, false, 1.0, 500, Some(AudioDeviceStatus::Opened), 4),
+            audio_playback_status(
+                false,
+                true,
+                false,
+                1.0,
+                500,
+                Some(AudioDeviceStatus::Opened),
+                4
+            ),
             "Sound: SILENT (compatibility)"
         );
         assert_eq!(
@@ -3345,23 +3353,63 @@ mod playback_tests {
             "Sound: waiting for PCM (experimental)"
         );
         assert_eq!(
-            audio_playback_status(true, true, false, 1.0, 530, Some(AudioDeviceStatus::OpenFailed), 0),
+            audio_playback_status(
+                true,
+                true,
+                false,
+                1.0,
+                530,
+                Some(AudioDeviceStatus::OpenFailed),
+                0
+            ),
             "Sound: PCM present; OS device FAILED"
         );
         assert_eq!(
-            audio_playback_status(true, true, false, 1.0, 530, Some(AudioDeviceStatus::Opened), 1),
+            audio_playback_status(
+                true,
+                true,
+                false,
+                1.0,
+                530,
+                Some(AudioDeviceStatus::Opened),
+                1
+            ),
             "Sound: PCM submitted (audibility unknown)"
         );
         assert_eq!(
-            audio_playback_status(true, true, false, 1.0, 530, Some(AudioDeviceStatus::Opened), 0),
+            audio_playback_status(
+                true,
+                true,
+                false,
+                1.0,
+                530,
+                Some(AudioDeviceStatus::Opened),
+                0
+            ),
             "Sound: OS device open; PCM not yet submitted"
         );
         assert_eq!(
-            audio_playback_status(true, false, false, 1.0, 530, Some(AudioDeviceStatus::Opened), 1),
+            audio_playback_status(
+                true,
+                false,
+                false,
+                1.0,
+                530,
+                Some(AudioDeviceStatus::Opened),
+                1
+            ),
             "Sound: MUTED (experimental)"
         );
         assert_eq!(
-            audio_playback_status(true, true, true, 1.0, 530, Some(AudioDeviceStatus::Opened), 1),
+            audio_playback_status(
+                true,
+                true,
+                true,
+                1.0,
+                530,
+                Some(AudioDeviceStatus::Opened),
+                1
+            ),
             "Sound: MUTED (experimental)"
         );
     }

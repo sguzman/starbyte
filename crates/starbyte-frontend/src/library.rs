@@ -2079,6 +2079,65 @@ mod tests {
     }
 
     #[test]
+    fn super_mario_world_named_zip_finds_local_cheatarium_candidates_offline() {
+        use flate2::{Compression, GzBuilder};
+
+        let dir = tempdir().unwrap();
+        let checkout = dir.path().join("cheatarium");
+        let output = checkout.join("generated/v1");
+        fs::create_dir_all(&output).unwrap();
+        let fixture = serde_json::json!({
+            "schema_version": 1,
+            "platform": "snes",
+            "records": [{
+                "id": "fixture:super-mario-world",
+                "title_hint": "Super Mario World (USA)",
+                "provenance": {"source_id": "test-local"},
+                "codes": [{
+                    "ordinal": 0,
+                    "role": "code",
+                    "description": "Example ROM substitution",
+                    "code": "DDB4-6F07",
+                    "snes_decode": {"format": "game-genie"}
+                }]
+            }]
+        });
+        let mut gzip = GzBuilder::new()
+            .mtime(0)
+            .write(Vec::new(), Compression::fast());
+        gzip.write_all(serde_json::to_string(&fixture).unwrap().as_bytes())
+            .unwrap();
+        fs::write(output.join("snes.json.gz"), gzip.finish().unwrap()).unwrap();
+        let archive = dir.path().join("Super Mario World (USA).zip");
+        write_zip_roms(
+            &archive,
+            &[(
+                "Super Mario World (USA).sfc",
+                synthetic_rom_bytes(b"STARBYTE ZIP LOAD    "),
+            )],
+        );
+        let mut config = RuntimeConfig::default();
+        config.advanced.providers.enable_network = false;
+        config.library.rom_dirs.push(dir.path().to_path_buf());
+        config.cheats.cheatarium_root = Some(checkout);
+        let assets = starbyte_core::manifest::AssetConfig {
+            cache_dir: Some(dir.path().join("cache")),
+            ..Default::default()
+        };
+        let mut service = LibraryService::new(config, assets).unwrap();
+        assert_eq!(service.refresh_cheats(&Default::default()).unwrap(), 1);
+        let entries = service.snapshot(LibraryFilter::default()).unwrap().entries;
+        let entry = entries
+            .iter()
+            .find(|entry| entry.local.as_ref().is_some_and(|local| local.rom_path == archive))
+            .unwrap();
+        assert_eq!(entry.cheats.len(), 1);
+        assert_eq!(entry.cheats[0].name, "Example ROM substitution");
+        assert_eq!(entry.cheats[0].kind, "game-genie");
+        assert!(!entry.cheats[0].enabled);
+    }
+
+    #[test]
     fn configured_cheatarium_refresh_is_offline_and_keeps_local_source() {
         use flate2::{Compression, GzBuilder};
         use starbyte_core::manifest::AssetConfig;

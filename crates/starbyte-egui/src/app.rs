@@ -89,6 +89,8 @@ fn gamepad_axis_binding(axis: Axis, before: f32, after: f32) -> Option<&'static 
         Axis::LeftStickY => ("LeftStickY+", "LeftStickY-"),
         Axis::RightStickX => ("RightStickX+", "RightStickX-"),
         Axis::RightStickY => ("RightStickY+", "RightStickY-"),
+        Axis::DPadX => ("DPadRight", "DPadLeft"),
+        Axis::DPadY => ("DPadUp", "DPadDown"),
         _ => return None,
     };
     if before < GAMEPAD_BIND_AXIS_THRESHOLD && after >= GAMEPAD_BIND_AXIS_THRESHOLD {
@@ -121,6 +123,8 @@ fn release_captured_axis(suppressed: &mut BTreeSet<String>, axis: Axis, value: f
         Axis::LeftStickY => &["LeftStickY+", "LeftStickY-", "DPadUp", "DPadDown"],
         Axis::RightStickX => &["RightStickX+", "RightStickX-"],
         Axis::RightStickY => &["RightStickY+", "RightStickY-"],
+        Axis::DPadX => &["DPadLeft", "DPadRight"],
+        Axis::DPadY => &["DPadUp", "DPadDown"],
         _ => &[],
     };
     for name in names {
@@ -298,6 +302,7 @@ pub struct StarbyteApp {
     queued_gamepad_presses: HashMap<GamepadId, BTreeSet<String>>,
     gamepad_sticks_by_id: HashMap<GamepadId, StickAxes>,
     gamepad_right_sticks_by_id: HashMap<GamepadId, StickAxes>,
+    gamepad_hat_axes_by_id: HashMap<GamepadId, StickAxes>,
     /// A newly captured input must be released before it can reach the game.
     captured_gamepad_inputs: HashMap<GamepadId, BTreeSet<String>>,
     pending_keyboard_bind: Option<String>,
@@ -437,6 +442,7 @@ impl StarbyteApp {
             queued_gamepad_presses: HashMap::new(),
             gamepad_sticks_by_id: HashMap::new(),
             gamepad_right_sticks_by_id: HashMap::new(),
+            gamepad_hat_axes_by_id: HashMap::new(),
             captured_gamepad_inputs: HashMap::new(),
             pending_keyboard_bind: None,
             pending_gamepad_bind: None,
@@ -838,6 +844,18 @@ impl StarbyteApp {
                             stick.y = value;
                             before
                         }
+                        Axis::DPadX => {
+                            let hat = self.gamepad_hat_axes_by_id.entry(event.id).or_default();
+                            let before = hat.x;
+                            hat.x = value;
+                            before
+                        }
+                        Axis::DPadY => {
+                            let hat = self.gamepad_hat_axes_by_id.entry(event.id).or_default();
+                            let before = hat.y;
+                            hat.y = value;
+                            before
+                        }
                         _ => continue,
                     };
                     if let Some(suppressed) = self.captured_gamepad_inputs.get_mut(&event.id) {
@@ -864,6 +882,7 @@ impl StarbyteApp {
                     self.queued_gamepad_presses.remove(&event.id);
                     self.gamepad_sticks_by_id.remove(&event.id);
                     self.gamepad_right_sticks_by_id.remove(&event.id);
+                    self.gamepad_hat_axes_by_id.remove(&event.id);
                     self.captured_gamepad_inputs.remove(&event.id);
                 }
                 _ => {}
@@ -882,6 +901,9 @@ impl StarbyteApp {
                 .entry(*id)
                 .or_default()
                 .extend(stick.axis_bindings("RightStick"));
+        }
+        for (id, hat) in &self.gamepad_hat_axes_by_id {
+            by_id.entry(*id).or_default().extend(hat.dpad_buttons());
         }
         self.gamepad_buttons_down =
             merged_gamepad_buttons_excluding(&by_id, &self.captured_gamepad_inputs);
@@ -1778,9 +1800,14 @@ impl StarbyteApp {
                         .get(&id)
                         .copied()
                         .unwrap_or_default();
+                    let hat = self
+                        .gamepad_hat_axes_by_id
+                        .get(&id)
+                        .copied()
+                        .unwrap_or_default();
                     ui.label(format!(
-                        "Left stick X {:+.2} Y {:+.2} | Right stick X {:+.2} Y {:+.2}",
-                        left.x, left.y, right.x, right.y
+                        "Left X {:+.2} Y {:+.2} | Right X {:+.2} Y {:+.2} | D-pad X {:+.2} Y {:+.2}",
+                        left.x, left.y, right.x, right.y, hat.x, hat.y
                     ));
                 }
             }
@@ -2850,6 +2877,14 @@ mod playback_tests {
             Some("RightStickY+")
         );
         assert_eq!(gamepad_axis_binding(Axis::LeftZ, 0.0, 1.0), None);
+        assert_eq!(
+            gamepad_axis_binding(Axis::DPadX, 0.0, -1.0),
+            Some("DPadLeft")
+        );
+        assert_eq!(
+            gamepad_axis_binding(Axis::DPadY, 0.0, 1.0),
+            Some("DPadUp")
+        );
     }
 
     #[test]
@@ -2961,6 +2996,11 @@ mod playback_tests {
         release_captured_axis(&mut suppressed, Axis::LeftStickX, 0.0);
         assert!(suppressed.is_empty());
         assert!(virtual_dpad_for_axis("RightStickX+").is_none());
+        let mut hat_capture = BTreeSet::from(["DPadLeft".to_owned()]);
+        release_captured_axis(&mut hat_capture, Axis::DPadX, -1.0);
+        assert!(hat_capture.contains("DPadLeft"));
+        release_captured_axis(&mut hat_capture, Axis::DPadX, 0.0);
+        assert!(hat_capture.is_empty());
     }
 
     #[test]

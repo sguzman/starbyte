@@ -153,6 +153,13 @@ struct FramePerformance {
     last_ms: f32,
     peak_ms: f32,
     slow_frames: u64,
+    /// UI wake scheduling delay, distinct from core emulation time.
+    last_wake_late_ms: f32,
+    peak_wake_late_ms: f32,
+    wakes_over_budget: u64,
+    /// CPU-side pixel copy and egui texture submission, not GPU presentation.
+    last_texture_ms: f32,
+    peak_texture_ms: f32,
 }
 
 impl FramePerformance {
@@ -169,6 +176,19 @@ impl FramePerformance {
         if elapsed > FRAME_INTERVAL {
             self.slow_frames += 1;
         }
+    }
+
+    fn record_wake_lateness(&mut self, late: Duration) {
+        self.last_wake_late_ms = late.as_secs_f32() * 1_000.0;
+        self.peak_wake_late_ms = self.peak_wake_late_ms.max(self.last_wake_late_ms);
+        if late > FRAME_INTERVAL {
+            self.wakes_over_budget = self.wakes_over_budget.saturating_add(1);
+        }
+    }
+
+    fn record_texture_upload(&mut self, elapsed: Duration) {
+        self.last_texture_ms = elapsed.as_secs_f32() * 1_000.0;
+        self.peak_texture_ms = self.peak_texture_ms.max(self.last_texture_ms);
     }
 }
 
@@ -1212,7 +1232,9 @@ impl StarbyteApp {
                         &self.session.emulator().audio_samples().samples,
                     );
                 }
+                let uploaded = Instant::now();
                 self.refresh_framebuffer(ctx);
+                self.frame_performance.record_texture_upload(uploaded.elapsed());
                 let pcm = &self.session.emulator().audio_samples().samples;
                 self.last_audio_pairs = pcm.len() / 2;
                 self.last_audio_nonzero_pairs = pcm
@@ -2360,8 +2382,15 @@ impl StarbyteApp {
         if self.show_performance_overlay && self.frame_performance.samples > 0 {
             let stats = self.frame_performance;
             let label = format!(
-                "Emulation {:.1} ms avg | {:.1} ms peak | {}/{} over budget",
-                stats.avg_ms, stats.peak_ms, stats.slow_frames, stats.samples,
+                "Emulation {:.1} ms avg / {:.1} ms peak | {} slow frames\nUI late {:.1} ms / peak {:.1} ms ({} missed frames)\nTexture CPU {:.1} ms / peak {:.1} ms",
+                stats.avg_ms,
+                stats.peak_ms,
+                stats.slow_frames,
+                stats.last_wake_late_ms,
+                stats.peak_wake_late_ms,
+                stats.wakes_over_budget,
+                stats.last_texture_ms,
+                stats.peak_texture_ms,
             );
             ui.painter().text(
                 rect.left_bottom() + egui::vec2(12.0, -12.0),
@@ -2438,6 +2467,17 @@ impl StarbyteApp {
                 self.frame_performance.peak_ms,
                 self.frame_performance.slow_frames,
                 self.frame_performance.samples,
+            ));
+            ui.label(format!(
+                "Late UI wake: {:.1} ms last, {:.1} ms peak; {} full-frame misses",
+                self.frame_performance.last_wake_late_ms,
+                self.frame_performance.peak_wake_late_ms,
+                self.frame_performance.wakes_over_budget
+            ));
+            ui.label(format!(
+                "CPU framebuffer/texture submission: {:.1} ms last, {:.1} ms peak",
+                self.frame_performance.last_texture_ms,
+                self.frame_performance.peak_texture_ms
             ));
         }
         ui.separator();
@@ -2935,7 +2975,10 @@ impl eframe::App for StarbyteApp {
 
         if self.is_playing && self.session.snapshot().has_rom {
             self.pending_step_frames = 0;
-            if self.frame_clock.take_due_frame(Instant::now()) {
+            let now = Instant::now();
+            let late_by = now.saturating_duration_since(self.frame_clock.next_frame_at);
+            if self.frame_clock.take_due_frame(now) {
+                self.frame_performance.record_wake_lateness(late_by);
                 self.run_frame(ctx);
             }
             if self.is_playing {

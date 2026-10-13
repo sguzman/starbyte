@@ -92,6 +92,9 @@ pub struct AudioOutput {
     producer_dropped_frames: Arc<AtomicU64>,
     /// Game buffers discarded as stale or superseded by the worker.
     worker_dropped_frames: Arc<AtomicU64>,
+    /// Times the Rodio sink was empty when the next game PCM buffer arrived.
+    /// A starvation indicator, not proof of a physically audible underrun.
+    sink_empty_on_pcm: Arc<AtomicU64>,
 }
 
 impl AudioOutput {
@@ -112,6 +115,8 @@ impl AudioOutput {
         let producer_dropped_frames = Arc::new(AtomicU64::new(0));
         let worker_dropped_frames = Arc::new(AtomicU64::new(0));
         let shared_worker_drops = Arc::clone(&worker_dropped_frames);
+        let sink_empty_on_pcm = Arc::new(AtomicU64::new(0));
+        let shared_sink_empty = Arc::clone(&sink_empty_on_pcm);
         // The GUI must not join this thread: the bounded channel owns its
         // lifecycle and disconnects when the last AudioOutput is dropped.
         let _audio_thread = thread::Builder::new()
@@ -126,6 +131,7 @@ impl AudioOutput {
                     shared_nonzero_frames,
                     shared_test_tones,
                     shared_worker_drops,
+                    shared_sink_empty,
                 )
             })
             .context("could not spawn background audio thread")?;
@@ -139,6 +145,7 @@ impl AudioOutput {
             test_tones_submitted,
             producer_dropped_frames,
             worker_dropped_frames,
+            sink_empty_on_pcm,
         })
     }
 
@@ -186,6 +193,12 @@ impl AudioOutput {
     /// Stale/superseded game buffers consumed but rejected by the worker.
     pub fn worker_dropped_frames(&self) -> u64 {
         self.worker_dropped_frames.load(Ordering::Acquire)
+    }
+
+    /// Empty-sink events observed immediately before an accepted game frame.
+    /// Distinct from producer queue overflow or stale-frame discards.
+    pub fn sink_empty_on_pcm(&self) -> u64 {
+        self.sink_empty_on_pcm.load(Ordering::Acquire)
     }
 
     /// Update the mixer level without opening an audio device or waiting
@@ -295,6 +308,24 @@ fn frame_is_fresh(queued_at: Instant, now: Instant) -> bool {
     now.saturating_duration_since(queued_at) <= MAX_FRAME_AGE
 }
 
+/// Keep mixer-continuity accounting independent of actual audio hardware.
+#[derive(Default)]
+struct PlaybackContinuity {
+    has_submitted_game_pcm: bool,
+}
+
+impl PlaybackContinuity {
+    fn reset(&mut self) {
+        self.has_submitted_game_pcm = false;
+    }
+
+    fn observe_game_pcm(&mut self, sink_empty: bool) -> bool {
+        let gap = self.has_submitted_game_pcm && sink_empty;
+        self.has_submitted_game_pcm = true;
+        gap
+    }
+}
+
 fn audio_worker(
     receiver: Receiver<AudioMessage>,
     generation: Arc<AtomicU64>,
@@ -304,11 +335,13 @@ fn audio_worker(
     submitted_nonzero_frames: Arc<AtomicU64>,
     test_tones_submitted: Arc<AtomicU64>,
     worker_dropped_frames: Arc<AtomicU64>,
+    sink_empty_on_pcm: Arc<AtomicU64>,
 ) {
     let mut device: Option<PlaybackDevice> = None;
     let mut retry_after: Option<Instant> = None;
     let mut active_generation = generation.load(Ordering::Acquire);
     let mut tone_until: Option<Instant> = None;
+    let mut continuity = PlaybackContinuity::default();
 
     for message in receiver {
         let newest_generation = generation.load(Ordering::Acquire);
@@ -317,6 +350,7 @@ fn audio_worker(
                 output.clear();
             }
             tone_until = None;
+            continuity.reset();
             active_generation = newest_generation;
         }
 
@@ -330,7 +364,10 @@ fn audio_worker(
                 generation,
                 queued_at,
             } => (generation, queued_at, speaker_test_tone(), true),
-            AudioMessage::Clear => continue,
+            AudioMessage::Clear => {
+                continuity.reset();
+                continue;
+            },
         };
         let now = Instant::now();
         if frame_generation != active_generation
@@ -382,9 +419,13 @@ fn audio_worker(
                     // emulation continue at full speed.
                     output.clear();
                     output.enqueue(&pcm, volume);
+                    continuity.reset();
                     tone_until = Some(Instant::now() + TEST_TONE_EXCLUSIVE);
                     test_tones_submitted.fetch_add(1, Ordering::Release);
                 } else {
+                    if continuity.observe_game_pcm(output.sink.empty()) {
+                        sink_empty_on_pcm.fetch_add(1, Ordering::Relaxed);
+                    }
                     output.enqueue(&pcm, volume);
                     submitted_frames.fetch_add(1, Ordering::Release);
                     if pcm.iter().any(|&sample| sample != 0) {
@@ -452,7 +493,7 @@ mod tests {
     };
 
     use super::{
-        AudioDeviceStatus, AudioMessage, AudioOutput, frame_is_fresh, normalize_volume,
+        AudioDeviceStatus, AudioMessage, AudioOutput, PlaybackContinuity, frame_is_fresh, normalize_volume,
         pcm16_stereo_to_float, retry_ready, speaker_test_tone,
     };
 
@@ -554,6 +595,7 @@ mod tests {
             test_tones_submitted: Arc::new(AtomicU64::new(0)),
             producer_dropped_frames: Arc::new(AtomicU64::new(0)),
             worker_dropped_frames: Arc::new(AtomicU64::new(0)),
+            sink_empty_on_pcm: Arc::new(AtomicU64::new(0)),
         };
         assert!(output.enqueue_live_test_tone());
         match receiver.try_recv().unwrap() {
@@ -578,6 +620,7 @@ mod tests {
             test_tones_submitted: Arc::new(AtomicU64::new(0)),
             producer_dropped_frames: Arc::new(AtomicU64::new(0)),
             worker_dropped_frames: Arc::new(AtomicU64::new(0)),
+            sink_empty_on_pcm: Arc::new(AtomicU64::new(0)),
         };
         output.enqueue(&[100, -100]);
         output.enqueue(&[100, -100]);
@@ -595,6 +638,21 @@ mod tests {
         assert!(frame_is_fresh(t0, t0 + Duration::from_millis(150)));
         assert!(!frame_is_fresh(t0, t0 + Duration::from_millis(151)));
         assert!(!frame_is_fresh(t0, t0 + Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn mixer_starvation_accounting_excludes_first_frame_and_intentional_clears() {
+        let mut continuity = PlaybackContinuity::default();
+        // The sink is necessarily empty before the first buffer.
+        assert!(!continuity.observe_game_pcm(true));
+        assert!(!continuity.observe_game_pcm(false));
+        // An empty sink on the next frame indicates a probable audio gap.
+        assert!(continuity.observe_game_pcm(true));
+        // A pause, new game, save restore or speaker tone deliberately clears
+        // audio; the next empty sink is not a gameplay underrun.
+        continuity.reset();
+        assert!(!continuity.observe_game_pcm(true));
+        assert!(continuity.observe_game_pcm(true));
     }
 
     #[test]

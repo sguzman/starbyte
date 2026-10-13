@@ -2826,7 +2826,9 @@ impl StarbyteApp {
 
 impl eframe::App for StarbyteApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        apply_theme(ctx, self.config.prefer_dark_mode);
+        // Theme is installed at construction and when the user changes it.
+        // Replacing egui visuals on every repaint invalidates unnecessary UI
+        // state during time-critical gameplay.
         let was_recording_binding = self.pending_keyboard_bind.is_some();
         self.capture_keyboard_binding(ctx);
         self.poll_gamepad_events(ctx.input(|input| input.focused));

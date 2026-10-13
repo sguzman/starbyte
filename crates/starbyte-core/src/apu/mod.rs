@@ -399,6 +399,7 @@ impl Apu {
             ));
         }
         self.host_clocked_spc_enabled = true;
+        self.dsp.set_hardware_key_on_timing(true);
         self.host_clocked_spc_phase = 0;
         self.host_clocked_spc_credit = 0;
         Ok(())
@@ -414,6 +415,7 @@ impl Apu {
     /// diagnostic snapshot into an ordinary desktop emulator session.
     pub fn disable_isolated_host_clocked_driver(&mut self) {
         self.host_clocked_spc_enabled = false;
+        self.dsp.set_hardware_key_on_timing(false);
         self.host_clocked_spc_phase = 0;
         self.host_clocked_spc_credit = 0;
     }

@@ -1305,6 +1305,12 @@ impl StarbyteApp {
                 .as_ref()
                 .map_or(0, AudioOutput::worker_dropped_frames),
         ));
+        ui.label(format!(
+            "Mixer empty before next game PCM: {} (possible playback gaps, not speaker proof)",
+            self.audio_output
+                .as_ref()
+                .map_or(0, AudioOutput::sink_empty_on_pcm),
+        ));
         ui.separator();
         ui.label("Independent OS speaker check (separate stream):");
         let speaker_test_running = matches!(&self.speaker_probe, SpeakerProbeState::Running(_));
@@ -2680,6 +2686,11 @@ impl StarbyteApp {
                 stats.last_texture_ms,
                 stats.peak_texture_ms,
             );
+            let gap_count = self
+                .audio_output
+                .as_ref()
+                .map_or(0, AudioOutput::sink_empty_on_pcm);
+            let label = format!("{label}\nMixer empty before PCM: {gap_count} possible gaps");
             ui.painter().text(
                 rect.left_bottom() + egui::vec2(12.0, -12.0),
                 egui::Align2::LEFT_BOTTOM,

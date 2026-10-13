@@ -421,7 +421,14 @@ impl Voice {
         if self.startup_delay > 0 {
             // A KON starts with five muted sample slots. Do not advance the
             // BRR source, pitch or envelope or raise ENDX during those slots.
-            self.startup_delay -= 1;
+            // A still-held KOFF/FLG reset must be able to silence a note
+            // before its first audible sample.
+            if self.releasing && self.envelope == 0 {
+                self.active = false;
+                self.startup_delay = 0;
+            } else {
+                self.startup_delay -= 1;
+            }
             return (0, false);
         }
 

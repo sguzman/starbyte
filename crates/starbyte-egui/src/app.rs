@@ -2062,11 +2062,15 @@ impl StarbyteApp {
     }
 
     fn effective_speed_percent(&self, ctx: &egui::Context) -> u16 {
+        // Do not call ctx.wants_keyboard_input() while holding an input read
+        // lock: egui nests another lock there and can deadlock native Wayland.
+        let text_focused = ctx.wants_keyboard_input();
+        let binding = self.pending_keyboard_bind.is_some() || self.pending_gamepad_bind.is_some();
         let holding_tab = ctx.input(|input| {
             tab_fast_forward_active(
                 input.focused,
-                ctx.wants_keyboard_input(),
-                self.pending_keyboard_bind.is_some() || self.pending_gamepad_bind.is_some(),
+                text_focused,
+                binding,
                 input.key_down(egui::Key::Tab),
             )
         });

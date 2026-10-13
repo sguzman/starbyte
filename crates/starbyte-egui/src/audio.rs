@@ -291,7 +291,9 @@ fn audio_worker(
             AudioMessage::Clear => continue,
         };
         let now = Instant::now();
-        if frame_generation != active_generation || !frame_is_fresh(queued_at, now) {
+        if frame_generation != active_generation
+            || (!is_test_tone && !frame_is_fresh(queued_at, now))
+        {
             continue;
         }
         if !is_test_tone && tone_until.is_some_and(|end| now < end) {

@@ -2238,8 +2238,8 @@ mod tests {
                     u32::MAX as u64,
                     u64::MAX,
                 ] {
-                    let numerator = u128::from(initial_phase)
-                        + u128::from(clocks) * u128::from(frequency);
+                    let numerator =
+                        u128::from(initial_phase) + u128::from(clocks) * u128::from(frequency);
                     let expected_count = numerator / u128::from(super::NTSC_MASTER_CLOCK_HZ);
                     let expected_phase =
                         (numerator % u128::from(super::NTSC_MASTER_CLOCK_HZ)) as u64;

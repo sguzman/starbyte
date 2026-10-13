@@ -17,6 +17,8 @@ use anyhow::{Context, Result};
 use rodio::{OutputStream, OutputStreamBuilder, Sink, buffer::SamplesBuffer};
 use tracing::warn;
 
+use crate::pitch::PitchStretch;
+
 const DSP_SAMPLE_RATE: u32 = 32_000;
 const CHANNELS: u16 = 2;
 /// A bounded producer backlog; excess frames are discarded, never blocked.
@@ -64,6 +66,8 @@ enum AudioMessage {
         pcm: Vec<i16>,
         /// Emulated game speed when the sound was synthesized.
         speed: f32,
+        /// Pitch multiplier independent of game tempo; 1.0 keeps SNES pitch.
+        pitch: f32,
     },
     /// Original generated sine burst, routed through the *same* Rodio stream
     /// and sink as real game PCM (unlike a separately opened speaker probe).
@@ -213,7 +217,7 @@ impl AudioOutput {
     /// Bounded try-send: full queues lose stale audio rather than blocking
     /// the UI or accumulating seconds of sound latency. Rodio follows the
     /// emulation rate and shifts pitch with the speed.
-    pub fn enqueue(&self, samples: &[i16], speed: f32) {
+    pub fn enqueue(&self, samples: &[i16], speed: f32, pitch: f32) {
         if samples.is_empty() || samples.len() % 2 != 0 {
             return;
         }
@@ -222,6 +226,7 @@ impl AudioOutput {
             queued_at: Instant::now(),
             pcm: samples.to_vec(),
             speed: normalize_playback_speed(speed),
+            pitch: normalize_pitch(pitch),
         }) {
             self.producer_dropped_frames.fetch_add(1, Ordering::Relaxed);
         }
@@ -281,10 +286,10 @@ impl PlaybackDevice {
         })
     }
 
-    fn enqueue(&self, samples: &[i16], volume: f32, speed: f32) {
-        let Some(pcm) = pcm16_stereo_to_float(samples) else {
+    fn enqueue(&self, pcm: Vec<f32>, volume: f32, pitch: f32) {
+        if pcm.is_empty() || pcm.len() % usize::from(CHANNELS) != 0 {
             return;
-        };
+        }
         // Skip old individual buffers without clearing the live sink.
         let excess = self
             .sink
@@ -295,7 +300,7 @@ impl PlaybackDevice {
         }
         self.sink.set_volume(volume);
         // Classic emulator tempo/pitch shift: 2x playback produces 2x pitch.
-        set_sink_playback_speed(&self.sink, speed);
+        set_sink_playback_speed(&self.sink, pitch);
         self.sink
             .append(SamplesBuffer::new(CHANNELS, DSP_SAMPLE_RATE, pcm));
         self.sink.play();
@@ -348,6 +353,7 @@ fn audio_worker(
     let mut active_generation = generation.load(Ordering::Acquire);
     let mut tone_until: Option<Instant> = None;
     let mut continuity = PlaybackContinuity::default();
+    let mut stretch = PitchStretch::default();
 
     for message in receiver {
         let newest_generation = generation.load(Ordering::Acquire);
@@ -357,22 +363,25 @@ fn audio_worker(
             }
             tone_until = None;
             continuity.reset();
+            stretch.reset();
             active_generation = newest_generation;
         }
 
-        let (frame_generation, queued_at, pcm, speed, is_test_tone) = match message {
+        let (frame_generation, queued_at, pcm, speed, pitch, is_test_tone) = match message {
             AudioMessage::Frame {
                 generation,
                 queued_at,
                 pcm,
                 speed,
-            } => (generation, queued_at, pcm, speed, false),
+                pitch,
+            } => (generation, queued_at, pcm, speed, pitch, false),
             AudioMessage::TestTone {
                 generation,
                 queued_at,
-            } => (generation, queued_at, speaker_test_tone(), 1.0, true),
+            } => (generation, queued_at, speaker_test_tone(), 1.0, 1.0, true),
             AudioMessage::Clear => {
                 continuity.reset();
+                stretch.reset();
                 continue;
             }
         };
@@ -413,6 +422,7 @@ fn audio_worker(
             if newest_generation != frame_generation {
                 output.clear();
                 active_generation = newest_generation;
+                stretch.reset();
                 if !is_test_tone {
                     worker_dropped_frames.fetch_add(1, Ordering::Relaxed);
                 }
@@ -425,18 +435,26 @@ fn audio_worker(
                     // check from frame-pruning while it plays. Video and
                     // emulation continue at full speed.
                     output.clear();
-                    output.enqueue(&pcm, volume, 1.0);
+                    output.enqueue(pcm16_stereo_to_float(&pcm).unwrap_or_default(), volume, 1.0);
                     continuity.reset();
+                    stretch.reset();
                     tone_until = Some(Instant::now() + TEST_TONE_EXCLUSIVE);
                     test_tones_submitted.fetch_add(1, Ordering::Release);
                 } else {
-                    if continuity.observe_game_pcm(output.sink.empty()) {
-                        sink_empty_on_pcm.fetch_add(1, Ordering::Relaxed);
-                    }
-                    output.enqueue(&pcm, volume, speed);
-                    submitted_frames.fetch_add(1, Ordering::Release);
-                    if pcm.iter().any(|&sample| sample != 0) {
-                        submitted_nonzero_frames.fetch_add(1, Ordering::Release);
+                    // Tempo and pitch are independent. WSOLA outputs fewer
+                    // frames for faster play, while Rodio applies only the
+                    // desired pitch multiplier to that output.
+                    let float_pcm = pcm16_stereo_to_float(&pcm).unwrap_or_default();
+                    let stretched = stretch.process(&float_pcm, speed / pitch);
+                    if !stretched.is_empty() {
+                        if continuity.observe_game_pcm(output.sink.empty()) {
+                            sink_empty_on_pcm.fetch_add(1, Ordering::Relaxed);
+                        }
+                        output.enqueue(stretched, volume, pitch);
+                        submitted_frames.fetch_add(1, Ordering::Release);
+                        if pcm.iter().any(|&sample| sample != 0) {
+                            submitted_nonzero_frames.fetch_add(1, Ordering::Release);
+                        }
                     }
                 }
             } else {
@@ -449,6 +467,15 @@ fn audio_worker(
 /// Set tempo and pitch together through Rodio's real sink control.
 fn set_sink_playback_speed(sink: &Sink, speed: f32) {
     sink.set_speed(normalize_playback_speed(speed));
+}
+
+/// Bound the independent pitch, preserving 1.0 as the default.
+fn normalize_pitch(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(0.5, 2.0)
+    } else {
+        1.0
+    }
 }
 
 /// Keep audio pitch/speed finite and within the supported UI's 0.5-4x range.
@@ -515,7 +542,8 @@ mod tests {
 
     use super::{
         AudioDeviceStatus, AudioMessage, AudioOutput, PlaybackContinuity, frame_is_fresh,
-        normalize_playback_speed, normalize_volume, pcm16_stereo_to_float, retry_ready,
+        normalize_pitch, normalize_playback_speed, normalize_volume, pcm16_stereo_to_float,
+        retry_ready,
         set_sink_playback_speed, speaker_test_tone,
     };
 
@@ -595,11 +623,11 @@ mod tests {
     fn queue_invalidation_does_not_need_a_working_speaker() {
         let output = AudioOutput::start().unwrap();
         let before = output.generation.load(Ordering::Acquire);
-        output.enqueue(&[0, 0], 1.0);
+        output.enqueue(&[0, 0], 1.0, 1.0);
         output.clear();
         let after = output.generation.load(Ordering::Acquire);
         assert_eq!(after, before + 1);
-        output.enqueue(&[0, 0], 1.0);
+        output.enqueue(&[0, 0], 1.0, 1.0);
     }
 
     #[test]
@@ -644,12 +672,12 @@ mod tests {
             worker_dropped_frames: Arc::new(AtomicU64::new(0)),
             sink_empty_on_pcm: Arc::new(AtomicU64::new(0)),
         };
-        output.enqueue(&[100, -100], 1.0);
-        output.enqueue(&[100, -100], 1.0);
+        output.enqueue(&[100, -100], 1.0, 1.0);
+        output.enqueue(&[100, -100], 1.0, 1.0);
         assert_eq!(output.producer_dropped_frames(), 1);
         assert_eq!(output.worker_dropped_frames(), 0);
         assert_eq!(output.submitted_frames(), 0);
-        output.enqueue(&[1], 1.0); // invalid PCM never enters the queue
+        output.enqueue(&[1], 1.0, 1.0); // invalid PCM never enters the queue
         assert_eq!(output.producer_dropped_frames(), 1);
     }
 
@@ -683,17 +711,19 @@ mod tests {
             sink_empty_on_pcm: Arc::new(AtomicU64::new(0)),
         };
         for speed in [0.5, 1.0, 2.0, 3.0, 4.0] {
-            output.enqueue(&[123, -123], speed);
+            output.enqueue(&[123, -123], speed, 1.0);
         }
         for speed in [0.5, 1.0, 2.0, 3.0, 4.0] {
             match receiver.try_recv().unwrap() {
                 AudioMessage::Frame {
                     pcm,
                     speed: received,
+                    pitch,
                     ..
                 } => {
                     assert_eq!(pcm, vec![123, -123]);
                     assert_eq!(received, speed);
+                    assert_eq!(pitch, 1.0);
                 }
                 _ => panic!("expected PCM frame with speed metadata"),
             }
@@ -702,6 +732,9 @@ mod tests {
         assert_eq!(normalize_playback_speed(0.0), 0.5);
         assert_eq!(normalize_playback_speed(12.0), 4.0);
         assert_eq!(normalize_playback_speed(f32::INFINITY), 1.0);
+        assert_eq!(normalize_pitch(2.5), 2.0);
+        assert_eq!(normalize_pitch(0.1), 0.5);
+        assert_eq!(normalize_pitch(f32::NAN), 1.0);
     }
 
     #[test]

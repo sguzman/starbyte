@@ -904,6 +904,23 @@ mod tests {
                 .iter()
                 .all(|&sample| sample == 0)
         );
+
+        // Identical guest APU execution must work in the sound-with-saves
+        // preview, not just in the previous read-only diagnostic mode.
+        session.load_rom_with_persistent_audio(&rom_path).unwrap();
+        session.run_frame().unwrap();
+        assert_eq!(session.sound_session_mode(), super::SoundSessionMode::Persistent);
+        assert!(session.emulator().isolated_apu_driver_probe_enabled());
+        assert!(
+            session
+                .emulator()
+                .audio_samples()
+                .samples
+                .iter()
+                .any(|&sample| sample > 1_000),
+            "sound-with-saves preview must synthesize the uploaded BRR driver"
+        );
+        assert!(session.save_ram_path().is_some());
     }
 
     #[test]

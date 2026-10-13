@@ -334,8 +334,9 @@ impl FrameClock {
             return 0;
         }
         let late = now.saturating_duration_since(self.next_frame_at);
-        let owed = 1 + usize::try_from(late.as_nanos() / interval.as_nanos())
-            .unwrap_or(usize::MAX);
+        let owed = usize::try_from(late.as_nanos() / interval.as_nanos())
+            .unwrap_or(usize::MAX)
+            .saturating_add(1);
         let frames = owed.min(limit);
         if owed > limit {
             self.next_frame_at = now + interval;
@@ -4158,6 +4159,8 @@ mod playback_tests {
 
     #[test]
     fn frame_clock_recovers_one_missed_frame_and_supports_fast_forward_bursts() {
+        use super::speed_frame_interval;
+
         let start = Instant::now();
         let mut clock = FrameClock::new(start);
         assert_eq!(clock.take_due_frames(start, FRAME_INTERVAL, 2), 1);

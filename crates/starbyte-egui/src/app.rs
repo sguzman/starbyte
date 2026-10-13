@@ -2125,6 +2125,14 @@ impl StarbyteApp {
                     self.frame_rate.reset();
                     self.frame_clock.reset(Instant::now());
                 }
+                // Keep Speed next to Pause, visible even on small/narrow screens
+                // where the rest of the horizontal toolbar wraps.
+                let active_speed = self.last_effective_speed_percent;
+                ui.menu_button(format!("Speed {}", speed_label(active_speed)), |ui| {
+                    self.draw_speed_controls(ui);
+                })
+                .response
+                .on_hover_text("Choose playback speed; hold Tab during gameplay to fast-forward.");
                 if ui.button("Quick Save (F5)").clicked() {
                     self.quick_save();
                 }
@@ -2147,10 +2155,7 @@ impl StarbyteApp {
                     SoundSessionMode::Persistent => "Sound (on)",
                 };
                 ui.menu_button(sound_label, |ui| self.draw_audio_controls(ui));
-                let active_speed = self.last_effective_speed_percent;
-                ui.menu_button(format!("Speed {}", speed_label(active_speed)), |ui| {
-                    self.draw_speed_controls(ui);
-                });
+
                 if ui.button("Cheats").clicked() {
                     self.show_cheats_window = !self.show_cheats_window;
                     self.cheat_search_focus_pending = self.show_cheats_window;

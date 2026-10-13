@@ -1473,12 +1473,17 @@ mod tests {
         let (mut dsp, mut ram) = looping_sample();
         dsp.set_hardware_key_on_timing(true);
         dsp.write_register(0x4c, 1, &ram);
-        for remaining in (1..=KEY_ON_EMPTY_SAMPLES).rev() {
-            assert_eq!(dsp.voices[0].startup_delay, remaining);
+        // In the experimental model, the KON command becomes active only
+        // when the next hardware DSP poll samples the pending latch.
+        assert!(!dsp.voices[0].active);
+        assert_eq!(dsp.pending_key_on, 1);
+        for tick in 0..KEY_ON_EMPTY_SAMPLES {
             assert_eq!(dsp.next_stereo_pair(&mut ram), (0, 0));
+            assert_eq!(dsp.voices[0].startup_delay, KEY_ON_EMPTY_SAMPLES - 1 - tick);
             assert_eq!(dsp.read_register(0x08), 0);
             assert_eq!(dsp.read_register(0x7c) & 1, 0);
         }
+        assert_eq!(dsp.pending_key_on, 0);
         assert_eq!(dsp.voices[0].startup_delay, 0);
         let mut direct = dsp.clone();
         let mut direct_ram = ram.clone();

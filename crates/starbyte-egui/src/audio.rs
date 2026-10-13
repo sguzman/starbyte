@@ -472,7 +472,7 @@ fn set_sink_playback_speed(sink: &Sink, speed: f32) {
 /// Bound the independent pitch, preserving 1.0 as the default.
 fn normalize_pitch(value: f32) -> f32 {
     if value.is_finite() {
-        value.clamp(0.5, 2.0)
+        value.clamp(0.5, 4.0)
     } else {
         1.0
     }
@@ -732,7 +732,8 @@ mod tests {
         assert_eq!(normalize_playback_speed(0.0), 0.5);
         assert_eq!(normalize_playback_speed(12.0), 4.0);
         assert_eq!(normalize_playback_speed(f32::INFINITY), 1.0);
-        assert_eq!(normalize_pitch(2.5), 2.0);
+        assert_eq!(normalize_pitch(2.5), 2.5);
+        assert_eq!(normalize_pitch(10.0), 4.0);
         assert_eq!(normalize_pitch(0.1), 0.5);
         assert_eq!(normalize_pitch(f32::NAN), 1.0);
     }

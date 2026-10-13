@@ -61,7 +61,7 @@ For any other library directory:
 cargo run -p starbyte-egui -- --rom-dir /path/to/your/roms
 ```
 
-Starbyte can also inspect a locally supplied [Cheatarium](https://github.com/sguzman/cheatarium) SNES index through its **read-only CLI**. This is candidate title search only; it does not match ROM hashes or enable codes. See [Cheatarium integration](docs/cheatarium.md).
+Starbyte can read a configured local [Cheatarium](https://github.com/sguzman/cheatarium) checkout via **Settings → Cheats**. The game cheat refresh uses its offline SNES index rather than downloading source codes when a local checkout is configured. Matches are unverified title candidates; simple decoded WRAM writes can be enabled manually, while Game Genie and other unsupported formats remain read-only. The CLI also supports read-only candidate searches, and no ROM hash/revision match is claimed. See [Cheatarium integration](docs/cheatarium.md).
 
 To check that the default Linux audio device accepts stereo output independently of game emulation, run the **opt-in synthetic speaker probe** (440 Hz, about 0.25 seconds; no ROM or firmware required):
 

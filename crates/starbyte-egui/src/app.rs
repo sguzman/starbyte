@@ -31,6 +31,12 @@ use starbyte_frontend::{
 // at 21,477,272 master clocks/second ≈ 60.0985 frames/second.
 // Pacing at a generic 60.0 Hz slowly desynchronizes eventual DSP audio.
 const FRAME_INTERVAL: Duration = Duration::from_nanos(16_639_357);
+/// Allow small catch-up bursts when Wayland wakes the UI a full frame late.
+/// Large stalls still resynchronize instead of blocking the compositor.
+const MAX_NORMAL_CATCHUP_FRAMES: usize = 2;
+const MAX_ACCELERATED_FRAMES: usize = 8;
+/// Request a repaint before the exact deadline to reduce scheduler overshoot.
+const FRAME_WAKE_HEADROOM: Duration = Duration::from_millis(2);
 // A bad game frame can run on the egui thread: return control to Wayland
 // with a diagnostic rather than freezing until the process is killed.
 const GUI_FRAME_TIMEOUT: Duration = Duration::from_millis(1_500);
@@ -319,6 +325,56 @@ impl FrameClock {
     fn time_until_next_frame(&self, now: Instant) -> Duration {
         self.next_frame_at.saturating_duration_since(now)
     }
+
+    /// Number of emulated frames owed at this wall-clock tick. Normal speed
+    /// can recover one missed frame; fast-forward runs multiple frames per UI
+    /// update. Never accumulate an unbounded catch-up backlog after a pause.
+    fn take_due_frames(&mut self, now: Instant, interval: Duration, limit: usize) -> usize {
+        if now < self.next_frame_at || limit == 0 {
+            return 0;
+        }
+        let late = now.saturating_duration_since(self.next_frame_at);
+        let owed = 1 + usize::try_from(late.as_nanos() / interval.as_nanos())
+            .unwrap_or(usize::MAX);
+        let frames = owed.min(limit);
+        if owed > limit {
+            self.next_frame_at = now + interval;
+        } else {
+            self.next_frame_at += interval * u32::try_from(frames).unwrap_or(u32::MAX);
+        }
+        frames
+    }
+}
+
+fn normalized_playback_speed(percent: u16) -> u16 {
+    match percent {
+        50 | 75 | 100 | 125 | 150 | 200 | 300 => percent,
+        _ => 100,
+    }
+}
+
+fn normalized_fast_forward_speed(percent: u16) -> u16 {
+    match percent {
+        200 | 300 | 400 => percent,
+        _ => 300,
+    }
+}
+
+fn speed_frame_interval(percent: u16) -> Duration {
+    Duration::from_nanos(16_639_357_u64 * 100 / u64::from(percent))
+}
+
+fn speed_label(percent: u16) -> String {
+    format!("{:.2}x", f32::from(percent) / 100.0)
+}
+
+fn tab_fast_forward_active(
+    window_focused: bool,
+    text_focused: bool,
+    editing_binding: bool,
+    tab_held: bool,
+) -> bool {
+    window_focused && !text_focused && !editing_binding && tab_held
 }
 
 /// Cumulative PCM evidence for an explicitly bounded native GUI smoke.
@@ -537,6 +593,8 @@ pub struct StarbyteApp {
     is_playing: bool,
     play_view: bool,
     frame_clock: FrameClock,
+    /// Last applied speed, used to reset pacing and flush old-speed audio.
+    last_effective_speed_percent: u16,
     frame_performance: FramePerformance,
     frame_rate: FrameRateMeter,
     last_frame_spike_log: Instant,
@@ -653,6 +711,7 @@ impl StarbyteApp {
             status_line
         };
         let audio_muted = config.audio.mute_on_startup;
+        let initial_speed = normalized_playback_speed(config.video.playback_speed_percent);
         let cheatarium_root_input = config
             .cheats
             .cheatarium_root
@@ -708,6 +767,7 @@ impl StarbyteApp {
             is_playing: start_playing,
             play_view: has_loaded_rom,
             frame_clock: FrameClock::new(Instant::now()),
+            last_effective_speed_percent: initial_speed,
             frame_performance: FramePerformance::default(),
             frame_rate: FrameRateMeter::default(),
             last_frame_spike_log: Instant::now(),
@@ -1566,7 +1626,7 @@ impl StarbyteApp {
         self.frame_rate.reset();
     }
 
-    fn run_frame(&mut self, ctx: &egui::Context) {
+    fn run_frame(&mut self, ctx: &egui::Context, play_audio: bool) {
         self.session
             .set_controller1(self.effective_controller_state(ctx));
         // Consume each short press once; held keys are sampled again from
@@ -1596,7 +1656,9 @@ impl StarbyteApp {
                 self.audio_nonzero_pairs_total = self
                     .audio_nonzero_pairs_total
                     .saturating_add(self.last_audio_nonzero_pairs as u64);
-                self.enqueue_current_audio();
+                if play_audio {
+                    self.enqueue_current_audio();
+                }
                 let timing = self.frame_performance;
                 let now = Instant::now();
                 if self.is_playing {
@@ -1961,6 +2023,53 @@ impl StarbyteApp {
         }
     }
 
+    fn draw_speed_controls(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Playback speed");
+        ui.label("Normal speed");
+        let mut changed = false;
+        for speed in [50, 75, 100, 125, 150, 200, 300] {
+            changed |= ui
+                .selectable_value(
+                    &mut self.config.video.playback_speed_percent,
+                    speed,
+                    speed_label(speed),
+                )
+                .changed();
+        }
+        ui.separator();
+        ui.label("Hold Tab for fast-forward");
+        for speed in [200, 300, 400] {
+            changed |= ui
+                .selectable_value(
+                    &mut self.config.video.fast_forward_speed_percent,
+                    speed,
+                    format!("Tab: {}", speed_label(speed)),
+                )
+                .changed();
+        }
+        ui.separator();
+        ui.small("At modified speeds, speaker audio is muted rather than played at the wrong pitch. It returns at 1x.");
+        if changed {
+            self.persist_config();
+        }
+    }
+
+    fn effective_speed_percent(&self, ctx: &egui::Context) -> u16 {
+        let holding_tab = ctx.input(|input| {
+            tab_fast_forward_active(
+                input.focused,
+                ctx.wants_keyboard_input(),
+                self.pending_keyboard_bind.is_some() || self.pending_gamepad_bind.is_some(),
+                input.key_down(egui::Key::Tab),
+            )
+        });
+        if holding_tab {
+            normalized_fast_forward_speed(self.config.video.fast_forward_speed_percent)
+        } else {
+            normalized_playback_speed(self.config.video.playback_speed_percent)
+        }
+    }
+
     fn draw_top_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, compact: bool) {
         ui.horizontal_wrapped(|ui| {
             if self.play_view {
@@ -2004,6 +2113,10 @@ impl StarbyteApp {
                     SoundSessionMode::Persistent => "Sound (on)",
                 };
                 ui.menu_button(sound_label, |ui| self.draw_audio_controls(ui));
+                let active_speed = self.last_effective_speed_percent;
+                ui.menu_button(format!("Speed {}", speed_label(active_speed)), |ui| {
+                    self.draw_speed_controls(ui);
+                });
                 if ui.button("Cheats").clicked() {
                     self.show_cheats_window = !self.show_cheats_window;
                     self.cheat_search_focus_pending = self.show_cheats_window;
@@ -3527,18 +3640,44 @@ impl eframe::App for StarbyteApp {
 
         if self.is_playing && self.session.snapshot().has_rom {
             self.pending_step_frames = 0;
+            let speed = self.effective_speed_percent(ctx);
+            if speed != self.last_effective_speed_percent {
+                // Never replay buffers synthesized for a different game speed.
+                if speed != 100 || self.last_effective_speed_percent != 100 {
+                    self.clear_audio();
+                }
+                self.last_effective_speed_percent = speed;
+                self.frame_clock.reset(Instant::now());
+                self.frame_rate.reset();
+            }
             let now = Instant::now();
+            let interval = speed_frame_interval(speed);
             let late_by = now.saturating_duration_since(self.frame_clock.next_frame_at);
-            if self.frame_clock.take_due_frame(now) {
+            let frame_limit = if speed == 100 {
+                MAX_NORMAL_CATCHUP_FRAMES
+            } else {
+                MAX_ACCELERATED_FRAMES
+            };
+            let due = self.frame_clock.take_due_frames(now, interval, frame_limit);
+            if due > 0 {
                 self.frame_performance.record_wake_lateness(late_by);
-                self.run_frame(ctx);
+                for _ in 0..due {
+                    if !self.is_playing {
+                        break;
+                    }
+                    self.run_frame(ctx, speed == 100);
+                }
             }
             if self.is_playing {
-                ctx.request_repaint_after(self.frame_clock.time_until_next_frame(Instant::now()));
+                ctx.request_repaint_after(
+                    self.frame_clock
+                        .time_until_next_frame(Instant::now())
+                        .saturating_sub(FRAME_WAKE_HEADROOM),
+                );
             }
         } else if self.pending_step_frames > 0 && self.session.snapshot().has_rom {
             let previous_frame = self.session.snapshot().frame;
-            self.run_frame(ctx);
+            self.run_frame(ctx, false);
             if self.session.snapshot().frame > previous_frame {
                 self.pending_step_frames -= 1;
             } else {
@@ -3999,6 +4138,39 @@ mod playback_tests {
         meter.record(start + Duration::from_secs(3));
         assert_eq!(meter.completed_at.len(), 1);
         assert_eq!(meter.fps(start + Duration::from_secs(3)), None);
+    }
+
+    #[test]
+    fn speed_frame_cadence_and_tab_focus_rules() {
+        use super::{
+            normalized_fast_forward_speed, normalized_playback_speed, speed_frame_interval,
+            tab_fast_forward_active,
+        };
+        assert_eq!(normalized_playback_speed(0), 100);
+        assert_eq!(normalized_fast_forward_speed(999), 300);
+        assert_eq!(speed_frame_interval(100), FRAME_INTERVAL);
+        assert_eq!(speed_frame_interval(200).as_nanos() * 2, 16_639_356);
+        assert!(tab_fast_forward_active(true, false, false, true));
+        assert!(!tab_fast_forward_active(true, true, false, true));
+        assert!(!tab_fast_forward_active(true, false, true, true));
+        assert!(!tab_fast_forward_active(false, false, false, true));
+    }
+
+    #[test]
+    fn frame_clock_recovers_one_missed_frame_and_supports_fast_forward_bursts() {
+        let start = Instant::now();
+        let mut clock = FrameClock::new(start);
+        assert_eq!(clock.take_due_frames(start, FRAME_INTERVAL, 2), 1);
+        assert_eq!(clock.take_due_frames(start, FRAME_INTERVAL, 2), 0);
+        assert_eq!(
+            clock.take_due_frames(start + FRAME_INTERVAL * 2, FRAME_INTERVAL, 2),
+            2
+        );
+        assert_eq!(clock.time_until_next_frame(start + FRAME_INTERVAL * 2), FRAME_INTERVAL);
+        assert_eq!(clock.take_due_frames(start + Duration::from_secs(5), FRAME_INTERVAL, 2), 2);
+        assert_eq!(clock.time_until_next_frame(start + Duration::from_secs(5)), FRAME_INTERVAL);
+        clock.reset(start);
+        assert_eq!(clock.take_due_frames(start + FRAME_INTERVAL, speed_frame_interval(400), 8), 5);
     }
 
     #[test]

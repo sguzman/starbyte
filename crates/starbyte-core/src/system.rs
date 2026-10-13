@@ -66,10 +66,25 @@ impl SystemBusObservability {
     }
 }
 
+/// One explicitly enabled SNES cartridge-ROM read substitution.
+///
+/// Unlike a RAM write, the replacement applies only when the requested CPU
+/// bus address resolves to a cartridge byte. The original ROM is untouched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RomReadPatch {
+    /// Full 24-bit SNES CPU bus address.
+    pub address: u32,
+    /// Byte to supply for matching cartridge reads.
+    pub value: u8,
+}
+
 /// CPU-visible system bus state needed for bootstrap correctness work.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemBus {
     cartridge: Option<Cartridge>,
+    /// Host-controlled cheats are never embedded in guest save-state files.
+    #[serde(skip)]
+    rom_read_patches: Vec<RomReadPatch>,
     coprocessor: Option<Coprocessor>,
     save_ram: Vec<u8>,
     wram: Vec<u8>,
@@ -109,6 +124,7 @@ impl Default for SystemBus {
     fn default() -> Self {
         Self {
             cartridge: None,
+            rom_read_patches: Vec::new(),
             coprocessor: None,
             save_ram: Vec::new(),
             wram: vec![0; WRAM_SIZE],
@@ -147,6 +163,16 @@ impl SystemBus {
         self.save_ram = vec![0; cartridge.header().ram_size_bytes()];
         self.coprocessor = Coprocessor::for_cartridge(&cartridge);
         self.cartridge = Some(cartridge);
+        self.rom_read_patches.clear();
+    }
+
+    /// Replace host-controlled ROM-read substitutions for the loaded cartridge.
+    ///
+    /// Later entries take precedence at the same CPU address. A cartridge
+    /// replacement clears these patches; a soft reset preserves them.
+    pub fn set_rom_read_patches(&mut self, patches: &[RomReadPatch]) {
+        self.rom_read_patches.clear();
+        self.rom_read_patches.extend_from_slice(patches);
     }
 
     /// Clear transient system state while keeping the current cartridge installed.
@@ -442,7 +468,11 @@ impl Bus for SystemBus {
             .as_ref()
             .and_then(|cartridge| cartridge.read_byte(address))
         {
-            value
+            self.rom_read_patches
+                .iter()
+                .rev()
+                .find(|patch| patch.address == address)
+                .map_or(value, |patch| patch.value)
         } else {
             self.open_bus
         };
@@ -1101,6 +1131,52 @@ mod tests {
             rom[base + 0x18] = 0x00;
         }
         Cartridge::from_bytes(rom, None).unwrap()
+    }
+
+    #[test]
+    fn rom_read_substitution_only_intercepts_cartridge_reads() {
+        let mut bus = SystemBus::default();
+        bus.install_cartridge(make_cart(Mapper::LoRom));
+        let original = bus.read(0x008000);
+        bus.write(0x7e0010, 0x27);
+        bus.set_rom_read_patches(&[
+            RomReadPatch { address: 0x008000, value: 0xA5 },
+            RomReadPatch { address: 0x7e0010, value: 0xFF },
+            RomReadPatch { address: 0x002100, value: 0xFF },
+        ]);
+        assert_eq!(bus.read(0x008000), 0xA5);
+        assert_eq!(bus.read(0x7e0010), 0x27);
+        // The cartridge's original bytes are never changed.
+        assert_eq!(bus.cartridge().unwrap().read_byte(0x008000), Some(original));
+        bus.set_rom_read_patches(&[]);
+        assert_eq!(bus.read(0x008000), original);
+    }
+
+    #[test]
+    fn rom_read_substitution_is_exact_and_isolated_by_cartridge() {
+        let mut bus = SystemBus::default();
+        bus.install_cartridge(make_cart(Mapper::LoRom));
+        bus.set_rom_read_patches(&[
+            RomReadPatch { address: 0x008000, value: 0xAA },
+            RomReadPatch { address: 0x008000, value: 0xBB },
+        ]);
+        assert_eq!(bus.read(0x008000), 0xBB);
+        assert_ne!(bus.read(0x808000), 0xBB);
+        bus.reset();
+        assert_eq!(bus.read(0x008000), 0xBB);
+        bus.install_cartridge(make_cart(Mapper::HiRom));
+        assert_ne!(bus.read(0x008000), 0xBB);
+    }
+
+    #[test]
+    fn rom_read_substitution_is_not_serialized_into_guest_state() {
+        let mut bus = SystemBus::default();
+        bus.install_cartridge(make_cart(Mapper::LoRom));
+        bus.set_rom_read_patches(&[RomReadPatch { address: 0x008000, value: 0xCA }]);
+        let serialized = serde_json::to_string(&bus).unwrap();
+        assert!(!serialized.contains("rom_read_patches"));
+        let mut restored: SystemBus = serde_json::from_str(&serialized).unwrap();
+        assert_ne!(restored.read(0x008000), 0xCA);
     }
 
     #[test]

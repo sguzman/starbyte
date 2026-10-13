@@ -752,7 +752,6 @@ impl StarbyteApp {
                         self.play_view = true;
                         self.frame_clock.reset(Instant::now());
                         self.frame_performance = FramePerformance::default();
-                self.frame_rate.reset();
                         self.frame_rate.reset();
                         self.pending_step_frames = 0;
                         self.last_sram_flush = Instant::now();

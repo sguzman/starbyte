@@ -85,6 +85,9 @@ pub struct SystemBus {
     /// Host-controlled cheats are never embedded in guest save-state files.
     #[serde(skip)]
     rom_read_patches: Vec<RomReadPatch>,
+    /// Number of real cartridge reads intercepted by the active patch set.
+    #[serde(skip)]
+    rom_read_patch_hits: u64,
     coprocessor: Option<Coprocessor>,
     save_ram: Vec<u8>,
     wram: Vec<u8>,
@@ -125,6 +128,7 @@ impl Default for SystemBus {
         Self {
             cartridge: None,
             rom_read_patches: Vec::new(),
+            rom_read_patch_hits: 0,
             coprocessor: None,
             save_ram: Vec::new(),
             wram: vec![0; WRAM_SIZE],
@@ -164,6 +168,7 @@ impl SystemBus {
         self.coprocessor = Coprocessor::for_cartridge(&cartridge);
         self.cartridge = Some(cartridge);
         self.rom_read_patches.clear();
+        self.rom_read_patch_hits = 0;
     }
 
     /// Replace host-controlled ROM-read substitutions for the loaded cartridge.
@@ -171,8 +176,20 @@ impl SystemBus {
     /// Later entries take precedence at the same CPU address. A cartridge
     /// replacement clears these patches; a soft reset preserves them.
     pub fn set_rom_read_patches(&mut self, patches: &[RomReadPatch]) {
-        self.rom_read_patches.clear();
-        self.rom_read_patches.extend_from_slice(patches);
+        if self.rom_read_patches != patches {
+            self.rom_read_patches.clear();
+            self.rom_read_patches.extend_from_slice(patches);
+            self.rom_read_patch_hits = 0;
+        }
+    }
+
+    /// Count of matching cartridge reads since the active ROM patch set changed.
+    ///
+    /// A hit proves the emulated system used the replacement byte; it does
+    /// not prove a visible gameplay effect or cartridge revision compatibility.
+    #[must_use]
+    pub const fn rom_read_patch_hits(&self) -> u64 {
+        self.rom_read_patch_hits
     }
 
     /// Clear transient system state while keeping the current cartridge installed.
@@ -468,11 +485,18 @@ impl Bus for SystemBus {
             .as_ref()
             .and_then(|cartridge| cartridge.read_byte(address))
         {
-            self.rom_read_patches
+            if let Some(patch) = self
+                .rom_read_patches
                 .iter()
                 .rev()
                 .find(|patch| patch.address == address)
-                .map_or(value, |patch| patch.value)
+                .copied()
+            {
+                self.rom_read_patch_hits = self.rom_read_patch_hits.saturating_add(1);
+                patch.value
+            } else {
+                value
+            }
         } else {
             self.open_bus
         };
@@ -1153,12 +1177,17 @@ mod tests {
                 value: 0xFF,
             },
         ]);
+        assert_eq!(bus.rom_read_patch_hits(), 0);
         assert_eq!(bus.read(0x008000), 0xA5);
+        assert_eq!(bus.rom_read_patch_hits(), 1);
         assert_eq!(bus.read(0x7e0010), 0x27);
+        assert_eq!(bus.rom_read_patch_hits(), 1);
         // The cartridge's original bytes are never changed.
         assert_eq!(bus.cartridge().unwrap().read_byte(0x008000), Some(original));
         bus.set_rom_read_patches(&[]);
+        assert_eq!(bus.rom_read_patch_hits(), 0);
         assert_eq!(bus.read(0x008000), original);
+        assert_eq!(bus.rom_read_patch_hits(), 0);
     }
 
     #[test]
@@ -1176,7 +1205,15 @@ mod tests {
             },
         ]);
         assert_eq!(bus.read(0x008000), 0xBB);
+        assert_eq!(bus.rom_read_patch_hits(), 1);
+        // Per-frame reapplication of the same set must preserve hit history.
+        bus.set_rom_read_patches(&[
+            RomReadPatch { address: 0x008000, value: 0xAA },
+            RomReadPatch { address: 0x008000, value: 0xBB },
+        ]);
+        assert_eq!(bus.rom_read_patch_hits(), 1);
         assert_ne!(bus.read(0x808000), 0xBB);
+        assert_eq!(bus.rom_read_patch_hits(), 1);
         bus.reset();
         assert_eq!(bus.read(0x008000), 0xBB);
         bus.install_cartridge(make_cart(Mapper::HiRom));

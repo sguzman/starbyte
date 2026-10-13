@@ -84,6 +84,15 @@ impl StickAxes {
 /// Capture stick direction only when an axis first crosses the intentional
 /// binding threshold; small drift must never create a binding.
 fn gamepad_axis_binding(axis: Axis, before: f32, after: f32) -> Option<&'static str> {
+    gamepad_axis_crossing(axis, before, after, GAMEPAD_BIND_AXIS_THRESHOLD)
+}
+
+fn gamepad_axis_crossing(
+    axis: Axis,
+    before: f32,
+    after: f32,
+    threshold: f32,
+) -> Option<&'static str> {
     let (positive, negative) = match axis {
         Axis::LeftStickX => ("LeftStickX+", "LeftStickX-"),
         Axis::LeftStickY => ("LeftStickY+", "LeftStickY-"),
@@ -93,9 +102,9 @@ fn gamepad_axis_binding(axis: Axis, before: f32, after: f32) -> Option<&'static 
         Axis::DPadY => ("DPadUp", "DPadDown"),
         _ => return None,
     };
-    if before < GAMEPAD_BIND_AXIS_THRESHOLD && after >= GAMEPAD_BIND_AXIS_THRESHOLD {
+    if before < threshold && after >= threshold {
         Some(positive)
-    } else if before > -GAMEPAD_BIND_AXIS_THRESHOLD && after <= -GAMEPAD_BIND_AXIS_THRESHOLD {
+    } else if before > -threshold && after <= -threshold {
         Some(negative)
     } else {
         None
@@ -784,6 +793,7 @@ impl StarbyteApp {
                         .or_default()
                         .insert(name.clone());
                     if self.pending_gamepad_bind.is_none()
+                        && self.pending_keyboard_bind.is_none()
                         && (self.is_playing || self.pending_step_frames > 0)
                         && matches!(
                             self.config.input.active_device,
@@ -860,6 +870,24 @@ impl StarbyteApp {
                     };
                     if let Some(suppressed) = self.captured_gamepad_inputs.get_mut(&event.id) {
                         release_captured_axis(suppressed, axis, value);
+                    }
+                    if self.pending_gamepad_bind.is_none()
+                        && self.pending_keyboard_bind.is_none()
+                        && (self.is_playing || self.pending_step_frames > 0)
+                        && matches!(
+                            self.config.input.active_device,
+                            InputDeviceMode::Auto | InputDeviceMode::Gamepad
+                        )
+                        && let Some(name) =
+                            gamepad_axis_crossing(axis, before, value, GAMEPAD_STICK_DEADZONE)
+                    {
+                        // A complete axis press/release within one UI poll must
+                        // still reach one emulation frame, including D-pad hats.
+                        let queued = self.queued_gamepad_presses.entry(event.id).or_default();
+                        queued.insert(name.to_owned());
+                        if let Some(dpad) = virtual_dpad_for_axis(name) {
+                            queued.insert(dpad.to_owned());
+                        }
                     }
                     if let Some(action) = self.pending_gamepad_bind.clone()
                         && new_binding.is_none()
@@ -2884,6 +2912,27 @@ mod playback_tests {
         assert_eq!(
             gamepad_axis_binding(Axis::DPadY, 0.0, 1.0),
             Some("DPadUp")
+        );
+    }
+
+    #[test]
+    fn short_stick_and_hat_taps_cross_gameplay_threshold() {
+        use super::{Axis, gamepad_axis_crossing, GAMEPAD_STICK_DEADZONE};
+        assert_eq!(
+            gamepad_axis_crossing(Axis::DPadX, 0.0, -1.0, GAMEPAD_STICK_DEADZONE),
+            Some("DPadLeft")
+        );
+        assert_eq!(
+            gamepad_axis_crossing(Axis::RightStickY, 0.2, 0.6, GAMEPAD_STICK_DEADZONE),
+            Some("RightStickY+")
+        );
+        assert_eq!(
+            gamepad_axis_crossing(Axis::LeftStickY, 0.6, 0.7, GAMEPAD_STICK_DEADZONE),
+            None
+        );
+        assert_eq!(
+            gamepad_axis_crossing(Axis::LeftStickX, 0.0, 0.2, GAMEPAD_STICK_DEADZONE),
+            None
         );
     }
 

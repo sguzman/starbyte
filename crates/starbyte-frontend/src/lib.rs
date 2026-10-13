@@ -521,6 +521,30 @@ mod tests {
     }
 
     #[test]
+    fn frontend_controller_state_reaches_emulated_snes_auto_joypad_read() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("joypad-integration.sfc");
+        let mut rom = synthetic_rom_bytes();
+        // LDA #$01 / STA $4200 / BRA * : enable SNES auto joypad polling.
+        rom[..7].copy_from_slice(&[0xA9, 0x01, 0x8D, 0x00, 0x42, 0x80, 0xFE]);
+        fs::write(&path, rom).unwrap();
+
+        let mut session = FrontendSession::new(Default::default()).unwrap();
+        session.load_rom(&path).unwrap();
+        let pressed = ControllerState {
+            start: true,
+            right: true,
+            ..ControllerState::default()
+        };
+        session.set_controller1(pressed);
+        session.run_frames(3).unwrap();
+        let (host, latched, busy) = session.emulator().joypad_status();
+        assert_eq!(host, pressed.to_bits());
+        assert_eq!(latched, pressed.to_bits());
+        assert!(!busy);
+    }
+
+    #[test]
     fn session_runs_frames_without_frontend_specific_state() {
         let temp_dir = tempdir().unwrap();
         let rom_path = temp_dir.path().join("frontend-test.sfc");

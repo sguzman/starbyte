@@ -157,7 +157,7 @@ fn handle_command(
         }
         WorkerCommandKind::RefreshMetadata => {
             let count = service.refresh_metadata_index()?;
-            service.save_config()?;
+            // The UI owns mutable settings. Workers only publish cache results.
             WorkerEvent::SnapshotReady {
                 job_id,
                 snapshot: service.snapshot(filter)?,
@@ -176,7 +176,7 @@ fn handle_command(
                 installed_only: true,
                 ..LibraryTarget::default()
             })?;
-            service.save_config()?;
+            // The UI owns mutable settings. Workers only publish cache results.
             WorkerEvent::SnapshotReady {
                 job_id,
                 // Artwork refresh is about the user's owned/local collection.
@@ -194,7 +194,7 @@ fn handle_command(
         }
         WorkerCommandKind::RefreshCovers { target } => {
             let count = service.refresh_covers(&target)?;
-            service.save_config()?;
+            // The UI owns mutable settings. Workers only publish cache results.
             WorkerEvent::SnapshotReady {
                 job_id,
                 snapshot: service.snapshot(filter)?,
@@ -204,7 +204,7 @@ fn handle_command(
         }
         WorkerCommandKind::RefreshCheats { target } => {
             let count = service.refresh_cheats(&target)?;
-            service.save_config()?;
+            // The UI owns mutable settings. Workers only publish cache results.
             WorkerEvent::SnapshotReady {
                 job_id,
                 snapshot: service.snapshot(filter)?,
@@ -214,7 +214,7 @@ fn handle_command(
         }
         WorkerCommandKind::RefreshAll => {
             let summary = service.refresh_all(&LibraryTarget::default())?;
-            service.save_config()?;
+            // The UI owns mutable settings. Workers only publish cache results.
             WorkerEvent::SnapshotReady {
                 job_id,
                 snapshot: service.snapshot(filter)?,

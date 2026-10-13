@@ -7,6 +7,7 @@ save-states, ROMs, or the Starbyte config. ROM files are not uploaded anywhere.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import hashlib
 import json
 import os
@@ -108,11 +109,90 @@ def summarize(rows: list[dict], report: dict, frames: int) -> dict:
     }
 
 
+def trace_busy_wait(trace_file: Path) -> dict:
+    """Summarize hot guest PCs and MMIO reads without printing ROM instructions."""
+    hot_pc: Counter[str] = Counter()
+    apu_reads: Counter[str] = Counter()
+    apu_values: Counter[str] = Counter()
+    instructions = 0
+    for line in trace_file.open(encoding="utf-8"):
+        entry = json.loads(line)
+        before = entry.get("before", {})
+        if "pbr" not in before or "pc" not in before:
+            continue
+        instructions += 1
+        hot_pc[f"{before['pbr']:02X}:{before['pc']:04X}"] += 1
+        for event in entry.get("bus_events", []):
+            if event.get("access") != "Read":
+                continue
+            address = event.get("address", -1)
+            if address < 0 or address & 0xFFFF not in (0x2140, 0x2141, 0x2142, 0x2143):
+                continue
+            port = f"${address & 0xFFFF:04X}"
+            apu_reads[port] += 1
+            apu_values[f"{port}={event.get('value')}"] += 1
+    return {
+        "instructions": instructions,
+        "hottest_pcs": hot_pc.most_common(8),
+        "apu_reads": dict(apu_reads),
+        "apu_read_values": dict(apu_values.most_common(12)),
+    }
+
+
+def run_driver_comparison(args: argparse.Namespace) -> int:
+    """Run real uploaded SPC code and contrast results with baseline shim."""
+    run_dir = args.out / "spc-driver"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    report_path = run_dir / "run-report.json"
+    history_path = run_dir / "frame-history.jsonl"
+    # CPU/SPC execution can be more expensive than the compatibility shim.
+    # 360 frames covers the frame-90 stall while bounding time and log size.
+    frames = min(args.frames, 360)
+    cmd = [
+        str(args.binary), "run", str(args.rom),
+        "--frames", str(frames), "--no-save-ram",
+        "--apu-upload-probe", "--apu-execute-driver",
+        "--report-json", str(report_path), "--frame-log", str(history_path),
+    ]
+    print(f"=== REAL SPC DRIVER COMPARISON ({frames} frames) ===", flush=True)
+    result = run_command(cmd, quiet=True)
+    if not report_path.is_file() or not history_path.is_file():
+        return result.returncode or 1
+    data = json.loads(report_path.read_text(encoding="utf-8"))
+    rows = [
+        json.loads(line)
+        for line in history_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    details = summarize(rows, data, frames)
+    print(json.dumps({
+        "completed_frames": details["completed_frames"],
+        "first_nonblack_frame": details["first_nonblack_frame"],
+        "first_display_enabled_frame": details["first_display_enabled_frame"],
+        "failure": data.get("failure"),
+        "apu_upload_timeline": data.get("apu_upload_timeline"),
+        "apu_io_activity": data.get("apu_io_activity"),
+        "ppu_write_totals": data.get("ppu_write_activity", {}).get("total_writes"),
+        "audio_run": data.get("audio_run"),
+        "selected_milestones": [
+            row for row in details["milestones"] if row["frame"] in (1, 30, 60, 90, 120, 180, 240, 360)
+        ],
+    }, indent=2))
+    (run_dir / "summary.json").write_text(
+        json.dumps(details, indent=2) + "\n", encoding="utf-8"
+    )
+    return result.returncode
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rom", type=Path, default=DEFAULT_ROM)
     parser.add_argument("--binary", type=Path, default=Path("./target/release/starbyte"))
     parser.add_argument("--frames", type=int, default=1200)
+    parser.add_argument("--compare-apu", action="store_true",
+                        help="compare normal bootstrap with real uploaded SPC driver")
+    parser.add_argument("--trace-stall-frame", type=int, default=None,
+                        help="trace one normal-mode frame of the suspected APU busy-wait")
     parser.add_argument(
         "--out", type=Path, default=Path("/tmp/starbyte-chrono-usa/boot-probe")
     )
@@ -123,6 +203,8 @@ def main() -> int:
         parser.error(f"Starbyte CLI binary not found: {args.binary}")
     if not (1 <= args.frames <= 3000):
         parser.error("frames must be in range 1..3000")
+    if args.trace_stall_frame is not None and not (1 <= args.trace_stall_frame <= args.frames):
+        parser.error("trace-stall-frame must be in range 1..frames")
 
     args.out.mkdir(parents=True, exist_ok=True)
     print("=== ROM IDENTIFICATION (local, never uploaded) ===")
@@ -143,11 +225,15 @@ def main() -> int:
     report = args.out / "run-report.json"
     frame_log = args.out / "frame-history.jsonl"
     print(f"=== READ-ONLY BOOT PROBE ({args.frames} frames) ===", flush=True)
-    result = run_command([
+    cmd = [
         str(args.binary), "run", str(args.rom),
         "--frames", str(args.frames), "--no-save-ram",
         "--report-json", str(report), "--frame-log", str(frame_log),
-    ], quiet=True)
+    ]
+    trace_path = args.out / "stall-frame-trace.jsonl"
+    if args.trace_stall_frame is not None:
+        cmd += ["--trace-frame", str(args.trace_stall_frame), "--trace-out", str(trace_path)]
+    result = run_command(cmd, quiet=True)
     if not report.is_file() or not frame_log.is_file():
         print("Boot report missing; inspect stderr above.", file=sys.stderr)
         return result.returncode or 1
@@ -163,8 +249,19 @@ def main() -> int:
         json.dumps(digest, indent=2) + "\n", encoding="utf-8"
     )
     print(json.dumps(digest, indent=2))
+    if args.trace_stall_frame is not None and trace_path.is_file():
+        print("=== BUSY-WAIT TRACE (counts, no ROM bytes) ===")
+        trace_summary = trace_busy_wait(trace_path)
+        print(json.dumps(trace_summary, indent=2))
+        (args.out / "stall-trace-summary.json").write_text(
+            json.dumps(trace_summary, indent=2) + "\n", encoding="utf-8"
+        )
+    if args.compare_apu:
+        comparison_result = run_driver_comparison(args)
+    else:
+        comparison_result = 0
     print(f"Local detailed reports: {args.out}")
-    return result.returncode
+    return result.returncode or comparison_result
 
 
 if __name__ == "__main__":

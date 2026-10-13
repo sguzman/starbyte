@@ -1938,7 +1938,8 @@ mod tests {
         assert_eq!(bus.read(0x804212) & 0x40, 0x40);
         assert_eq!(bus.read(0x004212) & 0x80, 0);
         bus.advance_master_clocks(
-            u64::from(DOTS_PER_SCANLINE) * u64::from(crate::timing::VBLANK_START_SCANLINE)
+            u64::from(DOTS_PER_SCANLINE)
+                * u64::from(crate::timing::VBLANK_START_SCANLINE)
                 * MASTER_CLOCKS_PER_DOT,
         );
         assert!(bus.timing().in_vblank());

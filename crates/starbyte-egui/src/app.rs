@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     path::{Path, PathBuf},
     process::Command,
+    sync::mpsc::{self, Receiver, TryRecvError},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -152,6 +153,32 @@ fn frame_spike_reportable(stats: FramePerformance) -> bool {
 
 fn is_compact_layout(width: f32, height: f32) -> bool {
     width < COMPACT_LAYOUT_WIDTH || height < 640.0
+}
+
+/// A separate, bounded OS sound check; game audio and saved progress are never
+/// touched. Keep the result until another explicit speaker test replaces it.
+enum SpeakerProbeState {
+    Idle,
+    Running(Receiver<std::result::Result<(), String>>),
+    Finished(std::result::Result<(), String>),
+}
+
+impl SpeakerProbeState {
+    /// A polling receive must never block an egui frame on audio hardware.
+    fn poll(&mut self) -> bool {
+        let Self::Running(receiver) = self else {
+            return false;
+        };
+        let result = match receiver.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return false,
+            Err(TryRecvError::Disconnected) => {
+                Err("Speaker test ended without reporting its result".to_owned())
+            }
+        };
+        *self = Self::Finished(result);
+        true
+    }
 }
 
 /// Track real emulation-frame runtime, excluding texture uploads/UI rendering.
@@ -312,6 +339,7 @@ pub struct StarbyteApp {
     cache_root: PathBuf,
     session: FrontendSession,
     audio_output: Option<AudioOutput>,
+    speaker_probe: SpeakerProbeState,
     /// Session mute defaults from persisted startup preference, then follows
     /// the live in-game Sound menu without rewriting that preference.
     audio_muted: bool,
@@ -473,6 +501,7 @@ impl StarbyteApp {
             cache_root,
             session,
             audio_output: None,
+            speaker_probe: SpeakerProbeState::Idle,
             audio_muted,
             confirm_experimental_audio: false,
             last_audio_pairs: 0,
@@ -1137,19 +1166,52 @@ impl StarbyteApp {
                 .as_ref()
                 .map_or("not attempted", |output| output.device_status().label())
         ));
-        if ui.button("Test speakers (440 Hz)").clicked() {
-            let result = std::thread::Builder::new()
+        let speaker_test_running = matches!(&self.speaker_probe, SpeakerProbeState::Running(_));
+        if ui
+            .add_enabled(
+                !speaker_test_running,
+                egui::Button::new("Test speakers (440 Hz)"),
+            )
+            .clicked()
+        {
+            let (sender, receiver) = mpsc::channel();
+            let started = std::thread::Builder::new()
                 .name("starbyte-speaker-probe".to_owned())
-                .spawn(|| {
-                    if let Err(error) = AudioOutput::test_speakers() {
-                        warn!("speaker probe failed: {error}");
-                    }
+                .spawn(move || {
+                    let result = AudioOutput::test_speakers().map_err(|error| error.to_string());
+                    let _ = sender.send(result);
                 });
-            self.status_line = if result.is_ok() {
-                "Speaker probe started; check your speakers (not a game-sound test).".to_owned()
-            } else {
-                "Could not start the speaker probe thread.".to_owned()
+            self.speaker_probe = match started {
+                Ok(_) => SpeakerProbeState::Running(receiver),
+                Err(error) => SpeakerProbeState::Finished(Err(format!(
+                    "Could not start speaker test: {error}"
+                ))),
             };
+        }
+        match &self.speaker_probe {
+            SpeakerProbeState::Idle => {}
+            SpeakerProbeState::Running(_) => {
+                ui.label("Testing the default OS sound device...");
+            }
+            SpeakerProbeState::Finished(Ok(())) => {
+                ui.label("Speaker test completed without an OS error. Only listening can confirm audibility.");
+            }
+            SpeakerProbeState::Finished(Err(error)) => {
+                ui.colored_label(egui::Color32::RED, format!("Speaker test failed: {error}"));
+            }
+        }
+        if isolated {
+            if let Some(upload) = self.session.emulator().isolated_apu_upload() {
+                ui.label(format!("Sound program uploaded: {} bytes", upload.bytes_written()));
+            }
+            if let Some(status) = self.session.emulator().isolated_apu_spc700_status() {
+                ui.label(format!(
+                    "SPC700: {} instructions, PC ${:04X}, {:?}",
+                    status.instructions, status.pc, status.halt_state
+                ));
+            } else {
+                ui.label("SPC700: waiting for the game's sound-program handoff");
+            }
         }
         if isolated {
             ui.label("This test does not read or write your normal save progress.");
@@ -2859,6 +2921,13 @@ impl eframe::App for StarbyteApp {
         self.capture_keyboard_binding(ctx);
         self.poll_gamepad_events(ctx.input(|input| input.focused));
         self.poll_worker_events(ctx);
+        if self.speaker_probe.poll() {
+            if let SpeakerProbeState::Finished(Err(error)) = &self.speaker_probe {
+                warn!("speaker test failed: {error}");
+            }
+        } else if matches!(&self.speaker_probe, SpeakerProbeState::Running(_)) {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
 
         // Drop a local ROM from the file manager to open it immediately.
         // Untrusted formats are validated by the normal cartridge loader;
@@ -3097,7 +3166,31 @@ mod playback_tests {
         FRAME_INTERVAL, FrameClock, FramePerformance, NativeSmokeAudioMetrics, Vec2,
         audible_output_volume, egui, fit_game_size, frame_spike_reportable, is_compact_layout,
         merged_gamepad_buttons, pressed_button_labels, record_recent_rom, write_png_screenshot,
+        SpeakerProbeState,
     };
+
+    #[test]
+    fn speaker_probe_result_is_nonblocking_and_survives_until_retested() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut probe = SpeakerProbeState::Running(receiver);
+        assert!(!probe.poll());
+        sender.send(Ok(())).unwrap();
+        assert!(probe.poll());
+        assert!(matches!(probe, SpeakerProbeState::Finished(Ok(()))));
+        assert!(!probe.poll());
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut failed = SpeakerProbeState::Running(receiver);
+        sender.send(Err("no default audio device".to_owned())).unwrap();
+        assert!(failed.poll());
+        assert!(matches!(failed, SpeakerProbeState::Finished(Err(_))));
+
+        let (sender, receiver) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
+        drop(sender);
+        let mut disconnected = SpeakerProbeState::Running(receiver);
+        assert!(disconnected.poll());
+        assert!(matches!(disconnected, SpeakerProbeState::Finished(Err(_))));
+    }
 
     #[test]
     fn audio_settings_gate_actual_speaker_output_without_muting_dsp_emulation() {

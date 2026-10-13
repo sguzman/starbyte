@@ -131,6 +131,23 @@ impl Default for LibraryViewMode {
     }
 }
 
+/// How the audio pitch changes independently of the game's playback tempo.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioPitchMode {
+    /// Preserve the original SNES soundtrack pitch while changing tempo.
+    #[default]
+    Preserve,
+    /// Classic varispeed: make the soundtrack higher/lower with game speed.
+    FollowSpeed,
+    /// Use the independent pitch setting regardless of game speed.
+    Custom,
+}
+
+const fn default_audio_pitch_percent() -> u16 {
+    100
+}
+
 /// Persistent audio options for frontend shells.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioSettings {
@@ -142,6 +159,12 @@ pub struct AudioSettings {
     pub sample_rate_hz: u32,
     /// Whether audio should be muted on startup.
     pub mute_on_startup: bool,
+    /// How pitch reacts to speed changes. Existing settings default to Preserve.
+    #[serde(default)]
+    pub pitch_mode: AudioPitchMode,
+    /// Independent pitch as a percentage, when pitch_mode is Custom.
+    #[serde(default = "default_audio_pitch_percent")]
+    pub pitch_percent: u16,
 }
 
 impl Default for AudioSettings {
@@ -151,6 +174,8 @@ impl Default for AudioSettings {
             volume: 1.0,
             sample_rate_hz: 48_000,
             mute_on_startup: false,
+            pitch_mode: AudioPitchMode::default(),
+            pitch_percent: default_audio_pitch_percent(),
         }
     }
 }
@@ -812,6 +837,25 @@ mod tests {
             toml::from_str("[cheats]\nshow_cheat_badges = true\n").unwrap();
         assert!(config.cheats.cheatarium_root.is_none());
         assert!(config.cheats.cheatarium_snes_index().is_none());
+    }
+
+    #[test]
+    fn audio_pitch_controls_preserve_old_config_and_roundtrip() {
+        use super::AudioPitchMode;
+
+        let old: super::RuntimeConfig = toml::from_str(
+            "[audio]\nenabled = true\nvolume = 1.0\nsample_rate_hz = 48000\nmute_on_startup = false\n",
+        )
+        .unwrap();
+        assert_eq!(old.audio.pitch_mode, AudioPitchMode::Preserve);
+        assert_eq!(old.audio.pitch_percent, 100);
+        let mut custom = old;
+        custom.audio.pitch_mode = AudioPitchMode::Custom;
+        custom.audio.pitch_percent = 85;
+        let reloaded: super::RuntimeConfig =
+            toml::from_str(&toml::to_string(&custom).unwrap()).unwrap();
+        assert_eq!(reloaded.audio.pitch_mode, AudioPitchMode::Custom);
+        assert_eq!(reloaded.audio.pitch_percent, 85);
     }
 
     #[test]

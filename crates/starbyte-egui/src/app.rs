@@ -2909,10 +2909,7 @@ mod playback_tests {
             gamepad_axis_binding(Axis::DPadX, 0.0, -1.0),
             Some("DPadLeft")
         );
-        assert_eq!(
-            gamepad_axis_binding(Axis::DPadY, 0.0, 1.0),
-            Some("DPadUp")
-        );
+        assert_eq!(gamepad_axis_binding(Axis::DPadY, 0.0, 1.0), Some("DPadUp"));
     }
 
     #[test]

@@ -910,10 +910,13 @@ mod tests {
             enabled: true,
         };
         assert_eq!(session.set_active_cheats(&[cheat.clone()]), 1);
+        assert_eq!(session.rom_cheat_read_hits(), 0);
         assert_eq!(session.host_read_u8(0x009E25), 0x00);
+        assert_eq!(session.rom_cheat_read_hits(), 1);
         assert_eq!(session.host_read_u8(0x809E25), 0x64);
         assert_eq!(session.emulator().cartridge().unwrap().rom()[0x1E25], 0x64);
         session.run_frame().unwrap();
+        assert!(session.rom_cheat_read_hits() > 1);
         assert_eq!(session.host_read_u8(0x7E0010), 0x00);
 
         // Both restore paths keep the host's chosen cheats, not the saved game's.
@@ -927,7 +930,9 @@ mod tests {
 
         cheat.enabled = false;
         assert_eq!(session.set_active_cheats(&[cheat]), 0);
+        assert_eq!(session.rom_cheat_read_hits(), 0);
         assert_eq!(session.host_read_u8(0x009E25), 0x64);
+        assert_eq!(session.rom_cheat_read_hits(), 0);
         // A clean unpatched replay must execute the same CPU program but
         // store the actual cartridge byte, not the former Game Genie value.
         session.load_rom(&rom_path).unwrap();

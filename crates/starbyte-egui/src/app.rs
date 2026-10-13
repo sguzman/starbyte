@@ -591,6 +591,27 @@ impl StarbyteApp {
                     self.persist_config();
                     self.library_snapshot = snapshot;
                     self.failed_cover_ids.clear();
+                    // A ROM opened directly from a ZIP was not necessarily
+                    // indexed when it first loaded. Associate it after the
+                    // asynchronous library scan, then apply matching cheats.
+                    if self.loaded_game_id.is_none()
+                        && let Some(loaded_path) = self.session.loaded_rom_path()
+                    {
+                        let recent = self.config.library.recent_roms.first();
+                        self.loaded_game_id = self
+                            .library_snapshot
+                            .entries
+                            .iter()
+                            .find(|entry| {
+                                entry.local.as_ref().is_some_and(|local| {
+                                    recent.is_some_and(|path| path == &local.rom_path)
+                                        || local.rom_path == loaded_path
+                                        || local.extracted_cache_path.as_deref()
+                                            == Some(loaded_path)
+                                })
+                            })
+                            .map(|entry| entry.game_id.clone());
+                    }
                     self.update_snapshot_cheat_flags();
                     self.sync_loaded_game_cheats();
                     self.update_job(job_id, "Library", "done", &status);
@@ -1140,6 +1161,30 @@ impl StarbyteApp {
                     let _ = self.session.set_active_cheats(&entry.cheats);
                 }
                 self.remember_recent_rom(path);
+                if self.loaded_game_id.is_none() {
+                    // Directly opened ZIPs and ROMs must become library games
+                    // before local Cheatarium codes can be matched to them.
+                    if let Some(parent) = path.parent()
+                        && !self.config.library.rom_dirs.contains(&parent.to_path_buf())
+                    {
+                        self.config.library.rom_dirs.push(parent.to_path_buf());
+                        self.persist_config();
+                    }
+                    self.queue_job(WorkerCommandKind::RefreshSnapshot);
+                    if self
+                        .config
+                        .cheats
+                        .cheatarium_snes_index()
+                        .is_some_and(|index| index.is_file())
+                    {
+                        self.queue_job(WorkerCommandKind::RefreshCheats {
+                            target: LibraryTarget {
+                                installed_only: true,
+                                ..LibraryTarget::default()
+                            },
+                        });
+                    }
+                }
                 if let Err(error) = self.session.run_frame_with_timeout(GUI_FRAME_TIMEOUT) {
                     self.record_playback_error(&error.to_string());
                     self.play_view = true;

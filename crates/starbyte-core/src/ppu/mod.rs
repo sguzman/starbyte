@@ -1229,7 +1229,7 @@ mod tests {
         assert_eq!(ordinary.pixels(), scanline.pixels());
     }
 
-    use super::{FrameBuffer, Ppu};
+    use super::{FrameBuffer, Ppu, SCREEN_WIDTH};
 
     fn write_color(ppu: &mut Ppu, slot: u8, color: u16) {
         let [low, high] = color.to_le_bytes();

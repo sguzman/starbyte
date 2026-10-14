@@ -142,7 +142,8 @@ pub struct SystemBus {
     #[serde(skip)]
     visible_ppu_snapshot: Option<Ppu>,
     /// In-progress raster pixels, generated with *live* PPU state at each
-    /// completed scanline. Only used for frames that begin in Mode 1.
+    /// completed scanline. Enabled for Modes 1 and 2; Mode 2 shops require
+    /// their per-line HDMA changes as well as BG3 offset-per-tile handling.
     #[serde(skip)]
     raster_frame: FrameBuffer,
     #[serde(skip)]
@@ -325,7 +326,7 @@ impl SystemBus {
                 // processing HDMA for the next line, so subsequent changes
                 // to TM, CGRAM, VRAM, scroll or OBJ cannot rewrite them.
                 if finished_line == 0 {
-                    self.raster_recording = self.ppu.read_register(0x2105) & 0x07 == 1;
+                    self.raster_recording = matches!(self.ppu.read_register(0x2105) & 0x07, 1 | 2);
                     self.raster_lines_rendered = 0;
                 }
                 if self.raster_recording {
@@ -2223,6 +2224,31 @@ mod tests {
         bus.render_frame(&mut frame);
         // Earlier raster pixels are red; after TM switches to sprites-only
         // the PPU's backdrop changes to blue.
+        assert_eq!(&frame.pixels()[0..4], &[248, 0, 0, 255]);
+        assert_eq!(
+            &frame.pixels()[100 * 256 * 4..100 * 256 * 4 + 4],
+            &[0, 0, 248, 255]
+        );
+    }
+
+    #[test]
+    fn mode2_shop_raster_keeps_early_rows_when_vblank_changes_palette() {
+        let mut bus = SystemBus::default();
+        bus.write(0x002100, 0x0F);
+        bus.write(0x002105, 2); // The merchant UI uses Mode 2.
+        bus.write(0x002121, 0);
+        bus.write(0x002122, 0x1F);
+        bus.write(0x002122, 0x00); // Red backdrop in the first 64 lines.
+        let line_clocks = u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT;
+        bus.advance_master_clocks(line_clocks * 64);
+        bus.write(0x002121, 0);
+        bus.write(0x002122, 0);
+        bus.write(0x002122, 0x7C); // Blue backdrop below that.
+        bus.advance_master_clocks(line_clocks * u64::from(NTSC_SCANLINES_PER_FRAME - 64));
+
+        assert!(bus.completed_raster_frame.is_some());
+        let mut frame = FrameBuffer::default();
+        bus.render_frame(&mut frame);
         assert_eq!(&frame.pixels()[0..4], &[248, 0, 0, 255]);
         assert_eq!(
             &frame.pixels()[100 * 256 * 4..100 * 256 * 4 + 4],

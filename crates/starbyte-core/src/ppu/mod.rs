@@ -283,7 +283,11 @@ impl Ppu {
         let mut sub_origins = None;
         if self.registers[0x30] & 0x02 != 0 && self.registers[0x31] & 0x3F != 0 {
             let mut sub_frame = FrameBuffer::default();
-            fill_rows(&mut sub_frame, bgr555_to_rgba(self.fixed_color), rows.clone());
+            fill_rows(
+                &mut sub_frame,
+                bgr555_to_rgba(self.fixed_color),
+                rows.clone(),
+            );
             let mut sub_layers = vec![0_u8; sub_frame.width * sub_frame.height];
             self.render_screen_layers(&mut sub_frame, &mut sub_layers, bgmode, true, rows.clone());
             subscreen = Some(sub_frame);
@@ -1239,8 +1243,14 @@ mod tests {
         ppu.write_register(0x2100, 0x80);
         ppu.render_scanline(&mut framebuffer, 2);
         assert_eq!(&framebuffer.pixels()[0..4], &[248, 0, 0, 255]);
-        assert_eq!(&framebuffer.pixels()[256 * 4..256 * 4 + 4], &[0, 0, 248, 255]);
-        assert_eq!(&framebuffer.pixels()[2 * 256 * 4..2 * 256 * 4 + 4], &[0, 0, 0, 255]);
+        assert_eq!(
+            &framebuffer.pixels()[256 * 4..256 * 4 + 4],
+            &[0, 0, 248, 255]
+        );
+        assert_eq!(
+            &framebuffer.pixels()[2 * 256 * 4..2 * 256 * 4 + 4],
+            &[0, 0, 0, 255]
+        );
     }
 
     #[test]

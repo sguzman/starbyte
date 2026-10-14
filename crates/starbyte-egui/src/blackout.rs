@@ -139,13 +139,13 @@ impl BlackScreenMonitor {
              PPU register samples from the last completed frame (after scanline HDMA):\n{}\n\
              No cartridge data, SRAM, or save-state bytes included.\n",
             self.consecutive_black_frames,
-            self.field_tick_changes,
             cpu.pbr,
             cpu.pc,
             cpu.a,
             cpu.x,
             cpu.y,
             cpu.p,
+            self.field_tick_changes,
             self.blackout_checkpoints.join("\n"),
             scanline_registers,
         );

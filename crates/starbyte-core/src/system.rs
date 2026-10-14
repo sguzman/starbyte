@@ -579,8 +579,7 @@ impl Bus for SystemBus {
         let pending = self.pending_nmi;
         self.pending_nmi = false;
         if pending {
-            self.observability.nmi_dispatches =
-                self.observability.nmi_dispatches.saturating_add(1);
+            self.observability.nmi_dispatches = self.observability.nmi_dispatches.saturating_add(1);
         }
         pending
     }

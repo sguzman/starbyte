@@ -183,7 +183,7 @@ impl Ppu {
                 self.mode7_parameters[index] =
                     (u16::from(value) << 8) | u16::from(self.mode7_latch);
                 self.mode7_latch = value;
-            },
+            }
             0x2102 => {
                 self.oam_address = (self.oam_address & 0x0100) | u16::from(value);
                 self.reload_oam_byte_address();
@@ -955,7 +955,11 @@ struct BackgroundConfig {
 /// Sign extend Mode 7's signed 13-bit center and scroll offsets.
 fn mode7_signed13(value: u16) -> i32 {
     let value = i32::from(value & 0x1FFF);
-    if value & 0x1000 != 0 { value - 0x2000 } else { value }
+    if value & 0x1000 != 0 {
+        value - 0x2000
+    } else {
+        value
+    }
 }
 
 fn object_size_pair(select: u8) -> (u8, u8) {

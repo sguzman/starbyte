@@ -380,7 +380,12 @@ impl SystemBus {
             .filter(|visible| {
                 let visible_main = visible.read_register(0x212C);
                 let visible_display = visible.read_register(0x2100);
-                live_main & 0x0F == 0
+                // Scope the initial correction to Mode 1, the mode of
+                // Chrono's observed post-naming blackout. In particular,
+                // leave the already-working Mode7 overworld unchanged.
+                self.ppu.read_register(0x2105) & 0x07 == 1
+                    && visible.read_register(0x2105) & 0x07 == 1
+                    && live_main & 0x0F == 0
                     && visible_main & 0x0F != 0
                     && visible_display & 0x80 == 0
                     && visible_display & 0x0F != 0
@@ -2073,6 +2078,14 @@ mod tests {
         bus.render_frame(&mut actual);
         bus.ppu.render_frame(&mut expected);
         assert_eq!(actual.pixels(), expected.pixels());
+        // Mode7 is never switched to a different raster source by this
+        // narrowly scoped Mode1 correction, even if VBlank disables BG1.
+        bus.write(0x00212C, 0x10);
+        let mut mode7_actual = FrameBuffer::default();
+        let mut mode7_expected = FrameBuffer::default();
+        bus.render_frame(&mut mode7_actual);
+        bus.ppu.render_frame(&mut mode7_expected);
+        assert_eq!(mode7_actual.pixels(), mode7_expected.pixels());
         bus.reset();
         assert!(bus.visible_ppu_snapshot.is_none());
     }

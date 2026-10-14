@@ -2066,9 +2066,7 @@ mod tests {
         bus.write(0x002100, 0x0F);
         bus.write(0x002105, 0x07);
         bus.write(0x00212C, 1);
-        bus.advance_master_clocks(
-            u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT * 211,
-        );
+        bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT * 211);
         assert!(bus.visible_ppu_snapshot.is_some());
         // Although an earlier snapshot exists, a still-visible BG at frame
         // end continues down the exact legacy render path.

@@ -21,9 +21,6 @@ pub struct FrameBuffer {
     width: usize,
     height: usize,
     pixels: Vec<u8>,
-    /// Global screen Y coordinate of row 0 for incremental scanline rendering.
-    #[serde(skip)]
-    row_origin: usize,
 }
 
 impl Default for FrameBuffer {
@@ -32,7 +29,6 @@ impl Default for FrameBuffer {
             width: SCREEN_WIDTH,
             height: SCREEN_HEIGHT,
             pixels: vec![0; SCREEN_WIDTH * SCREEN_HEIGHT * 4],
-            row_origin: 0,
         }
     }
 }
@@ -61,19 +57,6 @@ impl FrameBuffer {
     pub fn pixels_mut(&mut self) -> &mut [u8] {
         &mut self.pixels
     }
-}
-
-/// Live video register state sampled at the start of an emulated scanline.
-/// Only lightweight rendering state is captured; VRAM, OAM and CGRAM are
-/// shared from the completed frame rather than copied 224 times.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PpuLineState {
-    registers: Vec<u8>,
-    fixed_color: u16,
-    bg_scroll_x: [u16; BACKGROUND_COUNT],
-    bg_scroll_y: [u16; BACKGROUND_COUNT],
-    mode7_parameters: [u16; 6],
-    mode7_offsets: [u16; 2],
 }
 
 /// Minimal PPU state needed for bootstrap register correctness and frame output.
@@ -143,65 +126,6 @@ impl Default for Ppu {
 }
 
 impl Ppu {
-    /// Snapshot display registers and scroll/Mode7 transforms for one scanline.
-    #[must_use]
-    pub fn capture_line_state(&self) -> PpuLineState {
-        PpuLineState {
-            registers: self.registers.clone(),
-            fixed_color: self.fixed_color,
-            bg_scroll_x: self.bg_scroll_x,
-            bg_scroll_y: self.bg_scroll_y,
-            mode7_parameters: self.mode7_parameters,
-            mode7_offsets: self.mode7_offsets,
-        }
-    }
-
-    fn use_line_state(&mut self, state: &PpuLineState) {
-        self.registers.clone_from(&state.registers);
-        self.fixed_color = state.fixed_color;
-        self.bg_scroll_x = state.bg_scroll_x;
-        self.bg_scroll_y = state.bg_scroll_y;
-        self.mode7_parameters = state.mode7_parameters;
-        self.mode7_offsets = state.mode7_offsets;
-    }
-
-    /// Render visible rows with each scanline's effective HDMA/PPU state.
-    /// Pixels use the completed frame's VRAM/CGRAM/OAM snapshot for now.
-    /// If no scanline snapshots exist (e.g. direct unit tests), use the
-    /// historical full-frame path.
-    pub fn render_frame_with_line_states(
-        &self,
-        framebuffer: &mut FrameBuffer,
-        states: &[(u16, PpuLineState)],
-    ) {
-        if states.is_empty() {
-            self.render_frame(framebuffer);
-            return;
-        }
-
-        // Reuse one PPU clone and a one-row framebuffer. Rendering a full
-        // 224-row frame separately for every scanline would be prohibitively slow.
-        let mut renderer = self.clone();
-        let mut row = FrameBuffer {
-            width: framebuffer.width,
-            height: 1,
-            pixels: vec![0; framebuffer.width * 4],
-            row_origin: 0,
-        };
-        let mut cursor = 0;
-        for y in 0..framebuffer.height {
-            while cursor + 1 < states.len() && usize::from(states[cursor + 1].0) <= y {
-                cursor += 1;
-            }
-            renderer.use_line_state(&states[cursor].1);
-            row.row_origin = y;
-            renderer.render_frame(&mut row);
-            let offset = y * framebuffer.width * 4;
-            framebuffer.pixels[offset..offset + row.pixels.len()]
-                .copy_from_slice(&row.pixels);
-        }
-    }
-
     /// Read one CPU-visible PPU register.
     #[must_use]
     pub fn read_register(&self, register: u16) -> u8 {
@@ -344,12 +268,7 @@ impl Ppu {
         let mut subscreen = None;
         let mut sub_origins = None;
         if self.registers[0x30] & 0x02 != 0 && self.registers[0x31] & 0x3F != 0 {
-            let mut sub_frame = FrameBuffer {
-                width: framebuffer.width,
-                height: framebuffer.height,
-                pixels: vec![0; framebuffer.pixels.len()],
-                row_origin: framebuffer.row_origin,
-            };
+            let mut sub_frame = FrameBuffer::default();
             fill_frame(&mut sub_frame, bgr555_to_rgba(self.fixed_color));
             let mut sub_layers = vec![0_u8; sub_frame.width * sub_frame.height];
             self.render_screen_layers(&mut sub_frame, &mut sub_layers, bgmode, true);
@@ -520,11 +439,10 @@ impl Ppu {
         let m7sel = self.registers[0x1A];
         let direct_color = self.registers[0x30] & 0x01 != 0;
         for y in 0..framebuffer.height {
-            let screen_y = y + framebuffer.row_origin;
             let sy = if m7sel & 0x02 != 0 {
-                SCREEN_HEIGHT - 1 - screen_y
+                framebuffer.height - 1 - y
             } else {
-                screen_y
+                y
             } as i32;
             for x in 0..framebuffer.width {
                 if self.window_masks_layer(0, x, subscreen) {
@@ -594,9 +512,7 @@ impl Ppu {
                 if self.window_masks_layer(background.index, x, subscreen) {
                     continue;
                 }
-                if let Some((pixel, high)) =
-                    self.background_pixel(background, x as u16, (y + framebuffer.row_origin) as u16)
-                {
+                if let Some((pixel, high)) = self.background_pixel(background, x as u16, y as u16) {
                     let index = y * framebuffer.width + x;
                     let rank = background_priority_rank(mode, background.index, high, bg3_high);
                     if rank >= depth[index] {
@@ -908,9 +824,7 @@ impl Ppu {
 
             for local_y in 0..usize::from(size) {
                 let screen_y = (usize::from(y) + local_y) & 0xFF;
-                if screen_y < framebuffer.row_origin
-                    || screen_y >= framebuffer.row_origin + framebuffer.height
-                {
+                if screen_y >= framebuffer.height {
                     continue;
                 }
 
@@ -954,8 +868,7 @@ impl Ppu {
                         self.cgram[cgram_index % CGRAM_BYTES],
                         self.cgram[(cgram_index + 1) % CGRAM_BYTES],
                     ]);
-                    let pixel_index = (screen_y - framebuffer.row_origin) * framebuffer.width
-                        + screen_x as usize;
+                    let pixel_index = screen_y * framebuffer.width + screen_x as usize;
                     if rank >= depth[pixel_index] {
                         depth[pixel_index] = rank;
                         origins[pixel_index] = if palette >= 4 { 5 } else { 6 };
@@ -1193,49 +1106,7 @@ fn bgr555_to_rgba(color: u16) -> [u8; 4] {
 
 #[cfg(test)]
 mod tests {
-    use super::{FrameBuffer, Ppu, SCREEN_WIDTH};
-
-    #[test]
-    fn sampled_line_states_render_backgrounds_when_vblank_disables_them() {
-        let mut ppu = Ppu::default();
-        let mut frame = FrameBuffer::default();
-        ppu.cgram[2] = 0x1F;
-        ppu.cgram[3] = 0;
-        ppu.vram[0] = 0x01;
-        ppu.vram[1] = 0x00;
-        ppu.vram[16] = 0x80;
-        ppu.vram[17] = 0x00;
-        ppu.write_register(0x2100, 0x0F);
-        ppu.write_register(0x212C, 0x01);
-        let visible = ppu.capture_line_state();
-        ppu.write_register(0x212C, 0x10);
-        let hidden = ppu.capture_line_state();
-        ppu.render_frame_with_line_states(&mut frame, &[(0, visible), (1, hidden)]);
-        assert_eq!(&frame.pixels()[..4], &[248, 0, 0, 255]);
-        assert_eq!(
-            &frame.pixels()[SCREEN_WIDTH * 4..SCREEN_WIDTH * 4 + 4],
-            &[0, 0, 0, 255]
-        );
-    }
-
-    #[test]
-    fn constant_line_states_match_ordinary_frame_rendering() {
-        let mut ppu = Ppu::default();
-        ppu.write_register(0x2100, 0x0F);
-        ppu.write_register(0x2105, 0x07);
-        ppu.write_register(0x212C, 0x01);
-        ppu.write_register(0x211B, 0);
-        ppu.write_register(0x211B, 1);
-        ppu.write_register(0x211E, 0);
-        ppu.write_register(0x211E, 1);
-        let state = ppu.capture_line_state();
-        let mut ordinary = FrameBuffer::default();
-        let mut scanline = FrameBuffer::default();
-        ppu.render_frame(&mut ordinary);
-        ppu.render_frame_with_line_states(&mut scanline, &[(0, state)]);
-        assert_eq!(ordinary.pixels(), scanline.pixels());
-    }
-
+    use super::{FrameBuffer, Ppu};
 
     fn write_color(ppu: &mut Ppu, slot: u8, color: u16) {
         let [low, high] = color.to_le_bytes();

@@ -1413,6 +1413,72 @@ mod tests {
     }
 
     #[test]
+    fn mode2_opt_bg3_horizontal_override_positions_menu_tiles() {
+        let mut ppu = Ppu::default();
+        ppu.write_register(0x2100, 0x0F);
+        ppu.write_register(0x2105, 0x02); // Mode 2 offset-per-tile.
+        ppu.write_register(0x2107, 0x10); // BG1 map at VRAM byte $2000.
+        ppu.write_register(0x2109, 0x18); // BG3 OPT map at byte $3000.
+        ppu.write_register(0x212C, 0x01);
+        // BG1: tile1 red, tile2 green, tile3 blue. BG3 offset table is
+        // separate from the visible tilemap.
+        ppu.vram[0x2000] = 1;
+        ppu.vram[0x2002] = 2;
+        ppu.vram[0x2004] = 3;
+        ppu.cgram[2] = 0x1F;
+        ppu.cgram[4] = 0xE0;
+        ppu.cgram[5] = 0x03;
+        ppu.cgram[6] = 0;
+        ppu.cgram[7] = 0x7C;
+        for row in 0..8 {
+            ppu.vram[32 + row * 2] = 0xFF; // Color index 1.
+            ppu.vram[64 + row * 2 + 1] = 0xFF; // Color index 2.
+            ppu.vram[96 + row * 2] = 0xFF; // Color index 3.
+            ppu.vram[96 + row * 2 + 1] = 0xFF;
+        }
+        let mut frame = FrameBuffer::default();
+        ppu.render_frame(&mut frame);
+        assert_eq!(&frame.pixels()[..4], &[248, 0, 0, 255]);
+        assert_eq!(&frame.pixels()[8 * 4..8 * 4 + 4], &[0, 248, 0, 255]);
+
+        // First BG3 entry applies to screen column 1 (pixels 8-15), not
+        // column 0. 8 pixel offset shifts its source from tile2 to tile3.
+        ppu.vram[0x3000] = 8;
+        ppu.vram[0x3001] = 0x20; // 0x2008: enable only BG1.
+        ppu.render_frame(&mut frame);
+        assert_eq!(&frame.pixels()[..4], &[248, 0, 0, 255]);
+        assert_eq!(&frame.pixels()[8 * 4..8 * 4 + 4], &[0, 0, 248, 255]);
+        assert_eq!(&frame.pixels()[16 * 4..16 * 4 + 4], &[0, 0, 248, 255]);
+        // A word with only BG2's enable bit must not offset BG1.
+        ppu.vram[0x3001] = 0x40;
+        ppu.render_frame(&mut frame);
+        assert_eq!(&frame.pixels()[8 * 4..8 * 4 + 4], &[0, 248, 0, 255]);
+    }
+
+    #[test]
+    fn mode2_opt_vertical_override_and_fine_scroll_obey_validity_bits() {
+        let mut ppu = Ppu::default();
+        ppu.write_register(0x2105, 2);
+        ppu.write_register(0x2109, 0x18); // BG3 offset map at $3000.
+        ppu.bg_scroll_x[0] = 3;
+        ppu.bg_scroll_y[0] = 5;
+        ppu.bg_scroll_x[1] = 17;
+        ppu.bg_scroll_y[1] = 22;
+        let (base_h, base_v) = ppu.mode2_offset_per_tile(0, 0);
+        assert_eq!((base_h, base_v), (3, 5));
+        // Two successive rows of BG3 hold horizontal and vertical offsets.
+        ppu.vram[0x3000..0x3002].copy_from_slice(&0x2008_u16.to_le_bytes());
+        ppu.vram[0x3040..0x3042].copy_from_slice(&0x2010_u16.to_le_bytes());
+        assert_eq!(ppu.mode2_offset_per_tile(0, 8), (11, 16));
+        assert_eq!(ppu.mode2_offset_per_tile(1, 8), (17, 22));
+        // BG2 valid bit applies independently.
+        ppu.vram[0x3000..0x3002].copy_from_slice(&0x4000_u16.to_le_bytes());
+        ppu.vram[0x3040..0x3042].copy_from_slice(&0x4018_u16.to_le_bytes());
+        assert_eq!(ppu.mode2_offset_per_tile(0, 8), (3, 5));
+        assert_eq!(ppu.mode2_offset_per_tile(1, 8), (1, 24));
+    }
+
+    #[test]
     fn mode2_renders_bg1_four_bit_tiles_instead_of_just_sprites() {
         let mut ppu = Ppu::default();
         let mut frame = FrameBuffer::default();

@@ -30,8 +30,12 @@ pub struct DmaChannel {
     pub hdma_line_counter: u8,
     /// Whether this HDMA channel still has work to do this frame.
     pub hdma_active: bool,
-    /// Whether the current HDMA block repeats without consuming new data.
+    /// HDMA descriptor bit 7: transfer new data every scanline when set.
     pub hdma_repeat: bool,
+    /// The first scanline of every HDMA block transfers, even if bit 7 is clear.
+    /// Internal execution state; optional for compatibility with earlier save states.
+    #[serde(default)]
+    pub hdma_first_line: bool,
 }
 
 impl DmaChannel {
@@ -253,6 +257,7 @@ mod tests {
                 hdma_line_counter: 0xFE,
                 hdma_active: false,
                 hdma_repeat: false,
+                hdma_first_line: false,
             }
         );
         assert_eq!(dma.read_register(0x03), 0x12);

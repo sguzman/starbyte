@@ -64,13 +64,7 @@ impl BlackScreenMonitor {
              Input host={host_buttons:04X} latched={game_latched_buttons:04X} busy={joypad_busy}\n\
              Audio last frame pairs={audio_pairs}; nonzero pairs={nonzero_pairs}\n\
              No cartridge data, SRAM, or save-state bytes included.\n",
-            self.consecutive_black_frames,
-            cpu.pbr,
-            cpu.pc,
-            cpu.a,
-            cpu.x,
-            cpu.y,
-            cpu.p,
+            self.consecutive_black_frames, cpu.pbr, cpu.pc, cpu.a, cpu.x, cpu.y, cpu.p,
         );
         let path = cache_root
             .join("diagnostics")

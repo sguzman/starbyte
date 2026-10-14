@@ -745,6 +745,54 @@ mod tests {
     }
 
     #[test]
+    fn native_nmi_clears_field_vblank_flag_and_unblocks_main_loop() {
+        // ROM-independent regression built from the same 65816 instruction
+        // sequence used by Chrono Trigger's Field_WaitVblank routine:
+        // the main thread waits on $0152; NMI runs TCD with DP=$0100,
+        // then STZ $52 and RTI so the main thread can advance.
+        let mut rom = rom_bytes();
+        rom[0x7FFC] = 0x00;
+        rom[0x7FFD] = 0x80;
+        rom[0x7FEA] = 0x00; // Native-mode NMI vector points to $8100.
+        rom[0x7FEB] = 0x81;
+        let main = [
+            0x18,       // CLC
+            0xFB,       // XCE: native mode
+            0xC2, 0x30, // REP #$30 (16-bit A/X)
+            0xA9, 0x00, 0x01, // LDA #$0100
+            0x5B,       // TCD: DP = $0100
+            0xE2, 0x20, // SEP #$20 (8-bit A)
+            0xA9, 0x80, // LDA #$80
+            0x8D, 0x00, 0x42, // STA $4200: enable NMI
+            0xA9, 0x01, // LDA #1
+            0x8D, 0x52, 0x01, // STA $0152: mark next frame pending
+            0xAD, 0x52, 0x01, // LDA $0152
+            0xD0, 0xFB, // BNE to LDA: wait until NMI clears the flag
+            0xEE, 0x53, 0x01, // INC $0153: prove the main thread resumed
+            0xDB,       // STP
+        ];
+        rom[..main.len()].copy_from_slice(&main);
+        let handler = [
+            0xC2, 0x20, // REP #$20
+            0xA9, 0x00, 0x01, // LDA #$0100
+            0x5B,       // TCD
+            0xE2, 0x20, // SEP #$20
+            0x64, 0x52, // STZ $52 (direct page $0100 + $52)
+            0x40,       // RTI
+        ];
+        rom[0x100..0x100 + handler.len()].copy_from_slice(&handler);
+
+        let mut emulator = Emulator::default();
+        emulator.load_rom(Cartridge::from_bytes(rom, None).unwrap());
+        for _ in 0..3 {
+            emulator.run_until_frame().unwrap();
+        }
+        assert_eq!(emulator.peek_wram_u8(0x7E0152), Some(0));
+        assert_eq!(emulator.peek_wram_u8(0x7E0153), Some(1));
+        assert_eq!(emulator.cpu_registers().d, 0x0100);
+    }
+
+    #[test]
     fn native_nmi_with_full_register_save_restores_stack_and_program_bank() {
         let mut rom = rom_bytes();
         // LoROM NMI vector ($00:FFEA) enters bank zero at $8100.

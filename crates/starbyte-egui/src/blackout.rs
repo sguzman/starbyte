@@ -1,12 +1,15 @@
-//! Passive, low-cost gameplay blackout diagnostics. Captures register snapshots
-//! once when an already-visible game stays black for three seconds. A fade may
-//! be intentional: this never pauses the guest or claims a confirmed deadlock.
+//! Passive gameplay diagnostics: a bounded periodic status snapshot and
+//! additional sustained-blackout reports. Neither pauses the guest or
+//! presumes that a fade is a confirmed deadlock.
 use std::path::Path;
 
 use starbyte_core::Emulator;
 use tracing::warn;
 
 const REPORT_AFTER_BLACK_FRAMES: u32 = 180;
+/// Always refresh the latest status after three seconds of emulated time,
+/// including scenes with residual pixels or no prior nonblack frame.
+const STATUS_INTERVAL_FRAMES: u64 = 180;
 /// A handful of stray pixels must not suppress reports from an otherwise black scene.
 const MIN_VISIBLE_PIXELS: usize = 32;
 
@@ -38,7 +41,8 @@ impl BlackScreenMonitor {
             .take(MIN_VISIBLE_PIXELS)
             .count()
             == MIN_VISIBLE_PIXELS;
-        let should_report = self.observe_visibility(frame, visible);
+        let blackout_report = self.observe_visibility(frame, visible);
+        let periodic_report = frame > 0 && frame.is_multiple_of(STATUS_INTERVAL_FRAMES);
         if self.saw_visible_frame
             && self.consecutive_black_frames > 0
             && self.consecutive_black_frames.is_multiple_of(60)
@@ -59,7 +63,7 @@ impl BlackScreenMonitor {
                 cpu.pbr, cpu.pc,
             ));
         }
-        if !should_report {
+        if !blackout_report && !periodic_report {
             return;
         }
 
@@ -94,7 +98,7 @@ impl BlackScreenMonitor {
             .join("\n");
 
         let report = format!(
-            "Starbyte sustained-black-screen diagnostic (may be intentional fade)\n\
+            "Starbyte gameplay status (periodic; black frame may be intentional fade)\n\
              Frame {frame}; black frames in a row {}\n\
              CPU {:02X}:{:04X}; A={:04X} X={:04X} Y={:04X} P={:02X}\n\
              PPU INIDISP={inidisp:02X} BGMODE={bgmode:02X} TM={main_layers:02X} TS={sub_layers:02X} writes={ppu_writes}\n\
@@ -123,20 +127,27 @@ impl BlackScreenMonitor {
         } else {
             std::env::temp_dir().join("starbyte").join("diagnostics")
         };
-        let path = diagnostics_dir.join(format!("black-screen-{frame}.txt"));
-        if let Some(parent) = path.parent()
-            && let Err(error) = std::fs::create_dir_all(parent)
-        {
-            warn!(%error, "could not create black-screen diagnostic directory");
+        if let Err(error) = std::fs::create_dir_all(&diagnostics_dir) {
+            warn!(%error, "could not create gameplay diagnostic directory");
             return;
         }
-        match std::fs::write(&path, report) {
-            Ok(()) => warn!(
-                path = %path.display(),
-                frame,
-                "saved sustained-black-screen diagnostic; game continues"
-            ),
-            Err(error) => warn!(%error, "could not write black-screen diagnostic"),
+        if periodic_report {
+            // Overwrite instead of accumulating one file per heartbeat.
+            let path = diagnostics_dir.join("latest-status.txt");
+            if let Err(error) = std::fs::write(&path, &report) {
+                warn!(%error, path = %path.display(), "could not write periodic gameplay status");
+            }
+        }
+        if blackout_report {
+            let path = diagnostics_dir.join(format!("black-screen-{frame}.txt"));
+            match std::fs::write(&path, &report) {
+                Ok(()) => warn!(
+                    path = %path.display(),
+                    frame,
+                    "saved sustained-black-screen diagnostic; game continues"
+                ),
+                Err(error) => warn!(%error, "could not write black-screen diagnostic"),
+            }
         }
     }
 
@@ -169,6 +180,20 @@ impl BlackScreenMonitor {
 #[cfg(test)]
 mod tests {
     use super::BlackScreenMonitor;
+
+    #[test]
+    fn periodic_report_does_not_depend_on_blackout_or_visible_pixels() {
+        const INTERVAL: u64 = super::STATUS_INTERVAL_FRAMES;
+        let mut detector = BlackScreenMonitor::default();
+        for frame in 1..=INTERVAL * 3 {
+            assert!(!detector.observe_visibility(frame, false));
+            if frame.is_multiple_of(INTERVAL) {
+                assert_eq!(frame / INTERVAL, (frame / INTERVAL).max(1));
+            }
+        }
+        assert!(!detector.saw_visible_frame);
+        assert_eq!(INTERVAL, 180);
+    }
 
     #[test]
     fn capture_once_per_blackout_only_after_prior_visible_frame() {

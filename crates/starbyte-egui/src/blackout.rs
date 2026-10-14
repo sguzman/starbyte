@@ -14,6 +14,8 @@ pub struct BlackScreenMonitor {
     consecutive_black_frames: u32,
     last_frame: u64,
     reported_current_blackout: bool,
+    /// Sparse 1s interval snapshots distinguish CPU wait loops from fades.
+    blackout_checkpoints: Vec<String>,
 }
 
 impl BlackScreenMonitor {
@@ -31,7 +33,20 @@ impl BlackScreenMonitor {
             .pixels()
             .chunks_exact(4)
             .any(|pixel| pixel[..3].iter().any(|&channel| channel != 0));
-        if !self.observe_visibility(frame, visible) {
+        let should_report = self.observe_visibility(frame, visible);
+        if self.saw_visible_frame && self.consecutive_black_frames > 0
+            && self.consecutive_black_frames.is_multiple_of(60)
+        {
+            let cpu = emulator.cpu_registers();
+            let ppu_writes: u64 = emulator.system_observability()
+                .ppu_write_counts().iter().map(|&n| u64::from(n)).sum();
+            let ports = emulator.apu_to_cpu_ports();
+            self.blackout_checkpoints.push(format!(
+                "Frame {frame}: CPU={:02X}:{:04X} PPU-writes={ppu_writes} SPC-to-CPU={ports:?}",
+                cpu.pbr, cpu.pc,
+            ));
+        }
+        if !should_report {
             return;
         }
 
@@ -63,8 +78,10 @@ impl BlackScreenMonitor {
              APU MMIO reads={reads:?}; writes={writes:?}\n\
              Input host={host_buttons:04X} latched={game_latched_buttons:04X} busy={joypad_busy}\n\
              Audio last frame pairs={audio_pairs}; nonzero pairs={nonzero_pairs}\n\
+             Blackout checkpoints (once per second):\n{}\n\
              No cartridge data, SRAM, or save-state bytes included.\n",
             self.consecutive_black_frames, cpu.pbr, cpu.pc, cpu.a, cpu.x, cpu.y, cpu.p,
+            self.blackout_checkpoints.join("\n"),
         );
         let path = cache_root
             .join("diagnostics")
@@ -94,6 +111,7 @@ impl BlackScreenMonitor {
             self.saw_visible_frame = true;
             self.consecutive_black_frames = 0;
             self.reported_current_blackout = false;
+            self.blackout_checkpoints.clear();
             return false;
         }
         if !self.saw_visible_frame {

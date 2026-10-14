@@ -87,6 +87,12 @@ pub struct Ppu {
     /// The previous horizontal byte supplying fine-scroll bits 0..2.
     #[serde(default)]
     bghofs_latch: u8,
+    /// Mode 7 affine transform coefficients A,B,C,D and center X,Y.
+    /// Shared-register latch behavior is independent of tile BG scroll.
+    #[serde(default)]
+    mode7_parameters: [u16; 6],
+    #[serde(default)]
+    mode7_latch: u8,
 }
 
 impl Default for Ppu {
@@ -108,6 +114,8 @@ impl Default for Ppu {
             bg_scroll_y: [0; BACKGROUND_COUNT],
             bgofs_latch: 0,
             bghofs_latch: 0,
+            mode7_parameters: [0; 6],
+            mode7_latch: 0,
         }
     }
 }
@@ -170,6 +178,12 @@ impl Ppu {
         self.registers[usize::from(register - 0x2100)] = value;
         match register {
             0x210D..=0x2114 => self.write_bg_scroll(register, value),
+            0x211B..=0x2120 => {
+                let index = usize::from(register - 0x211B);
+                self.mode7_parameters[index] =
+                    (u16::from(value) << 8) | u16::from(self.mode7_latch);
+                self.mode7_latch = value;
+            },
             0x2102 => {
                 self.oam_address = (self.oam_address & 0x0100) | u16::from(value);
                 self.reload_oam_byte_address();
@@ -364,8 +378,15 @@ impl Ppu {
                 BackgroundConfig::for_mode1(1),
                 BackgroundConfig::for_mode1(0),
             ],
+            2 => &[
+                BackgroundConfig::for_mode2(1),
+                BackgroundConfig::for_mode2(0),
+            ],
             _ => &[],
         };
+        if mode == 7 && enabled & 0x01 != 0 {
+            self.render_mode7_background(framebuffer, &mut depth, origins, subscreen);
+        }
         for background in backgrounds {
             if enabled & (1 << background.index) != 0 {
                 self.render_background(
@@ -380,6 +401,86 @@ impl Ppu {
         }
         if enabled & 0x10 != 0 {
             self.render_objects(framebuffer, &mut depth, origins, mode, subscreen);
+        }
+    }
+
+    /// Sample Mode 7's 128x128 tilemap (even VRAM bytes) and interleaved
+    /// 8bpp tile pixels (odd VRAM bytes), transformed by the shared affine
+    /// matrix. Scanline-specific HDMA transforms are not yet modeled.
+    fn render_mode7_background(
+        &self,
+        framebuffer: &mut FrameBuffer,
+        depth: &mut [u8],
+        origins: &mut [u8],
+        subscreen: bool,
+    ) {
+        let m = self.mode7_parameters;
+        let a = i32::from(m[0] as i16);
+        let b = i32::from(m[1] as i16);
+        let c = i32::from(m[2] as i16);
+        let d = i32::from(m[3] as i16);
+        let center_x = mode7_signed13(m[4]);
+        let center_y = mode7_signed13(m[5]);
+        let h_off = mode7_signed13(self.bg_scroll_x[0]);
+        let v_off = mode7_signed13(self.bg_scroll_y[0]);
+        let m7sel = self.registers[0x1A];
+        let direct_color = self.registers[0x30] & 0x01 != 0;
+        for y in 0..framebuffer.height {
+            let sy = if m7sel & 0x02 != 0 {
+                framebuffer.height - 1 - y
+            } else {
+                y
+            } as i32;
+            for x in 0..framebuffer.width {
+                if self.window_masks_layer(0, x, subscreen) {
+                    continue;
+                }
+                let sx = if m7sel & 0x01 != 0 {
+                    framebuffer.width - 1 - x
+                } else {
+                    x
+                } as i32;
+                // Coefficients are signed 8.8 fixed point. Center/scroll
+                // coordinates are sign-extended from the SNES 13-bit domain.
+                let fx = sx + h_off - center_x;
+                let fy = sy + v_off - center_y;
+                let tx = ((a * fx + b * fy) >> 8) + center_x;
+                let ty = ((c * fx + d * fy) >> 8) + center_y;
+                let outside = !(0..1024).contains(&tx) || !(0..1024).contains(&ty);
+                let repeat = (m7sel >> 6) & 0x03;
+                if outside && (repeat == 1 || repeat == 2) {
+                    continue;
+                }
+                let tile_x = (tx & 0x3FF) as usize;
+                let tile_y = (ty & 0x3FF) as usize;
+                let tile = if outside && repeat == 3 {
+                    0
+                } else {
+                    let tilemap = ((tile_y / 8) * 128 + tile_x / 8) * 2;
+                    self.vram[tilemap % VRAM_BYTES]
+                };
+                let pixel_byte = (usize::from(tile) * 64 + (tile_y % 8) * 8 + tile_x % 8) * 2 + 1;
+                let color_index = self.vram[pixel_byte % VRAM_BYTES];
+                if color_index == 0 {
+                    continue;
+                }
+                let pixel = if direct_color {
+                    // Direct-color mode packs the 8-bit pixel's RGB bits
+                    // directly into RGB555 with no CGRAM palette lookup.
+                    let r = u16::from(color_index & 0x07) << 2;
+                    let g = u16::from((color_index >> 3) & 0x07) << 2;
+                    let bl = u16::from((color_index >> 6) & 0x03) << 3;
+                    bgr555_to_rgba(r | (g << 5) | (bl << 10))
+                } else {
+                    let offset = usize::from(color_index) * 2;
+                    let raw = u16::from_le_bytes([self.cgram[offset], self.cgram[offset + 1]]);
+                    bgr555_to_rgba(raw)
+                };
+                let index = y * framebuffer.width + x;
+                depth[index] = 5;
+                origins[index] = 1;
+                framebuffer.pixels[index * 4..index * 4 + 4].copy_from_slice(&pixel);
+            }
         }
     }
 
@@ -851,6 +952,12 @@ struct BackgroundConfig {
     palette_base: usize,
 }
 
+/// Sign extend Mode 7's signed 13-bit center and scroll offsets.
+fn mode7_signed13(value: u16) -> i32 {
+    let value = i32::from(value & 0x1FFF);
+    if value & 0x1000 != 0 { value - 0x2000 } else { value }
+}
+
 fn object_size_pair(select: u8) -> (u8, u8) {
     match select & 0x07 {
         0 => (8, 16),
@@ -875,6 +982,18 @@ impl BackgroundConfig {
             size_code: 0,
             tile_size: 8,
             palette_base: index * 32,
+        }
+    }
+
+    fn for_mode2(index: usize) -> Self {
+        Self {
+            index,
+            bits_per_pixel: BitsPerPixel::Four,
+            tilemap_base: 0,
+            tiledata_base: 0,
+            size_code: 0,
+            tile_size: 8,
+            palette_base: 0,
         }
     }
 
@@ -918,6 +1037,10 @@ fn background_priority_rank(mode: u8, index: usize, high: bool, bg3_high: bool) 
             }
         }
         (1, 2, false) => 1,
+        (2, 0, true) => 9,
+        (2, 1, true) => 8,
+        (2, 0, false) => 6,
+        (2, 1, false) => 5,
         _ => 0,
     }
 }

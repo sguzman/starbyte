@@ -756,11 +756,11 @@ mod tests {
         rom[0x7FEA] = 0x00; // Native-mode NMI vector points to $8100.
         rom[0x7FEB] = 0x81;
         let main = [
-            0x18,       // CLC
-            0xFB,       // XCE: native mode
+            0x18, // CLC
+            0xFB, // XCE: native mode
             0xC2, 0x30, // REP #$30 (16-bit A/X)
             0xA9, 0x00, 0x01, // LDA #$0100
-            0x5B,       // TCD: DP = $0100
+            0x5B, // TCD: DP = $0100
             0xE2, 0x20, // SEP #$20 (8-bit A)
             0xA9, 0x80, // LDA #$80
             0x8D, 0x00, 0x42, // STA $4200: enable NMI
@@ -769,16 +769,16 @@ mod tests {
             0xAD, 0x52, 0x01, // LDA $0152
             0xD0, 0xFB, // BNE to LDA: wait until NMI clears the flag
             0xEE, 0x53, 0x01, // INC $0153: prove the main thread resumed
-            0xDB,       // STP
+            0xDB, // STP
         ];
         rom[..main.len()].copy_from_slice(&main);
         let handler = [
             0xC2, 0x20, // REP #$20
             0xA9, 0x00, 0x01, // LDA #$0100
-            0x5B,       // TCD
+            0x5B, // TCD
             0xE2, 0x20, // SEP #$20
             0x64, 0x52, // STZ $52 (direct page $0100 + $52)
-            0x40,       // RTI
+            0x40, // RTI
         ];
         rom[0x100..0x100 + handler.len()].copy_from_slice(&handler);
 

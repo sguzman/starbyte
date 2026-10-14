@@ -58,7 +58,10 @@ impl BlackScreenMonitor {
             .zip(emulator.peek_wram_u8(0x7E0159))
             .map(|(low, high)| u16::from_le_bytes([low, high]));
         if let Some(tick) = field_tick {
-            if self.last_field_tick.is_some_and(|previous| previous != tick) {
+            if self
+                .last_field_tick
+                .is_some_and(|previous| previous != tick)
+            {
                 self.field_tick_changes = self.field_tick_changes.saturating_add(1);
             }
             self.last_field_tick = Some(tick);

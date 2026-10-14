@@ -535,7 +535,9 @@ impl Ppu {
                 if self.window_masks_layer(background.index, x, subscreen) {
                     continue;
                 }
-                if let Some((pixel, high)) = self.background_pixel(background, x as u16, y as u16) {
+                if let Some((pixel, high)) =
+                    self.background_pixel(background, x as u16, y as u16, mode)
+                {
                     let index = y * framebuffer.width + x;
                     let rank = background_priority_rank(mode, background.index, high, bg3_high);
                     if rank >= depth[index] {
@@ -554,6 +556,7 @@ impl Ppu {
         background: BackgroundConfig,
         x: u16,
         y: u16,
+        mode: u8,
     ) -> Option<([u8; 4], bool)> {
         // Mosaic blocks are anchored to screen coordinates; BG scrolling
         // shifts the sampled source, but never shifts the mosaic grid.
@@ -564,8 +567,16 @@ impl Ppu {
         } else {
             (usize::from(x), usize::from(y))
         };
-        let world_x = screen_x + usize::from(self.bg_scroll_x[background.index]);
-        let world_y = screen_y + usize::from(self.bg_scroll_y[background.index]);
+        let (hofs, vofs) = if mode == 2 && background.index < 2 {
+            self.mode2_offset_per_tile(background.index, usize::from(x))
+        } else {
+            (
+                self.bg_scroll_x[background.index],
+                self.bg_scroll_y[background.index],
+            )
+        };
+        let world_x = screen_x + usize::from(hofs);
+        let world_y = screen_y + usize::from(vofs);
         let size = background.tile_size;
         let entry_index = self.tilemap_entry_index(background, world_x / size, world_y / size);
         let entry = u16::from_le_bytes([
@@ -613,6 +624,44 @@ impl Ppu {
             self.cgram[(cgram_index + 1) % CGRAM_BYTES],
         ]);
         Some((bgr555_to_rgba(color), high))
+    }
+
+    /// Mode 2 uses BG3's *tilemap entries* as scroll override words for
+    /// BG1/BG2. Rendering BG3 as pixels, or ignoring this table, misaligns
+    /// Chrono Trigger's in-game item/shop menu text and icons.
+    ///
+    /// The first visible 8-pixel column uses the normal scroll registers.
+    /// The BG3 table's first entry controls the second visible column.
+    /// Horizontal overrides preserve the normal fine (3-bit) scroll; the
+    /// 0x2000 and 0x4000 validity bits select BG1 and BG2 independently.
+    /// Vertical entries live in the next BG3 offset-map row.
+    fn mode2_offset_per_tile(&self, layer: usize, screen_x: usize) -> (u16, u16) {
+        let mut horizontal = self.bg_scroll_x[layer];
+        let mut vertical = self.bg_scroll_y[layer];
+        if screen_x < 8 {
+            return (horizontal, vertical);
+        }
+
+        let config = self.resolve_background_config(BackgroundConfig::for_mode2(2));
+        let offset_x = (usize::from(self.bg_scroll_x[2]) & !7) + ((screen_x - 8) & !7);
+        let offset_y = usize::from(self.bg_scroll_y[2]) & !7;
+        let tile_x = offset_x / config.tile_size;
+        let tile_y = offset_y / config.tile_size;
+        let valid = if layer == 0 { 0x2000 } else { 0x4000 };
+        let entry_at = |row| {
+            let address = self.tilemap_entry_index(config, tile_x, row);
+            u16::from_le_bytes([self.vram[address], self.vram[(address + 1) % VRAM_BYTES]])
+        };
+
+        let horizontal_word = entry_at(tile_y);
+        if horizontal_word & valid != 0 {
+            horizontal = (horizontal & 7) | (horizontal_word & 0x03F8);
+        }
+        let vertical_word = entry_at((offset_y + 8) / config.tile_size);
+        if vertical_word & valid != 0 {
+            vertical = vertical_word & 0x03FF;
+        }
+        (horizontal, vertical)
     }
 
     fn tilemap_entry_index(

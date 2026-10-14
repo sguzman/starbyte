@@ -86,7 +86,13 @@ impl BlackScreenMonitor {
              Audio last frame pairs={audio_pairs}; nonzero pairs={nonzero_pairs}\n\
              Blackout checkpoints (once per second):\n{}\n\
              No cartridge data, SRAM, or save-state bytes included.\n",
-            self.consecutive_black_frames, cpu.pbr, cpu.pc, cpu.a, cpu.x, cpu.y, cpu.p,
+            self.consecutive_black_frames,
+            cpu.pbr,
+            cpu.pc,
+            cpu.a,
+            cpu.x,
+            cpu.y,
+            cpu.p,
             self.blackout_checkpoints.join("\n"),
         );
         let path = cache_root

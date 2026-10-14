@@ -2,6 +2,7 @@
 
 mod app;
 mod audio;
+mod blackout;
 mod logging;
 mod pitch;
 mod worker;

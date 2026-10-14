@@ -78,6 +78,13 @@ def summarize(rows: list[dict], report: dict, frames: int) -> dict:
         None,
     )
     history = []
+    visible = [row for row in rows if row.get("framebuffer", {}).get("nonblack_pixels", 0) > 0]
+    visible_hashes = [row.get("framebuffer", {}).get("hash") for row in visible]
+    hash_changes = sum(1 for older, newer in zip(visible_hashes, visible_hashes[1:]) if older != newer)
+    maximum_pixels = max(
+        (row.get("framebuffer", {}).get("nonblack_pixels", 0) for row in rows),
+        default=0,
+    )
     for row in rows:
         frame = row.get("completed_frame")
         if frame not in MILESTONES and frame != frames:
@@ -89,6 +96,8 @@ def summarize(rows: list[dict], report: dict, frames: int) -> dict:
             "frame": frame,
             "pc": f"{cpu.get('pbr', 0):02X}:{cpu.get('pc', 0):04X}",
             "nonblack_pixels": row.get("framebuffer", {}).get("nonblack_pixels"),
+            "distinct_colors": row.get("framebuffer", {}).get("distinct_rgb_colors"),
+            "framebuffer_hash": row.get("framebuffer", {}).get("hash"),
             "blank": ppu.get("forced_blank"),
             "brightness": ppu.get("brightness"),
             "mode": ppu.get("background_mode"),
@@ -102,6 +111,10 @@ def summarize(rows: list[dict], report: dict, frames: int) -> dict:
         "completed_frames": report.get("frame_counter"),
         "first_nonblack_frame": first_pixels,
         "first_display_enabled_frame": first_unblank,
+        "max_nonblack_pixels": maximum_pixels,
+        "nonblack_frame_count": len(visible),
+        "distinct_visible_frame_hashes": len(set(visible_hashes)),
+        "visible_frame_hash_changes": hash_changes,
         "last_ppu_display": report.get("ppu_display"),
         "last_ppu_write_activity": report.get("ppu_write_activity"),
         "last_apu_io_activity": report.get("apu_io_activity"),
@@ -145,15 +158,21 @@ def run_driver_comparison(args: argparse.Namespace) -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
     report_path = run_dir / "run-report.json"
     history_path = run_dir / "frame-history.jsonl"
-    # CPU/SPC execution can be more expensive than the compatibility shim.
-    # 360 frames covers the frame-90 stall while bounding time and log size.
-    frames = min(args.frames, 360)
+    # The ordinary two-mode comparison defaults to 360 frames; an explicitly
+    # requested longer driver run can follow intro/title-screen progression.
+    frames = args.driver_frames
     cmd = [
         str(args.binary), "run", str(args.rom),
         "--frames", str(frames), "--no-save-ram",
         "--apu-upload-probe", "--apu-execute-driver",
         "--report-json", str(report_path), "--frame-log", str(history_path),
     ]
+    if args.driver_images:
+        frame_dir = run_dir / "frames"
+        cmd += [
+            "--frame-images-dir", str(frame_dir),
+            "--frame-image-every", "120", "--max-frame-images", "20",
+        ]
     print(f"=== REAL SPC DRIVER COMPARISON ({frames} frames) ===", flush=True)
     result = run_command(cmd, quiet=True)
     if not report_path.is_file() or not history_path.is_file():
@@ -169,13 +188,17 @@ def run_driver_comparison(args: argparse.Namespace) -> int:
         "completed_frames": details["completed_frames"],
         "first_nonblack_frame": details["first_nonblack_frame"],
         "first_display_enabled_frame": details["first_display_enabled_frame"],
+        "max_nonblack_pixels": details["max_nonblack_pixels"],
+        "nonblack_frame_count": details["nonblack_frame_count"],
+        "distinct_visible_frame_hashes": details["distinct_visible_frame_hashes"],
+        "visible_frame_hash_changes": details["visible_frame_hash_changes"],
         "failure": data.get("failure"),
         "apu_upload_timeline": data.get("apu_upload_timeline"),
         "apu_io_activity": data.get("apu_io_activity"),
         "ppu_write_totals": data.get("ppu_write_activity", {}).get("total_writes"),
         "audio_run": data.get("audio_run"),
         "selected_milestones": [
-            row for row in details["milestones"] if row["frame"] in (1, 30, 60, 90, 120, 180, 240, 360)
+            row for row in details["milestones"] if row["frame"] in MILESTONES
         ],
     }, indent=2))
     (run_dir / "summary.json").write_text(
@@ -191,6 +214,12 @@ def main() -> int:
     parser.add_argument("--frames", type=int, default=1200)
     parser.add_argument("--compare-apu", action="store_true",
                         help="compare normal bootstrap with real uploaded SPC driver")
+    parser.add_argument("--driver-only", action="store_true",
+                        help="skip stalled legacy-Apu bootstrap and test real SPC driver alone")
+    parser.add_argument("--driver-frames", type=int, default=360,
+                        help="real-SPC-driver frame count (default 360, up to 3000)")
+    parser.add_argument("--driver-images", action="store_true",
+                        help="write bounded PPM screenshots every 120 driver frames under --out")
     parser.add_argument("--trace-stall-frame", type=int, default=None,
                         help="trace one normal-mode frame of the suspected APU busy-wait")
     parser.add_argument(
@@ -203,6 +232,10 @@ def main() -> int:
         parser.error(f"Starbyte CLI binary not found: {args.binary}")
     if not (1 <= args.frames <= 3000):
         parser.error("frames must be in range 1..3000")
+    if not (1 <= args.driver_frames <= 3000):
+        parser.error("driver-frames must be in range 1..3000")
+    if args.driver_only and args.trace_stall_frame is not None:
+        parser.error("--trace-stall-frame traces the legacy comparison; cannot combine with --driver-only")
     if args.trace_stall_frame is not None and not (1 <= args.trace_stall_frame <= args.frames):
         parser.error("trace-stall-frame must be in range 1..frames")
 
@@ -222,6 +255,8 @@ def main() -> int:
     (args.out / "inspection.json").write_text(
         json.dumps(inspected_obj, indent=2) + "\n", encoding="utf-8"
     )
+    if args.driver_only:
+        return run_driver_comparison(args)
     report = args.out / "run-report.json"
     frame_log = args.out / "frame-history.jsonl"
     print(f"=== READ-ONLY BOOT PROBE ({args.frames} frames) ===", flush=True)

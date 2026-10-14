@@ -2016,6 +2016,41 @@ mod tests {
     }
 
     #[test]
+    fn frame_raster_uses_visible_line_registers_instead_of_vblank_state() {
+        let mut bus = SystemBus::default();
+        bus.write(0x002100, 0x0F);
+        bus.write(0x00212C, 0x01);
+        bus.write(0x002121, 0x01);
+        bus.write(0x002122, 0x1F);
+        bus.write(0x002122, 0x00);
+        bus.write(0x002115, 0x80);
+        bus.write(0x002116, 0x00);
+        bus.write(0x002117, 0x00);
+        bus.write(0x002118, 0x01);
+        bus.write(0x002119, 0x00);
+        bus.write(0x002116, 0x08);
+        bus.write(0x002117, 0x00);
+        bus.write(0x002118, 0x80);
+        bus.write(0x002119, 0x00);
+        let clocks_per_line = u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT;
+        for line in 1..=NTSC_SCANLINES_PER_FRAME {
+            if line == 110 {
+                bus.write(0x00212C, 0x10);
+            }
+            bus.advance_master_clocks(clocks_per_line);
+        }
+        let mut frame = FrameBuffer::default();
+        bus.render_frame(&mut frame);
+        assert_eq!(&frame.pixels()[..4], &[248, 0, 0, 255]);
+        assert_eq!(
+            &frame.pixels()[160 * 256 * 4..160 * 256 * 4 + 4],
+            &[0, 0, 0, 255],
+        );
+        assert!(bus.completed_video_lines.len() >= 220);
+        assert_eq!(bus.peek_ppu_register(0x212C), Some(0x10));
+    }
+
+    #[test]
     fn samples_active_scanline_display_registers_before_end_of_frame() {
         let mut bus = SystemBus::default();
         let line_clocks = u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT;

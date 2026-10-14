@@ -917,6 +917,8 @@ impl SystemBus {
                 if self.nmi_enabled() && !nmi_was_enabled && self.timing.in_vblank() {
                     self.rdnmi = true;
                     self.pending_nmi = true;
+                    self.observability.nmi_assertions =
+                        self.observability.nmi_assertions.saturating_add(1);
                 }
                 Some(())
             }
@@ -1985,11 +1987,13 @@ mod tests {
         // No VBlank interrupt when disabled.
         bus.advance_master_clocks(line_clocks * u64::from(VBLANK_START_SCANLINE));
         assert_eq!(bus.observability().nmi_counts(), (0, 0));
-        // Enable NMI and advance through the *next* VBlank.
-        bus.write(0x004200, 0x80);
+        // Leave VBlank before enabling; otherwise enabling NMI during VBlank
+        // immediately asserts an edge on real SNES hardware.
         bus.advance_master_clocks(
-            line_clocks * u64::from(NTSC_SCANLINES_PER_FRAME),
+            line_clocks * u64::from(NTSC_SCANLINES_PER_FRAME - VBLANK_START_SCANLINE),
         );
+        bus.write(0x004200, 0x80);
+        bus.advance_master_clocks(line_clocks * u64::from(VBLANK_START_SCANLINE));
         assert_eq!(bus.observability().nmi_counts(), (1, 0));
         assert!(bus.poll_nmi());
         assert_eq!(bus.observability().nmi_counts(), (1, 1));

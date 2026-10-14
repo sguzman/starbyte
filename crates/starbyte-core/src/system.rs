@@ -10,7 +10,7 @@ use crate::cartridge::Cartridge;
 use crate::coprocessor::Coprocessor;
 use crate::dma::DmaController;
 use crate::input::ControllerState;
-use crate::ppu::{FrameBuffer, Ppu};
+use crate::ppu::{FrameBuffer, Ppu, PpuLineState, SCREEN_HEIGHT};
 use crate::timing::{
     DOTS_PER_SCANLINE, HBLANK_START_DOT, MASTER_CLOCKS_PER_DOT, NTSC_SCANLINES_PER_FRAME,
     TimingState,
@@ -107,6 +107,11 @@ pub struct SystemBus {
     save_ram: Vec<u8>,
     wram: Vec<u8>,
     ppu: Ppu,
+    /// Frame-local raster states, intentionally excluded from guest save files.
+    #[serde(skip)]
+    current_video_lines: Vec<(u16, PpuLineState)>,
+    #[serde(skip)]
+    completed_video_lines: Vec<(u16, PpuLineState)>,
     cpu_to_apu_io: Vec<u8>,
     /// CPU ports actually written since the last APU synchronization.
     /// Without this mask, an SPC CONTROL port-clear is undone every CPU
@@ -148,6 +153,8 @@ impl Default for SystemBus {
             save_ram: Vec::new(),
             wram: vec![0; WRAM_SIZE],
             ppu: Ppu::default(),
+            current_video_lines: Vec::with_capacity(SCREEN_HEIGHT),
+            completed_video_lines: Vec::new(),
             cpu_to_apu_io: vec![0; APU_IO_PORT_COUNT],
             pending_apu_port_writes: 0,
             apu_to_cpu_io: vec![0; APU_IO_PORT_COUNT],
@@ -215,6 +222,8 @@ impl SystemBus {
             coprocessor.reset();
         }
         self.ppu = Ppu::default();
+        self.current_video_lines.clear();
+        self.completed_video_lines.clear();
         self.cpu_to_apu_io.fill(0);
         self.pending_apu_port_writes = 0;
         self.apu_to_cpu_io.fill(0);
@@ -244,11 +253,16 @@ impl SystemBus {
         if events.started_new_frame {
             self.observability.completed_ppu_scanline_samples =
                 std::mem::take(&mut self.observability.ppu_scanline_samples);
+            self.completed_video_lines = std::mem::take(&mut self.current_video_lines);
             self.initialize_hdma_channels();
         }
         if events.crossed_scanline {
             self.step_hdma_for_scanline();
             let scanline = self.timing.scanline;
+            if usize::from(scanline) < SCREEN_HEIGHT {
+                self.current_video_lines
+                    .push((scanline, self.ppu.capture_line_state()));
+            }
             if matches!(scanline, 1 | 32 | 64 | 96 | 128 | 160 | 192 | 211 | 224) {
                 let snapshot = [
                     scanline,
@@ -339,7 +353,8 @@ impl SystemBus {
 
     /// Render the current frame through the PPU model.
     pub fn render_frame(&self, framebuffer: &mut FrameBuffer) {
-        self.ppu.render_frame(framebuffer);
+        self.ppu
+            .render_frame_with_line_states(framebuffer, &self.completed_video_lines);
         if let Some(coprocessor) = &self.coprocessor {
             coprocessor.render_overlay(framebuffer);
         }

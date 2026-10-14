@@ -91,6 +91,10 @@ pub struct Ppu {
     /// Shared-register latch behavior is independent of tile BG scroll.
     #[serde(default)]
     mode7_parameters: [u16; 6],
+    /// Mode 7 uses full signed 13-bit scroll registers at $210D/$210E.
+    /// Ordinary tile backgrounds still use their separate 10-bit scrolls.
+    #[serde(default)]
+    mode7_offsets: [u16; 2],
     #[serde(default)]
     mode7_latch: u8,
 }
@@ -115,6 +119,7 @@ impl Default for Ppu {
             bgofs_latch: 0,
             bghofs_latch: 0,
             mode7_parameters: [0; 6],
+            mode7_offsets: [0; 2],
             mode7_latch: 0,
         }
     }
@@ -177,7 +182,15 @@ impl Ppu {
 
         self.registers[usize::from(register - 0x2100)] = value;
         match register {
-            0x210D..=0x2114 => self.write_bg_scroll(register, value),
+            0x210D..=0x2114 => {
+                self.write_bg_scroll(register, value);
+                if register <= 0x210E {
+                    let index = usize::from(register - 0x210D);
+                    self.mode7_offsets[index] =
+                        (u16::from(value) << 8) | u16::from(self.mode7_latch);
+                    self.mode7_latch = value;
+                }
+            }
             0x211B..=0x2120 => {
                 let index = usize::from(register - 0x211B);
                 self.mode7_parameters[index] =
@@ -421,8 +434,8 @@ impl Ppu {
         let d = i32::from(m[3] as i16);
         let center_x = mode7_signed13(m[4]);
         let center_y = mode7_signed13(m[5]);
-        let h_off = mode7_signed13(self.bg_scroll_x[0]);
-        let v_off = mode7_signed13(self.bg_scroll_y[0]);
+        let h_off = mode7_signed13(self.mode7_offsets[0]);
+        let v_off = mode7_signed13(self.mode7_offsets[1]);
         let m7sel = self.registers[0x1A];
         let direct_color = self.registers[0x30] & 0x01 != 0;
         for y in 0..framebuffer.height {
@@ -1193,6 +1206,31 @@ mod tests {
         assert_eq!(&frame.pixels()[4..8], &[0, 0, 0, 255]);
         assert_eq!(ppu.mode7_parameters[0], 0x0100);
         assert_eq!(ppu.mode7_parameters[3], 0x0100);
+    }
+
+    #[test]
+    fn mode7_uses_signed_thirteen_bit_scroll_independent_of_tile_scroll() {
+        let mut ppu = Ppu::default();
+        let mut frame = FrameBuffer::default();
+        // Set a 0x0400 (1024 pixel) horizontal offset: Mode 7 must read all
+        // thirteen bits rather than incorrectly truncating to the tiled 10.
+        ppu.write_register(0x210D, 0x00);
+        ppu.write_register(0x210D, 0x04);
+        assert_eq!(ppu.mode7_offsets[0] & 0x1FFF, 0x0400);
+        assert_eq!(ppu.bg_scroll_x[0] & 0x03FF, 0);
+        ppu.vram[0] = 1;
+        ppu.vram[129] = 1;
+        ppu.cgram[2] = 0x1F;
+        ppu.write_register(0x2100, 0x0F);
+        ppu.write_register(0x2105, 7);
+        ppu.write_register(0x212C, 1);
+        ppu.write_register(0x211A, 0x40); // Clip out-of-bounds pixels.
+        ppu.write_register(0x211B, 0);
+        ppu.write_register(0x211B, 1);
+        ppu.write_register(0x211E, 0);
+        ppu.write_register(0x211E, 1);
+        ppu.render_frame(&mut frame);
+        assert_eq!(&frame.pixels()[..4], &[0, 0, 0, 255]);
     }
 
     #[test]

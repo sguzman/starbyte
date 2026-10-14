@@ -1167,6 +1167,76 @@ mod tests {
     }
 
     #[test]
+    fn mode7_identity_matrix_renders_8bpp_tilemap_pixels_from_odd_vram_bytes() {
+        let mut ppu = Ppu::default();
+        let mut frame = FrameBuffer::default();
+        // Tilemap is at even bytes; tile graphics are at odd bytes.
+        ppu.vram[0] = 1; // Tile 1 at x=0,y=0.
+        ppu.vram[1] = 0xFF; // Decoy odd byte must not become tile index.
+        ppu.vram[129] = 1; // Tile 1 first 8bpp pixel, word high byte.
+        ppu.cgram[2] = 0x1F;
+        ppu.cgram[3] = 0;
+        ppu.write_register(0x2100, 0x0F);
+        ppu.write_register(0x2105, 7);
+        ppu.write_register(0x212C, 0x01);
+        // Shared 8/16-bit mode7 latch: write 0x0100 identity A/D.
+        ppu.write_register(0x211B, 0x00);
+        ppu.write_register(0x211B, 0x01);
+        ppu.write_register(0x211E, 0x00);
+        ppu.write_register(0x211E, 0x01);
+        ppu.render_frame(&mut frame);
+        assert_eq!(&frame.pixels()[..4], &[248, 0, 0, 255]);
+        assert_eq!(&frame.pixels()[4..8], &[0, 0, 0, 255]);
+        assert_eq!(ppu.mode7_parameters[0], 0x0100);
+        assert_eq!(ppu.mode7_parameters[3], 0x0100);
+    }
+
+    #[test]
+    fn mode7_hflip_and_outside_transparent_handling() {
+        let mut ppu = Ppu::default();
+        let mut frame = FrameBuffer::default();
+        // Identity transform, flip X; screen x=255 samples original x=0.
+        ppu.vram[0] = 1;
+        ppu.vram[129] = 1;
+        ppu.cgram[2] = 0x1F;
+        ppu.write_register(0x2100, 0x0F);
+        ppu.write_register(0x2105, 7);
+        ppu.write_register(0x212C, 1);
+        ppu.write_register(0x211B, 0);
+        ppu.write_register(0x211B, 1);
+        ppu.write_register(0x211E, 0);
+        ppu.write_register(0x211E, 1);
+        ppu.write_register(0x211A, 1);
+        ppu.render_frame(&mut frame);
+        let right = (frame.width() - 1) * 4;
+        assert_eq!(&frame.pixels()[right..right + 4], &[248, 0, 0, 255]);
+
+        // Non-wrapping outside pixels use backdrop instead of looping.
+        ppu.write_register(0x211A, 0x40);
+        ppu.write_register(0x211B, 0); // A becomes zero until next write.
+        ppu.write_register(0x211B, 1);
+        ppu.write_register(0x211F, 0x00);
+        ppu.write_register(0x211F, 0x08); // Center X=2048: 13-bit positive.
+        ppu.render_frame(&mut frame);
+        assert_eq!(&frame.pixels()[..4], &[0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn mode2_renders_bg1_four_bit_tiles_instead_of_just_sprites() {
+        let mut ppu = Ppu::default();
+        let mut frame = FrameBuffer::default();
+        ppu.write_register(0x2100, 0x0F);
+        ppu.write_register(0x2105, 2); // BG1 and BG2 4bpp.
+        ppu.write_register(0x210B, 1); // Tile pixels at VRAM byte 8192.
+        ppu.write_register(0x212C, 1);
+        ppu.cgram[2] = 0x1F;
+        ppu.vram[8192] = 0x80; // Top-left BG1 pixel uses color 1.
+        ppu.render_frame(&mut frame);
+        assert_eq!(&frame.pixels()[..4], &[248, 0, 0, 255]);
+        assert_eq!(&frame.pixels()[4..8], &[0, 0, 0, 255]);
+    }
+
+    #[test]
     fn bg1_tilemap_render_uses_vram_tiles_and_cgram_palette() {
         let mut ppu = Ppu::default();
         ppu.write_register(0x2100, 0x0F); // Full screen brightness.

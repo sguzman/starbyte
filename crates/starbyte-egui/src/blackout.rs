@@ -7,6 +7,8 @@ use starbyte_core::Emulator;
 use tracing::warn;
 
 const REPORT_AFTER_BLACK_FRAMES: u32 = 180;
+/// A handful of stray pixels must not suppress reports from an otherwise black scene.
+const MIN_VISIBLE_PIXELS: usize = 32;
 
 #[derive(Debug, Default)]
 pub struct BlackScreenMonitor {
@@ -23,7 +25,7 @@ impl BlackScreenMonitor {
     pub fn observe(
         &mut self,
         emulator: &Emulator,
-        cache_root: &Path,
+        _cache_root: &Path,
         audio_pairs: usize,
         nonzero_pairs: usize,
     ) {
@@ -32,7 +34,10 @@ impl BlackScreenMonitor {
             .framebuffer()
             .pixels()
             .chunks_exact(4)
-            .any(|pixel| pixel[..3].iter().any(|&channel| channel != 0));
+            .filter(|pixel| pixel[..3].iter().any(|&channel| channel != 0))
+            .take(MIN_VISIBLE_PIXELS)
+            .count()
+            == MIN_VISIBLE_PIXELS;
         let should_report = self.observe_visibility(frame, visible);
         if self.saw_visible_frame
             && self.consecutive_black_frames > 0
@@ -47,8 +52,10 @@ impl BlackScreenMonitor {
                 .map(|&n| u64::from(n))
                 .sum();
             let ports = emulator.apu_to_cpu_ports();
+            let reads = emulator.system_observability().apu_port_read_counts();
+            let inidisp = emulator.peek_ppu_register(0x2100).unwrap_or(0);
             self.blackout_checkpoints.push(format!(
-                "Frame {frame}: CPU={:02X}:{:04X} PPU-writes={ppu_writes} SPC-to-CPU={ports:?}",
+                "Frame {frame}: CPU={:02X}:{:04X} INIDISP={inidisp:02X} PPU-writes={ppu_writes} SPC-to-CPU={ports:?} APU-reads={reads:?}",
                 cpu.pbr, cpu.pc,
             ));
         }
@@ -95,9 +102,14 @@ impl BlackScreenMonitor {
             cpu.p,
             self.blackout_checkpoints.join("\n"),
         );
-        let path = cache_root
-            .join("diagnostics")
-            .join(format!("black-screen-{frame}.txt"));
+        // These are ephemeral QA artifacts, never application cache or user data.
+        // Linux reports always go under /tmp for easy Jobflick attachment.
+        let diagnostics_dir = if cfg!(target_os = "linux") {
+            Path::new("/tmp/starbyte/diagnostics").to_path_buf()
+        } else {
+            std::env::temp_dir().join("starbyte").join("diagnostics")
+        };
+        let path = diagnostics_dir.join(format!("black-screen-{frame}.txt"));
         if let Some(parent) = path.parent()
             && let Err(error) = std::fs::create_dir_all(parent)
         {

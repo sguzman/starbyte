@@ -29,6 +29,21 @@ const fn default_irq_timer_compare() -> u16 {
     DEFAULT_IRQ_TIMER_COMPARE
 }
 
+const fn default_wrio() -> u8 {
+    0xFF
+}
+
+/// PPU counter latches and independent low/high read toggles. Both registers
+/// are 9-bit, and a read of STAT78 resets the byte toggles.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+struct HvCounterLatch {
+    horizontal: u16,
+    vertical: u16,
+    horizontal_high_next: bool,
+    vertical_high_next: bool,
+    latched: bool,
+}
+
 /// Compact MMIO activity gathered during commercial-ROM probing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SystemBusObservability {
@@ -153,6 +168,12 @@ pub struct SystemBus {
     /// Approximate vertical IRQ timer target ($4209/$420A).
     #[serde(default = "default_irq_timer_compare")]
     vtime: u16,
+    /// Programmable I/O port $4201; bit 7 enables PPU H/V latching.
+    #[serde(default = "default_wrio")]
+    wrio: u8,
+    /// Latched H/V counters read via $213C/$213D.
+    #[serde(default)]
+    hv_latch: HvCounterLatch,
     rdnmi: bool,
     #[serde(default)]
     pending_nmi: bool,
@@ -191,6 +212,8 @@ impl Default for SystemBus {
             nmitimen: 0,
             htime: DEFAULT_IRQ_TIMER_COMPARE,
             vtime: DEFAULT_IRQ_TIMER_COMPARE,
+            wrio: default_wrio(),
+            hv_latch: HvCounterLatch::default(),
             rdnmi: false,
             pending_nmi: false,
             timeup: false,
@@ -263,6 +286,8 @@ impl SystemBus {
         self.nmitimen = 0;
         self.htime = DEFAULT_IRQ_TIMER_COMPARE;
         self.vtime = DEFAULT_IRQ_TIMER_COMPARE;
+        self.wrio = default_wrio();
+        self.hv_latch = HvCounterLatch::default();
         self.rdnmi = false;
         self.pending_nmi = false;
         self.timeup = false;
@@ -899,6 +924,16 @@ impl SystemBus {
         }
     }
 
+    /// Capture the approximate current raster position. The horizontal dot
+    /// coordinate intentionally uses the existing timing model; no new
+    /// instruction scheduling or clock changes are introduced.
+    fn latch_hv_counters(&mut self) {
+        self.hv_latch.horizontal = self.timing.dot & 0x01FF;
+        self.hv_latch.vertical = self.timing.scanline & 0x01FF;
+        self.hv_latch.latched = true;
+        // Hardware does not reset low/high byte selectors when latching.
+    }
+
     fn read_mmio(&mut self, address: Address) -> Option<u8> {
         if !is_cpu_io_bank(address) {
             return None;
@@ -906,6 +941,42 @@ impl SystemBus {
         let register = (address & 0xFFFF) as u16;
 
         match register {
+            0x2137 => {
+                // A software H/V latch read only works while WRIO bit 7 is
+                // high. SLHV itself is an open-bus register.
+                if self.wrio & 0x80 != 0 {
+                    self.latch_hv_counters();
+                }
+                Some(self.open_bus)
+            }
+            0x213C => {
+                let value = if self.hv_latch.horizontal_high_next {
+                    (self.open_bus & 0xFE)
+                        | ((self.hv_latch.horizontal >> 8) as u8 & 1)
+                } else {
+                    self.hv_latch.horizontal as u8
+                };
+                self.hv_latch.horizontal_high_next = !self.hv_latch.horizontal_high_next;
+                Some(value)
+            }
+            0x213D => {
+                let value = if self.hv_latch.vertical_high_next {
+                    (self.open_bus & 0xFE)
+                        | ((self.hv_latch.vertical >> 8) as u8 & 1)
+                } else {
+                    self.hv_latch.vertical as u8
+                };
+                self.hv_latch.vertical_high_next = !self.hv_latch.vertical_high_next;
+                Some(value)
+            }
+            0x213F => {
+                self.hv_latch.horizontal_high_next = false;
+                self.hv_latch.vertical_high_next = false;
+                // STAT78: NTSC (bit4 clear), external counter latch (bit6),
+                // PPU2 revision 3 in bits0..3; preserve open-bus bit5.
+                Some((self.open_bus & 0x20) | 0x03
+                    | if self.hv_latch.latched { 0x40 } else { 0 })
+            }
             0x2100..=0x213F => Some(self.ppu.read_data_register(register)),
             0x2140..=0x2143 => {
                 let port = usize::from(register - 0x2140);
@@ -947,6 +1018,7 @@ impl SystemBus {
                 }
                 Some(value)
             }
+            0x4213 => Some(self.wrio),
             0x4214 => Some(self.math.quotient as u8),
             0x4215 => Some((self.math.quotient >> 8) as u8),
             0x4216 => Some(self.math.product_remainder as u8),
@@ -1017,6 +1089,14 @@ impl SystemBus {
                     self.observability.nmi_assertions =
                         self.observability.nmi_assertions.saturating_add(1);
                 }
+                Some(())
+            }
+            0x4201 => {
+                // H/V hardware latch on the falling edge of WRIO bit 7.
+                if self.wrio & 0x80 != 0 && value & 0x80 == 0 {
+                    self.latch_hv_counters();
+                }
+                self.wrio = value;
                 Some(())
             }
             0x4202 => {
@@ -2075,6 +2155,55 @@ mod tests {
         bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT);
 
         assert_eq!(&bus.ppu().cgram()[..2], &[0x00, 0x7C]);
+    }
+
+
+    #[test]
+    fn chrono_field_hv_reads_return_current_scanline_not_zero() {
+        let mut bus = SystemBus::default();
+        let line_clocks = u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT;
+        bus.advance_master_clocks(line_clocks * 86 + 40);
+        // Chrono Trigger Field_ReadHVLatch at C0:5A46: STAT78 resets the
+        // output selector, then SLHV latches the position, then two OPVCT
+        // reads construct a 9-bit vertical counter.
+        let _ = bus.read(0x00213F);
+        let _ = bus.read(0x002137);
+        let low = bus.read(0x00213D);
+        let high = bus.read(0x00213D) & 1;
+        assert_eq!(u16::from(low) | (u16::from(high) << 8), 86);
+        assert_eq!(bus.read(0x00213D), 86);
+
+        bus.advance_master_clocks(line_clocks * 172);
+        let _ = bus.read(0x00213F);
+        let _ = bus.read(0x002137);
+        let low = bus.read(0x00213D);
+        let high = bus.read(0x00213D) & 1;
+        assert_eq!(u16::from(low) | (u16::from(high) << 8), 258);
+    }
+
+    #[test]
+    fn hv_latch_requires_wrio_high_and_read_byte_toggles_reset_on_stat78() {
+        let mut bus = SystemBus::default();
+        let line_clocks = u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT;
+        bus.advance_master_clocks(line_clocks * 112 + 20);
+        bus.write(0x004201, 0x00); // 1 -> 0 transition latches line 112.
+        assert_eq!(bus.read(0x004213), 0);
+        bus.advance_master_clocks(line_clocks * 10);
+        let _ = bus.read(0x002137); // Disabled while WRIO bit 7 is zero.
+        assert_eq!(bus.read(0x00213D), 112);
+        assert_eq!(bus.read(0x00213D) & 1, 0);
+        assert_eq!(bus.read(0x00213D), 112);
+
+        // STAT78 independently resets both horizontal and vertical toggles.
+        let _ = bus.read(0x00213C);
+        let _ = bus.read(0x00213F);
+        assert_eq!(bus.read(0x00213D), 112);
+        assert_eq!(bus.read(0x00213C), 5); // Dot coordinate: 20 clocks / 4.
+        bus.write(0x004201, 0x80);
+        let _ = bus.read(0x002137);
+        assert_eq!(bus.read(0x00213D) & 1, 0); // High byte after prior low.
+        let _ = bus.read(0x00213F);
+        assert_eq!(bus.read(0x00213D), 122);
     }
 
     #[test]

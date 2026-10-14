@@ -2183,6 +2183,20 @@ impl StarbyteApp {
                 })
                 .response
                 .on_hover_text("Choose playback speed; hold Tab during gameplay to fast-forward.");
+                // Keep viewport fitting visible during actual gameplay. SNES
+                // 256x224 integer 3x produces large black gutters on modern
+                // Wayland windows; fractional Fit preserves aspect ratio.
+                let fit_label = if self.config.video.integer_scale {
+                    "Fit Window"
+                } else {
+                    "Pixel Scale"
+                };
+                if ui.button(fit_label).on_hover_text(
+                    "Fit Window uses the largest aspect-correct image; Pixel Scale uses whole-number pixels for crisp edges.",
+                ).clicked() {
+                    self.config.video.integer_scale = !self.config.video.integer_scale;
+                    self.persist_config();
+                }
                 if ui.button("Quick Save (F5)").clicked() {
                     self.quick_save();
                 }
@@ -4818,6 +4832,21 @@ mod playback_tests {
         stats.record_texture_upload(Duration::ZERO);
         stats.record(Duration::from_millis(55));
         assert!(frame_spike_reportable(stats));
+    }
+
+    #[test]
+    fn play_view_fit_mode_uses_available_aspect_correct_space() {
+        use super::fit_game_size;
+        use eframe::egui::vec2;
+        let source = vec2(256.0, 224.0);
+        let available = vec2(930.0, 950.0);
+        let pixel_scale = fit_game_size(source, available, true);
+        let window_fit = fit_game_size(source, available, false);
+        assert_eq!(pixel_scale, vec2(768.0, 672.0));
+        assert_eq!(window_fit.x, available.x);
+        assert!(window_fit.y < available.y);
+        assert!(window_fit.y > pixel_scale.y);
+        assert!((window_fit.x / window_fit.y - 256.0 / 224.0).abs() < 0.0001);
     }
 
     #[test]

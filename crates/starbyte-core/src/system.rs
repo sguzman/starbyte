@@ -35,6 +35,11 @@ pub struct SystemBusObservability {
     ppu_write_counts: Vec<u32>,
     apu_port_read_counts: Vec<u32>,
     apu_port_write_counts: Vec<u32>,
+    // Small live scanline samples are diagnostic-only, not saved guest state.
+    #[serde(skip)]
+    ppu_scanline_samples: Vec<[u16; 5]>,
+    #[serde(skip)]
+    completed_ppu_scanline_samples: Vec<[u16; 5]>,
 }
 
 impl Default for SystemBusObservability {
@@ -43,6 +48,8 @@ impl Default for SystemBusObservability {
             ppu_write_counts: vec![0; PPU_REGISTER_COUNT],
             apu_port_read_counts: vec![0; APU_IO_PORT_COUNT],
             apu_port_write_counts: vec![0; APU_IO_PORT_COUNT],
+            ppu_scanline_samples: Vec::new(),
+            completed_ppu_scanline_samples: Vec::new(),
         }
     }
 }
@@ -64,6 +71,13 @@ impl SystemBusObservability {
     #[must_use]
     pub fn apu_port_write_counts(&self) -> &[u32] {
         &self.apu_port_write_counts
+    }
+
+    /// Register snapshots from selected scanlines of the last completed frame.
+    /// Each entry is [scanline, INIDISP, BGMODE, TM, TS].
+    #[must_use]
+    pub fn completed_ppu_scanline_samples(&self) -> &[[u16; 5]] {
+        &self.completed_ppu_scanline_samples
     }
 }
 
@@ -228,10 +242,22 @@ impl SystemBus {
             coprocessor.step_master_cycles(clocks);
         }
         if events.started_new_frame {
+            self.observability.completed_ppu_scanline_samples =
+                std::mem::take(&mut self.observability.ppu_scanline_samples);
             self.initialize_hdma_channels();
         }
         if events.crossed_scanline {
             self.step_hdma_for_scanline();
+            let scanline = self.timing.scanline;
+            if matches!(scanline, 1 | 32 | 64 | 96 | 128 | 160 | 192 | 211 | 224) {
+                self.observability.ppu_scanline_samples.push([
+                    scanline,
+                    u16::from(self.peek_ppu_register(0x2100).unwrap_or(0)),
+                    u16::from(self.peek_ppu_register(0x2105).unwrap_or(0)),
+                    u16::from(self.peek_ppu_register(0x212C).unwrap_or(0)),
+                    u16::from(self.peek_ppu_register(0x212D).unwrap_or(0)),
+                ]);
+            }
         }
         if events.entered_vblank {
             trace!(
@@ -1972,4 +1998,23 @@ mod tests {
 
         assert_eq!(&frame.pixels()[..4], &[248, 0, 0, 0xFF]);
     }
+    #[test]
+    fn samples_active_scanline_display_registers_before_end_of_frame() {
+        let mut bus = SystemBus::default();
+        let line_clocks = u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT;
+        bus.write(0x002100, 0x0F);
+        bus.write(0x00212C, 0x01);
+        for line in 1..=261 {
+            if line == 112 {
+                bus.write(0x00212C, 0x10);
+            }
+            bus.advance_master_clocks(line_clocks);
+        }
+        bus.advance_master_clocks(line_clocks);
+        let samples = bus.observability().completed_ppu_scanline_samples();
+        assert_eq!(samples.iter().find(|s| s[0] == 64).unwrap()[3], 0x01);
+        assert_eq!(samples.iter().find(|s| s[0] == 128).unwrap()[3], 0x10);
+        assert_eq!(samples.iter().find(|s| s[0] == 128).unwrap()[1], 0x0F);
+    }
+
 }

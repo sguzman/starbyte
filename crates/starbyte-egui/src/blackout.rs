@@ -25,6 +25,9 @@ pub struct BlackScreenMonitor {
     reported_current_blackout: bool,
     /// Sparse 1s interval snapshots distinguish CPU wait loops from fades.
     blackout_checkpoints: Vec<String>,
+    /// Chrono USA $0158 field-loop tick samples, tracked only across rendered frames.
+    last_field_tick: Option<u16>,
+    field_tick_changes: u64,
 }
 
 impl BlackScreenMonitor {
@@ -47,6 +50,19 @@ impl BlackScreenMonitor {
             == MIN_VISIBLE_PIXELS;
         let blackout_report = self.observe_visibility(frame, visible);
         let periodic_report = periodic_status_due(frame);
+        // Chrono Trigger's field loop increments WRAM $0158 before entering
+        // Field_WaitVblank at C0:EC71. Observe changes without altering guest
+        // memory or tracing any individual CPU instructions.
+        let field_tick = emulator
+            .peek_wram_u8(0x7E0158)
+            .zip(emulator.peek_wram_u8(0x7E0159))
+            .map(|(low, high)| u16::from_le_bytes([low, high]));
+        if let Some(tick) = field_tick {
+            if self.last_field_tick.is_some_and(|previous| previous != tick) {
+                self.field_tick_changes = self.field_tick_changes.saturating_add(1);
+            }
+            self.last_field_tick = Some(tick);
+        }
         if self.saw_visible_frame
             && self.consecutive_black_frames > 0
             && self.consecutive_black_frames.is_multiple_of(60)
@@ -77,6 +93,11 @@ impl BlackScreenMonitor {
         let main_layers = emulator.peek_ppu_register(0x212C).unwrap_or(0);
         let sub_layers = emulator.peek_ppu_register(0x212D).unwrap_or(0);
         let (nmitimen, htime, vtime) = emulator.irq_timer_configuration();
+        let (nmi_asserted, nmi_dispatched) = emulator.system_observability().nmi_counts();
+        let field_pending = emulator.peek_wram_u8(0x7E0152);
+        let field_mode = emulator.peek_wram_u8(0x7E0100);
+        let field_task = emulator.peek_wram_u8(0x7E0146);
+        let field_upload = emulator.peek_wram_u8(0x7E0147);
         let ppu_writes: u64 = emulator
             .system_observability()
             .ppu_write_counts()
@@ -107,6 +128,9 @@ impl BlackScreenMonitor {
              CPU {:02X}:{:04X}; A={:04X} X={:04X} Y={:04X} P={:02X}\n\
              PPU INIDISP={inidisp:02X} BGMODE={bgmode:02X} TM={main_layers:02X} TS={sub_layers:02X} writes={ppu_writes}\n\
              IRQ NMITIMEN={nmitimen:02X} HTIME={htime} VTIME={vtime}\n\
+             VBlank NMI edges raised={nmi_asserted}; dispatched={nmi_dispatched}\n\
+             Chrono US 1.0 field wait $0152={field_pending:?}; mode $0100={field_mode:?}; tick $0158={field_tick:?}; sampled tick changes={}\n\
+             Chrono field task $0146={field_task:?}; upload $0147={field_upload:?}\n\
              APU CPU-to-SPC={input_ports:?}; SPC-to-CPU={output_ports:?}\n\
              APU MMIO reads={reads:?}; writes={writes:?}\n\
              Input host={host_buttons:04X} latched={game_latched_buttons:04X} busy={joypad_busy}\n\
@@ -115,6 +139,7 @@ impl BlackScreenMonitor {
              PPU register samples from the last completed frame (after scanline HDMA):\n{}\n\
              No cartridge data, SRAM, or save-state bytes included.\n",
             self.consecutive_black_frames,
+            self.field_tick_changes,
             cpu.pbr,
             cpu.pc,
             cpu.a,

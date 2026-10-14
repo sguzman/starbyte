@@ -1,6 +1,7 @@
 //! Bootstrap PPU register model and software frame generation.
 
 use serde::{Deserialize, Serialize};
+use std::ops::Range;
 
 /// Native SNES framebuffer dimensions.
 pub const SCREEN_WIDTH: usize = 256;
@@ -249,18 +250,31 @@ impl Ppu {
 
     /// Render one deterministic bootstrap frame.
     pub fn render_frame(&self, framebuffer: &mut FrameBuffer) {
+        self.render_rows(framebuffer, 0..framebuffer.height);
+    }
+
+    /// Render one visible scanline using the PPU registers *and graphics
+    /// memory* available at that line's emulated time. Earlier and later
+    /// framebuffer rows are left untouched.
+    pub fn render_scanline(&self, framebuffer: &mut FrameBuffer, line: usize) {
+        if line < framebuffer.height {
+            self.render_rows(framebuffer, line..line + 1);
+        }
+    }
+
+    fn render_rows(&self, framebuffer: &mut FrameBuffer, rows: Range<usize>) {
         let forced_blank = self.registers[0x00] & 0x80 != 0;
         let brightness = self.registers[0x00] & 0x0F;
         if forced_blank || brightness == 0 {
-            fill_frame(framebuffer, [0, 0, 0, 0xFF]);
+            fill_rows(framebuffer, [0, 0, 0, 0xFF], rows);
             return;
         }
 
         let backdrop = bgr555_to_rgba(self.backdrop_color());
         let bgmode = self.registers[0x05] & 0x07;
-        fill_frame(framebuffer, backdrop);
+        fill_rows(framebuffer, backdrop, rows.clone());
         let mut origins = vec![0_u8; framebuffer.width * framebuffer.height];
-        self.render_screen_layers(framebuffer, &mut origins, bgmode, false);
+        self.render_screen_layers(framebuffer, &mut origins, bgmode, false, rows.clone());
 
         // CGWSEL selects the subscreen as the second color-math operand.
         // Its layers must be composited independently of main-screen TM:
@@ -269,9 +283,9 @@ impl Ppu {
         let mut sub_origins = None;
         if self.registers[0x30] & 0x02 != 0 && self.registers[0x31] & 0x3F != 0 {
             let mut sub_frame = FrameBuffer::default();
-            fill_frame(&mut sub_frame, bgr555_to_rgba(self.fixed_color));
+            fill_rows(&mut sub_frame, bgr555_to_rgba(self.fixed_color), rows.clone());
             let mut sub_layers = vec![0_u8; sub_frame.width * sub_frame.height];
-            self.render_screen_layers(&mut sub_frame, &mut sub_layers, bgmode, true);
+            self.render_screen_layers(&mut sub_frame, &mut sub_layers, bgmode, true, rows.clone());
             subscreen = Some(sub_frame);
             sub_origins = Some(sub_layers);
         }
@@ -280,8 +294,9 @@ impl Ppu {
             &origins,
             subscreen.as_ref(),
             sub_origins.as_deref(),
+            rows.clone(),
         );
-        apply_brightness(framebuffer, brightness);
+        apply_brightness_rows(framebuffer, brightness, rows);
     }
 
     /// Borrow raw CGRAM bytes for tests and regression harnesses.
@@ -376,6 +391,7 @@ impl Ppu {
         origins: &mut [u8],
         mode: u8,
         subscreen: bool,
+        rows: Range<usize>,
     ) {
         let enabled = self.registers[if subscreen { 0x2D } else { 0x2C }];
         let mut depth = vec![0_u8; framebuffer.width * framebuffer.height];
@@ -398,7 +414,7 @@ impl Ppu {
             _ => &[],
         };
         if mode == 7 && enabled & 0x01 != 0 {
-            self.render_mode7_background(framebuffer, &mut depth, origins, subscreen);
+            self.render_mode7_background(framebuffer, &mut depth, origins, subscreen, rows.clone());
         }
         for background in backgrounds {
             if enabled & (1 << background.index) != 0 {
@@ -409,11 +425,12 @@ impl Ppu {
                     mode,
                     self.resolve_background_config(*background),
                     subscreen,
+                    rows.clone(),
                 );
             }
         }
         if enabled & 0x10 != 0 {
-            self.render_objects(framebuffer, &mut depth, origins, mode, subscreen);
+            self.render_objects(framebuffer, &mut depth, origins, mode, subscreen, rows);
         }
     }
 
@@ -426,6 +443,7 @@ impl Ppu {
         depth: &mut [u8],
         origins: &mut [u8],
         subscreen: bool,
+        rows: Range<usize>,
     ) {
         let m = self.mode7_parameters;
         let a = i32::from(m[0] as i16);
@@ -438,7 +456,7 @@ impl Ppu {
         let v_off = mode7_signed13(self.mode7_offsets[1]);
         let m7sel = self.registers[0x1A];
         let direct_color = self.registers[0x30] & 0x01 != 0;
-        for y in 0..framebuffer.height {
+        for y in rows {
             let sy = if m7sel & 0x02 != 0 {
                 framebuffer.height - 1 - y
             } else {
@@ -505,9 +523,10 @@ impl Ppu {
         mode: u8,
         background: BackgroundConfig,
         subscreen: bool,
+        rows: Range<usize>,
     ) {
         let bg3_high = self.registers[0x05] & 0x08 != 0;
-        for y in 0..framebuffer.height {
+        for y in rows {
             for x in 0..framebuffer.width {
                 if self.window_masks_layer(background.index, x, subscreen) {
                     continue;
@@ -715,6 +734,7 @@ impl Ppu {
         origins: &[u8],
         subscreen: Option<&FrameBuffer>,
         sub_origins: Option<&[u8]>,
+        rows: Range<usize>,
     ) {
         let cgwsel = self.registers[0x30];
         let operation = self.registers[0x31];
@@ -724,7 +744,13 @@ impl Ppu {
         let use_subscreen = cgwsel & 0x02 != 0;
         let clip_mode = cgwsel >> 6;
         let math_mode = (cgwsel >> 4) & 0x03;
-        for (index, rgba) in framebuffer.pixels.chunks_exact_mut(4).enumerate() {
+        for (index, rgba) in framebuffer
+            .pixels
+            .chunks_exact_mut(4)
+            .enumerate()
+            .skip(rows.start * framebuffer.width)
+            .take((rows.end - rows.start) * framebuffer.width)
+        {
             let x = index % framebuffer.width;
             let inside = self.inside_color_window(x);
             let clip_main = match clip_mode {
@@ -788,6 +814,7 @@ impl Ppu {
         origins: &mut [u8],
         mode: u8,
         subscreen: bool,
+        rows: Range<usize>,
     ) {
         let objsel = self.registers[0x01];
         let (small_size, large_size) = object_size_pair(objsel >> 5);
@@ -824,7 +851,7 @@ impl Ppu {
 
             for local_y in 0..usize::from(size) {
                 let screen_y = (usize::from(y) + local_y) & 0xFF;
-                if screen_y >= framebuffer.height {
+                if screen_y >= framebuffer.height || !rows.contains(&screen_y) {
                     continue;
                 }
 
@@ -1069,19 +1096,29 @@ fn sprite_priority_rank(mode: u8, priority: u8) -> u8 {
     }
 }
 
-fn fill_frame(framebuffer: &mut FrameBuffer, rgba: [u8; 4]) {
-    for pixel in framebuffer.pixels.chunks_exact_mut(4) {
+fn fill_rows(framebuffer: &mut FrameBuffer, rgba: [u8; 4], rows: Range<usize>) {
+    for pixel in framebuffer
+        .pixels
+        .chunks_exact_mut(4)
+        .skip(rows.start * framebuffer.width)
+        .take((rows.end - rows.start) * framebuffer.width)
+    {
         pixel.copy_from_slice(&rgba);
     }
 }
 
 /// Uniform frame brightness for the bootstrap renderer; scanline fades are
 /// a later step. Full intensity is 15; 0 is handled as an early black frame.
-fn apply_brightness(framebuffer: &mut FrameBuffer, brightness: u8) {
+fn apply_brightness_rows(framebuffer: &mut FrameBuffer, brightness: u8, rows: Range<usize>) {
     if brightness == 15 {
         return;
     }
-    for pixel in framebuffer.pixels.chunks_exact_mut(4) {
+    for pixel in framebuffer
+        .pixels
+        .chunks_exact_mut(4)
+        .skip(rows.start * framebuffer.width)
+        .take((rows.end - rows.start) * framebuffer.width)
+    {
         for component in &mut pixel[..3] {
             *component = (u16::from(*component) * u16::from(brightness) / 15) as u8;
         }
@@ -1151,6 +1188,59 @@ mod tests {
         ppu.write_register(0x2119, 0x56);
 
         assert_eq!(&ppu.vram()[..4], &[0x34, 0x12, 0x78, 0x56]);
+    }
+
+    #[test]
+    fn scanline_renderer_equals_full_frame_for_unchanged_mode1_ppu() {
+        let mut ppu = Ppu::default();
+        ppu.write_register(0x2100, 0x0F);
+        ppu.write_register(0x2105, 0x01);
+        ppu.write_register(0x212C, 0x11);
+        ppu.write_register(0x2107, 0);
+        ppu.write_register(0x2121, 1);
+        ppu.write_register(0x2122, 0x1F);
+        ppu.write_register(0x2122, 0);
+        // A colored pixel in BG1 tile 1.
+        ppu.write_register(0x2115, 0x80);
+        ppu.write_register(0x2116, 0);
+        ppu.write_register(0x2117, 0);
+        ppu.write_register(0x2118, 1);
+        ppu.write_register(0x2119, 0);
+        ppu.write_register(0x2116, 16);
+        ppu.write_register(0x2117, 0);
+        ppu.write_register(0x2118, 0x80);
+        ppu.write_register(0x2119, 0);
+
+        let mut expected = FrameBuffer::default();
+        ppu.render_frame(&mut expected);
+        let mut composed = FrameBuffer::default();
+        for line in 0..composed.height() {
+            ppu.render_scanline(&mut composed, line);
+        }
+        assert_eq!(composed.pixels(), expected.pixels());
+        // This ensures the test isn't proving equivalence between two
+        // identically black frames.
+        assert_eq!(&composed.pixels()[..4], &[248, 0, 0, 255]);
+    }
+
+    #[test]
+    fn scanline_renderer_preserves_rows_across_ppu_mode_and_palette_changes() {
+        let mut ppu = Ppu::default();
+        ppu.write_register(0x2100, 0x0F);
+        let mut framebuffer = FrameBuffer::default();
+        ppu.write_register(0x2121, 0);
+        ppu.write_register(0x2122, 0x1F);
+        ppu.write_register(0x2122, 0);
+        ppu.render_scanline(&mut framebuffer, 0);
+        ppu.write_register(0x2121, 0);
+        ppu.write_register(0x2122, 0);
+        ppu.write_register(0x2122, 0x7C);
+        ppu.render_scanline(&mut framebuffer, 1);
+        ppu.write_register(0x2100, 0x80);
+        ppu.render_scanline(&mut framebuffer, 2);
+        assert_eq!(&framebuffer.pixels()[0..4], &[248, 0, 0, 255]);
+        assert_eq!(&framebuffer.pixels()[256 * 4..256 * 4 + 4], &[0, 0, 248, 255]);
+        assert_eq!(&framebuffer.pixels()[2 * 256 * 4..2 * 256 * 4 + 4], &[0, 0, 0, 255]);
     }
 
     #[test]

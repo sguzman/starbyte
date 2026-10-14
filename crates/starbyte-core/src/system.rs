@@ -35,6 +35,12 @@ pub struct SystemBusObservability {
     ppu_write_counts: Vec<u32>,
     apu_port_read_counts: Vec<u32>,
     apu_port_write_counts: Vec<u32>,
+    /// NMI edges raised by VBlank timing (diagnostic, never saved).
+    #[serde(skip)]
+    nmi_assertions: u64,
+    /// NMI edges actually consumed by the 65816 (diagnostic, never saved).
+    #[serde(skip)]
+    nmi_dispatches: u64,
     // Small live scanline samples are diagnostic-only, not saved guest state.
     #[serde(skip)]
     ppu_scanline_samples: Vec<[u16; 5]>,
@@ -48,6 +54,8 @@ impl Default for SystemBusObservability {
             ppu_write_counts: vec![0; PPU_REGISTER_COUNT],
             apu_port_read_counts: vec![0; APU_IO_PORT_COUNT],
             apu_port_write_counts: vec![0; APU_IO_PORT_COUNT],
+            nmi_assertions: 0,
+            nmi_dispatches: 0,
             ppu_scanline_samples: Vec::new(),
             completed_ppu_scanline_samples: Vec::new(),
         }
@@ -71,6 +79,12 @@ impl SystemBusObservability {
     #[must_use]
     pub fn apu_port_write_counts(&self) -> &[u32] {
         &self.apu_port_write_counts
+    }
+
+    /// Number of scheduled and dispatched NMI edges since cartridge reset.
+    #[must_use]
+    pub const fn nmi_counts(&self) -> (u64, u64) {
+        (self.nmi_assertions, self.nmi_dispatches)
     }
 
     /// Register snapshots from selected scanlines of the last completed frame.
@@ -276,6 +290,8 @@ impl SystemBus {
             self.rdnmi = true;
             if self.nmi_enabled() {
                 self.pending_nmi = true;
+                self.observability.nmi_assertions =
+                    self.observability.nmi_assertions.saturating_add(1);
             }
         }
         if irq_match {
@@ -562,6 +578,10 @@ impl Bus for SystemBus {
     fn poll_nmi(&mut self) -> bool {
         let pending = self.pending_nmi;
         self.pending_nmi = false;
+        if pending {
+            self.observability.nmi_dispatches =
+                self.observability.nmi_dispatches.saturating_add(1);
+        }
         pending
     }
 
@@ -1956,6 +1976,25 @@ mod tests {
         bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT);
 
         assert_eq!(&bus.ppu().cgram()[..2], &[0x00, 0x7C]);
+    }
+
+    #[test]
+    fn nmi_diagnostic_counts_only_enabled_edges_and_cpu_dispatches() {
+        let mut bus = SystemBus::default();
+        let line_clocks = u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT;
+        // No VBlank interrupt when disabled.
+        bus.advance_master_clocks(line_clocks * u64::from(VBLANK_START_SCANLINE));
+        assert_eq!(bus.observability().nmi_counts(), (0, 0));
+        // Enable NMI and advance through the *next* VBlank.
+        bus.write(0x004200, 0x80);
+        bus.advance_master_clocks(
+            line_clocks * u64::from(NTSC_SCANLINES_PER_FRAME),
+        );
+        assert_eq!(bus.observability().nmi_counts(), (1, 0));
+        assert!(bus.poll_nmi());
+        assert_eq!(bus.observability().nmi_counts(), (1, 1));
+        assert!(!bus.poll_nmi());
+        assert_eq!(bus.observability().nmi_counts(), (1, 1));
     }
 
     #[test]

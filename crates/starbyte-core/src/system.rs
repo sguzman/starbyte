@@ -314,12 +314,13 @@ impl SystemBus {
             if scanline == 0 {
                 self.observability.completed_ppu_scanline_samples =
                     std::mem::take(&mut self.observability.ppu_scanline_samples);
-                self.completed_raster_frame =
-                    if self.raster_recording && self.raster_lines_rendered == SCREEN_HEIGHT as u16 {
-                        Some(std::mem::take(&mut self.raster_frame))
-                    } else {
-                        None
-                    };
+                self.completed_raster_frame = if self.raster_recording
+                    && self.raster_lines_rendered == SCREEN_HEIGHT as u16
+                {
+                    Some(std::mem::take(&mut self.raster_frame))
+                } else {
+                    None
+                };
                 self.raster_recording = false;
                 self.raster_lines_rendered = 0;
                 self.initialize_hdma_channels();
@@ -2091,16 +2092,17 @@ mod tests {
         bus.write(0x002121, 0);
         bus.write(0x002122, 0);
         bus.write(0x002122, 0x7C);
-        bus.advance_master_clocks(
-            line_clocks * u64::from(NTSC_SCANLINES_PER_FRAME - 64),
-        );
+        bus.advance_master_clocks(line_clocks * u64::from(NTSC_SCANLINES_PER_FRAME - 64));
         assert!(bus.completed_raster_frame.is_some());
         let mut frame = FrameBuffer::default();
         bus.render_frame(&mut frame);
         // Earlier raster pixels are red; after TM switches to sprites-only
         // the PPU's backdrop changes to blue.
         assert_eq!(&frame.pixels()[0..4], &[248, 0, 0, 255]);
-        assert_eq!(&frame.pixels()[100 * 256 * 4..100 * 256 * 4 + 4], &[0, 0, 248, 255]);
+        assert_eq!(
+            &frame.pixels()[100 * 256 * 4..100 * 256 * 4 + 4],
+            &[0, 0, 248, 255]
+        );
     }
 
     #[test]
@@ -2110,9 +2112,7 @@ mod tests {
         bus.write(0x002105, 7);
         bus.write(0x00212C, 1);
         let line_clocks = u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT;
-        bus.advance_master_clocks(
-            line_clocks * u64::from(NTSC_SCANLINES_PER_FRAME),
-        );
+        bus.advance_master_clocks(line_clocks * u64::from(NTSC_SCANLINES_PER_FRAME));
         assert!(bus.completed_raster_frame.is_none());
         let mut actual = FrameBuffer::default();
         let mut expected = FrameBuffer::default();

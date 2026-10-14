@@ -250,13 +250,14 @@ impl SystemBus {
             self.step_hdma_for_scanline();
             let scanline = self.timing.scanline;
             if matches!(scanline, 1 | 32 | 64 | 96 | 128 | 160 | 192 | 211 | 224) {
-                self.observability.ppu_scanline_samples.push([
+                let snapshot = [
                     scanline,
                     u16::from(self.peek_ppu_register(0x2100).unwrap_or(0)),
                     u16::from(self.peek_ppu_register(0x2105).unwrap_or(0)),
                     u16::from(self.peek_ppu_register(0x212C).unwrap_or(0)),
                     u16::from(self.peek_ppu_register(0x212D).unwrap_or(0)),
-                ]);
+                ];
+                self.observability.ppu_scanline_samples.push(snapshot);
             }
         }
         if events.entered_vblank {
@@ -1998,6 +1999,7 @@ mod tests {
 
         assert_eq!(&frame.pixels()[..4], &[248, 0, 0, 0xFF]);
     }
+
     #[test]
     fn samples_active_scanline_display_registers_before_end_of_frame() {
         let mut bus = SystemBus::default();
@@ -2016,5 +2018,4 @@ mod tests {
         assert_eq!(samples.iter().find(|s| s[0] == 128).unwrap()[3], 0x10);
         assert_eq!(samples.iter().find(|s| s[0] == 128).unwrap()[1], 0x0F);
     }
-
 }

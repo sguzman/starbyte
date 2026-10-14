@@ -14,6 +14,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     audio::{AudioDeviceStatus, AudioOutput},
+    blackout::BlackScreenMonitor,
     logging::SharedLogBuffer,
     worker::{AppWorker, WorkerCommand, WorkerCommandKind, WorkerEvent},
 };
@@ -590,6 +591,7 @@ pub struct StarbyteApp {
     worker: AppWorker,
     library_snapshot: LibrarySnapshot,
     framebuffer_texture: Option<TextureHandle>,
+    blackout_monitor: BlackScreenMonitor,
     cover_textures: BTreeMap<String, TextureHandle>,
     failed_cover_ids: BTreeSet<String>,
     held_input: ControllerState,
@@ -770,6 +772,7 @@ impl StarbyteApp {
             worker,
             library_snapshot: cached_snapshot.unwrap_or_else(empty_snapshot),
             framebuffer_texture: None,
+            blackout_monitor: BlackScreenMonitor::default(),
             cover_textures: BTreeMap::new(),
             failed_cover_ids: BTreeSet::new(),
             held_input: ControllerState::default(),
@@ -1692,6 +1695,12 @@ impl StarbyteApp {
                 }
                 let uploaded = Instant::now();
                 self.refresh_framebuffer(ctx);
+                self.blackout_monitor.observe(
+                    self.session.emulator(),
+                    &self.cache_root,
+                    self.last_audio_pairs,
+                    self.last_audio_nonzero_pairs,
+                );
                 self.frame_performance
                     .record_texture_upload(uploaded.elapsed());
                 let pcm = &self.session.emulator().audio_samples().samples;

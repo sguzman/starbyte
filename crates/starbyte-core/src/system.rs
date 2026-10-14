@@ -121,6 +121,11 @@ pub struct SystemBus {
     save_ram: Vec<u8>,
     wram: Vec<u8>,
     ppu: Ppu,
+    /// Coherent PPU/video-memory snapshot from a late *visible* scanline.
+    /// Unlike frame-end PPU state, this predates the game's VBlank uploads.
+    /// Never serialized as guest save-state data.
+    #[serde(skip)]
+    visible_ppu_snapshot: Option<Ppu>,
     cpu_to_apu_io: Vec<u8>,
     /// CPU ports actually written since the last APU synchronization.
     /// Without this mask, an SPC CONTROL port-clear is undone every CPU
@@ -162,6 +167,7 @@ impl Default for SystemBus {
             save_ram: Vec::new(),
             wram: vec![0; WRAM_SIZE],
             ppu: Ppu::default(),
+            visible_ppu_snapshot: None,
             cpu_to_apu_io: vec![0; APU_IO_PORT_COUNT],
             pending_apu_port_writes: 0,
             apu_to_cpu_io: vec![0; APU_IO_PORT_COUNT],
@@ -229,6 +235,7 @@ impl SystemBus {
             coprocessor.reset();
         }
         self.ppu = Ppu::default();
+        self.visible_ppu_snapshot = None;
         self.cpu_to_apu_io.fill(0);
         self.pending_apu_port_writes = 0;
         self.apu_to_cpu_io.fill(0);
@@ -263,6 +270,12 @@ impl SystemBus {
         if events.crossed_scanline {
             self.step_hdma_for_scanline();
             let scanline = self.timing.scanline;
+            if scanline == 211 {
+                // The game may disable all backgrounds during VBlank. A
+                // coherent PPU clone at the last regular visible sampling
+                // point retains *matching* registers, VRAM, CGRAM and OAM.
+                self.visible_ppu_snapshot = Some(self.ppu.clone());
+            }
             if matches!(scanline, 1 | 32 | 64 | 96 | 128 | 160 | 192 | 211 | 224) {
                 let snapshot = [
                     scanline,
@@ -355,7 +368,25 @@ impl SystemBus {
 
     /// Render the current frame through the PPU model.
     pub fn render_frame(&self, framebuffer: &mut FrameBuffer) {
-        self.ppu.render_frame(framebuffer);
+        let live_main = self.ppu.read_register(0x212C);
+        // Only substitute when the end-of-frame state has *no* background
+        // layers, while the visible portion explicitly enabled one. This
+        // avoids changing already-working Mode7 maps and ordinary scenes.
+        // A single coherent snapshot also avoids the mixed-timestamp VRAM
+        // corruption of the rolled-back experimental scanline compositor.
+        let ppu = self
+            .visible_ppu_snapshot
+            .as_ref()
+            .filter(|visible| {
+                let visible_main = visible.read_register(0x212C);
+                let visible_display = visible.read_register(0x2100);
+                live_main & 0x0F == 0
+                    && visible_main & 0x0F != 0
+                    && visible_display & 0x80 == 0
+                    && visible_display & 0x0F != 0
+            })
+            .unwrap_or(&self.ppu);
+        ppu.render_frame(framebuffer);
         if let Some(coprocessor) = &self.coprocessor {
             coprocessor.render_overlay(framebuffer);
         }
@@ -1977,6 +2008,73 @@ mod tests {
         bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT);
 
         assert_eq!(&bus.ppu().cgram()[..2], &[0x00, 0x7C]);
+    }
+
+    #[test]
+    fn visible_ppu_snapshot_preserves_pre_vblank_background_and_palette() {
+        let mut bus = SystemBus::default();
+        bus.write(0x002100, 0x0F); // Visible, full brightness.
+        bus.write(0x002105, 0x01); // Mode 1, BG1 is 4bpp.
+        bus.write(0x00212C, 0x01); // Main screen BG1.
+        // BG1 tile map entry 0 refers to tile 1.
+        bus.write(0x002115, 0x80);
+        bus.write(0x002116, 0);
+        bus.write(0x002117, 0);
+        bus.write(0x002118, 1);
+        bus.write(0x002119, 0);
+        // Tile 1 uses four-plane data beginning at VRAM byte 32.
+        bus.write(0x002116, 16);
+        bus.write(0x002117, 0);
+        bus.write(0x002118, 0x80);
+        bus.write(0x002119, 0);
+        // Color index 1 is bright red.
+        bus.write(0x002121, 1);
+        bus.write(0x002122, 0x1F);
+        bus.write(0x002122, 0x00);
+        let line_clocks = u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT;
+        bus.advance_master_clocks(line_clocks * 211);
+        let snapshot = bus.visible_ppu_snapshot.as_ref().unwrap();
+        assert_eq!(snapshot.read_register(0x212C), 1);
+        let mut expected = FrameBuffer::default();
+        snapshot.render_frame(&mut expected);
+        assert_eq!(&expected.pixels()[..4], &[248, 0, 0, 255]);
+
+        // After VBlank begins, the game makes visible BG1 disappear and
+        // overwrites VRAM and CGRAM for its *next* scene.
+        bus.write(0x00212C, 0x10);
+        bus.write(0x002121, 1);
+        bus.write(0x002122, 0);
+        bus.write(0x002122, 0);
+        bus.write(0x002116, 16);
+        bus.write(0x002117, 0);
+        bus.write(0x002118, 0);
+        bus.write(0x002119, 0);
+        let mut frame = FrameBuffer::default();
+        bus.render_frame(&mut frame);
+        assert_eq!(frame.pixels(), expected.pixels());
+        assert_eq!(bus.ppu.read_register(0x212C), 0x10);
+    }
+
+    #[test]
+    fn ordinary_background_frames_keep_the_existing_frame_end_renderer() {
+        let mut bus = SystemBus::default();
+        bus.write(0x002100, 0x0F);
+        bus.write(0x002105, 0x07);
+        bus.write(0x00212C, 1);
+        bus.advance_master_clocks(
+            u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT * 211,
+        );
+        assert!(bus.visible_ppu_snapshot.is_some());
+        // Although an earlier snapshot exists, a still-visible BG at frame
+        // end continues down the exact legacy render path.
+        bus.write(0x002132, 0x3F);
+        let mut actual = FrameBuffer::default();
+        let mut expected = FrameBuffer::default();
+        bus.render_frame(&mut actual);
+        bus.ppu.render_frame(&mut expected);
+        assert_eq!(actual.pixels(), expected.pixels());
+        bus.reset();
+        assert!(bus.visible_ppu_snapshot.is_none());
     }
 
     #[test]

@@ -7,7 +7,7 @@
 | Order | Game | Platform / testing notes | Evidence status |
 | --- | --- | --- | --- |
 | 1 | Super Mario World | Baseline LoROM; native controller, sound, saves and Cheats QA | **Playable on user hardware; intermittent native frame/audio stutter remains** |
-| 2 | **Chrono Trigger** | **USA retail ZIP identified as 4 MiB HiROM, NTSC; 8 KiB SRAM.** Headless 360-frame startup and isolated APU driver pass, but graphics remain black with forced blank enabled. Next: H-blank timing regression and longer native boot probe; then intro, gameplay, saves | **ROM load/CPU/APU partial pass; graphics and gameplay unverified** |
+| 2 | **Chrono Trigger** | **USA retail SHA-1 `de5822f4...`, 4 MiB HiROM, NTSC; 8 KiB SRAM.** The legacy non-executing APU shim stalls at CPU `7E:5AAF`, polling `$2143=0`, with a black screen. **Real uploaded SPC700 execution escapes that wait:** first nonblack framebuffer at frame 113, enabled/full-bright display and 668 nonblack pixels by frame 120, PPU writes continue to 285,080 by frame 180. Next: longer real-driver boot, framebuffer variation/screenshots, then title, input, saves | **ROM and sound-driver boot progress demonstrated; title/gameplay still unverified** |
 | 3 | Final Fantasy VI (Final Fantasy III in North America) | Test clean version first; intro, world navigation, dialogue, ATB and SRAM | Not verified |
 | 4 | Dragon Quest V | Original Japanese Super Famicom release, then English fan-patched ROM separately | Not verified |
 | 5 | Shin Megami Tensei II | Original Japanese Super Famicom release, then English fan-patched ROM separately | Not verified |

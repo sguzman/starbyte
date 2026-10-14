@@ -10,10 +10,10 @@ use crate::cartridge::Cartridge;
 use crate::coprocessor::Coprocessor;
 use crate::dma::DmaController;
 use crate::input::ControllerState;
-use crate::ppu::{FrameBuffer, Ppu};
+use crate::ppu::{FrameBuffer, Ppu, SCREEN_HEIGHT};
 use crate::timing::{
     DOTS_PER_SCANLINE, HBLANK_START_DOT, MASTER_CLOCKS_PER_DOT, NTSC_SCANLINES_PER_FRAME,
-    TimingState,
+    TimingState, VBLANK_START_SCANLINE,
 };
 
 const WRAM_SIZE: usize = 128 * 1024;
@@ -422,6 +422,13 @@ impl SystemBus {
 
     /// Render the current frame through the PPU model.
     pub fn render_frame(&self, framebuffer: &mut FrameBuffer) {
+        if let Some(raster) = &self.completed_raster_frame {
+            framebuffer.pixels_mut().copy_from_slice(raster.pixels());
+            if let Some(coprocessor) = &self.coprocessor {
+                coprocessor.render_overlay(framebuffer);
+            }
+            return;
+        }
         let live_main = self.ppu.read_register(0x212C);
         // Only substitute when the end-of-frame state has *no* background
         // layers, while the visible portion explicitly enabled one. This
@@ -2067,6 +2074,51 @@ mod tests {
         bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT);
 
         assert_eq!(&bus.ppu().cgram()[..2], &[0x00, 0x7C]);
+    }
+
+    #[test]
+    fn mode1_raster_preserves_early_background_even_if_later_lines_disable_it() {
+        let mut bus = SystemBus::default();
+        bus.write(0x002100, 0x0F);
+        bus.write(0x002105, 0x01);
+        bus.write(0x00212C, 0x01);
+        bus.write(0x002121, 0);
+        bus.write(0x002122, 0x1F);
+        bus.write(0x002122, 0x00);
+        let line_clocks = u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT;
+        bus.advance_master_clocks(line_clocks * 64);
+        bus.write(0x00212C, 0x10);
+        bus.write(0x002121, 0);
+        bus.write(0x002122, 0);
+        bus.write(0x002122, 0x7C);
+        bus.advance_master_clocks(
+            line_clocks * u64::from(NTSC_SCANLINES_PER_FRAME - 64),
+        );
+        assert!(bus.completed_raster_frame.is_some());
+        let mut frame = FrameBuffer::default();
+        bus.render_frame(&mut frame);
+        // Earlier raster pixels are red; after TM switches to sprites-only
+        // the PPU's backdrop changes to blue.
+        assert_eq!(&frame.pixels()[0..4], &[248, 0, 0, 255]);
+        assert_eq!(&frame.pixels()[100 * 256 * 4..100 * 256 * 4 + 4], &[0, 0, 248, 255]);
+    }
+
+    #[test]
+    fn mode7_does_not_use_incomplete_mode1_raster_capture() {
+        let mut bus = SystemBus::default();
+        bus.write(0x002100, 0x0F);
+        bus.write(0x002105, 7);
+        bus.write(0x00212C, 1);
+        let line_clocks = u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT;
+        bus.advance_master_clocks(
+            line_clocks * u64::from(NTSC_SCANLINES_PER_FRAME),
+        );
+        assert!(bus.completed_raster_frame.is_none());
+        let mut actual = FrameBuffer::default();
+        let mut expected = FrameBuffer::default();
+        bus.render_frame(&mut actual);
+        bus.ppu.render_frame(&mut expected);
+        assert_eq!(actual.pixels(), expected.pixels());
     }
 
     #[test]

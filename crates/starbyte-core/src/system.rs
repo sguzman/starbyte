@@ -1866,9 +1866,7 @@ mod tests {
     fn hdma_nonrepeating_block_transfers_once_then_waits_for_next_descriptor() {
         let mut bus = SystemBus::default();
         // $03 = one TM write then wait three lines; $01 = next block.
-        for (offset, value) in [
-            (0, 0x03), (1, 0x05), (2, 0x01), (3, 0x10), (4, 0x00)
-        ] {
+        for (offset, value) in [(0, 0x03), (1, 0x05), (2, 0x01), (3, 0x10), (4, 0x00)] {
             bus.write(0x7E0100 + offset, value);
         }
         bus.write(0x004300, 0x00);
@@ -1908,6 +1906,31 @@ mod tests {
         }
         assert_eq!(bus.ppu().read_register(0x212C), 0x10);
         assert_eq!(bus.dma.transfer_count, 2);
+    }
+
+    #[test]
+    fn hdma_repeating_indirect_block_advances_data_pointer_each_line() {
+        let mut bus = SystemBus::default();
+        // A direct HDMA table in bank 7E points into distinct data in bank 7F.
+        for (offset, value) in [(0, 0x82), (1, 0x00), (2, 0x02), (3, 0x00)] {
+            bus.write(0x7E0100 + offset, value);
+        }
+        bus.write(0x7F0200, 0x01);
+        bus.write(0x7F0201, 0x05);
+        bus.write(0x004300, 0x40);
+        bus.write(0x004301, 0x2C);
+        bus.write(0x004302, 0x00);
+        bus.write(0x004303, 0x01);
+        bus.write(0x004304, 0x7E);
+        bus.write(0x004307, 0x7F);
+        bus.write(0x00420C, 0x01);
+        let clocks = u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT;
+        bus.advance_master_clocks(clocks);
+        assert_eq!(bus.ppu().read_register(0x212C), 0x01);
+        bus.advance_master_clocks(clocks);
+        assert_eq!(bus.ppu().read_register(0x212C), 0x05);
+        assert_eq!(bus.dma.transfer_count, 2);
+        assert!(!bus.dma.channel(0).unwrap().hdma_active);
     }
 
     #[test]

@@ -10,6 +10,10 @@ const REPORT_AFTER_BLACK_FRAMES: u32 = 180;
 /// Always refresh the latest status after three seconds of emulated time,
 /// including scenes with residual pixels or no prior nonblack frame.
 const STATUS_INTERVAL_FRAMES: u64 = 180;
+
+fn periodic_status_due(frame: u64) -> bool {
+    frame > 0 && frame.is_multiple_of(STATUS_INTERVAL_FRAMES)
+}
 /// A handful of stray pixels must not suppress reports from an otherwise black scene.
 const MIN_VISIBLE_PIXELS: usize = 32;
 
@@ -42,7 +46,7 @@ impl BlackScreenMonitor {
             .count()
             == MIN_VISIBLE_PIXELS;
         let blackout_report = self.observe_visibility(frame, visible);
-        let periodic_report = frame > 0 && frame.is_multiple_of(STATUS_INTERVAL_FRAMES);
+        let periodic_report = periodic_status_due(frame);
         if self.saw_visible_frame
             && self.consecutive_black_frames > 0
             && self.consecutive_black_frames.is_multiple_of(60)
@@ -183,16 +187,15 @@ mod tests {
 
     #[test]
     fn periodic_report_does_not_depend_on_blackout_or_visible_pixels() {
-        const INTERVAL: u64 = super::STATUS_INTERVAL_FRAMES;
+        use super::periodic_status_due;
+
         let mut detector = BlackScreenMonitor::default();
-        for frame in 1..=INTERVAL * 3 {
+        for frame in 1..=540 {
             assert!(!detector.observe_visibility(frame, false));
-            if frame.is_multiple_of(INTERVAL) {
-                assert_eq!(frame / INTERVAL, (frame / INTERVAL).max(1));
-            }
+            assert_eq!(periodic_status_due(frame), matches!(frame, 180 | 360 | 540));
         }
         assert!(!detector.saw_visible_frame);
-        assert_eq!(INTERVAL, 180);
+        assert!(!periodic_status_due(0));
     }
 
     #[test]

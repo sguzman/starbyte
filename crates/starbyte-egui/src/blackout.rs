@@ -34,12 +34,18 @@ impl BlackScreenMonitor {
             .chunks_exact(4)
             .any(|pixel| pixel[..3].iter().any(|&channel| channel != 0));
         let should_report = self.observe_visibility(frame, visible);
-        if self.saw_visible_frame && self.consecutive_black_frames > 0
+        if self.saw_visible_frame
+            && self.consecutive_black_frames > 0
             && self.consecutive_black_frames.is_multiple_of(60)
+            && self.blackout_checkpoints.len() < 8
         {
             let cpu = emulator.cpu_registers();
-            let ppu_writes: u64 = emulator.system_observability()
-                .ppu_write_counts().iter().map(|&n| u64::from(n)).sum();
+            let ppu_writes: u64 = emulator
+                .system_observability()
+                .ppu_write_counts()
+                .iter()
+                .map(|&n| u64::from(n))
+                .sum();
             let ports = emulator.apu_to_cpu_ports();
             self.blackout_checkpoints.push(format!(
                 "Frame {frame}: CPU={:02X}:{:04X} PPU-writes={ppu_writes} SPC-to-CPU={ports:?}",

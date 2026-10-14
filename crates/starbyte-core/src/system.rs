@@ -701,15 +701,17 @@ impl SystemBus {
                 continue;
             }
 
-            if !channel.hdma_repeat {
+            // SNES HDMA always transfers on the first line of a block.
+            // Descriptor bit 7 then chooses every-line transfer (set) or
+            // wait-through-the-block after that first write (clear).
+            if channel.hdma_first_line || channel.hdma_repeat {
                 self.perform_hdma_transfer(&mut channel);
             }
+            channel.hdma_first_line = false;
 
             channel.hdma_line_counter = channel.hdma_line_counter.saturating_sub(1);
             if channel.hdma_line_counter == 0 {
                 self.reload_hdma_block(channel_index, &mut channel);
-            } else {
-                channel.hdma_repeat = false;
             }
             self.dma.set_channel(channel_index, channel);
         }
@@ -725,12 +727,19 @@ impl SystemBus {
             channel.hdma_active = false;
             channel.hdma_line_counter = 0;
             channel.hdma_repeat = false;
+            channel.hdma_first_line = false;
             return;
         }
 
         channel.hdma_active = true;
-        channel.hdma_line_counter = line_descriptor & 0x7F;
-        channel.hdma_repeat = line_descriptor & 0x80 != 0;
+        // $80 means a single transfer followed by a 128-line wait.
+        channel.hdma_line_counter = if line_descriptor == 0x80 {
+            128
+        } else {
+            line_descriptor & 0x7F
+        };
+        channel.hdma_repeat = line_descriptor > 0x80;
+        channel.hdma_first_line = true;
 
         if channel.hdma_indirect() {
             let low = self.dma_a_bus_read(
@@ -1829,6 +1838,76 @@ mod tests {
         bus.advance_master_clocks(u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT);
 
         assert_eq!(&bus.ppu().cgram()[..2], &[0x00, 0x7C]);
+    }
+
+    #[test]
+    fn hdma_repeating_direct_block_transfers_on_first_and_every_next_line() {
+        let mut bus = SystemBus::default();
+        // $83 = 3 lines, one TM write from fresh table data each scanline.
+        for (offset, value) in [(0, 0x83), (1, 0x01), (2, 0x05), (3, 0x10), (4, 0x00)] {
+            bus.write(0x7E0100 + offset, value);
+        }
+        bus.write(0x004300, 0x00);
+        bus.write(0x004301, 0x2C);
+        bus.write(0x004302, 0x00);
+        bus.write(0x004303, 0x01);
+        bus.write(0x004304, 0x7E);
+        bus.write(0x00420C, 0x01);
+        let clocks = u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT;
+        for (expected, transfers) in [(0x01, 1), (0x05, 2), (0x10, 3)] {
+            bus.advance_master_clocks(clocks);
+            assert_eq!(bus.ppu().read_register(0x212C), expected);
+            assert_eq!(bus.dma.transfer_count, transfers);
+        }
+        assert!(!bus.dma.channel(0).unwrap().hdma_active);
+    }
+
+    #[test]
+    fn hdma_nonrepeating_block_transfers_once_then_waits_for_next_descriptor() {
+        let mut bus = SystemBus::default();
+        // $03 = one TM write then wait three lines; $01 = next block.
+        for (offset, value) in [
+            (0, 0x03), (1, 0x05), (2, 0x01), (3, 0x10), (4, 0x00)
+        ] {
+            bus.write(0x7E0100 + offset, value);
+        }
+        bus.write(0x004300, 0x00);
+        bus.write(0x004301, 0x2C);
+        bus.write(0x004302, 0x00);
+        bus.write(0x004303, 0x01);
+        bus.write(0x004304, 0x7E);
+        bus.write(0x00420C, 0x01);
+        let clocks = u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT;
+        for (expected, transfers) in [(0x05, 1), (0x05, 1), (0x05, 1), (0x10, 2)] {
+            bus.advance_master_clocks(clocks);
+            assert_eq!(bus.ppu().read_register(0x212C), expected);
+            assert_eq!(bus.dma.transfer_count, transfers);
+        }
+        assert!(!bus.dma.channel(0).unwrap().hdma_active);
+    }
+
+    #[test]
+    fn hdma_descriptor_80_waits_128_lines_after_first_write() {
+        let mut bus = SystemBus::default();
+        for (offset, value) in [(0, 0x80), (1, 0x05), (2, 0x01), (3, 0x10), (4, 0x00)] {
+            bus.write(0x7E0100 + offset, value);
+        }
+        bus.write(0x004300, 0x00);
+        bus.write(0x004301, 0x2C);
+        bus.write(0x004302, 0x00);
+        bus.write(0x004303, 0x01);
+        bus.write(0x004304, 0x7E);
+        bus.write(0x00420C, 0x01);
+        let clocks = u64::from(DOTS_PER_SCANLINE) * MASTER_CLOCKS_PER_DOT;
+        for line in 1..=129 {
+            bus.advance_master_clocks(clocks);
+            if line <= 128 {
+                assert_eq!(bus.ppu().read_register(0x212C), 0x05);
+                assert_eq!(bus.dma.transfer_count, 1);
+            }
+        }
+        assert_eq!(bus.ppu().read_register(0x212C), 0x10);
+        assert_eq!(bus.dma.transfer_count, 2);
     }
 
     #[test]

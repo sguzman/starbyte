@@ -951,8 +951,7 @@ impl SystemBus {
             }
             0x213C => {
                 let value = if self.hv_latch.horizontal_high_next {
-                    (self.open_bus & 0xFE)
-                        | ((self.hv_latch.horizontal >> 8) as u8 & 1)
+                    (self.open_bus & 0xFE) | ((self.hv_latch.horizontal >> 8) as u8 & 1)
                 } else {
                     self.hv_latch.horizontal as u8
                 };
@@ -961,8 +960,7 @@ impl SystemBus {
             }
             0x213D => {
                 let value = if self.hv_latch.vertical_high_next {
-                    (self.open_bus & 0xFE)
-                        | ((self.hv_latch.vertical >> 8) as u8 & 1)
+                    (self.open_bus & 0xFE) | ((self.hv_latch.vertical >> 8) as u8 & 1)
                 } else {
                     self.hv_latch.vertical as u8
                 };
@@ -974,8 +972,7 @@ impl SystemBus {
                 self.hv_latch.vertical_high_next = false;
                 // STAT78: NTSC (bit4 clear), external counter latch (bit6),
                 // PPU2 revision 3 in bits0..3; preserve open-bus bit5.
-                Some((self.open_bus & 0x20) | 0x03
-                    | if self.hv_latch.latched { 0x40 } else { 0 })
+                Some((self.open_bus & 0x20) | 0x03 | if self.hv_latch.latched { 0x40 } else { 0 })
             }
             0x2100..=0x213F => Some(self.ppu.read_data_register(register)),
             0x2140..=0x2143 => {
@@ -2156,7 +2153,6 @@ mod tests {
 
         assert_eq!(&bus.ppu().cgram()[..2], &[0x00, 0x7C]);
     }
-
 
     #[test]
     fn chrono_field_hv_reads_return_current_scanline_not_zero() {

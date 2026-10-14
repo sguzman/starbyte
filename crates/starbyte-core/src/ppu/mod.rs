@@ -594,7 +594,9 @@ impl Ppu {
                 if self.window_masks_layer(background.index, x, subscreen) {
                     continue;
                 }
-                if let Some((pixel, high)) = self.background_pixel(background, x as u16, (y + framebuffer.row_origin) as u16) {
+                if let Some((pixel, high)) =
+                    self.background_pixel(background, x as u16, (y + framebuffer.row_origin) as u16)
+                {
                     let index = y * framebuffer.width + x;
                     let rank = background_priority_rank(mode, background.index, high, bg3_high);
                     if rank >= depth[index] {
@@ -1191,6 +1193,8 @@ fn bgr555_to_rgba(color: u16) -> [u8; 4] {
 
 #[cfg(test)]
 mod tests {
+    use super::{FrameBuffer, Ppu, SCREEN_WIDTH};
+
     #[test]
     fn sampled_line_states_render_backgrounds_when_vblank_disables_them() {
         let mut ppu = Ppu::default();
@@ -1208,7 +1212,10 @@ mod tests {
         let hidden = ppu.capture_line_state();
         ppu.render_frame_with_line_states(&mut frame, &[(0, visible), (1, hidden)]);
         assert_eq!(&frame.pixels()[..4], &[248, 0, 0, 255]);
-        assert_eq!(&frame.pixels()[SCREEN_WIDTH * 4..SCREEN_WIDTH * 4 + 4], &[0, 0, 0, 255]);
+        assert_eq!(
+            &frame.pixels()[SCREEN_WIDTH * 4..SCREEN_WIDTH * 4 + 4],
+            &[0, 0, 0, 255]
+        );
     }
 
     #[test]
@@ -1229,7 +1236,6 @@ mod tests {
         assert_eq!(ordinary.pixels(), scanline.pixels());
     }
 
-    use super::{FrameBuffer, Ppu, SCREEN_WIDTH};
 
     fn write_color(ppu: &mut Ppu, slot: u8, color: u16) {
         let [low, high] = color.to_le_bytes();

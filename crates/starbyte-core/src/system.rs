@@ -126,6 +126,16 @@ pub struct SystemBus {
     /// Never serialized as guest save-state data.
     #[serde(skip)]
     visible_ppu_snapshot: Option<Ppu>,
+    /// In-progress raster pixels, generated with *live* PPU state at each
+    /// completed scanline. Only used for frames that begin in Mode 1.
+    #[serde(skip)]
+    raster_frame: FrameBuffer,
+    #[serde(skip)]
+    completed_raster_frame: Option<FrameBuffer>,
+    #[serde(skip)]
+    raster_recording: bool,
+    #[serde(skip)]
+    raster_lines_rendered: u16,
     cpu_to_apu_io: Vec<u8>,
     /// CPU ports actually written since the last APU synchronization.
     /// Without this mask, an SPC CONTROL port-clear is undone every CPU
@@ -168,6 +178,10 @@ impl Default for SystemBus {
             wram: vec![0; WRAM_SIZE],
             ppu: Ppu::default(),
             visible_ppu_snapshot: None,
+            raster_frame: FrameBuffer::default(),
+            completed_raster_frame: None,
+            raster_recording: false,
+            raster_lines_rendered: 0,
             cpu_to_apu_io: vec![0; APU_IO_PORT_COUNT],
             pending_apu_port_writes: 0,
             apu_to_cpu_io: vec![0; APU_IO_PORT_COUNT],
@@ -236,6 +250,10 @@ impl SystemBus {
         }
         self.ppu = Ppu::default();
         self.visible_ppu_snapshot = None;
+        self.raster_frame = FrameBuffer::default();
+        self.completed_raster_frame = None;
+        self.raster_recording = false;
+        self.raster_lines_rendered = 0;
         self.cpu_to_apu_io.fill(0);
         self.pending_apu_port_writes = 0;
         self.apu_to_cpu_io.fill(0);
@@ -257,23 +275,59 @@ impl SystemBus {
 
     /// Advance global timing and derive pending interrupt state from it.
     pub fn advance_master_clocks(&mut self, clocks: u64) {
+        if clocks == 0 {
+            return;
+        }
+        let previous_scanline = self.timing.scanline;
+        let previous_frame = self.timing.frame;
         let irq_match = self.irq_timer_crossed(clocks);
         let events = self.timing.advance_master_clocks(clocks);
         if let Some(coprocessor) = &mut self.coprocessor {
             coprocessor.step_master_cycles(clocks);
         }
-        if events.started_new_frame {
-            self.observability.completed_ppu_scanline_samples =
-                std::mem::take(&mut self.observability.ppu_scanline_samples);
-            self.initialize_hdma_channels();
-        }
-        if events.crossed_scanline {
-            self.step_hdma_for_scanline();
-            let scanline = self.timing.scanline;
+        // Process every crossed scanline separately. The old boolean-only
+        // handler silently skipped intermediate HDMA transfers when a long
+        // DMA/CPU operation crossed multiple scanlines.
+        let lines_crossed = (self.timing.frame - previous_frame)
+            * u64::from(NTSC_SCANLINES_PER_FRAME)
+            + u64::from(self.timing.scanline)
+            - u64::from(previous_scanline);
+        for offset in 0..lines_crossed {
+            let finished_line = ((u64::from(previous_scanline) + offset)
+                % u64::from(NTSC_SCANLINES_PER_FRAME)) as u16;
+            if finished_line < SCREEN_HEIGHT as u16 {
+                // The line is already completed. Capture its pixels BEFORE
+                // processing HDMA for the next line, so subsequent changes
+                // to TM, CGRAM, VRAM, scroll or OBJ cannot rewrite them.
+                if finished_line == 0 {
+                    self.raster_recording = self.ppu.read_register(0x2105) & 0x07 == 1;
+                    self.raster_lines_rendered = 0;
+                }
+                if self.raster_recording {
+                    self.ppu
+                        .render_scanline(&mut self.raster_frame, usize::from(finished_line));
+                    self.raster_lines_rendered = self.raster_lines_rendered.saturating_add(1);
+                }
+            }
+
+            let scanline = (finished_line + 1) % NTSC_SCANLINES_PER_FRAME;
+            if scanline == 0 {
+                self.observability.completed_ppu_scanline_samples =
+                    std::mem::take(&mut self.observability.ppu_scanline_samples);
+                self.completed_raster_frame =
+                    if self.raster_recording && self.raster_lines_rendered == SCREEN_HEIGHT as u16 {
+                        Some(std::mem::take(&mut self.raster_frame))
+                    } else {
+                        None
+                    };
+                self.raster_recording = false;
+                self.raster_lines_rendered = 0;
+                self.initialize_hdma_channels();
+            }
+            self.step_hdma_for_scanline(scanline);
             if scanline == 211 {
-                // The game may disable all backgrounds during VBlank. A
-                // coherent PPU clone at the last regular visible sampling
-                // point retains *matching* registers, VRAM, CGRAM and OAM.
+                // Preserve the previous coherent single-frame fallback for
+                // incomplete raster captures.
                 self.visible_ppu_snapshot = Some(self.ppu.clone());
             }
             if matches!(scanline, 1 | 32 | 64 | 96 | 128 | 160 | 192 | 211 | 224) {
@@ -738,8 +792,8 @@ impl SystemBus {
         }
     }
 
-    fn step_hdma_for_scanline(&mut self) {
-        if self.timing.in_vblank() {
+    fn step_hdma_for_scanline(&mut self, scanline: u16) {
+        if scanline >= VBLANK_START_SCANLINE {
             return;
         }
 

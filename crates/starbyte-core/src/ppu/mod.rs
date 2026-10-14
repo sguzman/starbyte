@@ -1213,8 +1213,8 @@ mod tests {
 
         // Non-wrapping outside pixels use backdrop instead of looping.
         ppu.write_register(0x211A, 0x40);
-        ppu.write_register(0x211B, 0); // A becomes zero until next write.
-        ppu.write_register(0x211B, 1);
+        ppu.write_register(0x211B, 0);
+        ppu.write_register(0x211B, 0); // A=0, every screen X samples center X.
         ppu.write_register(0x211F, 0x00);
         ppu.write_register(0x211F, 0x08); // Center X=2048: 13-bit positive.
         ppu.render_frame(&mut frame);

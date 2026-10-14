@@ -80,6 +80,18 @@ impl BlackScreenMonitor {
         let input_ports = emulator.cpu_to_apu_ports();
         let output_ports = emulator.apu_to_cpu_ports();
         let (host_buttons, game_latched_buttons, joypad_busy) = emulator.joypad_status();
+        let scanline_registers = emulator
+            .system_observability()
+            .completed_ppu_scanline_samples()
+            .iter()
+            .map(|s| {
+                format!(
+                    "line {:>3}: INIDISP={:02X} BGMODE={:02X} TM={:02X} TS={:02X}",
+                    s[0], s[1], s[2], s[3], s[4]
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
 
         let report = format!(
             "Starbyte sustained-black-screen diagnostic (may be intentional fade)\n\
@@ -92,6 +104,7 @@ impl BlackScreenMonitor {
              Input host={host_buttons:04X} latched={game_latched_buttons:04X} busy={joypad_busy}\n\
              Audio last frame pairs={audio_pairs}; nonzero pairs={nonzero_pairs}\n\
              Blackout checkpoints (once per second):\n{}\n\
+             PPU register samples from the last completed frame (after scanline HDMA):\n{}\n\
              No cartridge data, SRAM, or save-state bytes included.\n",
             self.consecutive_black_frames,
             cpu.pbr,
@@ -101,6 +114,7 @@ impl BlackScreenMonitor {
             cpu.y,
             cpu.p,
             self.blackout_checkpoints.join("\n"),
+            scanline_registers,
         );
         // These are ephemeral QA artifacts, never application cache or user data.
         // Linux reports always go under /tmp for easy Jobflick attachment.

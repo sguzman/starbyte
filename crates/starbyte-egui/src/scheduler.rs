@@ -24,6 +24,7 @@ pub struct FrameMailbox<Frame> {
     latest: Mutex<Option<Frame>>,
     produced: AtomicU64,
     replaced: AtomicU64,
+    fault: Mutex<Option<String>>,
 }
 
 impl<Frame> Default for FrameMailbox<Frame> {
@@ -32,6 +33,7 @@ impl<Frame> Default for FrameMailbox<Frame> {
             latest: Mutex::new(None),
             produced: AtomicU64::new(0),
             replaced: AtomicU64::new(0),
+            fault: Mutex::new(None),
         }
     }
 }
@@ -60,6 +62,18 @@ impl<Frame> FrameMailbox<Frame> {
     pub fn replaced_count(&self) -> u64 {
         self.replaced.load(Ordering::Relaxed)
     }
+
+    fn record_error(&self, error: String) {
+        let mut slot = self.fault.lock().unwrap_or_else(|poison| poison.into_inner());
+        *slot = Some(error);
+    }
+
+    pub fn take_error(&self) -> Option<String> {
+        self.fault
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .take()
+    }
 }
 
 enum Command<Machine> {
@@ -71,6 +85,7 @@ enum Command<Machine> {
         Box<dyn FnOnce(&mut Machine) -> Result<(), String> + Send>,
         Sender<Result<(), String>>,
     ),
+    Post(Box<dyn FnOnce(&mut Machine) + Send>),
     Shutdown,
 }
 
@@ -118,6 +133,7 @@ fn apply_command<Machine>(
         Command::Invoke(action, response) => {
             let _ = response.send(action(machine));
         }
+        Command::Post(action) => action(machine),
         Command::Shutdown => return false,
     }
     true
@@ -184,6 +200,39 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
         result
             .recv()
             .map_err(|_| "emulation worker stopped before acknowledging command".to_owned())?
+    }
+
+    /// One-way state/input updates must never block a menu or gamepad read.
+    /// The worker applies each update before its next frame.
+    pub fn post(
+        &self,
+        action: impl FnOnce(&mut Machine) + Send + 'static,
+    ) -> Result<(), String> {
+        self.commands
+            .send(Command::Post(Box::new(action)))
+            .map_err(|_| "emulation worker is not running".to_owned())
+    }
+
+    /// Return a value from the thread that exclusively owns the emulator.
+    /// Use sparingly for user-requested save/load operations, not every paint.
+    pub fn transact<Value: Send + 'static>(
+        &self,
+        action: impl FnOnce(&mut Machine) -> Result<Value, String> + Send + 'static,
+    ) -> Result<Value, String> {
+        let (reply, result) = mpsc::channel();
+        self.invoke(move |machine| {
+            let outcome = action(machine);
+            reply
+                .send(outcome)
+                .map_err(|_| "emulation transaction receiver closed".to_owned())
+        })?;
+        result
+            .recv()
+            .map_err(|_| "emulation transaction result not delivered".to_owned())?
+    }
+
+    pub fn take_error(&self) -> Option<String> {
+        self.frames.take_error()
     }
 
     pub fn take_latest_frame(&self) -> Option<Frame> {
@@ -277,7 +326,8 @@ fn run_owned_clock<Machine, Frame>(
 
         match step(&mut machine) {
             Ok(frame) => frames.push(frame),
-            Err(_) => {
+            Err(error) => {
+                frames.record_error(error);
                 policy.playing = false;
                 continue;
             }
@@ -341,6 +391,39 @@ mod tests {
         assert!(latest >= 2);
         let final_machine = worker.shutdown().unwrap();
         assert!(final_machine >= latest);
+    }
+
+    #[test]
+    fn worker_transactions_and_async_input_are_ordered() {
+        let worker = EmulatorScheduler::spawn(
+            0_i32,
+            Duration::from_millis(2),
+            |machine| Ok(*machine),
+        )
+        .unwrap();
+        worker.post(|machine| *machine = 21).unwrap();
+        worker.post(|machine| *machine *= 2).unwrap();
+        assert_eq!(worker.transact(|machine| Ok(*machine)).unwrap(), 42);
+        assert_eq!(worker.shutdown().unwrap(), 42);
+    }
+
+    #[test]
+    fn worker_reports_failure_without_losing_owned_machine() {
+        let worker = EmulatorScheduler::spawn(
+            0_u8,
+            Duration::from_millis(2),
+            |_machine| -> Result<u8, String> { Err("synthetic frame fault".to_owned()) },
+        )
+        .unwrap();
+        worker.set_playing(true);
+        let started = Instant::now();
+        while worker.take_error().is_none() && started.elapsed() < Duration::from_secs(1) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // No frame means the worker stopped cleanly on its error, without a
+        // compositor-dependent repaint or a lost session.
+        assert_eq!(worker.completed_frames(), 0);
+        assert_eq!(worker.shutdown().unwrap(), 0);
     }
 
     #[test]

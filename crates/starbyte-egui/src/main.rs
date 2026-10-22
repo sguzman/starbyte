@@ -12,6 +12,8 @@ mod scheduler;
 // clock until the UI handoff is complete.
 #[allow(dead_code)]
 mod session_engine;
+#[allow(dead_code)]
+mod scheduler_video;
 mod worker;
 
 use std::{env, path::PathBuf};

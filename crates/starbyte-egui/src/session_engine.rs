@@ -48,7 +48,9 @@ impl InputPort {
         controller_from_bits(held | edges)
     }
 
-    fn reset(&self) {
+    /// Flush held buttons and pending press edges on focus loss or ROM
+    /// replacement. Background gameplay must not latch stale foreground keys.
+    pub fn clear(&self) {
         self.held_bits.store(0, Ordering::Release);
         self.pending_press_bits.store(0, Ordering::Release);
     }
@@ -206,7 +208,7 @@ impl OwnedSession {
         if let Some(output) = &self.audio {
             output.clear();
         }
-        self.input.reset();
+        self.input.clear();
         self.last_sram_flush = Instant::now();
         match mode {
             SoundSessionMode::Compatibility => self.session.load_rom(path),
@@ -401,6 +403,18 @@ mod tests {
         assert!(port.should_copy_framebuffer());
         port.set_visible(false);
         assert!(!port.should_copy_framebuffer());
+    }
+
+    #[test]
+    fn losing_focus_flushes_latched_buttons() {
+        let port = InputPort::default();
+        let pressed = ControllerState {
+            a: true,
+            ..ControllerState::default()
+        };
+        port.submit(pressed, pressed);
+        port.clear();
+        assert_eq!(port.take_frame_state(), ControllerState::default());
     }
 
     #[test]

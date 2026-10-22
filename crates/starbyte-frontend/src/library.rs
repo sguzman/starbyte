@@ -837,6 +837,10 @@ impl GameMetadataProvider for LibretroMetadataProvider {
     }
 }
 
+fn cached_cover_decodes(path: &Path) -> bool {
+    image::open(path).is_ok()
+}
+
 impl CoverProvider for LibretroCoverProvider {
     fn fetch_cover(
         &self,
@@ -856,8 +860,19 @@ impl CoverProvider for LibretroCoverProvider {
             .join("games")
             .join("covers")
             .join(format!("{}.{}", metadata.game_id, extension));
-        if cache_path.metadata().is_ok_and(|file| file.len() > 0) {
-            return Ok(None);
+        if cache_path.is_file() {
+            if cached_cover_decodes(&cache_path) {
+                return Ok(None);
+            }
+            // A previous truncated download or non-image HTTP response
+            // must not permanently block Get Covers from repairing it.
+            warn!(
+                game_id = %metadata.game_id,
+                path = %cache_path.display(),
+                "invalid cached cover; retrying download"
+            );
+            fs::remove_file(&cache_path)
+                .with_context(|| format!("failed to remove invalid cover {}", cache_path.display()))?;
         }
         if let Some(parent) = cache_path.parent() {
             fs::create_dir_all(parent)?;
@@ -871,6 +886,14 @@ impl CoverProvider for LibretroCoverProvider {
             .with_context(|| format!("cover request returned an error status for {source_url}"))?
             .bytes()
             .context("failed to read cover response bytes")?;
+        anyhow::ensure!(
+            bytes.len() <= 12 * 1024 * 1024,
+            "cover download exceeds 12 MiB safety limit"
+        );
+        anyhow::ensure!(
+            image::load_from_memory(&bytes).is_ok(),
+            "cover download did not contain a supported, decodable image"
+        );
         let mut temp = tempfile::NamedTempFile::new_in(
             cache_path
                 .parent()
@@ -2053,6 +2076,24 @@ mod tests {
                 .any(|entry| entry.game_id == missing_id
                     && entry.installed_status == InstalledStatus::Missing)
         );
+    }
+
+    #[test]
+    fn invalid_cached_image_is_detected_before_cover_refresh() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("cover.png");
+        fs::write(&path, b"not really a PNG").unwrap();
+        assert!(!super::cached_cover_decodes(&path));
+        image::save_buffer_with_format(
+            &path,
+            &[255, 128, 0, 255],
+            1,
+            1,
+            image::ColorType::Rgba8,
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+        assert!(super::cached_cover_decodes(&path));
     }
 
     #[test]

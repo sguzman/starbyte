@@ -168,6 +168,26 @@ impl eframe::App for ThreadedPreviewApp {
                         }
                         ui.close();
                     }
+                    ui.separator();
+                    ui.menu_button("Disk save slots", |ui| {
+                        for slot in 1..=3_u8 {
+                            if ui.button(format!("Save slot {slot}")).clicked() {
+                                self.last_error = self.engine.save_game_slot(slot).err();
+                                ui.close();
+                            }
+                            if ui.button(format!("Load slot {slot}")).clicked() {
+                                match self.engine.load_game_slot_with_frame(slot) {
+                                    Ok(frame) => {
+                                        let _ = self.engine.take_latest_frame();
+                                        self.display.import_frame(ctx, frame);
+                                        self.last_error = None;
+                                    }
+                                    Err(error) => self.last_error = Some(error),
+                                }
+                                ui.close();
+                            }
+                        }
+                    });
                 });
                 ui.menu_button("View", |ui| {
                     if ui

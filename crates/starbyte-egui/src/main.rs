@@ -266,6 +266,10 @@ fn validate_frame_exit_args(args: &Args) -> Result<()> {
         args.exit_after_frames.is_none() || args.demo || args.rom.is_some(),
         "--exit-after-frames requires --demo or --rom"
     );
+    anyhow::ensure!(
+        !args.threaded_preview || args.demo || args.rom.is_some(),
+        "--threaded-preview requires --demo or --rom"
+    );
     Ok(())
 }
 
@@ -391,6 +395,27 @@ mod speaker_cli_tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn threaded_preview_is_explicit_and_requires_a_game() {
+        let missing = Args::try_parse_from(["starbyte-egui", "--threaded-preview"]).unwrap();
+        assert!(validate_frame_exit_args(&missing).is_err());
+        let demo = Args::try_parse_from([
+            "starbyte-egui",
+            "--demo",
+            "--threaded-preview",
+            "--exit-after-frames",
+            "30",
+        ])
+        .unwrap();
+        assert!(validate_frame_exit_args(&demo).is_ok());
+        assert!(Args::try_parse_from([
+            "starbyte-egui",
+            "--demo",
+            "--threaded-preview",
+            "--scheduler-smoke",
+        ]).is_err());
     }
 
     #[test]

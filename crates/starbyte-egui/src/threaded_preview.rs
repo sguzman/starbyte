@@ -132,6 +132,9 @@ impl eframe::App for ThreadedPreviewApp {
                     if ui.button("Quick Load (F8)").clicked() {
                         match self.engine.quick_load_with_frame() {
                             Ok(frame) => {
+                                // Drop any still-queued picture from before
+                                // the restored state to avoid visual rollback.
+                                let _ = self.engine.take_latest_frame();
                                 self.display.import_frame(ctx, frame);
                                 self.last_error = None;
                             }
@@ -158,6 +161,7 @@ impl eframe::App for ThreadedPreviewApp {
         if focused && ctx.input(|input| input.key_pressed(egui::Key::F8)) {
             match self.engine.quick_load_with_frame() {
                 Ok(frame) => {
+                    let _ = self.engine.take_latest_frame();
                     self.display.import_frame(ctx, frame);
                     self.last_error = None;
                 }

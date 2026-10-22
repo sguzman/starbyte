@@ -198,7 +198,11 @@ impl OwnedSession {
         }
     }
 
-    pub fn load_rom(&mut self, path: &std::path::Path, mode: SoundSessionMode) -> anyhow::Result<()> {
+    pub fn load_rom(
+        &mut self,
+        path: &std::path::Path,
+        mode: SoundSessionMode,
+    ) -> anyhow::Result<()> {
         if let Some(output) = &self.audio {
             output.clear();
         }

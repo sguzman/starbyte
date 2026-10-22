@@ -434,9 +434,22 @@ impl Default for AppMode {
     }
 }
 
-/// Persistent GUI layout and logging panel settings.
+/// Frontend color scheme. System follows the native desktop preference.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UiTheme {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+/// Persistent GUI layout, color scheme, and logging panel settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiSettings {
+    /// Use the operating-system theme unless the player overrides it.
+    #[serde(default)]
+    pub theme: UiTheme,
     /// Whether the left settings/navigation column is visible.
     pub show_left_panel: bool,
     /// Whether the right session column is visible.
@@ -462,6 +475,7 @@ pub struct UiSettings {
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
+            theme: UiTheme::System,
             show_left_panel: true,
             show_right_panel: true,
             show_details_panel: true,
@@ -897,5 +911,36 @@ show_installed_only = false
         assert_eq!(loaded.mode, AppMode::Dev);
         assert!(loaded.library.recent_roms.is_empty());
         assert!(loaded.ui.show_log_panel);
+    }
+}
+
+#[cfg(test)]
+mod ui_theme_tests {
+    use super::{RuntimeConfig, UiTheme};
+
+    #[test]
+    fn new_config_follows_system_colors() {
+        assert_eq!(RuntimeConfig::default().ui.theme, UiTheme::System);
+    }
+
+    #[test]
+    fn old_layout_without_theme_defaults_to_system() {
+        let mut config = RuntimeConfig::default();
+        config.ui.theme = UiTheme::Dark;
+        let serialized = toml::to_string(&config).unwrap();
+        let legacy = serialized.replace("theme = \"dark\"\n", "");
+        let loaded: RuntimeConfig = toml::from_str(&legacy).unwrap();
+        assert_eq!(loaded.ui.theme, UiTheme::System);
+    }
+
+    #[test]
+    fn explicit_theme_roundtrips() {
+        for theme in [UiTheme::System, UiTheme::Light, UiTheme::Dark] {
+            let mut config = RuntimeConfig::default();
+            config.ui.theme = theme;
+            let saved = toml::to_string(&config).unwrap();
+            let loaded: RuntimeConfig = toml::from_str(&saved).unwrap();
+            assert_eq!(loaded.ui.theme, theme);
+        }
     }
 }

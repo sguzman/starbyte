@@ -207,7 +207,10 @@ fn main() -> Result<()> {
 /// Focus and pause acknowledgements travel on the same serialized queue as
 /// frames; a graphics compositor cannot influence this probe.
 fn run_scheduler_smoke(assets: AssetConfig, rom: PathBuf) -> Result<()> {
-    use std::{thread, time::{Duration, Instant}};
+    use std::{
+        thread,
+        time::{Duration, Instant},
+    };
     use crate::session_engine::OwnedSession;
 
     let mut engine = OwnedSession::create(assets)?;
@@ -285,7 +288,10 @@ fn run_scheduler_smoke(assets: AssetConfig, rom: PathBuf) -> Result<()> {
         .map_err(|_| anyhow::anyhow!("emulation scheduler worker panicked"))?;
     anyhow::ensure!(engine.snapshot().has_rom, "worker lost ROM ownership");
     println!(
-        "STARBYTE_SCHEDULER_SMOKE_OK background_frames={} paused_at={} total_frames={} restored_frame={}",
+        concat!(
+            "STARBYTE_SCHEDULER_SMOKE_OK background_frames={} ",
+            "paused_at={} total_frames={} restored_frame={}"
+        ),
         running,
         stopped_at,
         engine.snapshot().frame,

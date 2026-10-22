@@ -30,7 +30,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [x] 💾 Serialize quick saves, durable slots and SRAM operations on the worker.
 - [x] ⏳ Flush SRAM periodically on the worker and at manual/background pause transitions, independent of UI redraws.
 - [x] 🎮 Publish an atomic held-controller state with latched short-press edges.
-- [x] 🖼️ Skip unnecessary RGBA copies when a hidden renderer cannot consume them.
+- [x] 🖼️ Skip unnecessary RGBA copies after 300 ms without UI repaint heartbeats, even when Wayland never reports the window as minimized.
 - [x] 📬 Expose typed ROM, save, cheat, audio and input command methods.
 - [x] 🖼️ Build a renderer-only adapter that consumes published snapshots and updates egui textures.
 - [x] ⌨️ Expire stale input heartbeat after missing window callbacks, preventing endlessly held keys.
@@ -100,7 +100,7 @@ state as a fixed background-pause regression.
 
 - `scheduler.rs`: dedicated clock, mailbox, command and transaction tests.
 - `session_engine.rs`: worker-owned SNES session, audio, input port, periodic SRAM
-  flush and optional framebuffer copying.
+  flush and framebuffer copying controlled by renderer-update heartbeats.
 - `scheduler_video.rs`: renderer-only texture and telemetry adapter (not yet attached to the live GUI).
 - `main.rs`: explicit headless worker smoke (including a memory quick-save/restore roundtrip) and opt-in native-preview routes, no production default switch.
 - `threaded_preview.rs`: experimental worker-powered egui player with configured 12-button keyboard input, normal playback speed/pitch, manual/background pause, memory quick save/load and disk save slots. Visible but unfocused windows continue receiving game pictures.

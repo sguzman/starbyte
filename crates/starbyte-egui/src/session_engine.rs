@@ -62,13 +62,20 @@ impl InputPort {
     /// Submit the current controller state and *new* press edges separately.
     /// Call each visible UI update, even when no buttons are pressed.
     pub fn submit(&self, held: ControllerState, just_pressed: ControllerState) {
+        let now_ms = self.state.started.elapsed().as_millis() as u64;
+        let previous = self
+            .state
+            .last_heartbeat_ms
+            .swap(now_ms, Ordering::AcqRel);
+        if now_ms.saturating_sub(previous) > Self::STALE_AFTER_MS {
+            // A previous press that was never consumed while Wayland hid
+            // the window must not be replayed on the first fresh update.
+            self.state.pending_press_bits.store(0, Ordering::Release);
+        }
         self.state.held_bits.store(held.to_bits(), Ordering::Release);
-        self.state.pending_press_bits
+        self.state
+            .pending_press_bits
             .fetch_or(just_pressed.to_bits(), Ordering::AcqRel);
-        self.state.last_heartbeat_ms.store(
-            self.state.started.elapsed().as_millis() as u64,
-            Ordering::Release,
-        );
     }
 
     /// Called once by the worker immediately before emulating a frame.
@@ -79,9 +86,9 @@ impl InputPort {
     fn take_frame_state_at(&self, now_ms: u64) -> ControllerState {
         let recorded = self.state.last_heartbeat_ms.load(Ordering::Acquire);
         if now_ms.saturating_sub(recorded) > Self::STALE_AFTER_MS {
-            // Do not replay an old press edge after coming back from a
-            // workspace where the window was not painted for several seconds.
-            self.clear();
+            // Do not clear the atomics from this thread: a fresh GUI submit
+            // could otherwise race with clear() and lose a real keypress.
+            // The next submit will discard the stale edges before updating.
             return ControllerState::default();
         }
         let held = self.state.held_bits.load(Ordering::Acquire);

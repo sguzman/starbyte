@@ -23,7 +23,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [ ] 🧪 Confirm format, Clippy and full workspace tests on the exact commit.
 - [ ] 🖥️ Verify worker scheduling while Hyprland is off-workspace or occluded.
 
-## Milestone B: thread-owned frontend session — 7/10 source tasks (70%)
+## Milestone B: thread-owned frontend session — 8/11 source tasks (73%)
 
 - [x] 🧠 Define `OwnedSession` wrapping `FrontendSession` in `session_engine.rs`.
 - [x] 🎵 Produce PCM on the worker and enqueue it to the existing bounded Rodio worker.
@@ -32,6 +32,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [x] 🎮 Publish an atomic held-controller state with latched short-press edges.
 - [x] 🖼️ Skip unnecessary RGBA copies when a hidden renderer cannot consume them.
 - [x] 📬 Expose typed ROM, save, cheat, audio and input command methods.
+- [x] 🖼️ Build a renderer-only adapter that consumes published snapshots and updates egui textures.
 - [ ] 🔄 Replace all live `StarbyteApp.session` access with worker commands and snapshots.
 - [ ] 📊 Move current emulation telemetry (FPS, frame gaps, overlays) to worker-produced truth.
 - [ ] 🎚️ Preserve every current audio speed/pitch control and its per-mode behavior through the handoff.
@@ -90,6 +91,7 @@ state as a fixed background-pause regression.
 - `scheduler.rs`: dedicated clock, mailbox, command and transaction tests.
 - `session_engine.rs`: worker-owned SNES session, audio, input port, periodic SRAM
   flush and optional framebuffer copying.
+- `scheduler_video.rs`: renderer-only texture and telemetry adapter (not yet attached to the live GUI).
 - `main.rs`: explicit headless worker smoke route, no production default switch.
 - `.github/workflows/ci.yml`: build and smoke task authored; completion not yet
   verified.

@@ -230,7 +230,9 @@ impl OwnedSession {
         self.volume = volume.clamp(0.0, 1.0);
         if let Some(output) = &self.audio {
             output.set_volume(if enabled && !muted { self.volume } else { 0.0 });
-            if !enabled || muted {
+            if !enabled || muted || self.volume <= 0.0 {
+                // Do not keep PCM from before a mute/zero-volume interval:
+                // raising the volume later must play new audio, not backlog.
                 output.clear();
             }
         }

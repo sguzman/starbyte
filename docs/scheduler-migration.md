@@ -23,7 +23,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [ ] 🧪 Confirm format, Clippy and full workspace tests on the exact commit.
 - [ ] 🖥️ Verify worker scheduling while Hyprland is off-workspace or occluded.
 
-## Milestone B: thread-owned frontend session — 8/11 source tasks (73%)
+## Milestone B: thread-owned frontend session — 10/13 source tasks (77%)
 
 - [x] 🧠 Define `OwnedSession` wrapping `FrontendSession` in `session_engine.rs`.
 - [x] 🎵 Produce PCM on the worker and enqueue it to the existing bounded Rodio worker.
@@ -33,6 +33,8 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [x] 🖼️ Skip unnecessary RGBA copies when a hidden renderer cannot consume them.
 - [x] 📬 Expose typed ROM, save, cheat, audio and input command methods.
 - [x] 🖼️ Build a renderer-only adapter that consumes published snapshots and updates egui textures.
+- [x] ⌨️ Expire stale input heartbeat after missing window callbacks, preventing endlessly held keys.
+- [x] 💾 Publish restored still frames after quick-save and disk-state loads, including while paused.
 - [ ] 🔄 Replace all live `StarbyteApp.session` access with worker commands and snapshots.
 - [ ] 📊 Move current emulation telemetry (FPS, frame gaps, overlays) to worker-produced truth.
 - [ ] 🎚️ Preserve every current audio speed/pitch control and its per-mode behavior through the handoff.
@@ -100,5 +102,5 @@ state as a fixed background-pause regression.
   flush and optional framebuffer copying.
 - `scheduler_video.rs`: renderer-only texture and telemetry adapter (not yet attached to the live GUI).
 - `main.rs`: explicit headless worker smoke and opt-in native-preview routes, no production default switch.
-- `threaded_preview.rs`: experimental worker-powered egui player with keyboard, manual/background pause and quick save/load.
-- `.github/workflows/ci.yml`: headless worker and Weston threaded-preview smoke tasks authored; completion not yet verified.
+- `threaded_preview.rs`: experimental worker-powered egui player with configured 12-button keyboard input, normal playback speed/pitch, manual/background pause, memory quick save/load and disk save slots. Visible but unfocused windows continue receiving game pictures.
+- `.github/workflows/ci.yml`: headless worker (including memory quick-save roundtrip) and Weston threaded-preview smoke tasks authored; completion not yet verified.

@@ -5,6 +5,9 @@ mod audio;
 mod blackout;
 mod logging;
 mod pitch;
+// Worker-clock foundation; GUI session handoff is a separate gated milestone.
+#[allow(dead_code)]
+mod scheduler;
 mod worker;
 
 use std::{env, path::PathBuf};

@@ -453,6 +453,10 @@ pub struct UiSettings {
     /// Single-line strip of recently launched games under the menu bar.
     #[serde(default = "default_visible_ui_bar")]
     pub show_recent_games_bar: bool,
+    /// Preserve the current conservative behavior unless the player opts
+    /// into continuing emulation while Starbyte is in the background.
+    #[serde(default = "default_pause_when_unfocused")]
+    pub pause_when_unfocused: bool,
     /// Use the operating-system theme unless the player overrides it.
     #[serde(default)]
     pub theme: UiTheme,
@@ -482,11 +486,16 @@ const fn default_visible_ui_bar() -> bool {
     true
 }
 
+const fn default_pause_when_unfocused() -> bool {
+    true
+}
+
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
             show_menu_bar: true,
             show_recent_games_bar: true,
+            pause_when_unfocused: true,
             theme: UiTheme::System,
             show_left_panel: true,
             show_right_panel: true,
@@ -935,6 +944,7 @@ mod ui_theme_tests {
         assert_eq!(RuntimeConfig::default().ui.theme, UiTheme::System);
         assert!(RuntimeConfig::default().ui.show_menu_bar);
         assert!(RuntimeConfig::default().ui.show_recent_games_bar);
+        assert!(RuntimeConfig::default().ui.pause_when_unfocused);
     }
 
     #[test]
@@ -945,11 +955,13 @@ mod ui_theme_tests {
         let legacy = serialized
             .replace("theme = \"dark\"\n", "")
             .replace("show_menu_bar = true\n", "")
-            .replace("show_recent_games_bar = true\n", "");
+            .replace("show_recent_games_bar = true\n", "")
+            .replace("pause_when_unfocused = true\n", "");
         let loaded: RuntimeConfig = toml::from_str(&legacy).unwrap();
         assert_eq!(loaded.ui.theme, UiTheme::System);
         assert!(loaded.ui.show_menu_bar);
         assert!(loaded.ui.show_recent_games_bar);
+        assert!(loaded.ui.pause_when_unfocused);
     }
 
     #[test]
@@ -957,9 +969,11 @@ mod ui_theme_tests {
         let mut config = RuntimeConfig::default();
         config.ui.show_menu_bar = false;
         config.ui.show_recent_games_bar = false;
+        config.ui.pause_when_unfocused = false;
         let loaded: RuntimeConfig = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
         assert!(!loaded.ui.show_menu_bar);
         assert!(!loaded.ui.show_recent_games_bar);
+        assert!(!loaded.ui.pause_when_unfocused);
     }
 
     #[test]

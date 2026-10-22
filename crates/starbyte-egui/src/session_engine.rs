@@ -6,7 +6,7 @@
 use std::{
     io,
     sync::{
-        atomic::{AtomicU16, Ordering},
+        atomic::{AtomicBool, AtomicU16, Ordering},
         Arc,
     },
     time::{Duration, Instant},
@@ -54,6 +54,24 @@ impl InputPort {
     }
 }
 
+/// Whether the UI can currently consume full-size video frames. Hidden
+/// windows still advance the emulator and synthesize sound, but need not
+/// copy the same framebuffer sixty times per second.
+#[derive(Clone, Default)]
+pub struct RenderPort {
+    visible: Arc<AtomicBool>,
+}
+
+impl RenderPort {
+    pub fn set_visible(&self, visible: bool) {
+        self.visible.store(visible, Ordering::Release);
+    }
+
+    fn should_copy_framebuffer(&self) -> bool {
+        self.visible.load(Ordering::Acquire)
+    }
+}
+
 fn controller_from_bits(bits: u16) -> ControllerState {
     ControllerState {
         b: bits & 0x8000 != 0,
@@ -74,7 +92,7 @@ fn controller_from_bits(bits: u16) -> ControllerState {
 /// A snapshot for the renderer; video frames coalesce when the UI is hidden.
 pub struct PublishedGameFrame {
     pub status: SessionSnapshot,
-    pub rgba: Vec<u8>,
+    pub rgba: Option<Vec<u8>>,
     pub last_frame_cpu: Duration,
     pub stereo_pairs: usize,
     pub nonzero_pairs: usize,
@@ -91,6 +109,8 @@ pub struct OwnedSession {
     speed_percent: u16,
     pitch_factor: f32,
     input: InputPort,
+    render: RenderPort,
+    last_sram_flush: Instant,
 }
 
 impl OwnedSession {
@@ -108,6 +128,8 @@ impl OwnedSession {
             speed_percent: 100,
             pitch_factor: 1.0,
             input: InputPort::default(),
+            render: RenderPort::default(),
+            last_sram_flush: Instant::now(),
         }
     }
 
@@ -121,6 +143,24 @@ impl OwnedSession {
     ) -> io::Result<(EmulatorScheduler<Self, PublishedGameFrame>, InputPort)> {
         let input = self.input.clone();
         Ok((self.spawn()?, input))
+    }
+
+    /// Keep both lock-free ports outside the thread. The GUI may update
+    /// visibility even when Wayland stops sending egui repaint callbacks.
+    pub fn spawn_with_ports(
+        self,
+    ) -> io::Result<(
+        EmulatorScheduler<Self, PublishedGameFrame>,
+        InputPort,
+        RenderPort,
+    )> {
+        let input = self.input.clone();
+        let render = self.render.clone();
+        Ok((self.spawn()?, input, render))
+    }
+
+    pub fn set_render_visible(&self, visible: bool) {
+        self.render.set_visible(visible);
     }
 
     pub fn set_input(&mut self, input: ControllerState) {
@@ -152,6 +192,7 @@ impl OwnedSession {
             output.clear();
         }
         self.input.reset();
+        self.last_sram_flush = Instant::now();
         match mode {
             SoundSessionMode::Compatibility => self.session.load_rom(path),
             SoundSessionMode::Isolated => self.session.load_rom_with_isolated_audio_probe(path),
@@ -203,6 +244,15 @@ impl OwnedSession {
             .run_frame_with_timeout(FRAME_TIMEOUT)
             .map_err(|error| error.to_string())?;
 
+        // SRAM writes live with the emulator owner, not the egui renderer:
+        // active background games keep their 30-second autosave cadence.
+        if self.last_sram_flush.elapsed() >= Duration::from_secs(30) {
+            self.last_sram_flush = Instant::now();
+            if let Err(error) = self.session.flush_save_ram() {
+                tracing::warn!("background SRAM autosave failed: {error}");
+            }
+        }
+
         let status = self.session.snapshot();
         let samples = &self.session.emulator().audio_samples().samples;
         let stereo_pairs = samples.len() / 2;
@@ -229,7 +279,8 @@ impl OwnedSession {
 
         Ok(PublishedGameFrame {
             status,
-            rgba: self.session.framebuffer_rgba().to_vec(),
+            rgba: self.render.should_copy_framebuffer()
+                .then(|| self.session.framebuffer_rgba().to_vec()),
             last_frame_cpu: started.elapsed(),
             stereo_pairs,
             nonzero_pairs,
@@ -325,6 +376,16 @@ mod tests {
         port.submit(ControllerState::default(), ControllerState::default());
         assert!(port.take_frame_state().start);
         assert!(!port.take_frame_state().start);
+    }
+
+    #[test]
+    fn video_copying_can_be_suppressed_without_stopping_clock() {
+        let port = RenderPort::default();
+        assert!(!port.should_copy_framebuffer());
+        port.set_visible(true);
+        assert!(port.should_copy_framebuffer());
+        port.set_visible(false);
+        assert!(!port.should_copy_framebuffer());
     }
 
     #[test]

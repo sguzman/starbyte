@@ -295,6 +295,26 @@ impl OwnedSession {
         self.session.snapshot()
     }
 
+    /// Snapshot the current emulated framebuffer without advancing a frame.
+    /// Needed after quick/disk state loads while the user is paused: the UI
+    /// must display the restored picture immediately, not wait for Play.
+    pub fn capture_frame(&self) -> PublishedGameFrame {
+        let status = self.session.snapshot();
+        let samples = &self.session.emulator().audio_samples().samples;
+        let stereo_pairs = samples.len() / 2;
+        let nonzero_pairs = samples
+            .chunks_exact(2)
+            .filter(|pair| pair[0] != 0 || pair[1] != 0)
+            .count();
+        PublishedGameFrame {
+            status,
+            rgba: Some(self.session.framebuffer_rgba().to_vec()),
+            last_frame_cpu: Duration::ZERO,
+            stereo_pairs,
+            nonzero_pairs,
+        }
+    }
+
     /// Produce one game frame entirely on the scheduler thread. The Rodio
     /// queue is already bounded and independent of egui. Never enqueue PCM
     /// for the renderer to replay later after a hidden-window interval.
@@ -405,12 +425,31 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
         self.transact(|engine| engine.quick_load().map_err(|e| e.to_string()))
     }
 
+    /// Restore memory state and return a fresh still image in one serialized
+    /// transaction, even when the scheduler is deliberately paused.
+    pub fn quick_load_with_frame(&self) -> Result<PublishedGameFrame, String> {
+        self.transact(|engine| {
+            engine.quick_load().map_err(|e| e.to_string())?;
+            Ok(engine.capture_frame())
+        })
+    }
+
     pub fn save_game_slot(&self, slot: u8) -> Result<std::path::PathBuf, String> {
         self.transact(move |engine| engine.save_slot(slot).map_err(|e| e.to_string()))
     }
 
     pub fn load_game_slot(&self, slot: u8) -> Result<(), String> {
         self.transact(move |engine| engine.load_slot(slot).map_err(|e| e.to_string()))
+    }
+
+    pub fn load_game_slot_with_frame(
+        &self,
+        slot: u8,
+    ) -> Result<PublishedGameFrame, String> {
+        self.transact(move |engine| {
+            engine.load_slot(slot).map_err(|e| e.to_string())?;
+            Ok(engine.capture_frame())
+        })
     }
 
     pub fn persist_sram(&self) -> Result<(), String> {

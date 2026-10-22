@@ -5531,7 +5531,7 @@ fn shared_gamepad_bindings(bindings: &BTreeMap<String, String>) -> Vec<(String, 
         .collect()
 }
 
-fn input_actions() -> &'static [&'static str] {
+pub(crate) fn input_actions() -> &'static [&'static str] {
     &[
         "up", "down", "left", "right", "start", "select", "a", "b", "x", "y", "l", "r",
     ]
@@ -5555,7 +5555,7 @@ fn action_label(action: &str) -> &'static str {
     }
 }
 
-fn set_controller_flag(state: &mut ControllerState, action: &str, pressed: bool) {
+pub(crate) fn set_controller_flag(state: &mut ControllerState, action: &str, pressed: bool) {
     match action {
         "up" => state.up |= pressed,
         "down" => state.down |= pressed,
@@ -5573,7 +5573,7 @@ fn set_controller_flag(state: &mut ControllerState, action: &str, pressed: bool)
     }
 }
 
-fn parse_egui_key(binding: &str) -> Option<egui::Key> {
+pub(crate) fn parse_egui_key(binding: &str) -> Option<egui::Key> {
     match binding {
         "ArrowUp" => Some(egui::Key::ArrowUp),
         "ArrowDown" => Some(egui::Key::ArrowDown),

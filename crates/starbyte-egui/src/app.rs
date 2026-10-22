@@ -649,8 +649,7 @@ pub struct StarbyteApp {
     show_compact_settings: bool,
     show_compact_session: bool,
     show_compact_logs: bool,
-    /// Firefox-style menu bar: a tap of Alt reveals/hides all top menus.
-    menu_bar_visible: bool,
+    /// Track Alt press/release without toggling on unrelated key chords.
     alt_was_down: bool,
     alt_menu_tap_armed: bool,
 }
@@ -832,7 +831,6 @@ impl StarbyteApp {
             show_compact_settings: false,
             show_compact_session: false,
             show_compact_logs: false,
-            menu_bar_visible: false,
             alt_was_down: false,
             alt_menu_tap_armed: false,
         };
@@ -2405,6 +2403,19 @@ impl StarbyteApp {
                 {
                     ctx.request_repaint();
                 }
+                ui.separator();
+                if ui
+                    .checkbox(&mut self.config.ui.show_menu_bar, "Show menu bar (Alt / F10)")
+                    .changed()
+                {
+                    self.persist_config();
+                }
+                if ui
+                    .checkbox(&mut self.config.ui.show_recent_games_bar, "Recently played bar")
+                    .changed()
+                {
+                    self.persist_config();
+                }
                 ui.menu_button("Color theme", |ui| {
                     let old = self.config.ui.theme;
                     ui.selectable_value(
@@ -2483,6 +2494,51 @@ impl StarbyteApp {
                             format!("Could not open report {}: {error}", path.display());
                     }
                     ui.close();
+                }
+            });
+        });
+    }
+
+    /// The recent-game strip stays independent of the menu bar so each can
+    /// be hidden from View without hiding the other. It never auto-launches.
+    fn draw_recent_games_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let recent = self.config.library.recent_roms.clone();
+        egui::ScrollArea::horizontal().show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.strong("Recently played");
+                ui.separator();
+                if recent.is_empty() {
+                    ui.label("No games launched yet");
+                }
+                for path in recent {
+                    let entry = self.library_snapshot.entries.iter().find(|entry| {
+                        entry.local.as_ref().is_some_and(|local| {
+                            local.rom_path == path
+                                || local.extracted_cache_path.as_deref() == Some(path.as_path())
+                        })
+                    }).cloned();
+                    let title = entry.as_ref().map_or_else(
+                        || path.file_stem()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| path.display().to_string()),
+                        |entry| entry.display_title.clone(),
+                    );
+                    let available = path.is_file() || entry.as_ref().is_some_and(|entry| {
+                        entry.installed_status == InstalledStatus::Installed
+                    });
+                    let button = ui.add_enabled(
+                        available,
+                        egui::Button::new(abbreviate_title(&title, 28)),
+                    ).on_hover_text(path.display().to_string());
+                    if button.clicked() {
+                        if let Some(entry) = entry.filter(|entry| {
+                            entry.installed_status == InstalledStatus::Installed
+                        }) {
+                            self.queue_load_entry(&entry);
+                        } else if path.is_file() {
+                            self.open_local_rom(&path, ctx);
+                        }
+                    }
                 }
             });
         });
@@ -3637,13 +3693,17 @@ impl eframe::App for StarbyteApp {
         route_fast_forward_tab(raw_input, active, &mut self.tab_fast_forward_held);
         let menu_shortcut_enabled = self.pending_keyboard_bind.is_none()
             && self.pending_gamepad_bind.is_none();
+        let was_visible = self.config.ui.show_menu_bar;
         update_alt_menu_visibility(
             raw_input,
             menu_shortcut_enabled,
-            &mut self.menu_bar_visible,
+            &mut self.config.ui.show_menu_bar,
             &mut self.alt_was_down,
             &mut self.alt_menu_tap_armed,
         );
+        if self.config.ui.show_menu_bar != was_visible {
+            self.persist_config();
+        }
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -3676,7 +3736,15 @@ impl eframe::App for StarbyteApp {
         }
 
         // Hotkeys should never fire while editing controls or recording a new binding.
-        if !ctx.wants_keyboard_input() && self.pending_keyboard_bind.is_none() {
+        if !ctx.wants_keyboard_input()
+            && self.pending_keyboard_bind.is_none()
+            && self.pending_gamepad_bind.is_none()
+        {
+            // Standard desktop fallback when the Wayland compositor grabs Alt.
+            if ctx.input(|input| input.key_pressed(egui::Key::F10)) {
+                self.config.ui.show_menu_bar = !self.config.ui.show_menu_bar;
+                self.persist_config();
+            }
             if ctx.input(|input| input.key_pressed(egui::Key::F5))
                 && self.session.snapshot().has_rom
             {
@@ -3703,8 +3771,13 @@ impl eframe::App for StarbyteApp {
 
         let available = ctx.available_rect();
         let compact = is_compact_layout(available.width(), available.height());
-        if self.menu_bar_visible {
+        if self.config.ui.show_menu_bar {
             egui::TopBottomPanel::top("top_bar").show(ctx, |ui| self.draw_top_bar(ui, ctx, compact));
+        }
+        if self.config.ui.show_recent_games_bar {
+            egui::TopBottomPanel::top("recent_games_bar").show(ctx, |ui| {
+                self.draw_recent_games_bar(ui, ctx);
+            });
         }
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -3743,7 +3816,11 @@ impl eframe::App for StarbyteApp {
                 }
                 ui.label(self.status_line.as_str());
                 ui.separator();
-                ui.small(if self.menu_bar_visible { "Alt: hide menus" } else { "Alt: show menus" });
+                ui.small(if self.config.ui.show_menu_bar {
+                    "Alt / F10: hide menus"
+                } else {
+                    "Alt / F10: show menus"
+                });
                 let active = self
                     .jobs
                     .iter()

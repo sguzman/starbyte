@@ -6,7 +6,7 @@
 use std::{
     io,
     sync::{
-        atomic::{AtomicBool, AtomicU16, Ordering},
+        atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering},
         Arc,
     },
     time::{Duration, Instant},
@@ -26,33 +26,74 @@ const FRAME_TIMEOUT: Duration = Duration::from_millis(1_500);
 
 /// Controller bridge updated directly by the GUI. Held state replaces its
 /// predecessor; short press edges are OR-latched until consumed by one SNES
-/// frame. No command queue can accumulate stale high-frequency input.
-#[derive(Clone, Default)]
+/// frame. An independent heartbeat releases controls if Wayland stops the
+/// UI repaint/input callback while a keyboard button is held.
+#[derive(Clone)]
 pub struct InputPort {
-    held_bits: Arc<AtomicU16>,
-    pending_press_bits: Arc<AtomicU16>,
+    state: Arc<InputPortState>,
+}
+
+struct InputPortState {
+    held_bits: AtomicU16,
+    pending_press_bits: AtomicU16,
+    started: Instant,
+    last_heartbeat_ms: AtomicU64,
+}
+
+impl Default for InputPort {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(InputPortState {
+                held_bits: AtomicU16::new(0),
+                pending_press_bits: AtomicU16::new(0),
+                started: Instant::now(),
+                last_heartbeat_ms: AtomicU64::new(0),
+            }),
+        }
+    }
 }
 
 impl InputPort {
+    /// A visibility change may stop egui callbacks while the last keyboard
+    /// state still says "held". Avoid moving forever through a background
+    /// game because an input release was never delivered.
+    const STALE_AFTER_MS: u64 = 300;
+
     /// Submit the current controller state and *new* press edges separately.
+    /// Call each visible UI update, even when no buttons are pressed.
     pub fn submit(&self, held: ControllerState, just_pressed: ControllerState) {
-        self.held_bits.store(held.to_bits(), Ordering::Release);
-        self.pending_press_bits
+        self.state.held_bits.store(held.to_bits(), Ordering::Release);
+        self.state.pending_press_bits
             .fetch_or(just_pressed.to_bits(), Ordering::AcqRel);
+        self.state.last_heartbeat_ms.store(
+            self.state.started.elapsed().as_millis() as u64,
+            Ordering::Release,
+        );
     }
 
     /// Called once by the worker immediately before emulating a frame.
     fn take_frame_state(&self) -> ControllerState {
-        let held = self.held_bits.load(Ordering::Acquire);
-        let edges = self.pending_press_bits.swap(0, Ordering::AcqRel);
+        self.take_frame_state_at(self.state.started.elapsed().as_millis() as u64)
+    }
+
+    fn take_frame_state_at(&self, now_ms: u64) -> ControllerState {
+        let recorded = self.state.last_heartbeat_ms.load(Ordering::Acquire);
+        if now_ms.saturating_sub(recorded) > Self::STALE_AFTER_MS {
+            // Do not replay an old press edge after coming back from a
+            // workspace where the window was not painted for several seconds.
+            self.clear();
+            return ControllerState::default();
+        }
+        let held = self.state.held_bits.load(Ordering::Acquire);
+        let edges = self.state.pending_press_bits.swap(0, Ordering::AcqRel);
         controller_from_bits(held | edges)
     }
 
     /// Flush held buttons and pending press edges on focus loss or ROM
     /// replacement. Background gameplay must not latch stale foreground keys.
     pub fn clear(&self) {
-        self.held_bits.store(0, Ordering::Release);
-        self.pending_press_bits.store(0, Ordering::Release);
+        self.state.held_bits.store(0, Ordering::Release);
+        self.state.pending_press_bits.store(0, Ordering::Release);
     }
 }
 
@@ -415,6 +456,23 @@ mod tests {
         port.submit(pressed, pressed);
         port.clear();
         assert_eq!(port.take_frame_state(), ControllerState::default());
+    }
+
+    #[test]
+    fn stale_window_input_does_not_hold_buttons_forever() {
+        let port = InputPort::default();
+        let pressed = ControllerState {
+            right: true,
+            ..ControllerState::default()
+        };
+        port.submit(pressed, pressed);
+        let since = port.state.last_heartbeat_ms.load(Ordering::Acquire);
+        assert_eq!(
+            port.take_frame_state_at(since + InputPort::STALE_AFTER_MS + 1),
+            ControllerState::default()
+        );
+        assert_eq!(port.take_frame_state_at(since + InputPort::STALE_AFTER_MS + 2),
+            ControllerState::default());
     }
 
     #[test]

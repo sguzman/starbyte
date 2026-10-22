@@ -96,7 +96,7 @@ jobs:
           grep -F "STARBYTE_NATIVE_SMOKE_OK frame=" "$RUNNER_TEMP/starbyte-wayland-smoke.log"
           # This acceptance shell consumes worker frames through egui while
           # executing game frames from a separate OS thread.
-          timeout 90s target/debug/starbyte-egui --demo --threaded-preview --exit-after-frames 30 \
+          timeout 90s target/debug/starbyte-egui --demo --threaded-preview --preview-background --exit-after-frames 30 \
             --config "$RUNNER_TEMP/starbyte-preview-config.toml" \
             --cache-dir "$RUNNER_TEMP/starbyte-preview-cache" \
             > "$RUNNER_TEMP/starbyte-threaded-preview.log" 2>&1 || {

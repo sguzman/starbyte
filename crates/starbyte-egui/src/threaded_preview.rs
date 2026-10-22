@@ -187,7 +187,22 @@ impl eframe::App for ThreadedPreviewApp {
                     self.display.last_cpu_duration().as_secs_f32() * 1_000.0
                 ));
                 ui.separator();
-                ui.label(format!("Video frames superseded {}", self.engine.skipped_video_frames()));
+                let rate = self.engine.frame_stats();
+                if let Some(fps) = rate.fps {
+                    ui.label(format!("Worker FPS {fps:.1} / 60.1"));
+                } else {
+                    ui.label("Worker FPS: measuring");
+                }
+                ui.separator();
+                ui.label(format!(
+                    "Frame gap {:.1} ms | 40ms+ hitches {}",
+                    rate.last_gap_ms, rate.hitches_40ms
+                ));
+                ui.separator();
+                ui.label(format!(
+                    "Video frames superseded {}",
+                    self.engine.skipped_video_frames()
+                ));
             });
         });
         // UI painting is still paced by egui, but the worker is NOT.

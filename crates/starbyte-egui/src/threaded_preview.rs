@@ -106,7 +106,9 @@ impl eframe::App for ThreadedPreviewApp {
         if focused {
             self.keyboard(ctx);
         } else {
-            self.input.submit(ControllerState::default(), ControllerState::default());
+            // Flush short press edges too; a previous key must not remain
+            // latched after focus has moved to another application.
+            self.input.clear();
         }
 
         if let Some(error) = self.engine.take_error() {

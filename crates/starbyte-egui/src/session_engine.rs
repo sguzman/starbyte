@@ -134,7 +134,18 @@ impl OwnedSession {
     }
 
     pub fn spawn(self) -> io::Result<EmulatorScheduler<Self, PublishedGameFrame>> {
-        EmulatorScheduler::spawn(self, NTSC_FRAME_INTERVAL, Self::advance)
+        EmulatorScheduler::spawn_with_pause_hook(
+            self,
+            NTSC_FRAME_INTERVAL,
+            Self::advance,
+            Self::clear_game_audio,
+        )
+    }
+
+    fn clear_game_audio(&mut self) {
+        if let Some(audio) = &self.audio {
+            audio.clear();
+        }
     }
 
     /// Transfer engine ownership while retaining the lock-free input port.

@@ -253,10 +253,9 @@ fn run_scheduler_smoke(assets: AssetConfig, rom: PathBuf) -> Result<()> {
         .map_err(|_| anyhow::anyhow!("emulation scheduler worker panicked"))?;
     anyhow::ensure!(engine.snapshot().has_rom, "worker lost ROM ownership");
     println!(
-        concat!(
-            "STARBYTE_SCHEDULER_SMOKE_OK background_frames={running} ",
-            "paused_at={stopped_at} total_frames={}"
-        ),
+        "STARBYTE_SCHEDULER_SMOKE_OK background_frames={} paused_at={} total_frames={}",
+        running,
+        stopped_at,
         engine.snapshot().frame
     );
     Ok(())

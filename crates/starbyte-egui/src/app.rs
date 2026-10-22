@@ -2212,7 +2212,7 @@ impl StarbyteApp {
     /// A tap of Alt toggles the entire panel, including during gameplay.
     fn draw_top_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, compact: bool) {
         egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("File", |ui| {
+            let file_menu = ui.menu_button("File", |ui| {
                 if ui.button("Open ROM...").clicked() {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter(
@@ -2251,7 +2251,7 @@ impl StarbyteApp {
                 }
             });
 
-            ui.menu_button("Game", |ui| {
+            let game_menu = ui.menu_button("Game", |ui| {
                 let has_rom = self.session.snapshot().has_rom;
                 if ui
                     .add_enabled(
@@ -2331,7 +2331,7 @@ impl StarbyteApp {
                 }
             });
 
-            ui.menu_button("Library", |ui| {
+            let library_menu = ui.menu_button("Library", |ui| {
                 let installed = self
                     .selected_entry()
                     .filter(|entry| entry.installed_status == InstalledStatus::Installed);
@@ -2404,7 +2404,7 @@ impl StarbyteApp {
                 });
             });
 
-            ui.menu_button("View", |ui| {
+            let view_menu = ui.menu_button("View", |ui| {
                 if ui
                     .checkbox(&mut self.config.video.fullscreen, "Fullscreen")
                     .changed()
@@ -2492,7 +2492,7 @@ impl StarbyteApp {
                 });
             });
 
-            ui.menu_button("Tools", |ui| {
+            let tools_menu = ui.menu_button("Tools", |ui| {
                 if ui.button("Settings").clicked() {
                     if compact {
                         self.show_compact_settings = true;
@@ -2526,6 +2526,35 @@ impl StarbyteApp {
                     ui.close();
                 }
             });
+
+            // egui 0.32 opens root MenuButtons on click, but doesn't switch
+            // across siblings on hover. Once one root menu is active, moving
+            // to another root opens it immediately, like a desktop menu bar.
+            // Do not open menus by hover when the whole bar is inactive.
+            let buttons = [
+                &file_menu.response,
+                &game_menu.response,
+                &library_menu.response,
+                &view_menu.response,
+                &tools_menu.response,
+            ];
+            let menu_ids = buttons.map(egui::Popup::default_response_id);
+            let any_root_open = menu_ids
+                .iter()
+                .any(|id| egui::Popup::is_id_open(ctx, *id));
+            if any_root_open {
+                if let Some((index, _)) = buttons
+                    .iter()
+                    .enumerate()
+                    .find(|(_, button)| button.hovered())
+                {
+                    let target = menu_ids[index];
+                    if !egui::Popup::is_id_open(ctx, target) {
+                        egui::Popup::open_id(ctx, target);
+                        ctx.request_repaint();
+                    }
+                }
+            }
         });
     }
 

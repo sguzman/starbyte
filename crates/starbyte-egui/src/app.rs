@@ -869,16 +869,27 @@ impl StarbyteApp {
         }
     }
 
-    fn visible_entries(&self) -> Vec<LibraryEntry> {
-        let mut entries = self.library_snapshot.entries.clone();
-        if self.config.library.show_installed_only {
-            entries.retain(|entry| entry.installed_status == InstalledStatus::Installed);
-        }
-        if !self.search_query.trim().is_empty() {
-            let needle = normalize_query(&self.search_query);
-            entries.retain(|entry| normalize_query(&entry.display_title).contains(&needle));
-        }
-        entries
+    /// Filter by index rather than cloning every game and its cheat records
+    /// on each repaint. A large ROM library can contain tens of thousands of
+    /// cached cheats, which must not be cloned just to draw a menu or a grid.
+    fn visible_entry_indices(&self) -> Vec<usize> {
+        let needle = normalize_query(&self.search_query);
+        self.library_snapshot
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| {
+                (!self.config.library.show_installed_only
+                    || entry.installed_status == InstalledStatus::Installed)
+                    && (needle.is_empty()
+                        || normalize_query(&entry.display_title).contains(&needle))
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    fn visible_entry_count(&self) -> usize {
+        self.visible_entry_indices().len()
     }
 
     fn persist_config(&mut self) {
@@ -1025,16 +1036,11 @@ impl StarbyteApp {
 
     fn selected_entry(&self) -> Option<LibraryEntry> {
         let selected = self.selected_game_id.as_deref()?;
-        self.visible_entries()
-            .into_iter()
+        self.library_snapshot
+            .entries
+            .iter()
             .find(|entry| entry.game_id == selected)
-            .or_else(|| {
-                self.library_snapshot
-                    .entries
-                    .iter()
-                    .find(|entry| entry.game_id == selected)
-                    .cloned()
-            })
+            .cloned()
     }
 
     fn sync_loaded_game_cheats(&mut self) {
@@ -2549,7 +2555,7 @@ impl StarbyteApp {
             ui.heading("Library");
             ui.label(format!(
                 "Showing {} of {} entries",
-                self.visible_entries().len(),
+                self.visible_entry_count(),
                 self.library_snapshot.total_count
             ));
             ui.label(self.status_line.as_str());
@@ -3333,42 +3339,59 @@ impl StarbyteApp {
     }
 
     fn draw_library_browser(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let previous_query = self.search_query.clone();
         ui.horizontal(|ui| {
-            if ui
-                .add(
-                    egui::TextEdit::singleline(&mut self.search_query)
-                        .hint_text("Search library...")
-                        .desired_width(280.0),
-                )
-                .changed()
-            {
-                self.status_line = format!("Filtered to {} entries.", self.visible_entries().len());
-            }
-            ui.label(format!("{} games", self.visible_entries().len()));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.search_query)
+                    .hint_text("Search library...")
+                    .desired_width(280.0),
+            );
         });
+        let indices = self.visible_entry_indices();
+        if previous_query != self.search_query {
+            self.status_line = format!("Filtered to {} entries.", indices.len());
+        }
+        ui.label(format!("{} games", indices.len()));
         ui.separator();
-        let entries = self.visible_entries();
+
         match self.config.library.active_view {
+            LibraryViewMode::Grid => {
+                // Virtualize rows; drawing hundreds of offscreen cards and
+                // copying every game's cheats used to stall the menu thread.
+                const CARD_WIDTH: f32 = 196.0;
+                const CARD_HEIGHT: f32 = 320.0;
+                let gap = ui.spacing().item_spacing.x;
+                let columns = ((ui.available_width() + gap) / (CARD_WIDTH + gap))
+                    .floor()
+                    .max(1.0) as usize;
+                let rows = indices.len().div_ceil(columns);
+                let height = CARD_HEIGHT + ui.spacing().item_spacing.y;
+                egui::ScrollArea::vertical().show_rows(ui, height, rows, |ui, visible_rows| {
+                    for row in visible_rows {
+                        ui.horizontal(|ui| {
+                            for &index in indices.iter().skip(row * columns).take(columns) {
+                                let entry = self.library_snapshot.entries[index].clone();
+                                self.draw_grid_entry(ui, ctx, &entry);
+                            }
+                        });
+                    }
+                });
+            }
             LibraryViewMode::List => {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    for entry in entries {
+                egui::ScrollArea::vertical().show_rows(ui, 26.0, indices.len(), |ui, visible| {
+                    for index in visible {
+                        let entry = self.library_snapshot.entries[indices[index]].clone();
                         self.draw_list_entry(ui, ctx, &entry);
                         ui.separator();
                     }
                 });
             }
-            LibraryViewMode::Grid => {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        for entry in entries {
-                            self.draw_grid_entry(ui, ctx, &entry);
-                        }
-                    });
-                });
-            }
             LibraryViewMode::Detailed => {
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    for entry in entries {
+                    // Detailed cards vary in height, so preserve natural
+                    // layout while avoiding full-catalog clone upfront.
+                    for &index in &indices {
+                        let entry = self.library_snapshot.entries[index].clone();
                         self.draw_detailed_entry(ui, ctx, &entry);
                         ui.separator();
                     }

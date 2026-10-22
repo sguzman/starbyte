@@ -28,7 +28,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [x] 🧠 Define `OwnedSession` wrapping `FrontendSession` in `session_engine.rs`.
 - [x] 🎵 Produce PCM on the worker and enqueue it to the existing bounded Rodio worker.
 - [x] 💾 Serialize quick saves, durable slots and SRAM operations on the worker.
-- [x] ⏳ Flush SRAM periodically on the worker, independent of UI redraws.
+- [x] ⏳ Flush SRAM periodically on the worker and at manual/background pause transitions, independent of UI redraws.
 - [x] 🎮 Publish an atomic held-controller state with latched short-press edges.
 - [x] 🖼️ Skip unnecessary RGBA copies when a hidden renderer cannot consume them.
 - [x] 📬 Expose typed ROM, save, cheat, audio and input command methods.
@@ -88,7 +88,8 @@ Developers can also launch the opt-in `--demo --threaded-preview` shell to
 exercise real native input, video texture upload, frame execution and
 background pause. It is deliberately **not** the full game library or the
 default desktop app, and its normal functionality is not a substitute for
-Milestone C.
+Milestone C. For Weston/headless acceptance, `--preview-background` explicitly
+disables the preview's focus pause without mutating persisted preferences.
 
 This headless path is a diagnostic of the new worker only. Ordinary
 `cargo run --release -p starbyte-egui` **still runs the existing UI-owned
@@ -101,6 +102,6 @@ state as a fixed background-pause regression.
 - `session_engine.rs`: worker-owned SNES session, audio, input port, periodic SRAM
   flush and optional framebuffer copying.
 - `scheduler_video.rs`: renderer-only texture and telemetry adapter (not yet attached to the live GUI).
-- `main.rs`: explicit headless worker smoke and opt-in native-preview routes, no production default switch.
+- `main.rs`: explicit headless worker smoke (including a memory quick-save/restore roundtrip) and opt-in native-preview routes, no production default switch.
 - `threaded_preview.rs`: experimental worker-powered egui player with configured 12-button keyboard input, normal playback speed/pitch, manual/background pause, memory quick save/load and disk save slots. Visible but unfocused windows continue receiving game pictures.
 - `.github/workflows/ci.yml`: headless worker (including memory quick-save roundtrip) and Weston threaded-preview smoke tasks authored; completion not yet verified.

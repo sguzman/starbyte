@@ -100,9 +100,11 @@ impl eframe::App for ThreadedPreviewApp {
             self.focused = focused;
             self.engine.set_focused(focused);
         }
-        // A hidden/occluded window need not receive copied RGBA bytes.
-        // Emulation and audio continue on their independent worker clock.
-        self.render.set_visible(focused);
+        // Focus is not the same as visibility: a window can be on-screen
+        // and unfocused while the game continues in the background. Keep
+        // framebuffer publication enabled in this preview; the single-slot
+        // mailbox safely discards frames when Wayland withholds redraws.
+        self.render.set_visible(true);
         if focused {
             self.keyboard(ctx);
         } else {

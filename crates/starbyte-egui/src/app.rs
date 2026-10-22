@@ -21,7 +21,9 @@ use crate::{
 
 use starbyte_core::{
     input::ControllerState,
-    manifest::{AssetConfig, AudioPitchMode, InputDeviceMode, LibraryViewMode, RuntimeConfig, UiTheme},
+    manifest::{
+        AssetConfig, AudioPitchMode, InputDeviceMode, LibraryViewMode, RuntimeConfig, UiTheme,
+    },
 };
 use starbyte_frontend::{
     CheatEntry, FrontendSession, InstalledStatus, LibraryEntry, LibraryFilter, LibraryService,
@@ -673,7 +675,11 @@ impl StarbyteApp {
     ) -> Result<Self> {
         if let Some(prefer_dark_mode) = prefer_dark_mode_override {
             config.prefer_dark_mode = prefer_dark_mode;
-            config.ui.theme = if prefer_dark_mode { UiTheme::Dark } else { UiTheme::Light };
+            config.ui.theme = if prefer_dark_mode {
+                UiTheme::Dark
+            } else {
+                UiTheme::Light
+            };
         }
         for rom_dir in startup_rom_dirs {
             if !config.library.rom_dirs.contains(&rom_dir) {
@@ -2190,7 +2196,10 @@ impl StarbyteApp {
             ui.menu_button("File", |ui| {
                 if ui.button("Open ROM...").clicked() {
                     if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Super Nintendo ROM or ZIP", &["sfc", "smc", "swc", "fig", "zip"])
+                        .add_filter(
+                            "Super Nintendo ROM or ZIP",
+                            &["sfc", "smc", "swc", "fig", "zip"],
+                        )
                         .pick_file()
                     {
                         self.open_local_rom(&path, ctx);
@@ -2203,10 +2212,12 @@ impl StarbyteApp {
                         ui.label("No recently opened games");
                     }
                     for path in paths {
-                        let label = path.file_name()
+                        let label = path
+                            .file_name()
                             .map(|name| name.to_string_lossy().into_owned())
                             .unwrap_or_else(|| path.display().to_string());
-                        if ui.add_enabled(path.is_file(), egui::Button::new(label))
+                        if ui
+                            .add_enabled(path.is_file(), egui::Button::new(label))
                             .on_hover_text(path.display().to_string())
                             .clicked()
                         {
@@ -2223,24 +2234,49 @@ impl StarbyteApp {
 
             ui.menu_button("Game", |ui| {
                 let has_rom = self.session.snapshot().has_rom;
-                if ui.add_enabled(has_rom, egui::Button::new(
-                    if self.play_view { "Return to Library (Esc)" } else { "Game View (F9)" }
-                )).clicked() {
+                if ui
+                    .add_enabled(
+                        has_rom,
+                        egui::Button::new(if self.play_view {
+                            "Return to Library (Esc)"
+                        } else {
+                            "Game View (F9)"
+                        }),
+                    )
+                    .clicked()
+                {
                     self.play_view = !self.play_view;
                     ui.close();
                 }
-                if ui.add_enabled(has_rom, egui::Button::new(
-                    if self.is_playing { "Pause" } else { "Play / Resume" }
-                )).clicked() {
+                if ui
+                    .add_enabled(
+                        has_rom,
+                        egui::Button::new(if self.is_playing {
+                            "Pause"
+                        } else {
+                            "Play / Resume"
+                        }),
+                    )
+                    .clicked()
+                {
                     self.toggle_play_pause();
                     ui.close();
                 }
                 ui.separator();
-                if ui.add_enabled(has_rom, egui::Button::new("Quick Save (F5)")).clicked() {
+                if ui
+                    .add_enabled(has_rom, egui::Button::new("Quick Save (F5)"))
+                    .clicked()
+                {
                     self.quick_save();
                     ui.close();
                 }
-                if ui.add_enabled(self.session.has_quick_save(), egui::Button::new("Quick Load (F8)")).clicked() {
+                if ui
+                    .add_enabled(
+                        self.session.has_quick_save(),
+                        egui::Button::new("Quick Load (F8)"),
+                    )
+                    .clicked()
+                {
                     self.quick_load(ctx);
                     ui.close();
                 }
@@ -2250,21 +2286,31 @@ impl StarbyteApp {
                 ui.separator();
                 ui.menu_button("Speed and Pitch", |ui| self.draw_speed_controls(ui));
                 ui.menu_button("Sound", |ui| self.draw_audio_controls(ui));
-                if ui.add_enabled(has_rom, egui::Button::new("Cheats...")).clicked() {
+                if ui
+                    .add_enabled(has_rom, egui::Button::new("Cheats..."))
+                    .clicked()
+                {
                     self.show_cheats_window = !self.show_cheats_window;
                     self.cheat_search_focus_pending = self.show_cheats_window;
                     ui.close();
                 }
-                if ui.add_enabled(has_rom, egui::Button::new("Screenshot (F12)")).clicked() {
+                if ui
+                    .add_enabled(has_rom, egui::Button::new("Screenshot (F12)"))
+                    .clicked()
+                {
                     self.save_screenshot();
                     ui.close();
                 }
             });
 
             ui.menu_button("Library", |ui| {
-                let installed = self.selected_entry()
+                let installed = self
+                    .selected_entry()
                     .filter(|entry| entry.installed_status == InstalledStatus::Installed);
-                if ui.add_enabled(installed.is_some(), egui::Button::new("Play Selected")).clicked() {
+                if ui
+                    .add_enabled(installed.is_some(), egui::Button::new("Play Selected"))
+                    .clicked()
+                {
                     if let Some(entry) = installed {
                         self.queue_load_entry(&entry);
                     }
@@ -2284,11 +2330,15 @@ impl StarbyteApp {
                         ui.close();
                     }
                     if ui.button("Covers").clicked() {
-                        self.queue_job(WorkerCommandKind::RefreshCovers { target: LibraryTarget::default() });
+                        self.queue_job(WorkerCommandKind::RefreshCovers {
+                            target: LibraryTarget::default(),
+                        });
                         ui.close();
                     }
                     if ui.button("Cheats").clicked() {
-                        self.queue_job(WorkerCommandKind::RefreshCheats { target: LibraryTarget::default() });
+                        self.queue_job(WorkerCommandKind::RefreshCheats {
+                            target: LibraryTarget::default(),
+                        });
                         ui.close();
                     }
                     if ui.button("Everything").clicked() {
@@ -2297,14 +2347,29 @@ impl StarbyteApp {
                     }
                 });
                 ui.separator();
-                if ui.checkbox(&mut self.config.library.show_installed_only, "Installed only").changed() {
+                if ui
+                    .checkbox(&mut self.config.library.show_installed_only, "Installed only")
+                    .changed()
+                {
                     self.persist_config();
                 }
                 ui.menu_button("Library layout", |ui| {
                     let old = self.config.library.active_view;
-                    ui.selectable_value(&mut self.config.library.active_view, LibraryViewMode::Grid, "Grid");
-                    ui.selectable_value(&mut self.config.library.active_view, LibraryViewMode::List, "List");
-                    ui.selectable_value(&mut self.config.library.active_view, LibraryViewMode::Detailed, "Detailed");
+                    ui.selectable_value(
+                        &mut self.config.library.active_view,
+                        LibraryViewMode::Grid,
+                        "Grid",
+                    );
+                    ui.selectable_value(
+                        &mut self.config.library.active_view,
+                        LibraryViewMode::List,
+                        "List",
+                    );
+                    ui.selectable_value(
+                        &mut self.config.library.active_view,
+                        LibraryViewMode::Detailed,
+                        "Detailed",
+                    );
                     if self.config.library.active_view != old {
                         self.persist_config();
                     }
@@ -2312,25 +2377,51 @@ impl StarbyteApp {
             });
 
             ui.menu_button("View", |ui| {
-                if ui.checkbox(&mut self.config.video.fullscreen, "Fullscreen").changed() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.config.video.fullscreen));
+                if ui
+                    .checkbox(&mut self.config.video.fullscreen, "Fullscreen")
+                    .changed()
+                {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(
+                        self.config.video.fullscreen,
+                    ));
                     self.persist_config();
                 }
-                if ui.checkbox(&mut self.config.video.integer_scale, "Integer pixel scale").changed() {
+                if ui
+                    .checkbox(&mut self.config.video.integer_scale, "Integer pixel scale")
+                    .changed()
+                {
                     self.persist_config();
                 }
                 ui.separator();
-                if ui.checkbox(&mut self.show_performance_overlay, "Timing overlay").changed() {
+                if ui
+                    .checkbox(&mut self.show_performance_overlay, "Timing overlay")
+                    .changed()
+                {
                     ctx.request_repaint();
                 }
-                if ui.checkbox(&mut self.show_input_overlay, "Input diagnostics").changed() {
+                if ui
+                    .checkbox(&mut self.show_input_overlay, "Input diagnostics")
+                    .changed()
+                {
                     ctx.request_repaint();
                 }
                 ui.menu_button("Color theme", |ui| {
                     let old = self.config.ui.theme;
-                    ui.selectable_value(&mut self.config.ui.theme, UiTheme::System, "System (default)");
-                    ui.selectable_value(&mut self.config.ui.theme, UiTheme::Light, "Light / Day");
-                    ui.selectable_value(&mut self.config.ui.theme, UiTheme::Dark, "Dark / Night");
+                    ui.selectable_value(
+                        &mut self.config.ui.theme,
+                        UiTheme::System,
+                        "System (default)",
+                    );
+                    ui.selectable_value(
+                        &mut self.config.ui.theme,
+                        UiTheme::Light,
+                        "Light / Day",
+                    );
+                    ui.selectable_value(
+                        &mut self.config.ui.theme,
+                        UiTheme::Dark,
+                        "Dark / Night",
+                    );
                     if old != self.config.ui.theme {
                         apply_theme(ctx, self.config.ui.theme);
                         self.persist_config();
@@ -2388,7 +2479,8 @@ impl StarbyteApp {
                 if ui.button("Open scan report").clicked() {
                     let path = self.cache_root.join("manifests").join("rom-scan-report.json");
                     if let Err(error) = open_path(&path) {
-                        self.status_line = format!("Could not open report {}: {error}", path.display());
+                        self.status_line =
+                            format!("Could not open report {}: {error}", path.display());
                     }
                     ui.close();
                 }
@@ -3186,9 +3278,13 @@ impl StarbyteApp {
 
     fn draw_library_browser(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal(|ui| {
-            if ui.add(egui::TextEdit::singleline(&mut self.search_query)
-                .hint_text("Search library...")
-                .desired_width(280.0)).changed()
+            if ui
+                .add(
+                    egui::TextEdit::singleline(&mut self.search_query)
+                        .hint_text("Search library...")
+                        .desired_width(280.0),
+                )
+                .changed()
             {
                 self.status_line = format!("Filtered to {} entries.", self.visible_entries().len());
             }
@@ -5266,11 +5362,11 @@ fn update_alt_menu_visibility(
     if alt_down && !*was_down {
         *armed = true;
     }
-    if input.events.iter().any(|event| matches!(
-        event,
-        egui::Event::Key { pressed: true, .. }
-            | egui::Event::PointerButton { pressed: true, .. }
-    )) {
+    let used_as_modifier = input.events.iter().any(|event| match event {
+        egui::Event::Key { pressed, .. } | egui::Event::PointerButton { pressed, .. } => *pressed,
+        _ => false,
+    });
+    if used_as_modifier {
         *armed = false;
     }
     if !alt_down && *was_down && *armed {
@@ -5346,7 +5442,10 @@ mod menu_bar_shortcut_tests {
     fn input(alt: bool) -> egui::RawInput {
         egui::RawInput {
             focused: true,
-            modifiers: egui::Modifiers { alt, ..Default::default() },
+            modifiers: egui::Modifiers {
+                alt,
+                ..Default::default()
+            },
             ..Default::default()
         }
     }
@@ -5355,9 +5454,21 @@ mod menu_bar_shortcut_tests {
     fn plain_alt_toggles_visible_and_hidden_once_per_release() {
         let (mut visible, mut was_down, mut armed) = (false, false, false);
         for expected in [true, false] {
-            update_alt_menu_visibility(&input(true), true, &mut visible, &mut was_down, &mut armed);
+            update_alt_menu_visibility(
+                &input(true),
+                true,
+                &mut visible,
+                &mut was_down,
+                &mut armed,
+            );
             assert_ne!(visible, expected);
-            update_alt_menu_visibility(&input(false), true, &mut visible, &mut was_down, &mut armed);
+            update_alt_menu_visibility(
+                &input(false),
+                true,
+                &mut visible,
+                &mut was_down,
+                &mut armed,
+            );
             assert_eq!(visible, expected);
         }
     }
@@ -5365,7 +5476,13 @@ mod menu_bar_shortcut_tests {
     #[test]
     fn alt_chord_does_not_hide_menus() {
         let (mut visible, mut was_down, mut armed) = (true, false, false);
-        update_alt_menu_visibility(&input(true), true, &mut visible, &mut was_down, &mut armed);
+        update_alt_menu_visibility(
+            &input(true),
+            true,
+            &mut visible,
+            &mut was_down,
+            &mut armed,
+        );
         let mut chord = input(true);
         chord.events.push(egui::Event::Key {
             key: egui::Key::F9,
@@ -5374,21 +5491,57 @@ mod menu_bar_shortcut_tests {
             repeat: false,
             modifiers: chord.modifiers,
         });
-        update_alt_menu_visibility(&chord, true, &mut visible, &mut was_down, &mut armed);
-        update_alt_menu_visibility(&input(false), true, &mut visible, &mut was_down, &mut armed);
+        update_alt_menu_visibility(
+            &chord,
+            true,
+            &mut visible,
+            &mut was_down,
+            &mut armed,
+        );
+        update_alt_menu_visibility(
+            &input(false),
+            true,
+            &mut visible,
+            &mut was_down,
+            &mut armed,
+        );
         assert!(visible);
     }
 
     #[test]
     fn disabled_for_rebinding_and_unfocused_windows() {
         let (mut visible, mut was_down, mut armed) = (false, false, false);
-        update_alt_menu_visibility(&input(true), false, &mut visible, &mut was_down, &mut armed);
-        update_alt_menu_visibility(&input(false), true, &mut visible, &mut was_down, &mut armed);
+        update_alt_menu_visibility(
+            &input(true),
+            false,
+            &mut visible,
+            &mut was_down,
+            &mut armed,
+        );
+        update_alt_menu_visibility(
+            &input(false),
+            true,
+            &mut visible,
+            &mut was_down,
+            &mut armed,
+        );
         assert!(!visible);
-        update_alt_menu_visibility(&input(true), true, &mut visible, &mut was_down, &mut armed);
+        update_alt_menu_visibility(
+            &input(true),
+            true,
+            &mut visible,
+            &mut was_down,
+            &mut armed,
+        );
         let mut blurred = input(false);
         blurred.focused = false;
-        update_alt_menu_visibility(&blurred, true, &mut visible, &mut was_down, &mut armed);
+        update_alt_menu_visibility(
+            &blurred,
+            true,
+            &mut visible,
+            &mut was_down,
+            &mut armed,
+        );
         assert!(!visible);
     }
 }

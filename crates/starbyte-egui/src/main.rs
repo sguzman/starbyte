@@ -248,15 +248,42 @@ fn run_scheduler_smoke(assets: AssetConfig, rom: PathBuf) -> Result<()> {
         "worker did not resume after window focus returned"
     );
 
+    // A separate saved-state round trip checks that commands serialize
+    // against the independent clock. This uses only a memory quick slot in
+    // the synthetic demo ROM; it never touches a real game's disk slots.
     worker.set_playing(false);
+    worker.invoke(|_| Ok(())).map_err(anyhow::Error::msg)?;
+    let saved = worker.read_status().map_err(anyhow::Error::msg)?.frame;
+    worker.quick_save_game().map_err(anyhow::Error::msg)?;
+    worker.set_playing(true);
+    let replay_start = worker.completed_frames();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while worker.completed_frames() <= replay_start + 2 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(15));
+    }
+    anyhow::ensure!(
+        worker.completed_frames() > replay_start + 2,
+        "worker did not advance after memory quick-save"
+    );
+    worker.set_playing(false);
+    worker.invoke(|_| Ok(())).map_err(anyhow::Error::msg)?;
+    let restored = worker.quick_load_with_frame().map_err(anyhow::Error::msg)?;
+    anyhow::ensure!(
+        restored.status.frame == saved,
+        "quick-load restored frame {} instead of saved frame {saved}",
+        restored.status.frame
+    );
+    anyhow::ensure!(restored.rgba.is_some(), "restored still image was not published");
+
     let engine = worker.shutdown()
         .map_err(|_| anyhow::anyhow!("emulation scheduler worker panicked"))?;
     anyhow::ensure!(engine.snapshot().has_rom, "worker lost ROM ownership");
     println!(
-        "STARBYTE_SCHEDULER_SMOKE_OK background_frames={} paused_at={} total_frames={}",
+        "STARBYTE_SCHEDULER_SMOKE_OK background_frames={} paused_at={} total_frames={} restored_frame={}",
         running,
         stopped_at,
-        engine.snapshot().frame
+        engine.snapshot().frame,
+        restored.status.frame
     );
     Ok(())
 }

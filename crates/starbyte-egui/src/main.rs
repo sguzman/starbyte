@@ -14,6 +14,7 @@ mod scheduler;
 mod session_engine;
 #[allow(dead_code)]
 mod scheduler_video;
+mod threaded_preview;
 mod worker;
 
 use std::{env, path::PathBuf};
@@ -80,6 +81,11 @@ struct Args {
     /// without Wayland repaint callbacks and obeys background pause policy.
     #[arg(long, requires = "demo", conflicts_with = "exit_after_frames")]
     scheduler_smoke: bool,
+
+    /// Opt-in native preview of the worker-owned emulation engine.
+    /// Does not replace the normal, fully featured library UI yet.
+    #[arg(long, conflicts_with = "scheduler_smoke")]
+    threaded_preview: bool,
 }
 
 fn main() -> Result<()> {
@@ -147,6 +153,26 @@ fn main() -> Result<()> {
     let rom_dirs = args.rom_dirs.clone();
     if args.scheduler_smoke {
         return run_scheduler_smoke(assets, rom.expect("--demo generates a built-in ROM"));
+    }
+    if args.threaded_preview {
+        let path = rom.ok_or_else(|| {
+            anyhow::anyhow!("--threaded-preview requires --demo or --rom")
+        })?;
+        return eframe::run_native(
+            "Starbyte (threaded preview)",
+            options,
+            Box::new(move |_cc| {
+                let app = crate::threaded_preview::ThreadedPreviewApp::new(
+                    assets.clone(),
+                    &config,
+                    path.clone(),
+                    args.exit_after_frames,
+                )
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+                Ok(Box::new(app))
+            }),
+        )
+        .map_err(|error| anyhow::anyhow!("threaded preview failed: {error}"));
     }
 
     eframe::run_native(

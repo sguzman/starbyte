@@ -189,6 +189,13 @@ impl OwnedSession {
         if let Some(audio) = &self.audio {
             audio.clear();
         }
+        // A long manual/background pause may prevent the normal 30-second
+        // frame-driven SRAM flush. Commit cartridge progress at the pause
+        // transition, without depending on any Wayland repaint callback.
+        if let Err(error) = self.flush_sram() {
+            tracing::warn!("could not persist SRAM while pausing worker: {error}");
+        }
+        self.last_sram_flush = Instant::now();
     }
 
     /// Transfer engine ownership while retaining the lock-free input port.

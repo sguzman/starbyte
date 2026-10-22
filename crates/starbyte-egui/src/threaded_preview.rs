@@ -19,6 +19,14 @@ use crate::{
     session_engine::{InputPort, OwnedSession, PublishedGameFrame, RenderPort},
 };
 
+fn pitch_for(mode: AudioPitchMode, custom_percent: u16, speed: u16) -> f32 {
+    match mode {
+        AudioPitchMode::Preserve => 1.0,
+        AudioPitchMode::FollowSpeed => f32::from(speed) / 100.0,
+        AudioPitchMode::Custom => f32::from(custom_percent.clamp(50, 200)) / 100.0,
+    }
+}
+
 pub struct ThreadedPreviewApp {
     engine: EmulatorScheduler<OwnedSession, PublishedGameFrame>,
     input: InputPort,
@@ -29,7 +37,8 @@ pub struct ThreadedPreviewApp {
     pause_when_unfocused: bool,
     integer_scale: bool,
     speed_percent: u16,
-    pitch_factor: f32,
+    pitch_mode: AudioPitchMode,
+    pitch_percent: u16,
     exit_after_frames: Option<u64>,
     last_error: Option<String>,
 }
@@ -52,13 +61,11 @@ impl ThreadedPreviewApp {
             50 | 75 | 100 | 125 | 150 | 200 | 300 => config.video.playback_speed_percent,
             _ => 100,
         };
-        let pitch_factor = match config.audio.pitch_mode {
-            AudioPitchMode::Preserve => 1.0,
-            AudioPitchMode::FollowSpeed => f32::from(speed_percent) / 100.0,
-            AudioPitchMode::Custom => {
-                f32::from(config.audio.pitch_percent.clamp(50, 200)) / 100.0
-            }
-        };
+        let pitch_factor = pitch_for(
+            config.audio.pitch_mode,
+            config.audio.pitch_percent,
+            speed_percent,
+        );
         session.set_speed(speed_percent, pitch_factor);
         let (engine, input, render) = session.spawn_with_ports()?;
         engine.set_speed_percent(speed_percent);
@@ -76,7 +83,8 @@ impl ThreadedPreviewApp {
             pause_when_unfocused: config.ui.pause_when_unfocused,
             integer_scale: config.video.integer_scale,
             speed_percent,
-            pitch_factor,
+            pitch_mode: config.audio.pitch_mode,
+            pitch_percent: config.audio.pitch_percent,
             exit_after_frames,
             last_error: None,
         })
@@ -179,10 +187,16 @@ impl eframe::App for ThreadedPreviewApp {
                             )
                             .changed()
                         {
-                            self.engine
-                                .configure_playback_speed(speed, self.pitch_factor)
-                                .map_err(|error| self.last_error = Some(error))
-                                .ok();
+                            let pitch = pitch_for(
+                                self.pitch_mode,
+                                self.pitch_percent,
+                                speed,
+                            );
+                            if let Err(error) =
+                                self.engine.configure_playback_speed(speed, pitch)
+                            {
+                                self.last_error = Some(error);
+                            }
                             ui.close();
                         }
                     }

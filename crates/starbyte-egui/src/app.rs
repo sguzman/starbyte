@@ -2622,39 +2622,39 @@ impl StarbyteApp {
                             Vec2::new(CARD_WIDTH, CARD_HEIGHT),
                             egui::Layout::top_down(egui::Align::Center),
                             |ui| {
-                            let cover_clicked = if let Some(texture) = cover {
-                                let fit = fit_size(texture.size_vec2(), COVER_SIZE);
-                                ui.add_enabled(
-                                    available,
-                                    egui::ImageButton::new((texture.id(), fit)),
-                                )
-                                .on_hover_text(title.as_str())
-                                .clicked()
-                            } else {
-                                ui.add_sized(
-                                    [COVER_SIZE.x, COVER_SIZE.y],
-                                    egui::Label::new("No cover"),
-                                );
-                                false
-                            };
-                            let title_clicked = ui
-                                .add_enabled_ui(available, |ui| {
-                                    ui.add_sized(
-                                        [CARD_WIDTH, 26.0],
-                                        egui::Button::new(abbreviate_title(&title, 17)),
+                                let cover_clicked = if let Some(texture) = cover {
+                                    let fit = fit_size(texture.size_vec2(), COVER_SIZE);
+                                    ui.add_enabled(
+                                        available,
+                                        egui::ImageButton::new((texture.id(), fit)),
                                     )
-                                })
-                                .inner
-                                .on_hover_text(path.display().to_string())
-                                .clicked();
-                            if cover_clicked || title_clicked {
-                                if let Some(index) = index.filter(|_| installed) {
-                                    let entry = self.library_snapshot.entries[index].clone();
-                                    self.queue_load_entry(&entry);
-                                } else if path.is_file() {
-                                    self.open_local_rom(&path, ctx);
+                                    .on_hover_text(title.as_str())
+                                    .clicked()
+                                } else {
+                                    ui.add_sized(
+                                        [COVER_SIZE.x, COVER_SIZE.y],
+                                        egui::Label::new("No cover"),
+                                    );
+                                    false
+                                };
+                                let title_clicked = ui
+                                    .add_enabled_ui(available, |ui| {
+                                        ui.add_sized(
+                                            [CARD_WIDTH, 26.0],
+                                            egui::Button::new(abbreviate_title(&title, 17)),
+                                        )
+                                    })
+                                    .inner
+                                    .on_hover_text(path.display().to_string())
+                                    .clicked();
+                                if cover_clicked || title_clicked {
+                                    if let Some(index) = index.filter(|_| installed) {
+                                        let entry = self.library_snapshot.entries[index].clone();
+                                        self.queue_load_entry(&entry);
+                                    } else if path.is_file() {
+                                        self.open_local_rom(&path, ctx);
+                                    }
                                 }
-                            }
                             },
                         );
                     }

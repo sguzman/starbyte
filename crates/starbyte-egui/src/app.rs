@@ -2539,21 +2539,11 @@ impl StarbyteApp {
                 &tools_menu.response,
             ];
             let menu_ids = buttons.map(egui::Popup::default_response_id);
-            let any_root_open = menu_ids
-                .iter()
-                .any(|id| egui::Popup::is_id_open(ctx, *id));
-            if any_root_open {
-                if let Some((index, _)) = buttons
-                    .iter()
-                    .enumerate()
-                    .find(|(_, button)| button.hovered())
-                {
-                    let target = menu_ids[index];
-                    if !egui::Popup::is_id_open(ctx, target) {
-                        egui::Popup::open_id(ctx, target);
-                        ctx.request_repaint();
-                    }
-                }
+            let open = menu_ids.map(|id| egui::Popup::is_id_open(ctx, id));
+            let hovered = buttons.iter().position(|button| button.hovered());
+            if let Some(index) = root_menu_to_switch(open, hovered) {
+                egui::Popup::open_id(ctx, menu_ids[index]);
+                ctx.request_repaint();
             }
         });
     }
@@ -5584,6 +5574,15 @@ fn apply_theme(ctx: &egui::Context, theme: UiTheme) {
     });
 }
 
+/// Only switch root menus when one is already open. Hover alone must never
+/// turn the menu bar into a permanently auto-opening strip.
+fn root_menu_to_switch(open: [bool; 5], hovered: Option<usize>) -> Option<usize> {
+    if !open.contains(&true) {
+        return None;
+    }
+    hovered.filter(|&index| index < open.len() && !open[index])
+}
+
 /// Toggle on an Alt tap, not on Alt+another key or when a keybind is recording.
 /// Track press/release across input frames instead of toggling every repaint.
 fn update_alt_menu_visibility(
@@ -5812,5 +5811,31 @@ mod focus_pause_ui_tests {
         assert!(gameplay_should_tick(true, true, false, false));
         assert!(!gameplay_should_tick(false, true, false, false));
         assert!(!gameplay_should_tick(true, false, false, false));
+    }
+}
+
+#[cfg(test)]
+mod menu_hover_switch_tests {
+    use super::root_menu_to_switch;
+
+    #[test]
+    fn inactive_menu_bar_does_not_open_by_hover() {
+        assert_eq!(root_menu_to_switch([false; 5], Some(2)), None);
+    }
+
+    #[test]
+    fn active_menu_bar_opens_hovered_sibling_only() {
+        assert_eq!(
+            root_menu_to_switch([true, false, false, false, false], Some(3)),
+            Some(3)
+        );
+        assert_eq!(
+            root_menu_to_switch([true, false, false, false, false], Some(0)),
+            None
+        );
+        assert_eq!(
+            root_menu_to_switch([true, false, false, false, false], None),
+            None
+        );
     }
 }

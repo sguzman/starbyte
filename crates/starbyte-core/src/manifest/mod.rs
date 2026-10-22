@@ -447,6 +447,12 @@ pub enum UiTheme {
 /// Persistent GUI layout, color scheme, and logging panel settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiSettings {
+    /// Classic desktop menu bar, which Alt can also show or hide.
+    #[serde(default = "default_visible_ui_bar")]
+    pub show_menu_bar: bool,
+    /// Single-line strip of recently launched games under the menu bar.
+    #[serde(default = "default_visible_ui_bar")]
+    pub show_recent_games_bar: bool,
     /// Use the operating-system theme unless the player overrides it.
     #[serde(default)]
     pub theme: UiTheme,
@@ -472,9 +478,15 @@ pub struct UiSettings {
     pub log_panel_height: f32,
 }
 
+const fn default_visible_ui_bar() -> bool {
+    true
+}
+
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
+            show_menu_bar: true,
+            show_recent_games_bar: true,
             theme: UiTheme::System,
             show_left_panel: true,
             show_right_panel: true,
@@ -921,6 +933,8 @@ mod ui_theme_tests {
     #[test]
     fn new_config_follows_system_colors() {
         assert_eq!(RuntimeConfig::default().ui.theme, UiTheme::System);
+        assert!(RuntimeConfig::default().ui.show_menu_bar);
+        assert!(RuntimeConfig::default().ui.show_recent_games_bar);
     }
 
     #[test]
@@ -928,9 +942,24 @@ mod ui_theme_tests {
         let mut config = RuntimeConfig::default();
         config.ui.theme = UiTheme::Dark;
         let serialized = toml::to_string(&config).unwrap();
-        let legacy = serialized.replace("theme = \"dark\"\n", "");
+        let legacy = serialized
+            .replace("theme = \"dark\"\n", "")
+            .replace("show_menu_bar = true\n", "")
+            .replace("show_recent_games_bar = true\n", "");
         let loaded: RuntimeConfig = toml::from_str(&legacy).unwrap();
         assert_eq!(loaded.ui.theme, UiTheme::System);
+        assert!(loaded.ui.show_menu_bar);
+        assert!(loaded.ui.show_recent_games_bar);
+    }
+
+    #[test]
+    fn visibility_preferences_survive_roundtrip() {
+        let mut config = RuntimeConfig::default();
+        config.ui.show_menu_bar = false;
+        config.ui.show_recent_games_bar = false;
+        let loaded: RuntimeConfig = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+        assert!(!loaded.ui.show_menu_bar);
+        assert!(!loaded.ui.show_recent_games_bar);
     }
 
     #[test]

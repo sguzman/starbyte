@@ -86,6 +86,11 @@ struct Args {
     /// Does not replace the normal, fully featured library UI yet.
     #[arg(long, conflicts_with = "scheduler_smoke")]
     threaded_preview: bool,
+
+    /// Threaded preview only: keep running without compositor keyboard focus.
+    /// Useful for headless Weston acceptance; does not change saved settings.
+    #[arg(long, requires = "threaded_preview")]
+    preview_background: bool,
 }
 
 fn main() -> Result<()> {
@@ -167,6 +172,7 @@ fn main() -> Result<()> {
                     &config,
                     path.clone(),
                     args.exit_after_frames,
+                    args.preview_background,
                 )
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
                 Ok(Box::new(app))

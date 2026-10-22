@@ -23,3 +23,13 @@ nursery = "warn"
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
+
+# The native player is used interactively with `cargo run -p starbyte-egui`.
+# The unoptimized 65816/PPU/APU loop often misses the 16.6 ms SNES budget,
+# so optimize the two hot local crates even in ordinary development builds.
+# Release builds still use Cargo's independent release profile.
+[profile.dev.package.starbyte-core]
+opt-level = 2
+
+[profile.dev.package.starbyte-egui]
+opt-level = 2

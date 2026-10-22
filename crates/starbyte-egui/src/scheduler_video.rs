@@ -37,7 +37,9 @@ impl WorkerDisplay {
         true
     }
 
-    fn import_frame(&mut self, ctx: &egui::Context, frame: PublishedGameFrame) {
+    /// Import a fresh frame received after a paused save-state restore,
+    /// or the newest coalesced frame from the continuous worker.
+    pub fn import_frame(&mut self, ctx: &egui::Context, frame: PublishedGameFrame) {
         if let Some(rgba) = frame.rgba {
             let width = frame.status.framebuffer_width as usize;
             let height = frame.status.framebuffer_height as usize;

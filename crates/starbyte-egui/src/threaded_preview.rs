@@ -7,7 +7,10 @@ use std::{path::PathBuf, time::Duration};
 
 use anyhow::Result;
 use eframe::egui::{self, Color32};
-use starbyte_core::{input::ControllerState, manifest::{AssetConfig, RuntimeConfig}};
+use starbyte_core::{
+    input::ControllerState,
+    manifest::{AssetConfig, RuntimeConfig},
+};
 use starbyte_frontend::SoundSessionMode;
 
 use crate::{
@@ -64,16 +67,25 @@ impl ThreadedPreviewApp {
 
     fn keyboard(&self, ctx: &egui::Context) {
         let (held, pressed) = ctx.input(|input| {
-            let state = |pressed: bool| ControllerState {
-                up: if pressed { input.key_pressed(egui::Key::ArrowUp) } else { input.key_down(egui::Key::ArrowUp) },
-                down: if pressed { input.key_pressed(egui::Key::ArrowDown) } else { input.key_down(egui::Key::ArrowDown) },
-                left: if pressed { input.key_pressed(egui::Key::ArrowLeft) } else { input.key_down(egui::Key::ArrowLeft) },
-                right: if pressed { input.key_pressed(egui::Key::ArrowRight) } else { input.key_down(egui::Key::ArrowRight) },
-                a: if pressed { input.key_pressed(egui::Key::Z) } else { input.key_down(egui::Key::Z) },
-                b: if pressed { input.key_pressed(egui::Key::X) } else { input.key_down(egui::Key::X) },
-                start: if pressed { input.key_pressed(egui::Key::Enter) } else { input.key_down(egui::Key::Enter) },
-                select: if pressed { input.key_pressed(egui::Key::Backspace) } else { input.key_down(egui::Key::Backspace) },
-                ..ControllerState::default()
+            let state = |pressed: bool| {
+                let key = |button| {
+                    if pressed {
+                        input.key_pressed(button)
+                    } else {
+                        input.key_down(button)
+                    }
+                };
+                ControllerState {
+                    up: key(egui::Key::ArrowUp),
+                    down: key(egui::Key::ArrowDown),
+                    left: key(egui::Key::ArrowLeft),
+                    right: key(egui::Key::ArrowRight),
+                    a: key(egui::Key::Z),
+                    b: key(egui::Key::X),
+                    start: key(egui::Key::Enter),
+                    select: key(egui::Key::Backspace),
+                    ..ControllerState::default()
+                }
             };
             (state(false), state(true))
         });
@@ -130,7 +142,10 @@ impl eframe::App for ThreadedPreviewApp {
                     }
                 });
                 ui.menu_button("View", |ui| {
-                    if ui.checkbox(&mut self.pause_when_unfocused, "Pause in background").changed() {
+                    if ui
+                        .checkbox(&mut self.pause_when_unfocused, "Pause in background")
+                        .changed()
+                    {
                         self.engine.set_pause_when_unfocused(self.pause_when_unfocused);
                     }
                     ui.checkbox(&mut self.integer_scale, "Integer scale");
@@ -163,7 +178,10 @@ impl eframe::App for ThreadedPreviewApp {
                     ));
                 }
                 ui.separator();
-                ui.label(format!("CPU {:.2} ms", self.display.last_cpu_duration().as_secs_f32() * 1_000.0));
+                ui.label(format!(
+                    "CPU {:.2} ms",
+                    self.display.last_cpu_duration().as_secs_f32() * 1_000.0
+                ));
                 ui.separator();
                 ui.label(format!("Video frames superseded {}", self.engine.skipped_video_frames()));
             });

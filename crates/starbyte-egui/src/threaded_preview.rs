@@ -113,17 +113,6 @@ impl eframe::App for ThreadedPreviewApp {
             self.last_error = Some(error);
             self.playing = false;
         }
-        if let Some(limit) = self.exit_after_frames {
-            if self.engine.completed_frames() >= limit {
-                println!(
-                    "STARBYTE_THREADED_PREVIEW_SMOKE_OK frames={}",
-                    self.engine.completed_frames()
-                );
-                self.exit_after_frames = None;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-        }
-
         egui::TopBottomPanel::top("worker_preview_menu").show(ctx, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("Game", |ui| {
@@ -161,6 +150,19 @@ impl eframe::App for ThreadedPreviewApp {
         }
 
         self.display.poll(ctx, &self.engine);
+        // Acceptance requires both worker progress and a real texture upload
+        // through the window renderer, not just counting hidden ticks.
+        if let Some(limit) = self.exit_after_frames {
+            let rendered = self.display.status().map_or(0, |status| status.frame);
+            if rendered >= limit && self.display.texture().is_some() {
+                println!(
+                    "STARBYTE_THREADED_PREVIEW_SMOKE_OK worker_frames={} rendered_frame={rendered}",
+                    self.engine.completed_frames()
+                );
+                self.exit_after_frames = None;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
         egui::CentralPanel::default().show(ctx, |ui| {
             let bounds = ui.max_rect();
             ui.painter().rect_filled(bounds, 0.0, Color32::BLACK);

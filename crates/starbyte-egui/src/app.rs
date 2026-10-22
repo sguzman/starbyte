@@ -1885,37 +1885,49 @@ impl StarbyteApp {
         ctx: &egui::Context,
         entry: &LibraryEntry,
     ) -> Option<TextureHandle> {
-        if let Some(texture) = self.cover_textures.get(&entry.game_id) {
+        self.ensure_cover_texture_path(
+            ctx,
+            &entry.game_id,
+            entry.cover.as_ref().map(|cover| cover.cache_path.as_path()),
+        )
+    }
+
+    /// The recent strip only needs a game id and cover path; never clone the
+    /// entire LibraryEntry (including potentially thousands of cheat codes).
+    fn ensure_cover_texture_path(
+        &mut self,
+        ctx: &egui::Context,
+        game_id: &str,
+        cover_path: Option<&Path>,
+    ) -> Option<TextureHandle> {
+        if let Some(texture) = self.cover_textures.get(game_id) {
             return Some(texture.clone());
         }
-        if self.failed_cover_ids.contains(&entry.game_id) {
+        if self.failed_cover_ids.contains(game_id) {
             return None;
         }
-        let cover = entry.cover.as_ref()?;
-        let Ok(reader) = ImageReader::open(&cover.cache_path) else {
-            warn!("failed to open cached cover {}", cover.cache_path.display());
-            self.failed_cover_ids.insert(entry.game_id.clone());
+        let cover_path = cover_path?;
+        let Ok(reader) = ImageReader::open(cover_path) else {
+            warn!("failed to open cached cover {}", cover_path.display());
+            self.failed_cover_ids.insert(game_id.to_owned());
             return None;
         };
         let Ok(image) = reader.decode() else {
-            warn!(
-                "failed to decode cached cover {}",
-                cover.cache_path.display()
-            );
-            self.failed_cover_ids.insert(entry.game_id.clone());
+            warn!("failed to decode cached cover {}", cover_path.display());
+            self.failed_cover_ids.insert(game_id.to_owned());
             return None;
         };
         let rgba = image.to_rgba8();
         let size = [rgba.width() as usize, rgba.height() as usize];
         let color_image = ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
         let texture = ctx.load_texture(
-            format!("cover-{}", entry.game_id),
+            format!("cover-{game_id}"),
             color_image,
             TextureOptions::LINEAR,
         );
         self.cover_textures
-            .insert(entry.game_id.clone(), texture.clone());
-        self.failed_cover_ids.remove(&entry.game_id);
+            .insert(game_id.to_owned(), texture.clone());
+        self.failed_cover_ids.remove(game_id);
         Some(texture)
     }
 
@@ -2507,47 +2519,96 @@ impl StarbyteApp {
 
     /// The recent-game strip stays independent of the menu bar so each can
     /// be hidden from View without hiding the other. It never auto-launches.
+    /// Horizontal cover strip for the eight latest played ROMs; hiding it
+    /// frees all its vertical space without affecting the library or saves.
     fn draw_recent_games_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let recent = self.config.library.recent_roms.clone();
-        egui::ScrollArea::horizontal().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.strong("Recently played");
-                ui.separator();
-                if recent.is_empty() {
-                    ui.label("No games launched yet");
-                }
-                for path in recent {
-                    let entry = self.library_snapshot.entries.iter().find(|entry| {
-                        entry.local.as_ref().is_some_and(|local| {
-                            local.rom_path == path
-                                || local.extracted_cache_path.as_deref() == Some(path.as_path())
-                        })
-                    }).cloned();
-                    let title = entry.as_ref().map_or_else(
-                        || path.file_stem()
-                            .map(|name| name.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| path.display().to_string()),
-                        |entry| entry.display_title.clone(),
-                    );
-                    let available = path.is_file() || entry.as_ref().is_some_and(|entry| {
-                        entry.installed_status == InstalledStatus::Installed
+        egui::ScrollArea::horizontal()
+            .id_salt("starbyte_recent_game_covers")
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.strong("Recently played");
+                        ui.small("View → Recently played bar");
                     });
-                    let button = ui.add_enabled(
-                        available,
-                        egui::Button::new(abbreviate_title(&title, 28)),
-                    ).on_hover_text(path.display().to_string());
-                    if button.clicked() {
-                        if let Some(entry) = entry.filter(|entry| {
-                            entry.installed_status == InstalledStatus::Installed
-                        }) {
-                            self.queue_load_entry(&entry);
-                        } else if path.is_file() {
-                            self.open_local_rom(&path, ctx);
-                        }
+                    ui.separator();
+
+                    if recent.is_empty() {
+                        ui.label("Open a game to see its cover here.");
                     }
-                }
+
+                    for path in recent {
+                        let index = self.library_snapshot.entries.iter().position(|entry| {
+                            entry.local.as_ref().is_some_and(|local| {
+                                local.rom_path == path
+                                    || local.extracted_cache_path.as_deref()
+                                        == Some(path.as_path())
+                            })
+                        });
+                        let (title, game_id, cover_path, installed) = if let Some(index) = index {
+                            let entry = &self.library_snapshot.entries[index];
+                            (
+                                entry.display_title.clone(),
+                                Some(entry.game_id.clone()),
+                                entry.cover.as_ref().map(|cover| cover.cache_path.clone()),
+                                entry.installed_status == InstalledStatus::Installed,
+                            )
+                        } else {
+                            (
+                                path.file_stem()
+                                    .map(|name| name.to_string_lossy().into_owned())
+                                    .unwrap_or_else(|| path.display().to_string()),
+                                None,
+                                None,
+                                false,
+                            )
+                        };
+                        let available = installed || path.is_file();
+                        let cover = game_id.as_deref().and_then(|id| {
+                            self.ensure_cover_texture_path(
+                                ctx,
+                                id,
+                                cover_path.as_deref(),
+                            )
+                        });
+                        ui.vertical_centered(|ui| {
+                            const CARD_WIDTH: f32 = 128.0;
+                            const COVER_SIZE: Vec2 = Vec2::new(80.0, 84.0);
+                            ui.set_width(CARD_WIDTH);
+                            let cover_clicked = if let Some(texture) = cover {
+                                let fit = fit_size(texture.size_vec2(), COVER_SIZE);
+                                ui.add_enabled(
+                                    available,
+                                    egui::ImageButton::new((texture.id(), fit)),
+                                )
+                                .on_hover_text(title.as_str())
+                                .clicked()
+                            } else {
+                                ui.add_sized(
+                                    [COVER_SIZE.x, COVER_SIZE.y],
+                                    egui::Label::new("No cover"),
+                                );
+                                false
+                            };
+                            let title_clicked = ui
+                                .add_enabled(
+                                    available,
+                                    egui::Button::new(abbreviate_title(&title, 22)),
+                                )
+                                .on_hover_text(path.display().to_string())
+                                .clicked();
+                            if cover_clicked || title_clicked {
+                                if let Some(index) = index.filter(|_| installed) {
+                                    let entry = self.library_snapshot.entries[index].clone();
+                                    self.queue_load_entry(&entry);
+                                } else if path.is_file() {
+                                    self.open_local_rom(&path, ctx);
+                                }
+                            }
+                        });
+                    }
+                });
             });
-        });
     }
 
     fn draw_settings_panel(&mut self, ui: &mut egui::Ui) {

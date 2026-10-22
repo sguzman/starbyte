@@ -16,7 +16,7 @@ use tracing::info;
 
 use crate::{app::StarbyteApp, logging::install_tracing};
 
-use starbyte_core::manifest::{AssetConfig, RuntimeConfig};
+use starbyte_core::manifest::{AssetConfig, RuntimeConfig, UiTheme};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -109,6 +109,7 @@ fn main() -> Result<()> {
     let prefer_dark_mode_override = args.day_mode.then_some(false);
     if let Some(prefer_dark_mode) = prefer_dark_mode_override {
         config.prefer_dark_mode = prefer_dark_mode;
+        config.ui.theme = if prefer_dark_mode { UiTheme::Dark } else { UiTheme::Light };
     }
 
     let options = eframe::NativeOptions {

@@ -7,6 +7,7 @@
 //! completed frames instead. The GUI integration follows as a separate step.
 
 use std::{
+    collections::VecDeque,
     sync::{
         atomic::{AtomicU64, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError},
@@ -19,12 +20,69 @@ use std::{
 /// Hardware NTSC frame period used by the existing player.
 pub const NTSC_FRAME_INTERVAL: Duration = Duration::from_nanos(16_639_357);
 
+/// The real emulated frame rate, measured on the worker thread rather than
+/// inferred from eframe UI redraws or GPU presentation.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct WorkerFrameStats {
+    pub fps: Option<f32>,
+    pub last_gap_ms: f32,
+    pub hitches_40ms: u64,
+}
+
+#[derive(Default)]
+struct WorkerRateWindow {
+    completed: VecDeque<Instant>,
+    last_gap_ms: f32,
+    hitches_40ms: u64,
+}
+
+impl WorkerRateWindow {
+    fn record(&mut self, now: Instant) {
+        if let Some(previous) = self.completed.back() {
+            let gap = now.saturating_duration_since(*previous);
+            self.last_gap_ms = gap.as_secs_f32() * 1_000.0;
+            if gap >= Duration::from_millis(40) {
+                self.hitches_40ms = self.hitches_40ms.saturating_add(1);
+            }
+        }
+        self.completed.push_back(now);
+        self.prune(now);
+    }
+
+    fn prune(&mut self, now: Instant) {
+        while self.completed.front().is_some_and(|first| {
+            now.saturating_duration_since(*first) > Duration::from_secs(2)
+        }) {
+            self.completed.pop_front();
+        }
+    }
+
+    fn stats(&mut self, now: Instant) -> WorkerFrameStats {
+        self.prune(now);
+        let fps = match (self.completed.front(), self.completed.back()) {
+            (Some(first), Some(last)) if self.completed.len() > 1 => {
+                let elapsed = last.saturating_duration_since(*first);
+                (elapsed >= Duration::from_millis(250)).then(|| {
+                    (self.completed.len() - 1) as f32 / elapsed.as_secs_f32()
+                })
+            }
+            _ => None,
+        };
+        WorkerFrameStats {
+            fps,
+            last_gap_ms: self.last_gap_ms,
+            hitches_40ms: self.hitches_40ms,
+        }
+    }
+}
+
 /// Keep one fresh frame, never a backlog of framebuffers.
 pub struct FrameMailbox<Frame> {
     latest: Mutex<Option<Frame>>,
     produced: AtomicU64,
     replaced: AtomicU64,
     fault: Mutex<Option<String>>,
+    rate: Mutex<WorkerRateWindow>,
 }
 
 impl<Frame> Default for FrameMailbox<Frame> {
@@ -34,6 +92,7 @@ impl<Frame> Default for FrameMailbox<Frame> {
             produced: AtomicU64::new(0),
             replaced: AtomicU64::new(0),
             fault: Mutex::new(None),
+            rate: Mutex::new(WorkerRateWindow::default()),
         }
     }
 }
@@ -45,6 +104,10 @@ impl<Frame> FrameMailbox<Frame> {
             self.replaced.fetch_add(1, Ordering::Relaxed);
         }
         self.produced.fetch_add(1, Ordering::Relaxed);
+        self.rate
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .record(Instant::now());
     }
 
     /// Remove the newest completed frame without blocking on emulation.
@@ -61,6 +124,13 @@ impl<Frame> FrameMailbox<Frame> {
 
     pub fn replaced_count(&self) -> u64 {
         self.replaced.load(Ordering::Relaxed)
+    }
+
+    pub fn worker_frame_stats(&self) -> WorkerFrameStats {
+        self.rate
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .stats(Instant::now())
     }
 
     fn record_error(&self, error: String) {
@@ -266,6 +336,10 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
 
     pub fn skipped_video_frames(&self) -> u64 {
         self.frames.replaced_count()
+    }
+
+    pub fn frame_stats(&self) -> WorkerFrameStats {
+        self.frames.worker_frame_stats()
     }
 
     /// Shut down and return the owned machine so the UI can flush its SRAM

@@ -2259,7 +2259,7 @@ impl StarbyteApp {
                         egui::Button::new(if self.play_view {
                             "Return to Library (Esc)"
                         } else {
-                            "Game View (F9)"
+                            "Return to Game (Esc / F9)"
                         }),
                     )
                     .clicked()
@@ -3346,6 +3346,19 @@ impl StarbyteApp {
     fn draw_session_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.heading("Session");
         let snapshot = self.session.snapshot();
+        if snapshot.has_rom && !self.play_view {
+            if ui
+                .add_sized(
+                    [ui.available_width().min(260.0), 32.0],
+                    egui::Button::new("Return to Game (Esc / F9)"),
+                )
+                .clicked()
+            {
+                self.play_view = true;
+                ctx.request_repaint();
+            }
+            ui.separator();
+        }
         if let Some(path) = &snapshot.rom_path {
             ui.label(path.display().to_string());
         } else {
@@ -3443,6 +3456,12 @@ impl StarbyteApp {
     fn draw_library_browser(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let previous_query = self.search_query.clone();
         ui.horizontal(|ui| {
+            if self.session.snapshot().has_rom
+                && ui.button("Return to Game (Esc / F9)").clicked()
+            {
+                self.play_view = true;
+                ctx.request_repaint();
+            }
             ui.add(
                 egui::TextEdit::singleline(&mut self.search_query)
                     .hint_text("Search library...")
@@ -3889,8 +3908,13 @@ impl eframe::App for StarbyteApp {
             {
                 self.play_view = !self.play_view;
             }
-            if self.play_view && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-                self.play_view = false;
+            // Escape is reversible: the first press opens the library and
+            // the next returns to the already-loaded game. Never reload ROM
+            // or alter manual pause / save state on this navigation.
+            if ctx.input(|input| input.key_pressed(egui::Key::Escape))
+                && self.session.snapshot().has_rom
+            {
+                self.play_view = !self.play_view;
             }
         }
 

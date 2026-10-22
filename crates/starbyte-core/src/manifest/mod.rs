@@ -453,6 +453,30 @@ pub struct UiSettings {
     /// Single-line strip of recently launched games under the menu bar.
     #[serde(default = "default_visible_ui_bar")]
     pub show_recent_games_bar: bool,
+    /// Show the entire bottom status bar.
+    #[serde(default = "default_visible_ui_bar")]
+    pub show_status_bar: bool,
+    /// Status readout: measured emulated frames per second.
+    #[serde(default = "default_visible_ui_bar")]
+    pub status_fps: bool,
+    /// Status readout: audio output state.
+    #[serde(default = "default_visible_ui_bar")]
+    pub status_sound: bool,
+    /// Status readout: emulated frame counter.
+    #[serde(default = "default_visible_ui_bar")]
+    pub status_frame: bool,
+    /// Status readout: SPC700/APU step counter.
+    #[serde(default = "default_visible_ui_bar")]
+    pub status_apu_steps: bool,
+    /// Status readout: generated audio sample count.
+    #[serde(default = "default_visible_ui_bar")]
+    pub status_audio_samples: bool,
+    /// Status readout: current operation and background-job notices.
+    #[serde(default = "default_visible_ui_bar")]
+    pub status_activity: bool,
+    /// Status readout: Alt / F10 menu shortcut reminder.
+    #[serde(default = "default_visible_ui_bar")]
+    pub status_menu_hint: bool,
     /// Preserve the current conservative behavior unless the player opts
     /// into continuing emulation while Starbyte is in the background.
     #[serde(default = "default_pause_when_unfocused")]
@@ -495,6 +519,14 @@ impl Default for UiSettings {
         Self {
             show_menu_bar: true,
             show_recent_games_bar: true,
+            show_status_bar: true,
+            status_fps: true,
+            status_sound: true,
+            status_frame: true,
+            status_apu_steps: true,
+            status_audio_samples: true,
+            status_activity: true,
+            status_menu_hint: true,
             pause_when_unfocused: true,
             theme: UiTheme::System,
             show_left_panel: true,
@@ -974,6 +1006,31 @@ mod ui_theme_tests {
         assert!(!loaded.ui.show_menu_bar);
         assert!(!loaded.ui.show_recent_games_bar);
         assert!(!loaded.ui.pause_when_unfocused);
+    }
+
+    #[test]
+    fn status_visibility_defaults_on_for_old_configs_and_roundtrips() {
+        let mut config = RuntimeConfig::default();
+        assert!(config.ui.show_status_bar);
+        assert!(config.ui.status_frame);
+        config.ui.show_status_bar = false;
+        config.ui.status_sound = false;
+        config.ui.status_frame = false;
+        config.ui.status_apu_steps = false;
+        config.ui.status_audio_samples = false;
+        let text = toml::to_string(&config).unwrap();
+        let loaded: RuntimeConfig = toml::from_str(&text).unwrap();
+        assert!(!loaded.ui.show_status_bar);
+        assert!(!loaded.ui.status_sound);
+        assert!(!loaded.ui.status_frame);
+        assert!(!loaded.ui.status_apu_steps);
+        assert!(!loaded.ui.status_audio_samples);
+        let old = text.lines().filter(|line| !line.starts_with("status_")
+            && !line.starts_with("show_status_bar")).collect::<Vec<_>>().join("\n");
+        let legacy: RuntimeConfig = toml::from_str(&old).unwrap();
+        assert!(legacy.ui.show_status_bar);
+        assert!(legacy.ui.status_sound);
+        assert!(legacy.ui.status_frame);
     }
 
     #[test]

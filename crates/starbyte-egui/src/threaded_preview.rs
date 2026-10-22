@@ -3,7 +3,7 @@
 //! Deliberately separate from the user's established library UI until all
 //! existing game controls, cheats, saves and layout panels are migrated.
 
-use std::{path::PathBuf, time::Duration};
+use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
 use anyhow::Result;
 use eframe::egui::{self, Color32};
@@ -14,6 +14,7 @@ use starbyte_core::{
 use starbyte_frontend::SoundSessionMode;
 
 use crate::{
+    app::{input_actions, parse_egui_key, set_controller_flag},
     scheduler::EmulatorScheduler,
     scheduler_video::WorkerDisplay,
     session_engine::{InputPort, OwnedSession, PublishedGameFrame, RenderPort},
@@ -39,6 +40,7 @@ pub struct ThreadedPreviewApp {
     speed_percent: u16,
     pitch_mode: AudioPitchMode,
     pitch_percent: u16,
+    keyboard_bindings: BTreeMap<String, String>,
     exit_after_frames: Option<u64>,
     last_error: Option<String>,
 }
@@ -85,37 +87,36 @@ impl ThreadedPreviewApp {
             speed_percent,
             pitch_mode: config.audio.pitch_mode,
             pitch_percent: config.audio.pitch_percent,
+            keyboard_bindings: config.input.keyboard_bindings.clone(),
             exit_after_frames,
             last_error: None,
         })
     }
 
     fn keyboard(&self, ctx: &egui::Context) {
+        // Use the same persisted keyboard bindings as the established game
+        // view, including X/Y and shoulder buttons. Never forward keystrokes
+        // intended for a text field or keybinding editor to a game.
+        if ctx.wants_keyboard_input() {
+            self.input.clear();
+            return;
+        }
         let (held, pressed) = ctx.input(|input| {
-            let state = |pressed: bool| {
-                let key = |button| {
-                    if pressed {
-                        input.key_pressed(button)
-                    } else {
-                        input.key_down(button)
-                    }
-                };
-                ControllerState {
-                    up: key(egui::Key::ArrowUp),
-                    down: key(egui::Key::ArrowDown),
-                    left: key(egui::Key::ArrowLeft),
-                    right: key(egui::Key::ArrowRight),
-                    a: key(egui::Key::Z),
-                    b: key(egui::Key::X),
-                    start: key(egui::Key::Enter),
-                    select: key(egui::Key::Backspace),
-                    ..ControllerState::default()
+            let mut held = ControllerState::default();
+            let mut pressed = ControllerState::default();
+            for &action in input_actions() {
+                if let Some(binding) = self.keyboard_bindings.get(action)
+                    && let Some(key) = parse_egui_key(binding)
+                {
+                    set_controller_flag(&mut held, action, input.key_down(key));
+                    set_controller_flag(&mut pressed, action, input.key_pressed(key));
                 }
-            };
-            (state(false), state(true))
+            }
+            (held, pressed)
         });
         self.input.submit(held, pressed);
     }
+
 }
 
 impl eframe::App for ThreadedPreviewApp {

@@ -182,6 +182,68 @@ impl Drop for OwnedSession {
     }
 }
 
+/// Typed API for the GUI handoff. Instead of locking the live emulator,
+/// the GUI sends gamepad/audio state and explicit save commands to the owner.
+impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
+    pub fn set_gamepad_state(&self, state: ControllerState) -> Result<(), String> {
+        self.post(move |engine| engine.set_input(state))
+    }
+
+    pub fn configure_sound(
+        &self,
+        enabled: bool,
+        muted: bool,
+        volume: f32,
+    ) -> Result<(), String> {
+        self.post(move |engine| engine.set_audio(enabled, muted, volume))
+    }
+
+    pub fn configure_playback_speed(
+        &self,
+        speed_percent: u16,
+        pitch_factor: f32,
+    ) -> Result<(), String> {
+        self.set_speed_percent(speed_percent);
+        self.post(move |engine| engine.set_speed(speed_percent, pitch_factor))
+    }
+
+    pub fn load_game(
+        &self,
+        path: std::path::PathBuf,
+        mode: SoundSessionMode,
+    ) -> Result<(), String> {
+        self.transact(move |engine| engine.load_rom(&path, mode).map_err(|e| e.to_string()))
+    }
+
+    pub fn update_cheats(&self, cheats: Vec<CheatEntry>) -> Result<usize, String> {
+        self.transact(move |engine| Ok(engine.set_cheats(&cheats)))
+    }
+
+    pub fn quick_save_game(&self) -> Result<(), String> {
+        self.transact(|engine| engine.quick_save().map_err(|e| e.to_string()))
+    }
+
+    pub fn quick_load_game(&self) -> Result<(), String> {
+        self.transact(|engine| engine.quick_load().map_err(|e| e.to_string()))
+    }
+
+    pub fn save_game_slot(&self, slot: u8) -> Result<std::path::PathBuf, String> {
+        self.transact(move |engine| engine.save_slot(slot).map_err(|e| e.to_string()))
+    }
+
+    pub fn load_game_slot(&self, slot: u8) -> Result<(), String> {
+        self.transact(move |engine| engine.load_slot(slot).map_err(|e| e.to_string()))
+    }
+
+    pub fn persist_sram(&self) -> Result<(), String> {
+        self.transact(|engine| engine.flush_sram().map_err(|e| e.to_string()))
+    }
+
+    pub fn read_status(&self) -> Result<SessionSnapshot, String> {
+        self.transact(|engine| Ok(engine.snapshot()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

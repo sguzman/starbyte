@@ -2308,6 +2308,9 @@ impl StarbyteApp {
                         &mut self.config.ui.pause_when_unfocused,
                         "Pause when Starbyte is in background",
                     )
+                    .on_hover_text(
+                        "Uncheck to continue emulation while the window is unfocused and repaint callbacks are delivered. Hidden or off-workspace Wayland windows may still be suspended by the compositor; fully independent background emulation is not implemented yet.",
+                    )
                     .changed()
                 {
                     self.persist_config();

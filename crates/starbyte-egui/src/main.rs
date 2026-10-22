@@ -73,6 +73,11 @@ struct Args {
     /// Start in light mode instead of using the persisted theme preference.
     #[arg(long)]
     day_mode: bool,
+
+    /// Headless developer smoke: prove that the independent SNES clock runs
+    /// without Wayland repaint callbacks and obeys background pause policy.
+    #[arg(long, requires = "demo", conflicts_with = "exit_after_frames")]
+    scheduler_smoke: bool,
 }
 
 fn main() -> Result<()> {
@@ -138,6 +143,9 @@ fn main() -> Result<()> {
         args.rom.clone()
     };
     let rom_dirs = args.rom_dirs.clone();
+    if args.scheduler_smoke {
+        return run_scheduler_smoke(assets, rom.expect("--demo generates a built-in ROM"));
+    }
 
     eframe::run_native(
         "Starbyte",
@@ -159,6 +167,68 @@ fn main() -> Result<()> {
         }),
     )
     .map_err(|error| anyhow::anyhow!("failed to launch egui frontend: {error}"))
+}
+
+/// Drive an actual ROM through the worker without constructing any window.
+/// Focus and pause acknowledgements travel on the same serialized queue as
+/// frames; a graphics compositor cannot influence this probe.
+fn run_scheduler_smoke(assets: AssetConfig, rom: PathBuf) -> Result<()> {
+    use std::{thread, time::{Duration, Instant}};
+    use crate::session_engine::OwnedSession;
+
+    let mut engine = OwnedSession::create(assets)?;
+    engine.load_rom(&rom, starbyte_frontend::SoundSessionMode::Persistent)?;
+    engine.set_audio(false, true, 0.0);
+
+    let worker = engine.spawn()?;
+    worker.set_pause_when_unfocused(false);
+    worker.set_focused(false);
+    worker.set_playing(true);
+
+    let started = Instant::now();
+    while worker.completed_frames() < 5 && started.elapsed() < Duration::from_secs(6) {
+        thread::sleep(Duration::from_millis(15));
+    }
+    let running = worker.completed_frames();
+    anyhow::ensure!(
+        running >= 5,
+        "independent worker failed to produce 5 background frames: {running}"
+    );
+
+    worker.set_pause_when_unfocused(true);
+    worker.invoke(|_| Ok(()))
+        .map_err(anyhow::Error::msg)?;
+    let stopped_at = worker.completed_frames();
+    thread::sleep(Duration::from_millis(120));
+    anyhow::ensure!(
+        worker.completed_frames() == stopped_at,
+        "background pause did not stop emulation after command acknowledgement"
+    );
+
+    worker.set_focused(true);
+    worker.invoke(|_| Ok(()))
+        .map_err(anyhow::Error::msg)?;
+    let resumed_at = worker.completed_frames();
+    let resumed = Instant::now();
+    while worker.completed_frames() <= resumed_at
+        && resumed.elapsed() < Duration::from_secs(3)
+    {
+        thread::sleep(Duration::from_millis(15));
+    }
+    anyhow::ensure!(
+        worker.completed_frames() > resumed_at,
+        "worker did not resume after window focus returned"
+    );
+
+    worker.set_playing(false);
+    let engine = worker.shutdown()
+        .map_err(|_| anyhow::anyhow!("emulation scheduler worker panicked"))?;
+    anyhow::ensure!(engine.snapshot().has_rom, "worker lost ROM ownership");
+    println!(
+        "STARBYTE_SCHEDULER_SMOKE_OK background_frames={running} paused_at={stopped_at} total_frames={}",
+        engine.snapshot().frame
+    );
+    Ok(())
 }
 
 fn validate_frame_exit_args(args: &Args) -> Result<()> {

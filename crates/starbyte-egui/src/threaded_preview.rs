@@ -173,7 +173,8 @@ impl eframe::App for ThreadedPreviewApp {
             if let Some(error) = &self.last_error {
                 ui.colored_label(Color32::LIGHT_RED, error);
             }
-            self.display.draw(ui, ui.available_size(), self.integer_scale);
+            let available = ui.available_size();
+            self.display.draw(ui, available, self.integer_scale);
         });
         egui::TopBottomPanel::bottom("worker_preview_stats").show(ctx, |ui| {
             ui.horizontal(|ui| {

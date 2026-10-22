@@ -652,6 +652,8 @@ pub struct StarbyteApp {
     /// Track Alt press/release without toggling on unrelated key chords.
     alt_was_down: bool,
     alt_menu_tap_armed: bool,
+    /// A focus-triggered pause must not change the player's manual Pause state.
+    background_suspended: bool,
 }
 
 // Regular desktop game loads use audible emulation with writable SRAM.
@@ -833,6 +835,7 @@ impl StarbyteApp {
             show_compact_logs: false,
             alt_was_down: false,
             alt_menu_tap_armed: false,
+            background_suspended: false,
         };
         app.persist_config();
         if app.config.advanced.refresh_on_startup {
@@ -2300,6 +2303,15 @@ impl StarbyteApp {
                     ui.menu_button("Disk Slots", |ui| self.draw_persistent_slots(ui, ctx));
                 });
                 ui.separator();
+                if ui
+                    .checkbox(
+                        &mut self.config.ui.pause_when_unfocused,
+                        "Pause when Starbyte is in background",
+                    )
+                    .changed()
+                {
+                    self.persist_config();
+                }
                 ui.menu_button("Speed and Pitch", |ui| self.draw_speed_controls(ui));
                 ui.menu_button("Sound", |ui| self.draw_audio_controls(ui));
                 if ui
@@ -3870,6 +3882,8 @@ impl eframe::App for StarbyteApp {
                 if self.play_view && self.session.snapshot().has_rom {
                     let fps = if !self.is_playing {
                         "FPS: paused".to_owned()
+                    } else if self.background_suspended {
+                        "FPS: paused (background)".to_owned()
                     } else {
                         self.frame_rate
                             .fps(Instant::now())
@@ -4017,7 +4031,28 @@ impl eframe::App for StarbyteApp {
             self.queued_gamepad_presses.clear();
         }
 
-        if self.is_playing && self.session.snapshot().has_rom {
+        let window_focused = ctx.input(|input| input.focused);
+        let pause_for_background = self.config.ui.pause_when_unfocused && !window_focused;
+        if pause_for_background && self.is_playing && self.session.snapshot().has_rom {
+            if !self.background_suspended {
+                self.background_suspended = true;
+                self.clear_audio();
+                self.frame_rate.reset();
+            }
+        } else if self.background_suspended {
+            // Restart the frame deadline; never fast-forward to catch up for
+            // time deliberately spent paused or steal the manual Pause state.
+            self.background_suspended = false;
+            self.frame_clock.reset(Instant::now());
+            self.frame_rate.reset();
+        }
+
+        if gameplay_should_tick(
+            self.is_playing,
+            self.session.snapshot().has_rom,
+            window_focused,
+            self.config.ui.pause_when_unfocused,
+        ) {
             self.pending_step_frames = 0;
             let speed = self.effective_speed_percent(ctx);
             if speed != self.last_effective_speed_percent {
@@ -4054,7 +4089,10 @@ impl eframe::App for StarbyteApp {
                         .saturating_sub(FRAME_WAKE_HEADROOM),
                 );
             }
-        } else if self.pending_step_frames > 0 && self.session.snapshot().has_rom {
+        } else if self.pending_step_frames > 0
+            && self.session.snapshot().has_rom
+            && !pause_for_background
+        {
             let previous_frame = self.session.snapshot().frame;
             self.run_frame(ctx, false);
             if self.session.snapshot().frame > previous_frame {
@@ -5539,6 +5577,17 @@ fn update_alt_menu_visibility(
     *was_down = alt_down;
 }
 
+/// Focus pause is a temporary suspension, not a change to manual Play/Pause.
+/// Keeping this pure makes its interaction with background playback testable.
+fn gameplay_should_tick(
+    is_playing: bool,
+    has_rom: bool,
+    is_focused: bool,
+    pause_when_unfocused: bool,
+) -> bool {
+    is_playing && has_rom && (is_focused || !pause_when_unfocused)
+}
+
 /// Use exact integer pixel multiples when requested; permit shrinking for
 /// very small Wayland tiles and fractional scaling when explicitly selected.
 fn fit_game_size(source: Vec2, available: Vec2, integer_scale: bool) -> Vec2 {
@@ -5706,5 +5755,23 @@ mod menu_bar_shortcut_tests {
             &mut armed,
         );
         assert!(!visible);
+    }
+}
+
+#[cfg(test)]
+mod focus_pause_ui_tests {
+    use super::gameplay_should_tick;
+
+    #[test]
+    fn default_mode_suspends_unfocused_gameplay() {
+        assert!(gameplay_should_tick(true, true, true, true));
+        assert!(!gameplay_should_tick(true, true, false, true));
+    }
+
+    #[test]
+    fn opted_in_background_gameplay_keeps_running() {
+        assert!(gameplay_should_tick(true, true, false, false));
+        assert!(!gameplay_should_tick(false, true, false, false));
+        assert!(!gameplay_should_tick(true, false, false, false));
     }
 }

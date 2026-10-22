@@ -217,8 +217,11 @@ impl OwnedSession {
         self.render.set_visible(visible);
     }
 
+    /// Held-controller updates routed through typed commands cannot infer
+    /// genuine press edges. Prefer the direct InputPort for gameplay, where
+    /// the UI supplies held buttons and newly pressed buttons separately.
     pub fn set_input(&mut self, input: ControllerState) {
-        self.input.submit(input, input);
+        self.input.submit(input, ControllerState::default());
     }
 
     pub fn set_audio(&mut self, enabled: bool, muted: bool, volume: f32) {

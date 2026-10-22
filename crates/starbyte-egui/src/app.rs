@@ -3858,7 +3858,9 @@ impl eframe::App for StarbyteApp {
         if self.config.ui.show_menu_bar {
             egui::TopBottomPanel::top("top_bar").show(ctx, |ui| self.draw_top_bar(ui, ctx, compact));
         }
-        if self.config.ui.show_recent_games_bar {
+        // Recents belong to the library, not a live game framebuffer.
+        // Never decode covers or allocate game cards in the play loop.
+        if !self.play_view && self.config.ui.show_recent_games_bar {
             egui::TopBottomPanel::top("recent_games_bar").show(ctx, |ui| {
                 self.draw_recent_games_bar(ui, ctx);
             });

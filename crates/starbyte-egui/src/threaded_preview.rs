@@ -130,7 +130,13 @@ impl eframe::App for ThreadedPreviewApp {
                         ui.close();
                     }
                     if ui.button("Quick Load (F8)").clicked() {
-                        self.last_error = self.engine.quick_load_game().err();
+                        match self.engine.quick_load_with_frame() {
+                            Ok(frame) => {
+                                self.display.import_frame(ctx, frame);
+                                self.last_error = None;
+                            }
+                            Err(error) => self.last_error = Some(error),
+                        }
                         ui.close();
                     }
                 });
@@ -150,7 +156,13 @@ impl eframe::App for ThreadedPreviewApp {
             self.last_error = self.engine.quick_save_game().err();
         }
         if focused && ctx.input(|input| input.key_pressed(egui::Key::F8)) {
-            self.last_error = self.engine.quick_load_game().err();
+            match self.engine.quick_load_with_frame() {
+                Ok(frame) => {
+                    self.display.import_frame(ctx, frame);
+                    self.last_error = None;
+                }
+                Err(error) => self.last_error = Some(error),
+            }
         }
 
         self.display.poll(ctx, &self.engine);

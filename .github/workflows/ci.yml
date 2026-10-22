@@ -44,10 +44,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo run --locked -p starbyte-egui -- \\
-            --demo --scheduler-smoke \\
-            --config "$RUNNER_TEMP/starbyte-scheduler-config.toml" \\
-            --cache-dir "$RUNNER_TEMP/starbyte-scheduler-cache" \\
+          cargo run --locked -p starbyte-egui -- \
+            --demo --scheduler-smoke \
+            --config "$RUNNER_TEMP/starbyte-scheduler-config.toml" \
+            --cache-dir "$RUNNER_TEMP/starbyte-scheduler-cache" \
             > "$RUNNER_TEMP/starbyte-scheduler-smoke.log" 2>&1 || {
               cat "$RUNNER_TEMP/starbyte-scheduler-smoke.log"
               exit 1

@@ -48,9 +48,10 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [ ] 🧹 Shut down cleanly: stop clock, flush SRAM, clear audio and join exactly once.
 - [ ] 🚀 Make the worker the default runtime only after passing acceptance gates.
 
-## Milestone D: validation — 1/7 test paths authored (14%), not yet verified
+## Milestone D: validation — 2/8 test paths authored (25%), not yet verified
 
 - [x] 🧪 Add a display-server-free, real built-in ROM smoke path (`--demo --scheduler-smoke`) to CI.
+- [x] 🖥️ Add an opt-in `--threaded-preview` native egui shell and Weston smoke that requires a rendered texture.
 - [ ] ✅ Confirm Linux CI format/Clippy and Linux+Windows tests pass.
 - [ ] 🟩 Confirm the scheduler smoke actually completes on the exact commit.
 - [ ] 🪟 Run Wayland window visible/focused and confirm accurate ~60.1 emulated FPS.
@@ -81,6 +82,12 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 cargo run --locked -p starbyte-egui -- --demo --scheduler-smoke
 ```
 
+Developers can also launch the opt-in `--demo --threaded-preview` shell to
+exercise real native input, video texture upload, frame execution and
+background pause. It is deliberately **not** the full game library or the
+default desktop app, and its normal functionality is not a substitute for
+Milestone C.
+
 This headless path is a diagnostic of the new worker only. Ordinary
 `cargo run --release -p starbyte-egui` **still runs the existing UI-owned
 scheduler until Milestone C is complete**. Never describe this intermediate
@@ -92,6 +99,6 @@ state as a fixed background-pause regression.
 - `session_engine.rs`: worker-owned SNES session, audio, input port, periodic SRAM
   flush and optional framebuffer copying.
 - `scheduler_video.rs`: renderer-only texture and telemetry adapter (not yet attached to the live GUI).
-- `main.rs`: explicit headless worker smoke route, no production default switch.
-- `.github/workflows/ci.yml`: build and smoke task authored; completion not yet
-  verified.
+- `main.rs`: explicit headless worker smoke and opt-in native-preview routes, no production default switch.
+- `threaded_preview.rs`: experimental worker-powered egui player with keyboard, manual/background pause and quick save/load.
+- `.github/workflows/ci.yml`: headless worker and Weston threaded-preview smoke tasks authored; completion not yet verified.

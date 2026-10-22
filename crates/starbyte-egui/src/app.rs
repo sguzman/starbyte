@@ -2612,10 +2612,16 @@ impl StarbyteApp {
                                 cover_path.as_deref(),
                             )
                         });
-                        ui.vertical_centered(|ui| {
-                            const CARD_WIDTH: f32 = 128.0;
-                            const COVER_SIZE: Vec2 = Vec2::new(80.0, 84.0);
-                            ui.set_width(CARD_WIDTH);
+                        // Constrain both min and max card width. An ordinary
+                        // vertical_centered UI inherits the entire horizontal
+                        // scroll area width and spreads each game far apart.
+                        const CARD_WIDTH: f32 = 116.0;
+                        const CARD_HEIGHT: f32 = 142.0;
+                        const COVER_SIZE: Vec2 = Vec2::new(92.0, 92.0);
+                        ui.allocate_ui_with_layout(
+                            Vec2::new(CARD_WIDTH, CARD_HEIGHT),
+                            egui::Layout::top_down(egui::Align::Center),
+                            |ui| {
                             let cover_clicked = if let Some(texture) = cover {
                                 let fit = fit_size(texture.size_vec2(), COVER_SIZE);
                                 ui.add_enabled(
@@ -2632,10 +2638,13 @@ impl StarbyteApp {
                                 false
                             };
                             let title_clicked = ui
-                                .add_enabled(
-                                    available,
-                                    egui::Button::new(abbreviate_title(&title, 22)),
-                                )
+                                .add_enabled_ui(available, |ui| {
+                                    ui.add_sized(
+                                        [CARD_WIDTH, 26.0],
+                                        egui::Button::new(abbreviate_title(&title, 17)),
+                                    )
+                                })
+                                .inner
                                 .on_hover_text(path.display().to_string())
                                 .clicked();
                             if cover_clicked || title_clicked {
@@ -2646,7 +2655,8 @@ impl StarbyteApp {
                                     self.open_local_rom(&path, ctx);
                                 }
                             }
-                        });
+                            },
+                        );
                     }
                 });
             });

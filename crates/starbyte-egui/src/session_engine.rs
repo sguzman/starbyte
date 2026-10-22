@@ -104,21 +104,54 @@ impl InputPort {
     }
 }
 
-/// Whether the UI can currently consume full-size video frames. Hidden
-/// windows still advance the emulator and synthesize sound, but need not
-/// copy the same framebuffer sixty times per second.
-#[derive(Clone, Default)]
+/// Whether the GUI is currently repainting. A hidden Wayland window can
+/// stop receiving redraw callbacks without reporting "minimized"; suppress
+/// needless RGBA copies after a short missed-present heartbeat, while the
+/// independent emulation clock and audio continue uninterrupted.
+#[derive(Clone)]
 pub struct RenderPort {
-    visible: Arc<AtomicBool>,
+    state: Arc<RenderState>,
+}
+
+struct RenderState {
+    visible: AtomicBool,
+    started: Instant,
+    last_ui_heartbeat_ms: AtomicU64,
+}
+
+impl Default for RenderPort {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(RenderState {
+                visible: AtomicBool::new(false),
+                started: Instant::now(),
+                last_ui_heartbeat_ms: AtomicU64::new(0),
+            }),
+        }
+    }
 }
 
 impl RenderPort {
+    const STALE_AFTER_MS: u64 = 300;
+
+    /// Call once per actual GUI update. Stopping those updates automatically
+    /// disables video copying, without touching SNES time or PCM production.
     pub fn set_visible(&self, visible: bool) {
-        self.visible.store(visible, Ordering::Release);
+        self.state.visible.store(visible, Ordering::Release);
+        self.state.last_ui_heartbeat_ms.store(
+            self.state.started.elapsed().as_millis() as u64,
+            Ordering::Release,
+        );
     }
 
     fn should_copy_framebuffer(&self) -> bool {
-        self.visible.load(Ordering::Acquire)
+        self.should_copy_at(self.state.started.elapsed().as_millis() as u64)
+    }
+
+    fn should_copy_at(&self, now_ms: u64) -> bool {
+        let last = self.state.last_ui_heartbeat_ms.load(Ordering::Acquire);
+        self.state.visible.load(Ordering::Acquire)
+            && now_ms.saturating_sub(last) <= Self::STALE_AFTER_MS
     }
 }
 
@@ -498,6 +531,10 @@ mod tests {
     fn video_copying_can_be_suppressed_without_stopping_clock() {
         let port = RenderPort::default();
         assert!(!port.should_copy_framebuffer());
+        port.set_visible(true);
+        assert!(port.should_copy_framebuffer());
+        let last = port.state.last_ui_heartbeat_ms.load(Ordering::Acquire);
+        assert!(!port.should_copy_at(last + RenderPort::STALE_AFTER_MS + 1));
         port.set_visible(true);
         assert!(port.should_copy_framebuffer());
         port.set_visible(false);

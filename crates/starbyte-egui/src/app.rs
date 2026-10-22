@@ -1773,7 +1773,6 @@ impl StarbyteApp {
                     );
                     self.last_frame_spike_log = now;
                 }
-                self.status_line = self.session.snapshot().status_line();
             }
             Err(error) => self.record_playback_error(&error.to_string()),
         }
@@ -2449,6 +2448,25 @@ impl StarbyteApp {
                 {
                     self.persist_config();
                 }
+                ui.menu_button("Status bar", |ui| {
+                    let settings = &mut self.config.ui;
+                    let mut changed = false;
+                    changed |= ui.checkbox(&mut settings.show_status_bar, "Show status bar").changed();
+                    ui.separator();
+                    ui.add_enabled_ui(settings.show_status_bar, |ui| {
+                        changed |= ui.checkbox(&mut settings.status_fps, "Emulation FPS").changed();
+                        changed |= ui.checkbox(&mut settings.status_sound, "Sound").changed();
+                        changed |= ui.checkbox(&mut settings.status_frame, "Frame counter").changed();
+                        changed |= ui.checkbox(&mut settings.status_apu_steps, "APU steps").changed();
+                        changed |= ui.checkbox(&mut settings.status_audio_samples, "Audio samples").changed();
+                        ui.separator();
+                        changed |= ui.checkbox(&mut settings.status_activity, "Activity / jobs").changed();
+                        changed |= ui.checkbox(&mut settings.status_menu_hint, "Alt / F10 hint").changed();
+                    });
+                    if changed {
+                        self.persist_config();
+                    }
+                });
                 ui.menu_button("Color theme", |ui| {
                     let old = self.config.ui.theme;
                     ui.selectable_value(
@@ -2547,6 +2565,95 @@ impl StarbyteApp {
             if let Some(index) = root_menu_to_switch(open, hovered) {
                 egui::Popup::open_id(ctx, menu_ids[index]);
                 ctx.request_repaint();
+            }
+        });
+    }
+
+    fn draw_status_bar(&mut self, ui: &mut egui::Ui) {
+        let prefs = &self.config.ui;
+        ui.horizontal(|ui| {
+            let mut any = false;
+            let mut separator = |ui: &mut egui::Ui| {
+                if any {
+                    ui.separator();
+                }
+                any = true;
+            };
+            if self.play_view && self.session.snapshot().has_rom {
+                if prefs.status_fps {
+                    separator(ui);
+                    let fps = if !self.is_playing {
+                        "FPS: paused".to_owned()
+                    } else if self.background_suspended {
+                        "FPS: paused (background)".to_owned()
+                    } else {
+                        self.frame_rate
+                            .fps(Instant::now())
+                            .map_or_else(|| "FPS: --".to_owned(), |value| {
+                                format!(
+                                    "FPS: {value:.1} / {:.1}",
+                                    speed_target_fps(self.last_effective_speed_percent)
+                                )
+                            })
+                    };
+                    ui.label(RichText::new(fps).monospace())
+                        .on_hover_text("Completed emulated frames per real second.");
+                }
+                if prefs.status_sound {
+                    separator(ui);
+                    let sound = audio_playback_status(
+                        self.session.emulator().isolated_apu_driver_probe_enabled(),
+                        self.config.audio.enabled,
+                        self.audio_muted,
+                        self.config.audio.volume,
+                        self.audio_nonzero_pairs_total,
+                        self.audio_output.as_ref().map(AudioOutput::device_status),
+                        self.audio_output
+                            .as_ref()
+                            .map_or(0, AudioOutput::submitted_nonzero_frames),
+                    );
+                    ui.label(RichText::new(sound).monospace())
+                        .on_hover_text("Host sound state; PCM delivery does not prove speaker audibility.");
+                }
+                if prefs.status_frame || prefs.status_apu_steps || prefs.status_audio_samples {
+                    let snapshot = self.session.snapshot();
+                    if prefs.status_frame {
+                        separator(ui);
+                        ui.label(RichText::new(format!("Frame {}", snapshot.frame)).monospace());
+                    }
+                    if prefs.status_apu_steps {
+                        separator(ui);
+                        ui.label(RichText::new(format!("APU steps {}", snapshot.apu_steps)).monospace());
+                    }
+                    if prefs.status_audio_samples {
+                        separator(ui);
+                        ui.label(
+                            RichText::new(format!("Audio samples {}", snapshot.audio_sample_count))
+                                .monospace(),
+                        );
+                    }
+                }
+            }
+            if prefs.status_activity {
+                if !self.play_view || self.playback_error.is_some() {
+                    separator(ui);
+                    ui.label(self.status_line.as_str());
+                }
+                let active = self.jobs.iter().filter(|job| {
+                    job.state == "running" || job.state == "queued"
+                }).count();
+                if active > 0 {
+                    separator(ui);
+                    ui.label(format!("{active} background job(s)"));
+                }
+            }
+            if prefs.status_menu_hint {
+                separator(ui);
+                ui.small(if self.config.ui.show_menu_bar {
+                    "Alt / F10: hide menus"
+                } else {
+                    "Alt / F10: show menus"
+                });
             }
         });
     }
@@ -3933,61 +4040,11 @@ impl eframe::App for StarbyteApp {
                 self.draw_recent_games_bar(ui, ctx);
             });
         }
-        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if self.play_view && self.session.snapshot().has_rom {
-                    let fps = if !self.is_playing {
-                        "FPS: paused".to_owned()
-                    } else if self.background_suspended {
-                        "FPS: paused (background)".to_owned()
-                    } else {
-                        self.frame_rate
-                            .fps(Instant::now())
-                            .map_or_else(|| "FPS: --".to_owned(), |value| {
-                                format!(
-                                    "FPS: {value:.1} / {:.1}",
-                                    speed_target_fps(self.last_effective_speed_percent)
-                                )
-                            })
-                    };
-                    ui.label(RichText::new(fps).monospace()).on_hover_text(
-                        "Completed emulated frames per real second (rolling 2 seconds). This is not GPU or display FPS. Enable Timing for frame-time and hitch details.",
-                    );
-                    ui.separator();
-                    let audio_status = audio_playback_status(
-                        self.session.emulator().isolated_apu_driver_probe_enabled(),
-                        self.config.audio.enabled,
-                        self.audio_muted,
-                        self.config.audio.volume,
-                        self.audio_nonzero_pairs_total,
-                        self.audio_output.as_ref().map(AudioOutput::device_status),
-                        self.audio_output
-                            .as_ref()
-                            .map_or(0, AudioOutput::submitted_nonzero_frames),
-                    );
-                    ui.label(RichText::new(audio_status).monospace()).on_hover_text(
-                        "Sound and saves are enabled for ordinary game loads. Silent compatibility remains an explicit fallback in the Sound menu. Device-open and PCM counters do not prove physical audibility.",
-                    );
-                    ui.separator();
-                }
-                ui.label(self.status_line.as_str());
-                ui.separator();
-                ui.small(if self.config.ui.show_menu_bar {
-                    "Alt / F10: hide menus"
-                } else {
-                    "Alt / F10: show menus"
-                });
-                let active = self
-                    .jobs
-                    .iter()
-                    .filter(|job| job.state == "running" || job.state == "queued")
-                    .count();
-                if active > 0 {
-                    ui.separator();
-                    ui.label(format!("{active} background job(s)"));
-                }
+        if self.config.ui.show_status_bar {
+            egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+                self.draw_status_bar(ui);
             });
-        });
+        }
         if self.play_view {
             egui::CentralPanel::default().show(ctx, |ui| self.draw_play_view(ui));
             if self.show_cheats_window {

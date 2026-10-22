@@ -3,7 +3,14 @@
 //! The GUI must command this worker rather than borrowing FrontendSession
 //! directly. No egui or Wayland surface is required to execute a frame.
 
-use std::{io, time::{Duration, Instant}};
+use std::{
+    io,
+    sync::{
+        atomic::{AtomicU16, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
 
 use starbyte_core::{input::ControllerState, manifest::AssetConfig};
 use starbyte_frontend::{
@@ -16,6 +23,53 @@ use crate::{
 };
 
 const FRAME_TIMEOUT: Duration = Duration::from_millis(1_500);
+
+/// Controller bridge updated directly by the GUI. Held state replaces its
+/// predecessor; short press edges are OR-latched until consumed by one SNES
+/// frame. No command queue can accumulate stale high-frequency input.
+#[derive(Clone, Default)]
+pub struct InputPort {
+    held_bits: Arc<AtomicU16>,
+    pending_press_bits: Arc<AtomicU16>,
+}
+
+impl InputPort {
+    /// Submit the current controller state and *new* press edges separately.
+    pub fn submit(&self, held: ControllerState, just_pressed: ControllerState) {
+        self.held_bits.store(held.to_bits(), Ordering::Release);
+        self.pending_press_bits
+            .fetch_or(just_pressed.to_bits(), Ordering::AcqRel);
+    }
+
+    /// Called once by the worker immediately before emulating a frame.
+    fn take_frame_state(&self) -> ControllerState {
+        let held = self.held_bits.load(Ordering::Acquire);
+        let edges = self.pending_press_bits.swap(0, Ordering::AcqRel);
+        controller_from_bits(held | edges)
+    }
+
+    fn reset(&self) {
+        self.held_bits.store(0, Ordering::Release);
+        self.pending_press_bits.store(0, Ordering::Release);
+    }
+}
+
+fn controller_from_bits(bits: u16) -> ControllerState {
+    ControllerState {
+        b: bits & 0x8000 != 0,
+        y: bits & 0x4000 != 0,
+        select: bits & 0x2000 != 0,
+        start: bits & 0x1000 != 0,
+        up: bits & 0x0800 != 0,
+        down: bits & 0x0400 != 0,
+        left: bits & 0x0200 != 0,
+        right: bits & 0x0100 != 0,
+        a: bits & 0x0080 != 0,
+        x: bits & 0x0040 != 0,
+        l: bits & 0x0020 != 0,
+        r: bits & 0x0010 != 0,
+    }
+}
 
 /// A snapshot for the renderer; video frames coalesce when the UI is hidden.
 pub struct PublishedGameFrame {
@@ -36,6 +90,7 @@ pub struct OwnedSession {
     volume: f32,
     speed_percent: u16,
     pitch_factor: f32,
+    input: InputPort,
 }
 
 impl OwnedSession {
@@ -52,6 +107,7 @@ impl OwnedSession {
             volume: 0.15,
             speed_percent: 100,
             pitch_factor: 1.0,
+            input: InputPort::default(),
         }
     }
 
@@ -59,8 +115,16 @@ impl OwnedSession {
         EmulatorScheduler::spawn(self, NTSC_FRAME_INTERVAL, Self::advance)
     }
 
+    /// Transfer engine ownership while retaining the lock-free input port.
+    pub fn spawn_with_input(
+        self,
+    ) -> io::Result<(EmulatorScheduler<Self, PublishedGameFrame>, InputPort)> {
+        let input = self.input.clone();
+        Ok((self.spawn()?, input))
+    }
+
     pub fn set_input(&mut self, input: ControllerState) {
-        self.session.set_controller1(input);
+        self.input.submit(input, input);
     }
 
     pub fn set_audio(&mut self, enabled: bool, muted: bool, volume: f32) {
@@ -87,6 +151,7 @@ impl OwnedSession {
         if let Some(output) = &self.audio {
             output.clear();
         }
+        self.input.reset();
         match mode {
             SoundSessionMode::Compatibility => self.session.load_rom(path),
             SoundSessionMode::Isolated => self.session.load_rom_with_isolated_audio_probe(path),
@@ -133,6 +198,7 @@ impl OwnedSession {
     /// for the renderer to replay later after a hidden-window interval.
     pub fn advance(&mut self) -> Result<PublishedGameFrame, String> {
         let started = Instant::now();
+        self.session.set_controller1(self.input.take_frame_state());
         self.session
             .run_frame_with_timeout(FRAME_TIMEOUT)
             .map_err(|error| error.to_string())?;
@@ -247,6 +313,29 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transient_button_edges_survive_a_quick_release() {
+        let port = InputPort::default();
+        let pressed = ControllerState {
+            start: true,
+            ..ControllerState::default()
+        };
+        port.submit(pressed, pressed);
+        port.submit(ControllerState::default(), ControllerState::default());
+        assert!(port.take_frame_state().start);
+        assert!(!port.take_frame_state().start);
+    }
+
+    #[test]
+    fn controller_bits_round_trip() {
+        let all = ControllerState {
+            b: true, y: true, select: true, start: true,
+            up: true, down: true, left: true, right: true,
+            a: true, x: true, l: true, r: true,
+        };
+        assert_eq!(controller_from_bits(all.to_bits()), all);
+    }
 
     #[test]
     fn detached_session_has_no_game_until_loaded() {

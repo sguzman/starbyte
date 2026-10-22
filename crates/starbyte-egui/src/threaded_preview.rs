@@ -51,6 +51,7 @@ impl ThreadedPreviewApp {
         config: &RuntimeConfig,
         rom_path: PathBuf,
         exit_after_frames: Option<u64>,
+        preview_background: bool,
     ) -> Result<Self> {
         let mut session = OwnedSession::create(assets)?;
         session.load_rom(&rom_path, SoundSessionMode::Persistent)?;
@@ -72,7 +73,10 @@ impl ThreadedPreviewApp {
         let (engine, input, render) = session.spawn_with_ports()?;
         engine.set_speed_percent(speed_percent);
         render.set_visible(true);
-        engine.set_pause_when_unfocused(config.ui.pause_when_unfocused);
+        // Native smoke may run under a compositor without keyboard focus.
+        // This opt-in does not mutate RuntimeConfig or the default policy.
+        let pause_when_unfocused = config.ui.pause_when_unfocused && !preview_background;
+        engine.set_pause_when_unfocused(pause_when_unfocused);
         engine.set_focused(true);
         engine.set_playing(true);
         Ok(Self {
@@ -82,7 +86,7 @@ impl ThreadedPreviewApp {
             display: WorkerDisplay::default(),
             focused: true,
             playing: true,
-            pause_when_unfocused: config.ui.pause_when_unfocused,
+            pause_when_unfocused,
             integer_scale: config.video.integer_scale,
             speed_percent,
             pitch_mode: config.audio.pitch_mode,

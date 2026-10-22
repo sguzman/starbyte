@@ -9,7 +9,7 @@ use anyhow::Result;
 use eframe::egui::{self, Color32};
 use starbyte_core::{
     input::ControllerState,
-    manifest::{AssetConfig, RuntimeConfig},
+    manifest::{AssetConfig, AudioPitchMode, RuntimeConfig},
 };
 use starbyte_frontend::SoundSessionMode;
 
@@ -28,6 +28,8 @@ pub struct ThreadedPreviewApp {
     playing: bool,
     pause_when_unfocused: bool,
     integer_scale: bool,
+    speed_percent: u16,
+    pitch_factor: f32,
     exit_after_frames: Option<u64>,
     last_error: Option<String>,
 }
@@ -46,7 +48,20 @@ impl ThreadedPreviewApp {
             config.audio.mute_on_startup,
             config.audio.volume,
         );
+        let speed_percent = match config.video.playback_speed_percent {
+            50 | 75 | 100 | 125 | 150 | 200 | 300 => config.video.playback_speed_percent,
+            _ => 100,
+        };
+        let pitch_factor = match config.audio.pitch_mode {
+            AudioPitchMode::Preserve => 1.0,
+            AudioPitchMode::FollowSpeed => f32::from(speed_percent) / 100.0,
+            AudioPitchMode::Custom => {
+                f32::from(config.audio.pitch_percent.clamp(50, 200)) / 100.0
+            }
+        };
+        session.set_speed(speed_percent, pitch_factor);
         let (engine, input, render) = session.spawn_with_ports()?;
+        engine.set_speed_percent(speed_percent);
         render.set_visible(true);
         engine.set_pause_when_unfocused(config.ui.pause_when_unfocused);
         engine.set_focused(true);
@@ -60,6 +75,8 @@ impl ThreadedPreviewApp {
             playing: true,
             pause_when_unfocused: config.ui.pause_when_unfocused,
             integer_scale: config.video.integer_scale,
+            speed_percent,
+            pitch_factor,
             exit_after_frames,
             last_error: None,
         })
@@ -152,6 +169,24 @@ impl eframe::App for ThreadedPreviewApp {
                     }
                     ui.checkbox(&mut self.integer_scale, "Integer scale");
                 });
+                ui.menu_button("Speed", |ui| {
+                    for speed in [50_u16, 75, 100, 125, 150, 200, 300] {
+                        if ui
+                            .selectable_value(
+                                &mut self.speed_percent,
+                                speed,
+                                format!("{:.2}x", f32::from(speed) / 100.0),
+                            )
+                            .changed()
+                        {
+                            self.engine
+                                .configure_playback_speed(speed, self.pitch_factor)
+                                .map_err(|error| self.last_error = Some(error))
+                                .ok();
+                            ui.close();
+                        }
+                    }
+                });
                 ui.label("Threaded preview (not the normal Starbyte library)");
             });
         });
@@ -208,7 +243,10 @@ impl eframe::App for ThreadedPreviewApp {
                 ui.separator();
                 let rate = self.engine.frame_stats();
                 if let Some(fps) = rate.fps {
-                    ui.label(format!("Worker FPS {fps:.1} / 60.1"));
+                    ui.label(format!(
+                        "Worker FPS {fps:.1} / {:.1}",
+                        60.0985 * f32::from(self.speed_percent) / 100.0
+                    ));
                 } else {
                     ui.label("Worker FPS: measuring");
                 }

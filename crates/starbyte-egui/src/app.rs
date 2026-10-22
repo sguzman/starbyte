@@ -21,7 +21,7 @@ use crate::{
 
 use starbyte_core::{
     input::ControllerState,
-    manifest::{AssetConfig, AudioPitchMode, InputDeviceMode, LibraryViewMode, RuntimeConfig},
+    manifest::{AssetConfig, AudioPitchMode, InputDeviceMode, LibraryViewMode, RuntimeConfig, UiTheme},
 };
 use starbyte_frontend::{
     CheatEntry, FrontendSession, InstalledStatus, LibraryEntry, LibraryFilter, LibraryService,
@@ -647,6 +647,10 @@ pub struct StarbyteApp {
     show_compact_settings: bool,
     show_compact_session: bool,
     show_compact_logs: bool,
+    /// Firefox-style menu bar: a tap of Alt reveals/hides all top menus.
+    menu_bar_visible: bool,
+    alt_was_down: bool,
+    alt_menu_tap_armed: bool,
 }
 
 // Regular desktop game loads use audible emulation with writable SRAM.
@@ -669,6 +673,7 @@ impl StarbyteApp {
     ) -> Result<Self> {
         if let Some(prefer_dark_mode) = prefer_dark_mode_override {
             config.prefer_dark_mode = prefer_dark_mode;
+            config.ui.theme = if prefer_dark_mode { UiTheme::Dark } else { UiTheme::Light };
         }
         for rom_dir in startup_rom_dirs {
             if !config.library.rom_dirs.contains(&rom_dir) {
@@ -695,11 +700,11 @@ impl StarbyteApp {
             config.cheats.cheatarium_root = Some(found);
         }
         let cache_root = resolve_cache_root(&config, &assets);
-        apply_theme(&cc.egui_ctx, config.prefer_dark_mode);
+        apply_theme(&cc.egui_ctx, config.ui.theme);
         info!(
             config_path = %assets.config_path().display(),
             cache_root = %cache_root.display(),
-            prefer_dark_mode = config.prefer_dark_mode,
+            theme = ?config.ui.theme,
             rom_dirs = ?config.library.rom_dirs,
             providers_enabled = config.advanced.providers.enable_network,
             "initialized gui app state"
@@ -821,6 +826,9 @@ impl StarbyteApp {
             show_compact_settings: false,
             show_compact_session: false,
             show_compact_logs: false,
+            menu_bar_visible: false,
+            alt_was_down: false,
+            alt_menu_tap_armed: false,
         };
         app.persist_config();
         if app.config.advanced.refresh_on_startup {
@@ -2163,271 +2171,228 @@ impl StarbyteApp {
         }
     }
 
+    fn toggle_play_pause(&mut self) {
+        if !self.session.snapshot().has_rom {
+            return;
+        }
+        self.is_playing = !self.is_playing;
+        if !self.is_playing {
+            self.clear_audio();
+        }
+        self.frame_rate.reset();
+        self.frame_clock.reset(Instant::now());
+    }
+
+    /// The top panel contains only organized menus, not a wrapping toolbar.
+    /// A tap of Alt toggles the entire panel, including during gameplay.
     fn draw_top_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, compact: bool) {
-        ui.horizontal_wrapped(|ui| {
-            if self.play_view {
-                ui.heading("Starbyte");
-                if ui.button("Library (Esc)").clicked() {
-                    self.play_view = false;
-                }
-                if ui
-                    .add_enabled(
-                        self.session.snapshot().has_rom,
-                        egui::Button::new(if self.is_playing { "Pause" } else { "Play" }),
-                    )
-                    .clicked()
-                {
-                    self.is_playing = !self.is_playing;
-                    if !self.is_playing {
-                        self.clear_audio();
-                    }
-                    self.frame_rate.reset();
-                    self.frame_clock.reset(Instant::now());
-                }
-                // Keep Speed next to Pause, visible even on small/narrow screens
-                // where the rest of the horizontal toolbar wraps.
-                let active_speed = self.last_effective_speed_percent;
-                ui.menu_button(format!("Speed {}", speed_label(active_speed)), |ui| {
-                    self.draw_speed_controls(ui);
-                })
-                .response
-                .on_hover_text("Choose playback speed; hold Tab during gameplay to fast-forward.");
-                // Keep viewport fitting visible during actual gameplay. SNES
-                // 256x224 integer 3x produces large black gutters on modern
-                // Wayland windows; fractional Fit preserves aspect ratio.
-                let fit_label = if self.config.video.integer_scale {
-                    "Fit Window"
-                } else {
-                    "Pixel Scale"
-                };
-                if ui.button(fit_label).on_hover_text(
-                    "Fit Window uses the largest aspect-correct image; Pixel Scale uses whole-number pixels for crisp edges.",
-                ).clicked() {
-                    self.config.video.integer_scale = !self.config.video.integer_scale;
-                    self.persist_config();
-                }
-                if ui.button("Quick Save (F5)").clicked() {
-                    self.quick_save();
-                }
-                if ui
-                    .add_enabled(
-                        self.session.has_quick_save(),
-                        egui::Button::new("Quick Load (F8)"),
-                    )
-                    .clicked()
-                {
-                    self.quick_load(ctx);
-                }
-                ui.menu_button("Disk Slots", |ui| self.draw_persistent_slots(ui, ctx));
-                if ui.button("Screenshot (F12)").clicked() {
-                    self.save_screenshot();
-                }
-                let sound_label = match self.session.sound_session_mode() {
-                    SoundSessionMode::Compatibility => "Sound (silent)",
-                    SoundSessionMode::Isolated => "Sound (isolated)",
-                    SoundSessionMode::Persistent => "Sound (on)",
-                };
-                ui.menu_button(sound_label, |ui| self.draw_audio_controls(ui));
-
-                if ui.button("Cheats").clicked() {
-                    self.show_cheats_window = !self.show_cheats_window;
-                    self.cheat_search_focus_pending = self.show_cheats_window;
-                }
-                if ui
-                    .checkbox(&mut self.show_performance_overlay, "Timing")
-                    .changed()
-                {
-                    ctx.request_repaint();
-                }
-                if ui
-                    .checkbox(&mut self.show_input_overlay, "Input Diagnostics")
-                    .changed()
-                {
-                    ctx.request_repaint();
-                }
-                if ui.button("Fullscreen").clicked() {
-                    self.config.video.fullscreen = !self.config.video.fullscreen;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(
-                        self.config.video.fullscreen,
-                    ));
-                    self.persist_config();
-                }
-                return;
-            }
-
-            ui.heading("Starbyte");
-            ui.label("Cozy SNES · experimental");
-            ui.separator();
-            let has_rom = self.session.snapshot().has_rom;
-            if ui
-                .add_enabled(has_rom, egui::Button::new("Play View (F9)"))
-                .clicked()
-            {
-                self.play_view = true;
-            }
-            if ui.button("Open ROM...").clicked()
-                && let Some(path) = rfd::FileDialog::new()
-                    .add_filter(
-                        "Super Nintendo ROM or ZIP",
-                        &["sfc", "smc", "swc", "fig", "zip"],
-                    )
-                    .pick_file()
-            {
-                self.open_local_rom(&path, ctx);
-            }
-            ui.menu_button("Recent", |ui| {
-                let paths = self.config.library.recent_roms.clone();
-                if paths.is_empty() {
-                    ui.label("No games opened yet");
-                }
-                for path in paths {
-                    let label = path
-                        .file_name()
-                        .map(|name| name.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| path.display().to_string());
-                    if ui
-                        .add_enabled(path.is_file(), egui::Button::new(label))
-                        .on_hover_text(path.display().to_string())
-                        .clicked()
+        egui::MenuBar::new().ui(ui, |ui| {
+            ui.menu_button("File", |ui| {
+                if ui.button("Open ROM...").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Super Nintendo ROM or ZIP", &["sfc", "smc", "swc", "fig", "zip"])
+                        .pick_file()
                     {
                         self.open_local_rom(&path, ctx);
+                    }
+                    ui.close();
+                }
+                ui.menu_button("Recent ROMs", |ui| {
+                    let paths = self.config.library.recent_roms.clone();
+                    if paths.is_empty() {
+                        ui.label("No recently opened games");
+                    }
+                    for path in paths {
+                        let label = path.file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| path.display().to_string());
+                        if ui.add_enabled(path.is_file(), egui::Button::new(label))
+                            .on_hover_text(path.display().to_string())
+                            .clicked()
+                        {
+                            self.open_local_rom(&path, ctx);
+                            ui.close();
+                        }
+                    }
+                });
+                ui.separator();
+                if ui.button("Quit").clicked() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            });
+
+            ui.menu_button("Game", |ui| {
+                let has_rom = self.session.snapshot().has_rom;
+                if ui.add_enabled(has_rom, egui::Button::new(
+                    if self.play_view { "Return to Library (Esc)" } else { "Game View (F9)" }
+                )).clicked() {
+                    self.play_view = !self.play_view;
+                    ui.close();
+                }
+                if ui.add_enabled(has_rom, egui::Button::new(
+                    if self.is_playing { "Pause" } else { "Play / Resume" }
+                )).clicked() {
+                    self.toggle_play_pause();
+                    ui.close();
+                }
+                ui.separator();
+                if ui.add_enabled(has_rom, egui::Button::new("Quick Save (F5)")).clicked() {
+                    self.quick_save();
+                    ui.close();
+                }
+                if ui.add_enabled(self.session.has_quick_save(), egui::Button::new("Quick Load (F8)")).clicked() {
+                    self.quick_load(ctx);
+                    ui.close();
+                }
+                ui.add_enabled_ui(has_rom, |ui| {
+                    ui.menu_button("Disk Slots", |ui| self.draw_persistent_slots(ui, ctx));
+                });
+                ui.separator();
+                ui.menu_button("Speed and Pitch", |ui| self.draw_speed_controls(ui));
+                ui.menu_button("Sound", |ui| self.draw_audio_controls(ui));
+                if ui.add_enabled(has_rom, egui::Button::new("Cheats...")).clicked() {
+                    self.show_cheats_window = !self.show_cheats_window;
+                    self.cheat_search_focus_pending = self.show_cheats_window;
+                    ui.close();
+                }
+                if ui.add_enabled(has_rom, egui::Button::new("Screenshot (F12)")).clicked() {
+                    self.save_screenshot();
+                    ui.close();
+                }
+            });
+
+            ui.menu_button("Library", |ui| {
+                let installed = self.selected_entry()
+                    .filter(|entry| entry.installed_status == InstalledStatus::Installed);
+                if ui.add_enabled(installed.is_some(), egui::Button::new("Play Selected")).clicked() {
+                    if let Some(entry) = installed {
+                        self.queue_load_entry(&entry);
+                    }
+                    ui.close();
+                }
+                if ui.button("Scan Library").clicked() {
+                    self.queue_job(WorkerCommandKind::RefreshSnapshot);
+                    ui.close();
+                }
+                if ui.button("Get Covers").clicked() {
+                    self.queue_job(WorkerCommandKind::RefreshArtwork);
+                    ui.close();
+                }
+                ui.menu_button("Refresh", |ui| {
+                    if ui.button("Metadata").clicked() {
+                        self.queue_job(WorkerCommandKind::RefreshMetadata);
                         ui.close();
                     }
-                }
-            });
-            let selected_installed = self
-                .selected_entry()
-                .filter(|entry| entry.installed_status == InstalledStatus::Installed);
-            if ui
-                .add_enabled(
-                    selected_installed.is_some(),
-                    egui::Button::new("Play Selected"),
-                )
-                .on_hover_text("Select an installed game from the library to launch it")
-                .clicked()
-            {
-                if let Some(entry) = selected_installed {
-                    self.queue_load_entry(&entry);
-                }
-            }
-            if ui
-                .add_enabled(
-                    has_rom,
-                    egui::Button::new(if self.is_playing { "Pause" } else { "Resume" }),
-                )
-                .clicked()
-            {
-                self.is_playing = !self.is_playing;
-                if !self.is_playing {
-                    self.clear_audio();
-                }
-                self.frame_rate.reset();
-                self.frame_clock.reset(Instant::now());
-            }
-            if ui
-                .add(egui::TextEdit::singleline(&mut self.search_query).hint_text("Search library"))
-                .changed()
-            {
-                self.status_line = format!("Filtered to {} entries.", self.visible_entries().len());
-            }
-
-            if ui
-                .checkbox(
-                    &mut self.config.library.show_installed_only,
-                    "Installed only",
-                )
-                .changed()
-            {
-                self.persist_config();
-                self.status_line = format!("Filtered to {} entries.", self.visible_entries().len());
-            }
-
-            let previous_view = self.config.library.active_view;
-            egui::ComboBox::from_label("View")
-                .selected_text(match self.config.library.active_view {
-                    LibraryViewMode::List => "List",
-                    LibraryViewMode::Grid => "Grid",
-                    LibraryViewMode::Detailed => "Detailed",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut self.config.library.active_view,
-                        LibraryViewMode::List,
-                        "List",
-                    );
-                    ui.selectable_value(
-                        &mut self.config.library.active_view,
-                        LibraryViewMode::Grid,
-                        "Grid",
-                    );
-                    ui.selectable_value(
-                        &mut self.config.library.active_view,
-                        LibraryViewMode::Detailed,
-                        "Detailed",
-                    );
+                    if ui.button("Covers").clicked() {
+                        self.queue_job(WorkerCommandKind::RefreshCovers { target: LibraryTarget::default() });
+                        ui.close();
+                    }
+                    if ui.button("Cheats").clicked() {
+                        self.queue_job(WorkerCommandKind::RefreshCheats { target: LibraryTarget::default() });
+                        ui.close();
+                    }
+                    if ui.button("Everything").clicked() {
+                        self.queue_job(WorkerCommandKind::RefreshAll);
+                        ui.close();
+                    }
                 });
-            if self.config.library.active_view != previous_view {
-                self.persist_config();
-            }
-
-            if ui.button("Get Covers").clicked() {
-                self.queue_job(WorkerCommandKind::RefreshArtwork);
-            }
-            ui.menu_button("Refresh", |ui| {
-                if ui.button("Metadata").clicked() {
-                    self.queue_job(WorkerCommandKind::RefreshMetadata);
-                    ui.close();
+                ui.separator();
+                if ui.checkbox(&mut self.config.library.show_installed_only, "Installed only").changed() {
+                    self.persist_config();
                 }
-                if ui.button("Covers").clicked() {
-                    self.queue_job(WorkerCommandKind::RefreshCovers {
-                        target: LibraryTarget::default(),
-                    });
-                    ui.close();
-                }
-                if ui.button("Cheats").clicked() {
-                    self.queue_job(WorkerCommandKind::RefreshCheats {
-                        target: LibraryTarget::default(),
-                    });
-                    ui.close();
-                }
-                if ui.button("Everything").clicked() {
-                    self.queue_job(WorkerCommandKind::RefreshAll);
-                    ui.close();
-                }
+                ui.menu_button("Library layout", |ui| {
+                    let old = self.config.library.active_view;
+                    ui.selectable_value(&mut self.config.library.active_view, LibraryViewMode::Grid, "Grid");
+                    ui.selectable_value(&mut self.config.library.active_view, LibraryViewMode::List, "List");
+                    ui.selectable_value(&mut self.config.library.active_view, LibraryViewMode::Detailed, "Detailed");
+                    if self.config.library.active_view != old {
+                        self.persist_config();
+                    }
+                });
             });
-            if ui
-                .checkbox(&mut self.config.prefer_dark_mode, "Night Mode")
-                .changed()
-            {
-                apply_theme(ctx, self.config.prefer_dark_mode);
-                self.persist_config();
-            }
 
-            ui.separator();
-            if compact {
+            ui.menu_button("View", |ui| {
+                if ui.checkbox(&mut self.config.video.fullscreen, "Fullscreen").changed() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.config.video.fullscreen));
+                    self.persist_config();
+                }
+                if ui.checkbox(&mut self.config.video.integer_scale, "Integer pixel scale").changed() {
+                    self.persist_config();
+                }
+                ui.separator();
+                if ui.checkbox(&mut self.show_performance_overlay, "Timing overlay").changed() {
+                    ctx.request_repaint();
+                }
+                if ui.checkbox(&mut self.show_input_overlay, "Input diagnostics").changed() {
+                    ctx.request_repaint();
+                }
+                ui.menu_button("Color theme", |ui| {
+                    let old = self.config.ui.theme;
+                    ui.selectable_value(&mut self.config.ui.theme, UiTheme::System, "System (default)");
+                    ui.selectable_value(&mut self.config.ui.theme, UiTheme::Light, "Light / Day");
+                    ui.selectable_value(&mut self.config.ui.theme, UiTheme::Dark, "Dark / Night");
+                    if old != self.config.ui.theme {
+                        apply_theme(ctx, self.config.ui.theme);
+                        self.persist_config();
+                    }
+                });
+                ui.separator();
+                ui.menu_button("Panels", |ui| {
+                    if compact {
+                        ui.checkbox(&mut self.show_compact_settings, "Settings");
+                        ui.checkbox(&mut self.show_compact_session, "Session");
+                        ui.checkbox(&mut self.show_compact_logs, "Logs");
+                    } else {
+                        ui.checkbox(&mut self.config.ui.show_left_panel, "Settings");
+                        ui.add_enabled_ui(
+                            self.config.library.active_view == LibraryViewMode::List,
+                            |ui| {
+                                ui.checkbox(&mut self.config.ui.show_details_panel, "Details");
+                            },
+                        );
+                        ui.checkbox(&mut self.config.ui.show_right_panel, "Session");
+                        ui.checkbox(&mut self.config.ui.show_log_panel, "Logs");
+                    }
+                    if ui.button("Save layout").clicked() {
+                        self.persist_config();
+                        ui.close();
+                    }
+                });
+            });
+
+            ui.menu_button("Tools", |ui| {
                 if ui.button("Settings").clicked() {
-                    self.show_compact_settings = !self.show_compact_settings;
+                    if compact {
+                        self.show_compact_settings = true;
+                    } else {
+                        self.config.ui.show_left_panel = true;
+                    }
+                    ui.close();
                 }
                 if ui.button("Session").clicked() {
-                    self.show_compact_session = !self.show_compact_session;
+                    if compact {
+                        self.show_compact_session = true;
+                    } else {
+                        self.config.ui.show_right_panel = true;
+                    }
+                    ui.close();
                 }
                 if ui.button("Logs").clicked() {
-                    self.show_compact_logs = !self.show_compact_logs;
+                    if compact {
+                        self.show_compact_logs = true;
+                    } else {
+                        self.config.ui.show_log_panel = true;
+                    }
+                    ui.close();
                 }
-            } else {
-                ui.checkbox(&mut self.config.ui.show_left_panel, "Left");
-                ui.add_enabled_ui(
-                    self.config.library.active_view == LibraryViewMode::List,
-                    |ui| {
-                        ui.checkbox(&mut self.config.ui.show_details_panel, "Details");
-                    },
-                );
-                ui.checkbox(&mut self.config.ui.show_right_panel, "Session");
-                ui.checkbox(&mut self.config.ui.show_log_panel, "Logs");
-            }
-            if ui.button("Save Layout").clicked() {
-                self.persist_config();
-            }
+                if ui.button("Open scan report").clicked() {
+                    let path = self.cache_root.join("manifests").join("rom-scan-report.json");
+                    if let Err(error) = open_path(&path) {
+                        self.status_line = format!("Could not open report {}: {error}", path.display());
+                    }
+                    ui.close();
+                }
+            });
         });
     }
 
@@ -3220,6 +3185,16 @@ impl StarbyteApp {
     }
 
     fn draw_library_browser(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.horizontal(|ui| {
+            if ui.add(egui::TextEdit::singleline(&mut self.search_query)
+                .hint_text("Search library...")
+                .desired_width(280.0)).changed()
+            {
+                self.status_line = format!("Filtered to {} entries.", self.visible_entries().len());
+            }
+            ui.label(format!("{} games", self.visible_entries().len()));
+        });
+        ui.separator();
         let entries = self.visible_entries();
         match self.config.library.active_view {
             LibraryViewMode::List => {
@@ -3564,6 +3539,15 @@ impl eframe::App for StarbyteApp {
             && self.pending_gamepad_bind.is_none()
             && !ctx.wants_keyboard_input();
         route_fast_forward_tab(raw_input, active, &mut self.tab_fast_forward_held);
+        let menu_shortcut_enabled = self.pending_keyboard_bind.is_none()
+            && self.pending_gamepad_bind.is_none();
+        update_alt_menu_visibility(
+            raw_input,
+            menu_shortcut_enabled,
+            &mut self.menu_bar_visible,
+            &mut self.alt_was_down,
+            &mut self.alt_menu_tap_armed,
+        );
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -3623,7 +3607,9 @@ impl eframe::App for StarbyteApp {
 
         let available = ctx.available_rect();
         let compact = is_compact_layout(available.width(), available.height());
-        egui::TopBottomPanel::top("top_bar").show(ctx, |ui| self.draw_top_bar(ui, ctx, compact));
+        if self.menu_bar_visible {
+            egui::TopBottomPanel::top("top_bar").show(ctx, |ui| self.draw_top_bar(ui, ctx, compact));
+        }
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if self.play_view && self.session.snapshot().has_rom {
@@ -3660,6 +3646,8 @@ impl eframe::App for StarbyteApp {
                     ui.separator();
                 }
                 ui.label(self.status_line.as_str());
+                ui.separator();
+                ui.small(if self.menu_bar_visible { "Alt: hide menus" } else { "Alt: show menus" });
                 let active = self
                     .jobs
                     .iter()
@@ -5252,12 +5240,44 @@ fn snapshot_logs(logs: &SharedLogBuffer) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn apply_theme(ctx: &egui::Context, prefer_dark_mode: bool) {
-    if prefer_dark_mode {
-        ctx.set_visuals(egui::Visuals::dark());
-    } else {
-        ctx.set_visuals(egui::Visuals::light());
+fn apply_theme(ctx: &egui::Context, theme: UiTheme) {
+    ctx.set_theme(match theme {
+        UiTheme::System => egui::ThemePreference::System,
+        UiTheme::Light => egui::ThemePreference::Light,
+        UiTheme::Dark => egui::ThemePreference::Dark,
+    });
+}
+
+/// Toggle on an Alt tap, not on Alt+another key or when a keybind is recording.
+/// Track press/release across input frames instead of toggling every repaint.
+fn update_alt_menu_visibility(
+    input: &egui::RawInput,
+    enabled: bool,
+    visible: &mut bool,
+    was_down: &mut bool,
+    armed: &mut bool,
+) {
+    if !input.focused || !enabled {
+        *was_down = false;
+        *armed = false;
+        return;
     }
+    let alt_down = input.modifiers.alt;
+    if alt_down && !*was_down {
+        *armed = true;
+    }
+    if input.events.iter().any(|event| matches!(
+        event,
+        egui::Event::Key { pressed: true, .. }
+            | egui::Event::PointerButton { pressed: true, .. }
+    )) {
+        *armed = false;
+    }
+    if !alt_down && *was_down && *armed {
+        *visible = !*visible;
+        *armed = false;
+    }
+    *was_down = alt_down;
 }
 
 /// Use exact integer pixel multiples when requested; permit shrinking for
@@ -5316,4 +5336,59 @@ fn open_path(path: &Path) -> Result<()> {
         Command::new("open").arg(path).spawn()?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod menu_bar_shortcut_tests {
+    use super::update_alt_menu_visibility;
+    use eframe::egui;
+
+    fn input(alt: bool) -> egui::RawInput {
+        egui::RawInput {
+            focused: true,
+            modifiers: egui::Modifiers { alt, ..Default::default() },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn plain_alt_toggles_visible_and_hidden_once_per_release() {
+        let (mut visible, mut was_down, mut armed) = (false, false, false);
+        for expected in [true, false] {
+            update_alt_menu_visibility(&input(true), true, &mut visible, &mut was_down, &mut armed);
+            assert_ne!(visible, expected);
+            update_alt_menu_visibility(&input(false), true, &mut visible, &mut was_down, &mut armed);
+            assert_eq!(visible, expected);
+        }
+    }
+
+    #[test]
+    fn alt_chord_does_not_hide_menus() {
+        let (mut visible, mut was_down, mut armed) = (true, false, false);
+        update_alt_menu_visibility(&input(true), true, &mut visible, &mut was_down, &mut armed);
+        let mut chord = input(true);
+        chord.events.push(egui::Event::Key {
+            key: egui::Key::F9,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: chord.modifiers,
+        });
+        update_alt_menu_visibility(&chord, true, &mut visible, &mut was_down, &mut armed);
+        update_alt_menu_visibility(&input(false), true, &mut visible, &mut was_down, &mut armed);
+        assert!(visible);
+    }
+
+    #[test]
+    fn disabled_for_rebinding_and_unfocused_windows() {
+        let (mut visible, mut was_down, mut armed) = (false, false, false);
+        update_alt_menu_visibility(&input(true), false, &mut visible, &mut was_down, &mut armed);
+        update_alt_menu_visibility(&input(false), true, &mut visible, &mut was_down, &mut armed);
+        assert!(!visible);
+        update_alt_menu_visibility(&input(true), true, &mut visible, &mut was_down, &mut armed);
+        let mut blurred = input(false);
+        blurred.focused = false;
+        update_alt_menu_visibility(&blurred, true, &mut visible, &mut was_down, &mut armed);
+        assert!(!visible);
+    }
 }

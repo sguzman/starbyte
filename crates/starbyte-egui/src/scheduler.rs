@@ -133,6 +133,12 @@ impl<Frame> FrameMailbox<Frame> {
             .stats(Instant::now())
     }
 
+    fn suspend_timing_window(&self) {
+        let mut rate = self.rate.lock().unwrap_or_else(|poison| poison.into_inner());
+        rate.completed.clear();
+        rate.last_gap_ms = 0.0;
+    }
+
     fn record_error(&self, error: String) {
         let mut slot = self.fault.lock().unwrap_or_else(|poison| poison.into_inner());
         *slot = Some(error);
@@ -392,6 +398,9 @@ fn run_owned_clock<Machine, Frame>(
         let running = policy.should_run();
         if was_running && !running {
             on_pause(&mut machine);
+            // A deliberate pause is not a gameplay hitch, and restarting
+            // must not count the whole background interval as a frame gap.
+            frames.suspend_timing_window();
         }
         was_running = running;
         if !running {
@@ -517,6 +526,17 @@ mod tests {
         let counts = worker.shutdown().unwrap();
         assert!(counts.ticks >= 1);
         assert_eq!(counts.pauses, 1);
+    }
+
+    #[test]
+    fn deliberate_pause_clears_fps_sample_window() {
+        let frames = FrameMailbox::default();
+        frames.push(1);
+        frames.push(2);
+        frames.suspend_timing_window();
+        let rate = frames.worker_frame_stats();
+        assert_eq!(rate.fps, None);
+        assert_eq!(rate.last_gap_ms, 0.0);
     }
 
     #[test]

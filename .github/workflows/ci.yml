@@ -39,6 +39,21 @@ jobs:
         run: cargo test --workspace --locked
       - name: Bench Compile
         run: cargo bench -p starbyte-core --bench core_bootstrap --no-run --locked
+      - name: Independent scheduler background-play smoke (no display server)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --locked -p starbyte-egui -- \\
+            --demo --scheduler-smoke \\
+            --config "$RUNNER_TEMP/starbyte-scheduler-config.toml" \\
+            --cache-dir "$RUNNER_TEMP/starbyte-scheduler-cache" \\
+            > "$RUNNER_TEMP/starbyte-scheduler-smoke.log" 2>&1 || {
+              cat "$RUNNER_TEMP/starbyte-scheduler-smoke.log"
+              exit 1
+            }
+          cat "$RUNNER_TEMP/starbyte-scheduler-smoke.log"
+          grep -F "STARBYTE_SCHEDULER_SMOKE_OK" "$RUNNER_TEMP/starbyte-scheduler-smoke.log"
       - name: Native Wayland demo smoke (virtual compositor)
         if: runner.os == 'Linux'
         shell: bash

@@ -156,14 +156,35 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
     pub fn spawn(
         machine: Machine,
         base_interval: Duration,
+        step: impl FnMut(&mut Machine) -> Result<Frame, String> + Send + 'static,
+    ) -> std::io::Result<Self> {
+        Self::spawn_with_pause_hook(machine, base_interval, step, |_| {})
+    }
+
+    /// Called exactly once when the clock transitions from running to
+    /// suspended (manual pause, lost focus, or frame failure). This lets
+    /// the session owner clear queued game PCM before the video stops.
+    pub fn spawn_with_pause_hook(
+        machine: Machine,
+        base_interval: Duration,
         mut step: impl FnMut(&mut Machine) -> Result<Frame, String> + Send + 'static,
+        mut on_pause: impl FnMut(&mut Machine) + Send + 'static,
     ) -> std::io::Result<Self> {
         let (sender, receiver) = mpsc::channel();
         let frames = Arc::new(FrameMailbox::default());
         let publication = Arc::clone(&frames);
         let join = thread::Builder::new()
             .name("starbyte-emulation".to_owned())
-            .spawn(move || run_owned_clock(machine, receiver, publication, base_interval, &mut step))?;
+            .spawn(move || {
+                run_owned_clock(
+                    machine,
+                    receiver,
+                    publication,
+                    base_interval,
+                    &mut step,
+                    &mut on_pause,
+                )
+            })?;
         Ok(Self {
             commands: sender,
             frames,
@@ -276,8 +297,10 @@ fn run_owned_clock<Machine, Frame>(
     frames: Arc<FrameMailbox<Frame>>,
     base_interval: Duration,
     step: &mut impl FnMut(&mut Machine) -> Result<Frame, String>,
+    on_pause: &mut impl FnMut(&mut Machine),
 ) -> Machine {
     let mut policy = ClockPolicy::default();
+    let mut was_running = false;
     let mut deadline = Instant::now();
     loop {
         let before = policy;
@@ -292,7 +315,12 @@ fn run_owned_clock<Machine, Frame>(
                 Err(TryRecvError::Disconnected) => return machine,
             }
         }
-        if !policy.should_run() {
+        let running = policy.should_run();
+        if was_running && !running {
+            on_pause(&mut machine);
+        }
+        was_running = running;
+        if !running {
             deadline = Instant::now();
             match commands.recv_timeout(Duration::from_millis(50)) {
                 Ok(command) => {
@@ -391,6 +419,30 @@ mod tests {
         assert!(latest >= 2);
         let final_machine = worker.shutdown().unwrap();
         assert!(final_machine >= latest);
+    }
+
+    #[test]
+    fn pause_callback_runs_only_on_actual_suspend_transitions() {
+        struct Counts { ticks: u32, pauses: u32 }
+        let worker = EmulatorScheduler::spawn_with_pause_hook(
+            Counts { ticks: 0, pauses: 0 },
+            Duration::from_millis(2),
+            |machine| {
+                machine.ticks += 1;
+                Ok(machine.ticks)
+            },
+            |machine| machine.pauses += 1,
+        )
+        .unwrap();
+        worker.set_playing(true);
+        std::thread::sleep(Duration::from_millis(20));
+        worker.set_focused(false);
+        std::thread::sleep(Duration::from_millis(20));
+        worker.set_focused(false);
+        std::thread::sleep(Duration::from_millis(20));
+        let counts = worker.shutdown().unwrap();
+        assert!(counts.ticks >= 1);
+        assert_eq!(counts.pauses, 1);
     }
 
     #[test]

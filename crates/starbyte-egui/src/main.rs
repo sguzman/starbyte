@@ -8,6 +8,10 @@ mod pitch;
 // Worker-clock foundation; GUI session handoff is a separate gated milestone.
 #[allow(dead_code)]
 mod scheduler;
+// Session/audio/save ownership bridge; keep current frontend on the proven
+// clock until the UI handoff is complete.
+#[allow(dead_code)]
+mod session_engine;
 mod worker;
 
 use std::{env, path::PathBuf};

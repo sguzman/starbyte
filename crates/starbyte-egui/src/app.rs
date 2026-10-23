@@ -680,7 +680,9 @@ struct FullLibraryWorker {
         Receiver<Result<WorkerSaveResponse, String>>,
     )>,
     pending_screenshots: Vec<(Option<u64>, Receiver<Result<SessionScreenshot, String>>)>,
-    pending_screenshot_writes: Vec<Receiver<Result<PathBuf, String>>>,
+    /// Capture generation is retained through asynchronous PNG encoding;
+    /// a completed older write must not replace the new game's status.
+    pending_screenshot_writes: Vec<(Option<u64>, Receiver<Result<PathBuf, String>>)>,
     pending_speaker_checks: Vec<Receiver<Result<(), String>>>,
     pending_step: Option<(Option<u64>, Receiver<Result<PublishedGameFrame, String>>)>,
     last_focus: Option<bool>,
@@ -1200,12 +1202,15 @@ impl StarbyteApp {
         worker.pending_screenshots = captures_pending;
         let mut screenshot_writes = Vec::new();
         let mut writes_pending = Vec::new();
-        for response in std::mem::take(&mut worker.pending_screenshot_writes) {
+        for (generation, response) in std::mem::take(&mut worker.pending_screenshot_writes) {
             match response.try_recv() {
-                Ok(result) => screenshot_writes.push(result),
-                Err(TryRecvError::Empty) => writes_pending.push(response),
+                Ok(result) => screenshot_writes.push((generation, result)),
+                Err(TryRecvError::Empty) => writes_pending.push((generation, response)),
                 Err(TryRecvError::Disconnected) => {
-                    screenshot_writes.push(Err("Screenshot PNG writer stopped".to_owned()));
+                    screenshot_writes.push((
+                        generation,
+                        Err("Screenshot PNG writer stopped".to_owned()),
+                    ));
                 }
             }
         }
@@ -1445,7 +1450,7 @@ impl StarbyteApp {
                     match spawn_screenshot_writer(path, image) {
                         Ok(reply) => {
                             if let Some(worker) = &mut self.full_worker {
-                                worker.pending_screenshot_writes.push(reply);
+                                worker.pending_screenshot_writes.push((generation, reply));
                             }
                         }
                         Err(error) => self.status_line = format!("Screenshot failed: {error}"),
@@ -1460,7 +1465,13 @@ impl StarbyteApp {
                 Err(error) => format!("Worker speaker check failed: {error}"),
             };
         }
-        for result in screenshot_writes {
+        for (generation, result) in screenshot_writes {
+            // The PNG may have been written successfully even when its game
+            // is no longer selected. Do not overwrite newer launch/status
+            // feedback with a delayed completion from that old cartridge.
+            if !worker_screenshot_receipt_is_current(generation, self.latest_rom_job_id) {
+                continue;
+            }
             if self.worker_save_smoke_stage == Some(WorkerSaveSmokeStage::AwaitScreenshot) {
                 self.worker_save_smoke_screenshot = Some(result.clone());
             }
@@ -5667,7 +5678,11 @@ impl eframe::App for StarbyteApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
 
-        if self.session_snapshot().has_rom
+        // When the complete library opts into the independent owner, that
+        // thread alone performs 30-second SRAM autosaves and pause/shutdown
+        // flushes. Never run a second legacy-session save on an egui repaint.
+        if self.full_worker.is_none()
+            && self.session_snapshot().has_rom
             && self.last_sram_flush.elapsed() >= Duration::from_secs(30)
         {
             self.last_sram_flush = Instant::now();
@@ -5731,6 +5746,14 @@ mod session_view_bridge_tests {
         assert!(should_report_worker_exit(true, false));
         assert!(!should_report_worker_exit(true, true));
         // Notice is not conditional on the UI's is_playing flag.
+    }
+
+    #[test]
+    fn delayed_screenshot_writer_cannot_overwrite_new_cartridge_status() {
+        assert!(worker_screenshot_receipt_is_current(Some(4), Some(4)));
+        assert!(!worker_screenshot_receipt_is_current(Some(4), Some(5)));
+        assert!(!worker_screenshot_receipt_is_current(None, None));
+        assert!(!worker_screenshot_receipt_is_current(None, Some(5)));
     }
 
     #[test]
@@ -7145,6 +7168,13 @@ fn record_recent_rom(recent: &mut Vec<PathBuf>, path: &Path) {
 /// of whether it belongs to the legacy GUI or the independent worker.
 fn should_report_worker_exit(finished: bool, reported: bool) -> bool {
     finished && !reported
+}
+
+fn worker_screenshot_receipt_is_current(
+    received_generation: Option<u64>,
+    requested_generation: Option<u64>,
+) -> bool {
+    received_generation.is_some() && received_generation == requested_generation
 }
 
 fn worker_save_receipt_is_current(

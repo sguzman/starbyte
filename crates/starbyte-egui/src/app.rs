@@ -1712,7 +1712,7 @@ impl StarbyteApp {
                 let uploaded = Instant::now();
                 self.refresh_framebuffer(ctx);
                 self.blackout_monitor.observe(
-                    self.session.emulator(),
+                    &self.session,
                     &self.cache_root,
                     self.last_audio_pairs,
                     self.last_audio_nonzero_pairs,

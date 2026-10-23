@@ -628,14 +628,10 @@ mod tests {
 
     #[test]
     fn lost_gui_heartbeat_suspends_only_when_background_pause_is_enabled() {
-        let worker = EmulatorScheduler::spawn(
-            0_u64,
-            Duration::from_millis(4),
-            |machine| {
-                *machine += 1;
-                Ok(*machine)
-            },
-        )
+        let worker = EmulatorScheduler::spawn(0_u64, Duration::from_millis(4), |machine| {
+            *machine += 1;
+            Ok(*machine)
+        })
         .unwrap();
         worker.gui_heartbeat();
         worker.set_playing(true);

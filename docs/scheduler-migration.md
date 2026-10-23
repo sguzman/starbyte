@@ -39,7 +39,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [ ] 📊 Move current emulation telemetry (FPS, frame gaps, overlays) to worker-produced truth.
 - [ ] 🎚️ Preserve every current audio speed/pitch control and its per-mode behavior through the handoff.
 
-## Milestone P: opt-in threaded preview parity — 8/11 source tasks (73%)
+## Milestone P: opt-in threaded preview parity — 10/13 source tasks (77%)
 
 - [x] 🖼️ Display coalesced worker frames using egui textures without advancing the emulator from UI redraws.
 - [x] 🎮 Reuse configured twelve-button keyboard bindings and support several gamepads with analog D-pad emulation.
@@ -49,7 +49,9 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [x] 📬 Queue preview saves and loads asynchronously to avoid freezing menus.
 - [x] 📸 Capture screenshots through the worker and write PNG files on a separate I/O thread.
 - [x] 📊 Show actual worker FPS, hitches, CPU time and superseded video-frame counts.
-- [ ] 🎚️ Match the full audio controls including live mute, volume, pitch-mode selectors and speaker diagnostics.
+- [x] 🎚️ Add worker-controlled mute, audio enable, volume and independent pitch-mode selectors.
+- [x] 🧩 Honor the existing individual View → Status bar metric visibility choices.
+- [ ] 🔉 Complete speaker/device diagnostics and ensure full audio quality parity.
 - [ ] 🧪 Verify preview menus, gamepads, screenshots and save slots natively on Hyprland.
 - [ ] ✅ Confirm format, compile, Clippy and tests on the exact preview commit.
 
@@ -57,8 +59,9 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 not a separate repository, not the default UI, and not a substitute for the
 complete Starbyte library application.
 
-## Milestone C: native GUI migration — 0/8 integrated tasks (0%)
+## Milestone C: native GUI migration — 1/9 source tasks (11%; default worker integration still 0%)
 
+- [x] 🧱 Introduce frontend-neutral SessionControlsSnapshot and migrate the existing disk-slot menu to it; worker can serialize the same summary.
 - [ ] 🎬 Route game-launch success/error replies through the emulation worker.
 - [ ] ⌨️ Send controller inputs without losing key-down/up edges; preserve F5/F8/F9/Escape.
 - [ ] 🪟 Display the latest completed RGBA texture without blocking the worker.
@@ -121,6 +124,7 @@ state as a fixed background-pause regression.
   flush and framebuffer copying controlled by renderer-update heartbeats.
 - `scheduler_video.rs`: renderer-only texture and telemetry adapter (not yet attached to the live GUI).
 - `main.rs`: explicit headless worker smoke (including a memory quick-save/restore roundtrip) and opt-in native-preview routes, no production default switch.
-- `threaded_preview.rs`: opt-in worker-powered egui player with configured twelve-button keyboard/gamepad input, independent FPS, live clock policies, speed and pitch, asynchronous save/load, disk slots and F12 screenshots.
+- `threaded_preview.rs`: opt-in worker-powered egui player with configured twelve-button keyboard/gamepad input, independent FPS, audio controls, live clock policies, status visibility, asynchronous save/load, disk slots and F12 screenshots.
 - `preview_gamepads.rs`: multi-controller button and analog-axis input aggregation, independent of SNES frame pacing.
+- `starbyte-frontend::SessionControlsSnapshot`: common typed summary of ROM, mode, quick-save, durable slots, and cheat-read diagnostics; adopted by the legacy slot menu as a low-risk UI migration seam.
 - `.github/workflows/ci.yml`: headless worker (including memory quick-save roundtrip) and Weston threaded-preview smoke tasks authored; completion not yet verified.

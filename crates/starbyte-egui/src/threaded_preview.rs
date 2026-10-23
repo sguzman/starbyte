@@ -54,6 +54,9 @@ pub struct ThreadedPreviewApp {
     speed_percent: u16,
     pitch_mode: AudioPitchMode,
     pitch_percent: u16,
+    audio_enabled: bool,
+    audio_muted: bool,
+    audio_volume: f32,
     keyboard_bindings: BTreeMap<String, String>,
     gamepads: PreviewGamepads,
     input_mode: InputDeviceMode,
@@ -111,6 +114,9 @@ impl ThreadedPreviewApp {
             speed_percent,
             pitch_mode: config.audio.pitch_mode,
             pitch_percent: config.audio.pitch_percent,
+            audio_enabled: config.audio.enabled,
+            audio_muted: config.audio.mute_on_startup,
+            audio_volume: config.audio.volume,
             keyboard_bindings: config.input.keyboard_bindings.clone(),
             gamepads: PreviewGamepads::new(config.input.gamepad_bindings.clone()),
             input_mode: config.input.active_device,
@@ -265,6 +271,18 @@ impl ThreadedPreviewApp {
 
 }
 
+#[cfg(test)]
+mod pitch_mode_tests {
+    use super::*;
+
+    #[test]
+    fn follow_speed_changes_pitch_without_changing_custom_mode() {
+        assert_eq!(pitch_for(AudioPitchMode::Preserve, 150, 300), 1.0);
+        assert_eq!(pitch_for(AudioPitchMode::FollowSpeed, 150, 300), 3.0);
+        assert_eq!(pitch_for(AudioPitchMode::Custom, 150, 300), 1.5);
+    }
+}
+
 impl eframe::App for ThreadedPreviewApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Deliberately independent of frame production: an absent heartbeat
@@ -349,6 +367,72 @@ impl eframe::App for ThreadedPreviewApp {
                         self.engine.set_pause_when_unfocused(self.pause_when_unfocused);
                     }
                     ui.checkbox(&mut self.integer_scale, "Integer scale");
+                });
+                ui.menu_button("Audio", |ui| {
+                    let mut changed = false;
+                    changed |= ui.checkbox(&mut self.audio_enabled, "Sound enabled").changed();
+                    changed |= ui.checkbox(&mut self.audio_muted, "Mute").changed();
+                    changed |= ui
+                        .add(
+                            egui::Slider::new(&mut self.audio_volume, 0.0..=1.0)
+                                .text("Volume"),
+                        )
+                        .changed();
+                    if changed
+                        && let Err(error) = self.engine.configure_sound(
+                            self.audio_enabled,
+                            self.audio_muted,
+                            self.audio_volume,
+                        )
+                    {
+                        self.last_error = Some(error);
+                    }
+                    ui.separator();
+                    ui.label("Pitch");
+                    let mut pitch_changed = false;
+                    pitch_changed |= ui
+                        .selectable_value(
+                            &mut self.pitch_mode,
+                            AudioPitchMode::Preserve,
+                            "Preserve original pitch",
+                        )
+                        .changed();
+                    pitch_changed |= ui
+                        .selectable_value(
+                            &mut self.pitch_mode,
+                            AudioPitchMode::FollowSpeed,
+                            "Follow game speed",
+                        )
+                        .changed();
+                    pitch_changed |= ui
+                        .selectable_value(
+                            &mut self.pitch_mode,
+                            AudioPitchMode::Custom,
+                            "Custom pitch",
+                        )
+                        .changed();
+                    if self.pitch_mode == AudioPitchMode::Custom {
+                        pitch_changed |= ui
+                            .add(
+                                egui::Slider::new(&mut self.pitch_percent, 50..=200)
+                                    .text("Pitch")
+                                    .suffix("%"),
+                            )
+                            .changed();
+                    }
+                    if pitch_changed {
+                        let pitch = pitch_for(
+                            self.pitch_mode,
+                            self.pitch_percent,
+                            self.speed_percent,
+                        );
+                        if let Err(error) = self.engine.configure_playback_speed(
+                            self.speed_percent,
+                            pitch,
+                        ) {
+                            self.last_error = Some(error);
+                        }
+                    }
                 });
                 ui.menu_button("Speed", |ui| {
                     for speed in [50_u16, 75, 100, 125, 150, 200, 300] {

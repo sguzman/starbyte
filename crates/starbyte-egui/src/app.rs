@@ -784,6 +784,10 @@ enum WorkerShortcutSmoke {
     PressLoad,
     AwaitLoad {
         deadline: Instant,
+    },
+    PressLibrary,
+    AwaitLibrary {
+        deadline: Instant,
         started_at: u64,
     },
     PressReturn,
@@ -4223,6 +4227,8 @@ impl StarbyteApp {
             self.worker_shell_paints.status += 1;
         }
         let prefs = &self.config.ui;
+        let tracking_shell = self.worker_shortcut_smoke.is_some();
+        let mut shell_paints = self.worker_shell_paints;
         ui.horizontal(|ui| {
             let mut any = false;
             let mut separator = |ui: &mut egui::Ui| {
@@ -4233,8 +4239,8 @@ impl StarbyteApp {
             };
             if self.play_view && self.session_snapshot().has_rom {
                 if prefs.status_fps {
-                    if self.worker_shortcut_smoke.is_some() {
-                        self.worker_shell_paints.fps += 1;
+                    if tracking_shell {
+                        shell_paints.fps += 1;
                     }
                     separator(ui);
                     let fps = if !self.is_playing {
@@ -4270,8 +4276,8 @@ impl StarbyteApp {
                         .on_hover_text("Completed emulated frames per real second.");
                 }
                 if prefs.status_sound {
-                    if self.worker_shortcut_smoke.is_some() {
-                        self.worker_shell_paints.sound += 1;
+                    if tracking_shell {
+                        shell_paints.sound += 1;
                     }
                     separator(ui);
                     let sound = audio_playback_status(
@@ -4308,8 +4314,8 @@ impl StarbyteApp {
                 if prefs.status_frame || prefs.status_apu_steps || prefs.status_audio_samples {
                     let snapshot = self.session_snapshot();
                     if prefs.status_frame {
-                        if self.worker_shortcut_smoke.is_some() {
-                            self.worker_shell_paints.frame += 1;
+                        if tracking_shell {
+                            shell_paints.frame += 1;
                         }
                         separator(ui);
                         ui.label(RichText::new(format!("Frame {}", snapshot.frame)).monospace());
@@ -4353,6 +4359,9 @@ impl StarbyteApp {
                 });
             }
         });
+        if tracking_shell {
+            self.worker_shell_paints = shell_paints;
+        }
     }
 
     /// The recent-game strip stays independent of the menu bar so each can

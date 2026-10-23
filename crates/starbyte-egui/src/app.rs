@@ -740,6 +740,9 @@ pub struct StarbyteApp {
     worker_focus_pause_smoke: Option<WorkerFocusPauseSmoke>,
     worker_panic_smoke: bool,
     worker_panic_sent: bool,
+    worker_sram_smoke: bool,
+    worker_sram_smoke_started: bool,
+    worker_sram_smoke_reply: Option<Receiver<Result<usize, String>>>,
     audio_output: Option<AudioOutput>,
     speaker_probe: SpeakerProbeState,
     /// Session mute defaults from persisted startup preference, then follows
@@ -844,6 +847,7 @@ impl StarbyteApp {
         worker_no_redraw_smoke: bool,
         worker_focus_pause_smoke: bool,
         worker_panic_smoke: bool,
+        worker_sram_smoke: bool,
         logs: SharedLogBuffer,
     ) -> Result<Self> {
         // Headless Weston has no keyboard focus until a compositor explicitly
@@ -856,6 +860,7 @@ impl StarbyteApp {
             || worker_no_redraw_smoke
             || worker_focus_pause_smoke
             || worker_panic_smoke
+            || worker_sram_smoke
         {
             // The pause smoke begins with playable frames before it toggles
             // the real scheduler policy; Weston may have no keyboard focus.
@@ -982,6 +987,9 @@ impl StarbyteApp {
                 .then_some(WorkerFocusPauseSmoke::WaitingForGame),
             worker_panic_smoke,
             worker_panic_sent: false,
+            worker_sram_smoke,
+            worker_sram_smoke_started: false,
+            worker_sram_smoke_reply: None,
             audio_output: None,
             speaker_probe: SpeakerProbeState::Idle,
             audio_muted,
@@ -5392,6 +5400,58 @@ impl eframe::App for StarbyteApp {
                 }
             }
             self.last_effective_speed_percent = speed;
+            if self.worker_sram_smoke {
+                if !self.worker_sram_smoke_started
+                    && self.session_snapshot().frame >= 15
+                    && self.framebuffer_texture.is_some()
+                {
+                    self.worker_sram_smoke_started = true;
+                    if let Some(worker) = &self.full_worker {
+                        match worker.engine.queue_update_cheats(vec![CheatEntry {
+                            id: "native-worker-battery".to_owned(),
+                            game_id: "starbyte-display-demo".to_owned(),
+                            name: "Battery SRAM persistence acceptance".to_owned(),
+                            code: "700000:5A".to_owned(),
+                            source: "test".to_owned(),
+                            kind: "Action Replay".to_owned(),
+                            enabled: true,
+                        }]) {
+                            Ok(reply) => self.worker_sram_smoke_reply = Some(reply),
+                            Err(error) => {
+                                println!("STARBYTE_FULL_LIBRARY_SRAM_SMOKE_FAILED queue={error}");
+                                self.worker_sram_smoke = false;
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                return;
+                            }
+                        }
+                    }
+                }
+                if let Some(reply) = self.worker_sram_smoke_reply.take() {
+                    match reply.try_recv() {
+                        Ok(Ok(1)) => {
+                            // Keep the modified SRAM in the owner. Closing
+                            // the actual eframe window must flush it via Drop.
+                            println!("STARBYTE_FULL_LIBRARY_SRAM_SMOKE_CLOSE accepted_patch=true");
+                            self.worker_sram_smoke = false;
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            return;
+                        }
+                        Ok(other) => {
+                            println!("STARBYTE_FULL_LIBRARY_SRAM_SMOKE_FAILED patch={other:?}");
+                            self.worker_sram_smoke = false;
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            return;
+                        }
+                        Err(TryRecvError::Empty) => self.worker_sram_smoke_reply = Some(reply),
+                        Err(TryRecvError::Disconnected) => {
+                            println!("STARBYTE_FULL_LIBRARY_SRAM_SMOKE_FAILED worker_reply_closed");
+                            self.worker_sram_smoke = false;
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            return;
+                        }
+                    }
+                }
+            }
             if self.worker_panic_smoke {
                 if self.worker_panic_sent {
                     if self.worker_exit_reported

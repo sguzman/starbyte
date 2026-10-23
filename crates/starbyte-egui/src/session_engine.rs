@@ -15,7 +15,8 @@ use std::{
 
 use starbyte_core::{input::ControllerState, manifest::AssetConfig};
 use starbyte_frontend::{
-    CheatEntry, FrontendSession, SessionControlsSnapshot, SessionSnapshot, SoundSessionMode,
+    CheatEntry, FrontendSession, SessionControlsSnapshot, SessionInputDiagnostics,
+    SessionSnapshot, SoundSessionMode,
 };
 
 use crate::{
@@ -194,6 +195,7 @@ pub struct PublishedGameFrame {
     pub stereo_pairs: usize,
     pub nonzero_pairs: usize,
     pub audio_diagnostics: WorkerAudioDiagnostics,
+    pub input_diagnostics: SessionInputDiagnostics,
 }
 
 /// Exclusive, thread-owned game state. All save mutations stay serialized
@@ -411,6 +413,7 @@ impl OwnedSession {
             stereo_pairs,
             nonzero_pairs,
             audio_diagnostics: self.audio_diagnostics(),
+            input_diagnostics: self.session.input_diagnostics(),
         }
     }
 
@@ -475,6 +478,7 @@ impl OwnedSession {
             stereo_pairs,
             nonzero_pairs,
             audio_diagnostics: self.audio_diagnostics(),
+            input_diagnostics: self.session.input_diagnostics(),
         })
     }
 }

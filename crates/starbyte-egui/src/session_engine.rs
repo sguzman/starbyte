@@ -590,10 +590,21 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
         action: SessionSaveAction,
     ) -> Result<Receiver<Result<SessionSaveOutcome, String>>, String> {
         self.submit_transaction(move |engine| {
-            engine
+            let outcome = engine
                 .session
                 .apply_save_action(action)
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.to_string())?;
+            if matches!(
+                action,
+                SessionSaveAction::QuickLoad | SessionSaveAction::LoadSlot(_)
+            ) {
+                // Loading memory rewinds the APU too. Discard any PCM queued
+                // from the pre-restore timeline before gameplay resumes.
+                if let Some(audio) = &engine.audio {
+                    audio.clear();
+                }
+            }
+            Ok(outcome)
         })
     }
 

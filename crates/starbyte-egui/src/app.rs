@@ -675,6 +675,7 @@ struct FullLibraryWorker {
     render: RenderPort,
     pending_launches: Vec<FullLibraryPendingLaunch>,
     pending_saves: Vec<(
+        Option<u64>,
         SessionSaveAction,
         Receiver<Result<WorkerSaveResponse, String>>,
     )>,
@@ -713,6 +714,9 @@ pub struct StarbyteApp {
     session: FrontendSession,
     session_view: SessionViewBridge,
     full_worker: Option<FullLibraryWorker>,
+    /// Generation of the last successfully installed worker cartridge.
+    /// A failed replacement leaves this identity unchanged.
+    worker_active_launch_id: Option<u64>,
     worker_save_smoke_stage: Option<WorkerSaveSmokeStage>,
     worker_save_smoke_receipt: Option<(SessionSaveAction, Result<(), String>)>,
     worker_save_smoke_screenshot: Option<Result<PathBuf, String>>,
@@ -940,6 +944,7 @@ impl StarbyteApp {
             session,
             session_view: SessionViewBridge::default(),
             full_worker: None,
+            worker_active_launch_id: None,
             worker_save_smoke_stage: worker_save_smoke.then_some(WorkerSaveSmokeStage::WaitForGame),
             worker_save_smoke_receipt: None,
             worker_save_smoke_screenshot: None,
@@ -1131,11 +1136,12 @@ impl StarbyteApp {
         worker.pending_launches = waiting;
         let mut completed_saves = Vec::new();
         let mut pending_saves = Vec::new();
-        for (action, reply) in std::mem::take(&mut worker.pending_saves) {
+        for (generation, action, reply) in std::mem::take(&mut worker.pending_saves) {
             match reply.try_recv() {
-                Ok(result) => completed_saves.push((action, result)),
-                Err(TryRecvError::Empty) => pending_saves.push((action, reply)),
+                Ok(result) => completed_saves.push((generation, action, result)),
+                Err(TryRecvError::Empty) => pending_saves.push((generation, action, reply)),
                 Err(TryRecvError::Disconnected) => completed_saves.push((
+                    generation,
                     action,
                     Err("Emulation worker closed the save receipt".to_owned()),
                 )),
@@ -1237,6 +1243,7 @@ impl StarbyteApp {
                             rgba,
                         );
                     }
+                    self.worker_active_launch_id = Some(pending.job_id);
                     self.loaded_game_id = pending.game_id;
                     self.remember_recent_rom(&pending.original_path);
                     self.playback_error = None;
@@ -1265,7 +1272,13 @@ impl StarbyteApp {
                 }
             }
         }
-        for (action, result) in completed_saves {
+        for (generation, action, result) in completed_saves {
+            // ROM path alone is not enough: the same file may have been
+            // reinstalled with a different sound/save namespace. A receipt
+            // from the old owner must never update the new session's UI.
+            if !worker_save_receipt_is_current(generation, self.worker_active_launch_id) {
+                continue;
+            }
             if self.worker_save_smoke_stage.is_some() {
                 self.worker_save_smoke_receipt =
                     Some((action, result.as_ref().map(|_| ()).map_err(Clone::clone)));
@@ -1434,7 +1447,9 @@ impl StarbyteApp {
         }
         match worker.engine.queue_save_action_with_frame(action) {
             Ok(reply) => {
-                worker.pending_saves.push((action, reply));
+                worker
+                    .pending_saves
+                    .push((self.worker_active_launch_id, action, reply));
                 self.status_line = "Saving or restoring on the emulator worker...".to_owned();
             }
             Err(error) => self.status_line = error,
@@ -5442,6 +5457,16 @@ mod session_view_bridge_tests {
     use starbyte_frontend::{LocalRomInfo, LocalRomSourceKind};
 
     #[test]
+    fn save_receipts_reject_old_worker_generation_even_for_same_rom_path() {
+        assert!(worker_save_receipt_is_current(Some(7), Some(7)));
+        assert!(!worker_save_receipt_is_current(Some(7), Some(8)));
+        assert!(!worker_save_receipt_is_current(None, Some(8)));
+        assert!(!worker_save_receipt_is_current(None, None));
+        // A failed replacement preserves the installed generation.
+        assert!(worker_save_receipt_is_current(Some(7), Some(7)));
+    }
+
+    #[test]
     fn full_library_read_only_views_can_consume_worker_state_without_owner_borrow() {
         let dir = tempfile::tempdir().unwrap();
         let rom = dir.path().join("full-ui-session-view.sfc");
@@ -6776,6 +6801,13 @@ fn record_recent_rom(recent: &mut Vec<PathBuf>, path: &Path) {
 /// Reassociate a directly opened or ZIP-extracted game when the asynchronous
 /// library index arrives. Use the active session's ROM identity, regardless
 /// of whether it belongs to the legacy GUI or the independent worker.
+fn worker_save_receipt_is_current(
+    received_generation: Option<u64>,
+    active_generation: Option<u64>,
+) -> bool {
+    received_generation.is_some() && received_generation == active_generation
+}
+
 fn indexed_game_id_for_loaded_rom(
     entries: &[LibraryEntry],
     loaded_path: &Path,

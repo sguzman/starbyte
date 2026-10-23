@@ -1,8 +1,35 @@
 # Emulation scheduler migration
 
-**Status: in progress. Commit [`f201823`](https://github.com/sguzman/starbyte/commit/f2018235217838bff01647d8ff153dc6446b6f3b) passed [CI run 39998845470](https://github.com/sguzman/starbyte/actions/runs/39998845470): Linux, Windows, lint/Clippy, native Weston full-window playback, save/restore, 60-frame stepping, two-second focus pause/resume, background continuation and unexpected worker termination reporting. Default-app ownership transfer and physical Hyprland/audio validation remain outstanding.**
+**Status: in progress. Commit [`66d7147`](https://github.com/sguzman/starbyte/commit/66d71471b7b7a1faf268ff8c75fd4205bab7e08c) passed [CI run 40000854342](https://github.com/sguzman/starbyte/actions/runs/40000854342): Linux, Windows, lint/Clippy, original-window Weston playback/save/restore/60-frame stepping, focus pause/resume, worker-failure handling, and battery-backed SRAM persistence across actual GUI shutdown. Default-app ownership transfer and physical Hyprland/audio validation remain outstanding.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
+
+## Verified battery-backed SRAM across original GUI shutdown — 2026-10-23
+
+Commit [`66d7147`](https://github.com/sguzman/starbyte/commit/66d71471b7b7a1faf268ff8c75fd4205bab7e08c)
+passed [CI 40000854342](https://github.com/sguzman/starbyte/actions/runs/40000854342):
+**Linux, Windows and lint/Clippy all green**, including the original-library
+native Weston smoke.
+
+A new headless owner regression modifies a small copyright-free synthetic
+SNES cartridge to expose battery-backed SRAM. The exclusive emulation worker
+writes byte `0x5A` at bus address `0x700000`, with no GUI-side save call,
+shuts down, flushes SRAM from the owner finalizer, then reopens the cartridge
+to confirm the on-disk value survived.
+
+A separate **native original Starbyte window** test exercises the real eframe
+close path (not merely an isolated worker shutdown): the same synthetic
+cartridge is launched through the opt-in complete library UI, a worker-owned
+cheat writes the SRAM byte, the window closes, `StarbyteApp::drop` joins the
+worker, and the executable reopens the persisted cartridge. Weston recorded
+`STARBYTE_FULL_LIBRARY_SRAM_SMOKE_OK persisted_byte=5A`.
+
+This verifies a real synthetic battery-backed SRAM write on *normal*
+shutdown, not general behavior for all commercial games, sudden process
+termination, power loss, storage failure or physical Hyprland. The source
+ledger counts remain A 7/8 (88%), B 15/18 (83%), P 18/20 (90%), C 8/16
+(50%), D 11/15 (73%); the original full-library worker path is still opt-in,
+and the legacy player remains the default.
 
 ## Verified original-window owner failure reporting — 2026-10-23
 

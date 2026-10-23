@@ -207,7 +207,8 @@ fn main() -> Result<()> {
                     assets.clone(),
                     &config,
                     rom.clone(),
-                    args.exit_after_frames.or(args.exit_after_library_play.then_some(30)),
+                    args.exit_after_frames
+                        .or(args.exit_after_library_play.then_some(30)),
                     args.preview_background,
                     args.exit_after_library_scan,
                     args.exit_after_library_play,
@@ -539,7 +540,10 @@ mod speaker_cli_tests {
         assert!(Args::try_parse_from(["starbyte-egui", "--exit-after-library-play"]).is_err());
         assert!(
             Args::try_parse_from([
-                "starbyte-egui", "--threaded-preview", "--demo", "--exit-after-library-play"
+                "starbyte-egui",
+                "--threaded-preview",
+                "--demo",
+                "--exit-after-library-play"
             ])
             .is_err()
         );

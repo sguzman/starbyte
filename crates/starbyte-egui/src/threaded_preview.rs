@@ -587,9 +587,16 @@ mod pitch_mode_tests {
             cache_dir: Some(temp.path().join("cache")),
             config_path: None,
         };
-        let app =
-            ThreadedPreviewApp::new(assets, &RuntimeConfig::default(), None, None, false, false, false)
-                .unwrap();
+        let app = ThreadedPreviewApp::new(
+            assets,
+            &RuntimeConfig::default(),
+            None,
+            None,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
         assert!(!app.playing);
         assert!(!app.controls.session.has_rom);
         assert!(app.show_library);
@@ -613,7 +620,8 @@ mod pitch_mode_tests {
         };
         let mut config = RuntimeConfig::default();
         config.audio.enabled = false;
-        let mut app = ThreadedPreviewApp::new(assets, &config, None, None, true, false, false).unwrap();
+        let mut app =
+            ThreadedPreviewApp::new(assets, &config, None, None, true, false, false).unwrap();
         let entry = LibraryEntry {
             game_id: "preview-demo".to_owned(),
             display_title: "Preview Demo".to_owned(),
@@ -721,7 +729,8 @@ mod pitch_mode_tests {
         };
         let mut config = RuntimeConfig::default();
         config.audio.enabled = false;
-        let mut app = ThreadedPreviewApp::new(assets, &config, None, None, true, false, false).unwrap();
+        let mut app =
+            ThreadedPreviewApp::new(assets, &config, None, None, true, false, false).unwrap();
         app.queue_rom_load(rom.clone());
         let ctx = egui::Context::default();
         let deadline = Instant::now() + Duration::from_secs(6);
@@ -757,7 +766,8 @@ mod pitch_mode_tests {
         };
         let mut config = RuntimeConfig::default();
         config.audio.enabled = false;
-        let mut app = ThreadedPreviewApp::new(assets, &config, None, None, true, false, false).unwrap();
+        let mut app =
+            ThreadedPreviewApp::new(assets, &config, None, None, true, false, false).unwrap();
         app.queue_rom_load(first);
         let older = app.pending_library_rom.unwrap();
         app.queue_rom_load(second.clone());
@@ -794,7 +804,8 @@ mod pitch_mode_tests {
         };
         let mut config = RuntimeConfig::default();
         config.audio.enabled = false;
-        let mut app = ThreadedPreviewApp::new(assets, &config, None, None, true, false, false).unwrap();
+        let mut app =
+            ThreadedPreviewApp::new(assets, &config, None, None, true, false, false).unwrap();
         let ctx = egui::Context::default();
         app.queue_rom_load(good.clone());
         let deadline = Instant::now() + Duration::from_secs(6);

@@ -153,6 +153,18 @@ jobs:
             }
           cat "$RUNNER_TEMP/starbyte-full-focus-pause.log"
           grep -F "STARBYTE_FULL_LIBRARY_FOCUS_PAUSE_SMOKE_OK paused_frames=" "$RUNNER_TEMP/starbyte-full-focus-pause.log"
+          # Inject a panic only in the exclusive emulator owner and require
+          # the complete original window to report its termination once.
+          timeout 90s target/debug/starbyte-egui --demo --native-worker-preview --exit-after-full-worker-panic \
+            --config "$RUNNER_TEMP/starbyte-full-worker-exit-config.toml" \
+            --cache-dir "$RUNNER_TEMP/starbyte-full-worker-exit-cache" \
+            > "$RUNNER_TEMP/starbyte-full-worker-exit.log" 2>&1 || {
+              cat "$RUNNER_TEMP/weston.log"
+              cat "$RUNNER_TEMP/starbyte-full-worker-exit.log"
+              exit 1
+            }
+          cat "$RUNNER_TEMP/starbyte-full-worker-exit.log"
+          grep -F "STARBYTE_FULL_LIBRARY_WORKER_EXIT_SMOKE_OK playback_stopped=true" "$RUNNER_TEMP/starbyte-full-worker-exit.log"
           # This acceptance shell consumes worker frames through egui while
           # executing game frames from a separate OS thread.
           timeout 90s target/debug/starbyte-egui --demo --threaded-preview --preview-background --exit-after-frames 30 \

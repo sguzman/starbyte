@@ -19,7 +19,8 @@ use starbyte_core::{
 };
 use starbyte_frontend::{
     InstalledStatus, LibraryEntry, LibraryFilter, LibrarySnapshot, SessionControlsSnapshot,
-    SessionLaunchRequest, SessionSaveAction, SessionSaveOutcome, SessionScreenshot, SoundSessionMode,
+    SessionLaunchRequest, SessionSaveAction, SessionSaveOutcome, SessionScreenshot,
+    SoundSessionMode,
 };
 
 use crate::{
@@ -28,13 +29,13 @@ use crate::{
         write_png_screenshot,
     },
     preview_gamepads::{PreviewGamepads, merge_sources},
-    worker::{AppWorker, WorkerCommand, WorkerCommandKind, WorkerEvent},
     scheduler::EmulatorScheduler,
     scheduler_video::WorkerDisplay,
     session_engine::{
         InputPort, OwnedSession, PublishedGameFrame, RenderPort, WorkerLaunchResponse,
         WorkerSaveResponse,
     },
+    worker::{AppWorker, WorkerCommand, WorkerCommandKind, WorkerEvent},
 };
 
 fn pitch_for(mode: AudioPitchMode, custom_percent: u16, speed: u16) -> f32 {
@@ -254,11 +255,17 @@ impl ThreadedPreviewApp {
             self.last_error = Some("Game is not installed locally".to_owned());
             return;
         }
-        if self.pending.iter().any(|op| matches!(op, PendingOperation::LoadRom { .. })) {
+        if self
+            .pending
+            .iter()
+            .any(|op| matches!(op, PendingOperation::LoadRom { .. }))
+        {
             self.last_error = Some("Wait for cartridge installation to finish".to_owned());
             return;
         }
-        let Some(worker) = &self.library_worker else { return; };
+        let Some(worker) = &self.library_worker else {
+            return;
+        };
         let job_id = self.next_library_job;
         self.next_library_job += 1;
         self.pending_library_rom = Some(job_id);
@@ -279,13 +286,15 @@ impl ThreadedPreviewApp {
         if let Some(worker) = &self.library_worker {
             while let Some(event) = worker.try_recv() {
                 match event {
-                    WorkerEvent::SnapshotReady { snapshot, status, .. } => {
+                    WorkerEvent::SnapshotReady {
+                        snapshot, status, ..
+                    } => {
                         self.library_snapshot = Some(snapshot);
                         self.library_status = status;
                     }
-                    WorkerEvent::RomReady { job_id, request, .. }
-                        if self.pending_library_rom == Some(job_id) =>
-                    {
+                    WorkerEvent::RomReady {
+                        job_id, request, ..
+                    } if self.pending_library_rom == Some(job_id) => {
                         self.pending_library_rom = None;
                         self.library_status = "Cartridge prepared".to_owned();
                         launch = Some(request);
@@ -502,8 +511,8 @@ mod pitch_mode_tests {
             cache_dir: Some(temp.path().join("cache")),
             config_path: None,
         };
-        let app = ThreadedPreviewApp::new(assets, &RuntimeConfig::default(), None, None, false)
-            .unwrap();
+        let app =
+            ThreadedPreviewApp::new(assets, &RuntimeConfig::default(), None, None, false).unwrap();
         assert!(!app.playing);
         assert!(!app.controls.session.has_rom);
         assert!(app.show_library);
@@ -598,14 +607,23 @@ impl eframe::App for ThreadedPreviewApp {
                 });
                 ui.menu_button("Game", |ui| {
                     if ui
-                        .button(if self.playing { "Pause" } else { "Resume" })
+                        .add_enabled(
+                            self.controls.session.has_rom,
+                            egui::Button::new(if self.playing { "Pause" } else { "Resume" }),
+                        )
                         .clicked()
                     {
                         self.playing = !self.playing;
                         self.engine.set_playing(self.playing);
                         ui.close();
                     }
-                    if ui.button("Quick Save (F5)").clicked() {
+                    if ui
+                        .add_enabled(
+                            self.controls.session.has_rom,
+                            egui::Button::new("Quick Save (F5)"),
+                        )
+                        .clicked()
+                    {
                         self.queue_save(SessionSaveAction::QuickSave);
                         ui.close();
                     }
@@ -619,13 +637,25 @@ impl eframe::App for ThreadedPreviewApp {
                         self.queue_save(SessionSaveAction::QuickLoad);
                         ui.close();
                     }
-                    if ui.button("Screenshot (F12)").clicked() {
+                    if ui
+                        .add_enabled(
+                            self.controls.session.has_rom,
+                            egui::Button::new("Screenshot (F12)"),
+                        )
+                        .clicked()
+                    {
                         self.queue_screenshot();
                         ui.close();
                     }
                     ui.separator();
                     ui.menu_button("Cheats", |ui| {
-                        if ui.button("Disable all runtime cheats").clicked() {
+                        if ui
+                            .add_enabled(
+                                self.controls.session.has_rom,
+                                egui::Button::new("Disable all runtime cheats"),
+                            )
+                            .clicked()
+                        {
                             match self.engine.queue_clear_cheats() {
                                 Ok(reply) => {
                                     self.pending.push(PendingOperation::ClearCheats(reply));
@@ -637,7 +667,13 @@ impl eframe::App for ThreadedPreviewApp {
                     });
                     ui.menu_button("Disk save slots", |ui| {
                         for slot in 1..=3_u8 {
-                            if ui.button(format!("Save slot {slot}")).clicked() {
+                            if ui
+                                .add_enabled(
+                                    self.controls.session.has_rom,
+                                    egui::Button::new(format!("Save slot {slot}")),
+                                )
+                                .clicked()
+                            {
                                 self.queue_save(SessionSaveAction::SaveSlot(slot));
                                 ui.close();
                             }
@@ -786,7 +822,10 @@ impl eframe::App for ThreadedPreviewApp {
                 ));
             });
         });
-        if focused && ctx.input(|input| input.key_pressed(egui::Key::F5)) {
+        if focused
+            && self.controls.session.has_rom
+            && ctx.input(|input| input.key_pressed(egui::Key::F5))
+        {
             self.queue_save(SessionSaveAction::QuickSave);
         }
         if focused
@@ -796,7 +835,10 @@ impl eframe::App for ThreadedPreviewApp {
             self.queue_save(SessionSaveAction::QuickLoad);
         }
 
-        if focused && ctx.input(|input| input.key_pressed(egui::Key::F12)) {
+        if focused
+            && self.controls.session.has_rom
+            && ctx.input(|input| input.key_pressed(egui::Key::F12))
+        {
             self.queue_screenshot();
         }
         self.display.poll(ctx, &self.engine);

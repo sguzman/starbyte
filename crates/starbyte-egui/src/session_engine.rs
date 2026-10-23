@@ -784,7 +784,7 @@ mod tests {
         let mut engine = OwnedSession::create(assets).unwrap();
         engine.load_rom(&rom, SoundSessionMode::Persistent).unwrap();
         engine.set_audio(false, true, 0.0);
-        let (worker, _input, _render) = engine.spawn_with_ports().unwrap();
+        let (worker, _input, render) = engine.spawn_with_ports().unwrap();
         worker.set_pause_when_unfocused(false);
         worker.set_focused(false);
         worker.set_playing(true);
@@ -796,6 +796,26 @@ mod tests {
             worker.completed_frames() >= 5,
             "independent clock did not produce background frames"
         );
+        // No GUI heartbeat: game frames continue, but the mailbox must not
+        // carry expensive RGBA copies that a hidden renderer cannot display.
+        let hidden = worker.take_latest_frame().unwrap();
+        assert!(hidden.rgba.is_none(), "hidden renderer still copied video");
+
+        // Restoring a visible renderer enables the next complete video
+        // frame without restarting or taking ownership of the SNES clock.
+        render.set_visible(true);
+        let video_deadline = Instant::now() + Duration::from_secs(2);
+        let mut showed_video = false;
+        while Instant::now() < video_deadline {
+            if let Some(frame) = worker.take_latest_frame() {
+                if frame.rgba.is_some() {
+                    showed_video = true;
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(showed_video, "renderer did not receive a fresh frame after resurfacing");
         worker.set_playing(false);
         worker.invoke(|_| Ok(())).unwrap();
         let controls = worker.read_controls().unwrap();

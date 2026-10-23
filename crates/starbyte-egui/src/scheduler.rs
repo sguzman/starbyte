@@ -853,9 +853,19 @@ mod tests {
         })
         .unwrap();
         worker.set_playing(true);
+        let mut accepted = 0_usize;
+        let mut rejected = 0_usize;
         for _ in 0..5_000 {
-            worker.post(|_| {}).unwrap();
+            match worker.post(|_| {}) {
+                Ok(()) => accepted += 1,
+                Err(error) if error == "emulation worker operation queue is full" => {
+                    rejected += 1;
+                }
+                Err(error) => panic!("unexpected worker submission failure: {error}"),
+            }
         }
+        assert_eq!(accepted + rejected, 5_000);
+        assert!(accepted > 0, "worker accepted no commands");
         let until = Instant::now() + Duration::from_secs(2);
         while worker.completed_frames() < 3 && Instant::now() < until {
             std::thread::sleep(Duration::from_millis(10));

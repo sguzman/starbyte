@@ -38,6 +38,7 @@ fn pitch_for(mode: AudioPitchMode, custom_percent: u16, speed: u16) -> f32 {
 enum PendingOperation {
     Save(Receiver<Result<(), String>>),
     SpeakerCheck(Receiver<Result<(), String>>),
+    ClearCheats(Receiver<Result<(), String>>),
     Restore(Receiver<Result<PublishedGameFrame, String>>),
     Screenshot(Receiver<Result<SessionScreenshot, String>>),
     PngWrite(Receiver<Result<PathBuf, String>>),
@@ -259,6 +260,19 @@ impl ThreadedPreviewApp {
                         self.status_note = None;
                     }
                 },
+                PendingOperation::ClearCheats(reply) => match reply.try_recv() {
+                    Ok(Ok(())) => {
+                        self.status_note = Some("Runtime cheats disabled".to_owned());
+                        self.last_error = None;
+                    }
+                    Ok(Err(error)) => self.last_error = Some(error),
+                    Err(TryRecvError::Empty) => {
+                        still_pending.push(PendingOperation::ClearCheats(reply));
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        self.last_error = Some("Cheat command worker stopped".to_owned());
+                    }
+                },
                 PendingOperation::SpeakerCheck(reply) => match reply.try_recv() {
                     Ok(Ok(())) => {
                         self.status_note = Some(
@@ -476,6 +490,17 @@ impl eframe::App for ThreadedPreviewApp {
                         ui.close();
                     }
                     ui.separator();
+                    ui.menu_button("Cheats", |ui| {
+                        if ui.button("Disable all runtime cheats").clicked() {
+                            match self.engine.queue_clear_cheats() {
+                                Ok(reply) => {
+                                    self.pending.push(PendingOperation::ClearCheats(reply));
+                                }
+                                Err(error) => self.last_error = Some(error),
+                            }
+                            ui.close();
+                        }
+                    });
                     ui.menu_button("Disk save slots", |ui| {
                         for slot in 1..=3_u8 {
                             if ui.button(format!("Save slot {slot}")).clicked() {

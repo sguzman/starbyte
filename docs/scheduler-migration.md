@@ -76,7 +76,7 @@ complete Starbyte library application.
 - [x] 📸 Migrate the existing screenshot action to a shared owned SessionScreenshot payload that the worker can capture as well.
 - [x] 🔊 Use shared frontend PCM metrics and sound diagnostics in both legacy app and worker, without direct emulator access from ordinary menus.
 - [x] 🛡️ Isolate deep blackout-monitor emulator inspection behind the FrontendSession boundary for later migration into worker ownership.
-- [x] 💾 Route the established F5/F8 and durable-slot actions through frontend-neutral SessionSaveAction and implement the same command on the worker.
+- [x] 💾 Route the established F5/F8 and durable-slot actions through frontend-neutral SessionSaveAction; the worker uses the same action dispatcher for quick save/load, durable slots and SRAM.
 - [ ] 🎬 Route game-launch success/error replies through the emulation worker.
 - [ ] ⌨️ Send controller inputs without losing key-down/up edges; preserve F5/F8/F9/Escape.
 - [ ] 🪟 Display the latest completed RGBA texture without blocking the worker.
@@ -150,5 +150,6 @@ state as a fixed background-pause regression.
 - `threaded_preview.rs`: opt-in worker-powered egui player with configured twelve-button keyboard/gamepad input, independent FPS, audio controls and speaker check, live clock policies, status visibility, asynchronous save/load, ROM replacement, disk slots and F12 screenshots.
 - `preview_gamepads.rs`: multi-controller button and analog-axis input aggregation, independent of SNES frame pacing.
 - `starbyte-frontend::SessionControlsSnapshot`: common typed summary of ROM, mode, quick-save, durable slots, and cheat-read diagnostics; adopted by the legacy slot menu as a low-risk UI migration seam.
-- `starbyte-frontend::SessionInputDiagnostics` and `SessionScreenshot`: neutral hardware readout and owned RGBA capture shared by the established UI and the worker.
+- `starbyte-frontend::SessionInputDiagnostics`, `SessionSoundDiagnostics`, `SessionAudioFrameMetrics`, and `SessionScreenshot`: neutral hardware/audio readouts and owned RGBA capture shared by the established UI and the worker.
+- `starbyte-frontend::SessionSaveAction`: one typed save/load/SRAM action dispatcher consumed synchronously by the current application and asynchronously by the worker. A built-in ROM test asserts compatibility and sound-mode disk slot isolation.
 - `.github/workflows/ci.yml`: headless worker (including memory quick-save roundtrip) and Weston threaded-preview smoke tasks authored; completion not yet verified.

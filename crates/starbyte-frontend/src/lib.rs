@@ -81,6 +81,18 @@ impl SoundSessionMode {
     }
 }
 
+/// One logical library launch: choose the cartridge, sound/save namespace
+/// and matching enabled cheats before any next emulated frame executes.
+#[derive(Debug, Clone)]
+pub struct SessionLaunchRequest {
+    /// Cartridge path already resolved or materialized by the library.
+    pub rom_path: PathBuf,
+    /// Save/sound policy. Never inferred from another game's prior session.
+    pub sound_mode: SoundSessionMode,
+    /// Active patches for this cartridge; an empty vector clears old cheats.
+    pub cheats: Vec<CheatEntry>,
+}
+
 /// Owned RGBA screenshot pixels captured at one point in emulated time.
 /// Frontends can encode this away from the machine thread without borrowing
 /// the live emulator framebuffer.
@@ -305,6 +317,15 @@ impl FrontendSession {
             self.emulator.save_ram()
         };
         Ok(())
+    }
+
+    /// Apply one launch under a single emulator owner, so the next frame
+    /// never runs the newly loaded cartridge with the old game's patches.
+    /// Cartridge errors leave the previous active session intact.
+    pub fn launch_game(&mut self, request: &SessionLaunchRequest) -> Result<SessionSnapshot> {
+        self.load_rom_inner(&request.rom_path, request.sound_mode)?;
+        self.set_active_cheats(&request.cheats);
+        Ok(self.snapshot())
     }
 
     /// Return the currently loaded ROM path, if any.
@@ -1456,6 +1477,40 @@ mod tests {
         session.run_frame().unwrap();
 
         assert_eq!(session.host_read_u8(0x7E0010), 0xAA);
+    }
+}
+
+#[cfg(test)]
+mod session_launch_request_tests {
+    use super::{FrontendSession, SessionLaunchRequest, SoundSessionMode};
+    use starbyte_core::manifest::AssetConfig;
+
+    #[test]
+    fn launch_keeps_previous_cartridge_after_missing_rom_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let rom = dir.path().join("demo.sfc");
+        std::fs::write(&rom, starbyte_core::testing::demo::demo_rom_bytes()).unwrap();
+        let mut session = FrontendSession::new(AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(dir.path().join("saves")),
+            state_dir: Some(dir.path().join("states")),
+            cache_dir: Some(dir.path().join("cache")),
+            config_path: None,
+        })
+        .unwrap();
+        let make_request = |rom_path| SessionLaunchRequest {
+            rom_path,
+            sound_mode: SoundSessionMode::Persistent,
+            cheats: Vec::new(),
+        };
+        let snapshot = session.launch_game(&make_request(rom.clone())).unwrap();
+        assert_eq!(snapshot.rom_path.as_deref(), Some(rom.as_path()));
+        assert_eq!(session.sound_session_mode(), SoundSessionMode::Persistent);
+        assert!(session
+            .launch_game(&make_request(dir.path().join("missing.sfc")))
+            .is_err());
+        assert_eq!(session.loaded_rom_path(), Some(rom.as_path()));
+        assert_eq!(session.sound_session_mode(), SoundSessionMode::Persistent);
     }
 }
 

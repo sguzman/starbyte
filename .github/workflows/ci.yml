@@ -16,12 +16,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Linux dependencies
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libudev-dev libasound2-dev
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      # Check source layout before apt or Rust dependency installation:
+      # formatter failures should surface early during rapid main updates.
       - name: Format
         run: cargo fmt --all -- --check
+      - name: Install Linux dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libudev-dev libasound2-dev
+      - uses: Swatinem/rust-cache@v2
       - name: Chrono diagnostic script syntax and CLI
         run: |
           python3 -m py_compile scripts/qa-chrono-usa.py

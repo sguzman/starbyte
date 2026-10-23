@@ -1,6 +1,6 @@
 # Emulation scheduler migration
 
-**Status: in progress. Linux/Windows CI, headless worker timing, native Weston gameplay, no-ROM library indexing, and native indexed-library worker gameplay passed on commit `3a808ff` (run 39959433627). Full original-app ownership transfer and physical Hyprland validation remain outstanding.**
+**Status: in progress. Native Weston worker playback and a two-second no-egui-callback interval (121 continued SNES frames) passed on commit `135cf2e` (Linux run 39962498642). Full original-app ownership transfer and physical Hyprland/audio validation remain outstanding.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
 
@@ -91,7 +91,7 @@ complete Starbyte library application.
 - [ ] 🧹 Complete full-application orderly shutdown handoff: stop clock, flush SRAM, clear audio and join exactly once (worker finalizer implemented and covered, not yet installed in normal StarbyteApp).
 - [ ] 🚀 Make the worker the default runtime only after passing acceptance gates.
 
-## Milestone D: validation — 10/14 checkpoints (71%; code commit `3a808ff` CI green on Linux and Windows)
+## Milestone D: validation — 11/15 checkpoints (73%; Linux no-redraw acceptance passed on `135cf2e`, complete run verification pending)
 
 - [x] 🧪 Add a display-server-free, real built-in ROM smoke path (`--demo --scheduler-smoke`) to CI.
 - [x] 🖥️ Add an opt-in `--threaded-preview` native egui shell and Weston smoke that requires a rendered texture.
@@ -103,6 +103,7 @@ complete Starbyte library application.
 - [x] 🎮 Test the opt-in library selection coordinator from installed entry through asynchronous ROM preparation, owned-session launch, still-frame upload and compositor-independent frame progress (Linux test run on `adddfa9`).
 - [x] 🪟 Add and pass a dedicated native Weston smoke for `--threaded-preview --exit-after-library-scan` without a startup ROM, with a real indexed built-in SNES demo file (Linux CI run 39955310386).
 - [x] 🎮 Add and pass native Weston indexed-library game launch: scan the local demo, select the installed entry through the ROM preparation worker, install it on the exclusive SNES worker, and upload 30 rendered egui frames (`STARBYTE_THREADED_LIBRARY_PLAY_SMOKE_OK`; run 39959433627).
+- [x] 🌙 In native Weston, suppress egui callback work and heartbeats for two seconds with background pause disabled; verify the worker advances at least 45 independent frames (observed 121 on commit `135cf2e`, run 39962498642).
 - [ ] 🪟 Run Wayland window visible/focused and confirm accurate ~60.1 emulated FPS.
 - [ ] 🌌 Switch to another Hyprland workspace; confirm continued emulation and sound when allowed.
 - [ ] 💤 Repeat with background pause checked; verify true stop, no catch-up burst and clean resume.
@@ -305,3 +306,23 @@ physical Hyprland/audio acceptance or proof that the original full-library
 `StarbyteApp` has transferred ownership. The subsequent held/press input
 sampling separation is preparatory source work and remains unverified until
 its own CI completes; it does not close Milestone C's input handoff.
+
+## 2026-10-23 worker install handoff and missing-redraw regression
+
+A new preview launch request arriving while the worker is installing a
+cartridge now replaces the pending-next slot rather than returning a busy
+error. The preparation lane remains independent; acknowledgements and video
+from superseded intermediate installations are not painted. Save/load,
+screenshots, cheat changes and pause controls are unavailable while an
+exclusive owner install is pending, avoiding cross-cartridge action races.
+Regression tests exercise preparation during installation, back-to-back
+worker launches, and the save guard. These changes do **not** transfer the
+original full-library `StarbyteApp` to the worker.
+
+A further native Weston test launches the built-in demo with background
+pause explicitly disabled, then deliberately stops processing egui callbacks,
+input and display polling for two seconds. The log on commit `135cf2e`
+reported `STARBYTE_NO_REPAINT_SMOKE_OK advanced_frames=121`. That is
+evidence for compositor-callback-independent game progression in virtual
+Wayland, **not** proof of physical Hyprland focus transitions or speaker
+output. The default legacy application is unchanged.

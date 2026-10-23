@@ -34,7 +34,8 @@ use starbyte_core::{
 use starbyte_frontend::{
     CheatEntry, FrontendSession, InstalledStatus, LibraryEntry, LibraryFilter, LibraryService,
     LibrarySnapshot, LibraryTarget, SessionControlsSnapshot, SessionInputDiagnostics,
-    SessionLaunchRequest, SessionSaveAction, SessionScreenshot, SessionSnapshot, SoundSessionMode,
+    SessionLaunchRequest, SessionSaveAction, SessionScreenshot, SessionSnapshot,
+    SessionSoundDiagnostics, SoundSessionMode,
 };
 
 // NTSC SNES video: 341 dots/scanline × 262 lines × 4 master clocks/dot
@@ -684,6 +685,10 @@ struct FullLibraryWorker {
     /// a completed older write must not replace the new game's status.
     pending_screenshot_writes: Vec<(Option<u64>, Receiver<Result<PathBuf, String>>)>,
     pending_speaker_checks: Vec<Receiver<Result<(), String>>>,
+    pending_sound_diagnostics: Option<(
+        Option<u64>,
+        Receiver<Result<SessionSoundDiagnostics, String>>,
+    )>,
     pending_step: Option<(Option<u64>, Receiver<Result<PublishedGameFrame, String>>)>,
     last_focus: Option<bool>,
     last_playing: Option<bool>,
@@ -759,6 +764,8 @@ pub struct StarbyteApp {
     audio_nonzero_pairs_total: u64,
     worker_audio: WorkerAudioDiagnostics,
     worker_cpu: Duration,
+    worker_sound_diagnostics: Option<SessionSoundDiagnostics>,
+    worker_sound_requested_at: Instant,
     worker: AppWorker,
     /// Newest requested ROM job wins. Older materialization replies must
     /// never replace a newer selection or its save/cheat namespace.
@@ -1001,6 +1008,8 @@ impl StarbyteApp {
             audio_nonzero_pairs_total: 0,
             worker_audio: WorkerAudioDiagnostics::default(),
             worker_cpu: Duration::ZERO,
+            worker_sound_diagnostics: None,
+            worker_sound_requested_at: Instant::now() - Duration::from_secs(2),
             worker,
             latest_rom_job_id: None,
             library_snapshot: cached_snapshot.unwrap_or_else(empty_snapshot),
@@ -1085,6 +1094,7 @@ impl StarbyteApp {
                 pending_screenshots: Vec::new(),
                 pending_screenshot_writes: Vec::new(),
                 pending_speaker_checks: Vec::new(),
+                pending_sound_diagnostics: None,
                 pending_step: None,
                 last_focus: None,
                 last_playing: None,
@@ -1225,6 +1235,23 @@ impl StarbyteApp {
             }
         }
         worker.pending_speaker_checks = waiting_tones;
+        let completed_sound = if let Some((generation, response)) =
+            worker.pending_sound_diagnostics.take()
+        {
+            match response.try_recv() {
+                Ok(result) => Some((generation, result)),
+                Err(TryRecvError::Empty) => {
+                    worker.pending_sound_diagnostics = Some((generation, response));
+                    None
+                }
+                Err(TryRecvError::Disconnected) => Some((
+                    generation,
+                    Err("Emulation worker closed the sound diagnostics receipt".to_owned()),
+                )),
+            }
+        } else {
+            None
+        };
         let completed_step = if let Some((generation, reply)) = worker.pending_step.take() {
             match reply.try_recv() {
                 Ok(result) => Some((generation, result)),
@@ -1284,6 +1311,8 @@ impl StarbyteApp {
                         );
                     }
                     self.worker_active_launch_id = Some(pending.job_id);
+                    self.worker_sound_diagnostics = None;
+                    self.worker_sound_requested_at = Instant::now() - Duration::from_secs(2);
                     self.loaded_game_id = pending.game_id;
                     self.remember_recent_rom(&pending.original_path);
                     self.playback_error = None;
@@ -1462,6 +1491,16 @@ impl StarbyteApp {
                 Ok(()) => "440 Hz worker tone submitted (audibility unverified).".to_owned(),
                 Err(error) => format!("Worker speaker check failed: {error}"),
             };
+        }
+        if let Some((generation, Ok(sound))) = completed_sound
+            && generation.is_some()
+            && generation == self.worker_active_launch_id
+            && self
+                .full_worker
+                .as_ref()
+                .is_some_and(|worker| worker.pending_launches.is_empty())
+        {
+            self.worker_sound_diagnostics = Some(sound);
         }
         for (generation, result) in screenshot_writes {
             // The PNG may have been written successfully even when its game
@@ -2591,7 +2630,32 @@ impl StarbyteApp {
             }
         }
         if isolated && self.full_worker.is_some() {
-            ui.label("SPC700 and PCM details are provided by worker telemetry.");
+            // The emulator computes detailed APU strings on its owner
+            // thread, at most once per second and only with this panel open.
+            if self.worker_sound_requested_at.elapsed() >= Duration::from_secs(1) {
+                if let Some(worker) = &mut self.full_worker
+                    && worker.pending_sound_diagnostics.is_none()
+                    && worker.pending_launches.is_empty()
+                    && self.worker_active_launch_id.is_some()
+                {
+                    if let Ok(reply) = worker.engine.queue_sound_diagnostics() {
+                        worker.pending_sound_diagnostics = Some((self.worker_active_launch_id, reply));
+                        self.worker_sound_requested_at = Instant::now();
+                    }
+                }
+            }
+            if let Some(sound) = &self.worker_sound_diagnostics {
+                if let Some(uploaded) = &sound.uploaded_program {
+                    ui.label(uploaded);
+                }
+                if let Some(status) = &sound.spc700_status {
+                    ui.label(status);
+                } else {
+                    ui.label("SPC700: waiting for the game's sound-program handoff");
+                }
+            } else {
+                ui.label("Reading SPC700 diagnostics from emulation worker...");
+            }
         } else if isolated {
             let sound = self.session.sound_diagnostics();
             if let Some(uploaded) = sound.uploaded_program {

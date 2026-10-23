@@ -93,6 +93,7 @@ pub struct ThreadedPreviewApp {
     library_worker: Option<AppWorker>,
     library_snapshot: Option<LibrarySnapshot>,
     library_status: String,
+    library_query: String,
     show_library: bool,
     next_library_job: u64,
     pending_library_rom: Option<u64>,
@@ -172,6 +173,7 @@ impl ThreadedPreviewApp {
             library_worker: None,
             library_snapshot: None,
             library_status: "Not scanned".to_owned(),
+            library_query: String::new(),
             show_library: !starts_playing,
             next_library_job: 1,
             pending_library_rom: None,
@@ -517,6 +519,68 @@ mod pitch_mode_tests {
         assert!(!app.controls.session.has_rom);
         assert!(app.show_library);
         assert!(app.loaded_rom_path.is_none());
+    }
+
+    #[test]
+    fn selecting_an_indexed_rom_uses_the_independent_worker_until_video_is_ready() {
+        use starbyte_frontend::{LocalRomInfo, LocalRomSourceKind};
+        use std::time::Instant;
+
+        let temp = tempfile::tempdir().unwrap();
+        let rom = temp.path().join("preview-library-demo.sfc");
+        std::fs::write(&rom, starbyte_core::testing::demo::demo_rom_bytes()).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(temp.path().join("saves")),
+            state_dir: Some(temp.path().join("states")),
+            cache_dir: Some(temp.path().join("cache")),
+            config_path: None,
+        };
+        let mut config = RuntimeConfig::default();
+        config.audio.enabled = false;
+        let mut app = ThreadedPreviewApp::new(assets, &config, None, None, true).unwrap();
+        let entry = LibraryEntry {
+            game_id: "preview-demo".to_owned(),
+            display_title: "Preview Demo".to_owned(),
+            installed_status: InstalledStatus::Installed,
+            local: Some(LocalRomInfo {
+                game_id: "preview-demo".to_owned(),
+                title: "Preview Demo".to_owned(),
+                normalized_title: "preview demo".to_owned(),
+                rom_path: rom.clone(),
+                source_kind: LocalRomSourceKind::File,
+                archive_member_path: None,
+                extracted_cache_path: None,
+                mapper: "LoROM".to_owned(),
+                coprocessor: None,
+                region: "NTSC".to_owned(),
+                file_size_bytes: std::fs::metadata(&rom).unwrap().len(),
+            }),
+            metadata: None,
+            cover: None,
+            cheats: Vec::new(),
+        };
+        app.queue_library_entry(entry);
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(6);
+        while Instant::now() < deadline {
+            app.poll_library_events();
+            app.poll_operations(&ctx);
+            if app.controls.session.has_rom && app.loaded_rom_path.as_deref() == Some(rom.as_path()) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(app.controls.session.has_rom, "indexed selection was not launched");
+        assert_eq!(app.loaded_rom_path.as_deref(), Some(rom.as_path()));
+        assert!(app.playing);
+        assert!(app.display.texture().is_some(), "worker still frame was not uploaded");
+        // No egui repaint calls: the independent worker remains authoritative.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while app.engine.completed_frames() < 3 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(app.engine.completed_frames() >= 3);
     }
 
     #[test]
@@ -873,12 +937,19 @@ impl eframe::App for ThreadedPreviewApp {
                         }
                     });
                     ui.small(&self.library_status);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.library_query)
+                            .hint_text("Search installed games..."),
+                    );
                     if let Some(snapshot) = &self.library_snapshot {
                         ui.label(format!("{} installed games", snapshot.installed_count));
                         ui.separator();
+                        let query = self.library_query.trim().to_lowercase();
                         egui::ScrollArea::vertical().show(ui, |ui| {
                             for entry in &snapshot.entries {
                                 if entry.installed_status == InstalledStatus::Installed
+                                    && (query.is_empty()
+                                        || entry.display_title.to_lowercase().contains(&query))
                                     && ui.button(&entry.display_title).clicked()
                                 {
                                     selected = Some(entry.clone());

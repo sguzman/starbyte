@@ -23,7 +23,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [ ] 🧪 Confirm format, Clippy and full workspace tests on the exact commit.
 - [ ] 🖥️ Verify worker scheduling while Hyprland is off-workspace or occluded.
 
-## Milestone B: thread-owned frontend session — 13/16 source tasks (81%)
+## Milestone B: thread-owned frontend session — 14/17 source tasks (82%)
 
 - [x] 🧠 Define `OwnedSession` wrapping `FrontendSession` in `session_engine.rs`.
 - [x] 🎵 Produce PCM on the worker and enqueue it to the existing bounded Rodio worker.
@@ -38,11 +38,12 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [x] 🎮 Support nonblocking ROM replacement with old-game preservation after failed cartridge loads.
 - [x] 📸 Share an owned screenshot payload with the established frontend instead of borrowing emulator pixels from the UI.
 - [x] 🔊 Publish actual audio-device, submitted PCM, and dropped-buffer diagnostics alongside video frames.
+- [x] 💾 Run final SRAM flush and PCM invalidation on the emulation owner thread before shutdown/join, including failure to keep the GUI responsive.
 - [ ] 🔄 Replace all live `StarbyteApp.session` access with worker commands and snapshots.
 - [ ] 📊 Move current emulation telemetry (FPS, frame gaps, overlays) to worker-produced truth.
 - [ ] 🎚️ Preserve every current audio speed/pitch control and its per-mode behavior through the handoff.
 
-## Milestone P: opt-in threaded preview parity — 13/16 source tasks (81%)
+## Milestone P: opt-in threaded preview parity — 14/17 source tasks (82%)
 
 - [x] 🖼️ Display coalesced worker frames using egui textures without advancing the emulator from UI redraws.
 - [x] 🎮 Reuse configured twelve-button keyboard bindings and support several gamepads with analog D-pad emulation.
@@ -57,6 +58,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [x] 📂 Open a replacement cartridge asynchronously without blocking menus or discarding the old game on load failure.
 - [x] 🔉 Add real device/sink diagnostics and a mute-aware 440 Hz speaker check.
 - [x] 🎮 Show worker-produced hardware input and cheat-interception diagnostics.
+- [x] ⏩ Use Tab for temporary configured fast-forward speed, with transition-only audio/scheduler updates.
 - [ ] 🎼 Verify actual background audio quality and speaker/device recovery on Hyprland.
 - [ ] 🧪 Verify preview menus, gamepads, screenshots and save slots natively on Hyprland.
 - [ ] ✅ Confirm format, compile, Clippy and tests on the exact preview commit.
@@ -65,18 +67,20 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 not a separate repository, not the default UI, and not a substitute for the
 complete Starbyte library application.
 
-## Milestone C: native GUI migration — 3/11 source tasks (27%; default worker integration still 0%)
+## Milestone C: native GUI migration — 5/13 source tasks (38%; default worker integration still 0%)
 
 - [x] 🧱 Introduce frontend-neutral SessionControlsSnapshot and migrate the existing disk-slot menu to it; worker can serialize the same summary.
 - [x] 🎮 Migrate the existing input overlay to frontend-neutral SessionInputDiagnostics that the worker can also publish.
 - [x] 📸 Migrate the existing screenshot action to a shared owned SessionScreenshot payload that the worker can capture as well.
+- [x] 🔊 Use shared frontend PCM metrics and sound diagnostics in both legacy app and worker, without direct emulator access from ordinary menus.
+- [x] 🛡️ Isolate deep blackout-monitor emulator inspection behind the FrontendSession boundary for later migration into worker ownership.
 - [ ] 🎬 Route game-launch success/error replies through the emulation worker.
 - [ ] ⌨️ Send controller inputs without losing key-down/up edges; preserve F5/F8/F9/Escape.
 - [ ] 🪟 Display the latest completed RGBA texture without blocking the worker.
 - [ ] 🏠 Keep the full library, menus, recent covers and View status-bar toggles intact.
 - [ ] ⏸️ Make manually paused / automatically paused / background-allowed states independent.
 - [ ] 💾 Preserve original disk-slot, SRAM and sound-mode namespaces.
-- [ ] 🧹 Shut down cleanly: stop clock, flush SRAM, clear audio and join exactly once.
+- [ ] 🧹 Complete full-application orderly shutdown handoff: stop clock, flush SRAM, clear audio and join exactly once (worker finalizer implemented and covered, not yet installed in normal StarbyteApp).
 - [ ] 🚀 Make the worker the default runtime only after passing acceptance gates.
 
 ## Milestone D: validation — 3/9 test paths authored (33%), not yet verified

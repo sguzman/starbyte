@@ -340,10 +340,7 @@ impl FrontendSession {
     /// Dispatch a menu/save operation through one frontend-neutral API.
     /// The caller controls thread ownership: synchronous in the legacy
     /// player or serialized in the independent emulation worker.
-    pub fn apply_save_action(
-        &mut self,
-        action: SessionSaveAction,
-    ) -> Result<SessionSaveOutcome> {
+    pub fn apply_save_action(&mut self, action: SessionSaveAction) -> Result<SessionSaveOutcome> {
         match action {
             SessionSaveAction::QuickSave => {
                 self.quick_save()?;
@@ -621,15 +618,12 @@ impl FrontendSession {
             .emulator
             .isolated_apu_upload()
             .map(|upload| format!("Sound program uploaded: {} bytes", upload.bytes_written()));
-        let spc700_status = self
-            .emulator
-            .isolated_apu_spc700_status()
-            .map(|status| {
-                format!(
-                    "SPC700: {} instructions, PC ${:04X}, {:?}",
-                    status.instructions, status.pc, status.halt_state
-                )
-            });
+        let spc700_status = self.emulator.isolated_apu_spc700_status().map(|status| {
+            format!(
+                "SPC700: {} instructions, PC ${:04X}, {:?}",
+                status.instructions, status.pc, status.halt_state
+            )
+        });
         SessionSoundDiagnostics {
             uploaded_program,
             spc700_status,
@@ -1473,12 +1467,30 @@ mod session_save_command_tests {
     #[test]
     fn save_actions_preserve_unloaded_session_errors() {
         let mut session = FrontendSession::new(AssetConfig::default()).unwrap();
-        assert!(session.apply_save_action(SessionSaveAction::QuickSave).is_err());
-        assert!(session.apply_save_action(SessionSaveAction::QuickLoad).is_err());
-        assert!(session.apply_save_action(SessionSaveAction::SaveSlot(1)).is_err());
-        assert!(session.apply_save_action(SessionSaveAction::LoadSlot(1)).is_err());
+        assert!(
+            session
+                .apply_save_action(SessionSaveAction::QuickSave)
+                .is_err()
+        );
+        assert!(
+            session
+                .apply_save_action(SessionSaveAction::QuickLoad)
+                .is_err()
+        );
+        assert!(
+            session
+                .apply_save_action(SessionSaveAction::SaveSlot(1))
+                .is_err()
+        );
+        assert!(
+            session
+                .apply_save_action(SessionSaveAction::LoadSlot(1))
+                .is_err()
+        );
         assert_eq!(
-            session.apply_save_action(SessionSaveAction::FlushSram).unwrap(),
+            session
+                .apply_save_action(SessionSaveAction::FlushSram)
+                .unwrap(),
             SessionSaveOutcome::Completed
         );
     }
@@ -1504,13 +1516,25 @@ mod session_save_command_tests {
             panic!("disk slot save did not return its actual path");
         };
         assert!(compatibility_path.is_file());
-        assert!(compatibility_path.to_string_lossy().ends_with(".slot1.state.json"));
+        assert!(
+            compatibility_path
+                .to_string_lossy()
+                .ends_with(".slot1.state.json")
+        );
 
-        session.apply_save_action(SessionSaveAction::QuickSave).unwrap();
+        session
+            .apply_save_action(SessionSaveAction::QuickSave)
+            .unwrap();
         assert!(session.has_quick_save());
         session.load_rom_with_persistent_audio(&rom).unwrap();
-        assert!(!session.has_quick_save(), "ROM reload must clear memory quick saves");
-        assert!(!session.has_state_slot(1), "sound mode must not see compatibility slots");
+        assert!(
+            !session.has_quick_save(),
+            "ROM reload must clear memory quick saves"
+        );
+        assert!(
+            !session.has_state_slot(1),
+            "sound mode must not see compatibility slots"
+        );
         let sound_slot = session
             .apply_save_action(SessionSaveAction::SaveSlot(1))
             .unwrap();
@@ -1518,16 +1542,30 @@ mod session_save_command_tests {
             panic!("sound-mode save did not return its actual path");
         };
         assert_ne!(sound_path, compatibility_path);
-        assert!(sound_path.to_string_lossy().ends_with(".sound.slot1.state.json"));
+        assert!(
+            sound_path
+                .to_string_lossy()
+                .ends_with(".sound.slot1.state.json")
+        );
         assert!(sound_path.is_file());
-        session.apply_save_action(SessionSaveAction::LoadSlot(1)).unwrap();
+        session
+            .apply_save_action(SessionSaveAction::LoadSlot(1))
+            .unwrap();
     }
 
     #[test]
     fn invalid_slot_ids_remain_rejected_by_existing_path_validation() {
         let mut session = FrontendSession::new(AssetConfig::default()).unwrap();
-        assert!(session.apply_save_action(SessionSaveAction::SaveSlot(0)).is_err());
-        assert!(session.apply_save_action(SessionSaveAction::LoadSlot(4)).is_err());
+        assert!(
+            session
+                .apply_save_action(SessionSaveAction::SaveSlot(0))
+                .is_err()
+        );
+        assert!(
+            session
+                .apply_save_action(SessionSaveAction::LoadSlot(4))
+                .is_err()
+        );
     }
 }
 
@@ -1542,9 +1580,7 @@ mod session_audio_frame_metrics_tests {
         assert_eq!(empty.stereo_pairs, 0);
         assert_eq!(empty.nonzero_pairs, 0);
 
-        let measured = SessionAudioFrameMetrics::from_samples(&[
-            0, 0, 1, 0, 0, -2, 0, 0,
-        ]);
+        let measured = SessionAudioFrameMetrics::from_samples(&[0, 0, 1, 0, 0, -2, 0, 0]);
         assert!(measured.has_valid_stereo_pcm);
         assert_eq!(measured.stereo_pairs, 4);
         assert_eq!(measured.nonzero_pairs, 2);

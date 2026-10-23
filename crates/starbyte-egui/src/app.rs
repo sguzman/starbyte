@@ -7334,8 +7334,8 @@ mod session_view_bridge_tests {
         };
         let legacy = FrontendSession::new(assets.clone()).unwrap();
         let mut bridge = SessionViewBridge::default();
-        assert!(!bridge.snapshot(&legacy).has_rom);
-        assert!(!bridge.controls(&legacy).has_quick_save);
+        assert!(!bridge.snapshot(Some(&legacy)).has_rom);
+        assert!(!bridge.controls(Some(&legacy)).has_quick_save);
 
         let owner = OwnedSession::create(assets).unwrap();
         bridge.attach_worker(owner.controls_port());
@@ -7351,7 +7351,7 @@ mod session_view_bridge_tests {
             .unwrap()
             .unwrap();
         bridge.accept_worker_frame(&launched.frame);
-        assert_eq!(bridge.snapshot(&legacy).rom_path, Some(rom.clone()));
+        assert_eq!(bridge.snapshot(Some(&legacy)).rom_path, Some(rom.clone()));
         let entry = LibraryEntry {
             game_id: "demo".to_owned(),
             display_title: "Demo".to_owned(),
@@ -7373,7 +7373,7 @@ mod session_view_bridge_tests {
             cover: None,
             cheats: Vec::new(),
         };
-        let loaded = bridge.snapshot(&legacy).rom_path.unwrap();
+        let loaded = bridge.snapshot(Some(&legacy)).rom_path.unwrap();
         assert_eq!(
             indexed_game_id_for_loaded_rom(&[entry.clone()], &loaded, None).as_deref(),
             Some("demo")
@@ -7413,9 +7413,9 @@ mod session_view_bridge_tests {
             indexed_game_id_for_loaded_rom(&[zip_entry], &loaded, None).as_deref(),
             Some("demo")
         );
-        assert!(bridge.controls(&legacy).session.has_rom);
+        assert!(bridge.controls(Some(&legacy)).session.has_rom);
         assert_eq!(
-            bridge.input_diagnostics(&legacy).host_bits,
+            bridge.input_diagnostics(Some(&legacy)).host_bits,
             launched.frame.input_diagnostics.host_bits
         );
         worker
@@ -7424,7 +7424,7 @@ mod session_view_bridge_tests {
             .recv_timeout(Duration::from_secs(3))
             .unwrap()
             .unwrap();
-        assert!(bridge.controls(&legacy).has_quick_save);
+        assert!(bridge.controls(Some(&legacy)).has_quick_save);
         // The original empty session was never mutated or moved into egui.
         assert!(!legacy.snapshot().has_rom);
         worker.shutdown().unwrap();

@@ -677,6 +677,15 @@ struct FullLibraryWorker {
     last_pause_when_unfocused: Option<bool>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkerSaveSmokeStage {
+    WaitForGame,
+    AwaitQuickSave,
+    AwaitQuickLoad,
+    AwaitSlotSave,
+    AwaitSlotLoad,
+}
+
 struct FullLibraryPendingLaunch {
     job_id: u64,
     original_path: PathBuf,
@@ -691,6 +700,8 @@ pub struct StarbyteApp {
     session: FrontendSession,
     session_view: SessionViewBridge,
     full_worker: Option<FullLibraryWorker>,
+    worker_save_smoke_stage: Option<WorkerSaveSmokeStage>,
+    worker_save_smoke_receipt: Option<(SessionSaveAction, Result<(), String>)>,
     audio_output: Option<AudioOutput>,
     speaker_probe: SpeakerProbeState,
     /// Session mute defaults from persisted startup preference, then follows
@@ -789,6 +800,7 @@ impl StarbyteApp {
         prefer_dark_mode_override: Option<bool>,
         exit_after_frames: Option<u64>,
         use_worker_preview: bool,
+        worker_save_smoke: bool,
         logs: SharedLogBuffer,
     ) -> Result<Self> {
         // Headless Weston has no keyboard focus until a compositor explicitly
@@ -796,7 +808,7 @@ impl StarbyteApp {
         // execution test: disabling focus pause in this *opt-in test session*
         // avoids waiting forever for a focus event that never arrives. Normal
         // launches retain their persisted background-pause preference.
-        if exit_after_frames.is_some() {
+        if exit_after_frames.is_some() || worker_save_smoke {
             config.ui.pause_when_unfocused = false;
         }
         if let Some(prefer_dark_mode) = prefer_dark_mode_override {
@@ -906,6 +918,8 @@ impl StarbyteApp {
             session,
             session_view: SessionViewBridge::default(),
             full_worker: None,
+            worker_save_smoke_stage: worker_save_smoke.then_some(WorkerSaveSmokeStage::WaitForGame),
+            worker_save_smoke_receipt: None,
             audio_output: None,
             speaker_probe: SpeakerProbeState::Idle,
             audio_muted,
@@ -1156,6 +1170,12 @@ impl StarbyteApp {
             }
         }
         for (action, result) in completed_saves {
+            if self.worker_save_smoke_stage.is_some() {
+                self.worker_save_smoke_receipt = Some((
+                    action,
+                    result.as_ref().map(|_| ()).map_err(Clone::clone),
+                ));
+            }
             match result {
                 Ok(saved) => {
                     // Older save receipts must not redraw an earlier game
@@ -1231,6 +1251,81 @@ impl StarbyteApp {
                 self.status_line = "Saving or restoring on the emulator worker...".to_owned();
             }
             Err(error) => self.status_line = error,
+        }
+    }
+
+    fn advance_full_worker_save_smoke(&mut self, ctx: &egui::Context) {
+        let Some(stage) = self.worker_save_smoke_stage else {
+            return;
+        };
+        if stage == WorkerSaveSmokeStage::WaitForGame {
+            if self.session_snapshot().has_rom && self.session_snapshot().frame >= 15 {
+                self.queue_full_worker_save(SessionSaveAction::QuickSave);
+                self.worker_save_smoke_stage = Some(WorkerSaveSmokeStage::AwaitQuickSave);
+            }
+            return;
+        }
+        let Some((action, outcome)) = self.worker_save_smoke_receipt.take() else {
+            return;
+        };
+        let expected = match stage {
+            WorkerSaveSmokeStage::WaitForGame => return,
+            WorkerSaveSmokeStage::AwaitQuickSave => SessionSaveAction::QuickSave,
+            WorkerSaveSmokeStage::AwaitQuickLoad => SessionSaveAction::QuickLoad,
+            WorkerSaveSmokeStage::AwaitSlotSave => SessionSaveAction::SaveSlot(1),
+            WorkerSaveSmokeStage::AwaitSlotLoad => SessionSaveAction::LoadSlot(1),
+        };
+        if action != expected || outcome.is_err() {
+            println!(
+                "STARBYTE_FULL_LIBRARY_SAVE_SMOKE_FAILED action={action:?} error={outcome:?}"
+            );
+            self.worker_save_smoke_stage = None;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+        match stage {
+            WorkerSaveSmokeStage::WaitForGame => {}
+            WorkerSaveSmokeStage::AwaitQuickSave => {
+                if !self.session_controls().has_quick_save {
+                    println!("STARBYTE_FULL_LIBRARY_SAVE_SMOKE_FAILED quick_save_missing");
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    self.worker_save_smoke_stage = None;
+                    return;
+                }
+                self.queue_full_worker_save(SessionSaveAction::QuickLoad);
+                self.worker_save_smoke_stage = Some(WorkerSaveSmokeStage::AwaitQuickLoad);
+            }
+            WorkerSaveSmokeStage::AwaitQuickLoad => {
+                self.queue_full_worker_save(SessionSaveAction::SaveSlot(1));
+                self.worker_save_smoke_stage = Some(WorkerSaveSmokeStage::AwaitSlotSave);
+            }
+            WorkerSaveSmokeStage::AwaitSlotSave => {
+                if !self.session_controls().state_slots[0] {
+                    println!("STARBYTE_FULL_LIBRARY_SAVE_SMOKE_FAILED disk_slot_missing");
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    self.worker_save_smoke_stage = None;
+                    return;
+                }
+                self.queue_full_worker_save(SessionSaveAction::LoadSlot(1));
+                self.worker_save_smoke_stage = Some(WorkerSaveSmokeStage::AwaitSlotLoad);
+            }
+            WorkerSaveSmokeStage::AwaitSlotLoad => {
+                let controls = self.session_controls();
+                if controls.session.has_rom
+                    && controls.has_quick_save
+                    && controls.state_slots[0]
+                    && self.framebuffer_texture.is_some()
+                {
+                    println!(
+                        "STARBYTE_FULL_LIBRARY_SAVE_SMOKE_OK frame={} slot=1 quick=true",
+                        self.session_snapshot().frame
+                    );
+                } else {
+                    println!("STARBYTE_FULL_LIBRARY_SAVE_SMOKE_FAILED state_after_restore");
+                }
+                self.worker_save_smoke_stage = None;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
         }
     }
 
@@ -4711,6 +4806,7 @@ impl eframe::App for StarbyteApp {
                 }
             }
             self.last_effective_speed_percent = speed;
+            self.advance_full_worker_save_smoke(ctx);
             self.queued_keyboard_presses.clear();
             self.queued_gamepad_presses.clear();
             if let Some(limit) = self.exit_after_frames

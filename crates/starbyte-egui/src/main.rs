@@ -126,6 +126,11 @@ struct Args {
     /// Deliberately hidden until all native controls are validated.
     #[arg(long, hide = true, conflicts_with_all = ["threaded_preview", "scheduler_smoke", "speaker_test"])]
     native_worker_preview: bool,
+
+    /// CI only: exercise quick and durable worker save/restore receipts in
+    /// the original native library window rather than the stripped preview.
+    #[arg(long, requires_all = ["demo", "native_worker_preview"], conflicts_with = "exit_after_frames", hide = true)]
+    exit_after_full_worker_saves: bool,
 }
 
 fn main() -> Result<()> {
@@ -251,6 +256,7 @@ fn main() -> Result<()> {
                 prefer_dark_mode_override,
                 args.exit_after_frames,
                 args.native_worker_preview,
+                args.exit_after_full_worker_saves,
                 log_lines.clone(),
             )
             .map_err(|error| std::io::Error::other(error.to_string()))?;
@@ -472,6 +478,22 @@ mod speaker_cli_tests {
         ])
         .unwrap();
         assert!(validate_frame_exit_args(&integration).is_ok());
+        let save_probe = Args::try_parse_from([
+            "starbyte-egui",
+            "--demo",
+            "--native-worker-preview",
+            "--exit-after-full-worker-saves",
+        ])
+        .unwrap();
+        assert!(save_probe.exit_after_full_worker_saves);
+        assert!(
+            Args::try_parse_from([
+                "starbyte-egui",
+                "--demo",
+                "--exit-after-full-worker-saves"
+            ])
+            .is_err()
+        );
     }
 
     #[test]

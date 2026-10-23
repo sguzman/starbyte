@@ -115,6 +115,18 @@ jobs:
             }
           cat "$RUNNER_TEMP/starbyte-full-worker.log"
           grep -F "STARBYTE_FULL_LIBRARY_WORKER_SMOKE_OK frame=" "$RUNNER_TEMP/starbyte-full-worker.log"
+          # Exercise the original window's worker-owned quick save, quick
+          # restore, durable-slot save and durable-slot restore on real Weston.
+          timeout 90s target/debug/starbyte-egui --demo --native-worker-preview --exit-after-full-worker-saves \
+            --config "$RUNNER_TEMP/starbyte-full-save-config.toml" \
+            --cache-dir "$RUNNER_TEMP/starbyte-full-save-cache" \
+            > "$RUNNER_TEMP/starbyte-full-save.log" 2>&1 || {
+              cat "$RUNNER_TEMP/weston.log"
+              cat "$RUNNER_TEMP/starbyte-full-save.log"
+              exit 1
+            }
+          cat "$RUNNER_TEMP/starbyte-full-save.log"
+          grep -F "STARBYTE_FULL_LIBRARY_SAVE_SMOKE_OK frame=" "$RUNNER_TEMP/starbyte-full-save.log"
           # This acceptance shell consumes worker frames through egui while
           # executing game frames from a separate OS thread.
           timeout 90s target/debug/starbyte-egui --demo --threaded-preview --preview-background --exit-after-frames 30 \

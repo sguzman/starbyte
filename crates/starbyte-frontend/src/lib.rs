@@ -1283,3 +1283,20 @@ mod tests {
         assert_eq!(session.host_read_u8(0x7E0010), 0xAA);
     }
 }
+
+#[cfg(test)]
+mod session_controls_snapshot_tests {
+    use super::{FrontendSession, SoundSessionMode};
+    use starbyte_core::manifest::AssetConfig;
+
+    #[test]
+    fn empty_session_has_no_saves_or_loaded_cartridge() {
+        let session = FrontendSession::new(AssetConfig::default()).unwrap();
+        let summary = session.controls_snapshot();
+        assert!(!summary.session.has_rom);
+        assert!(!summary.has_quick_save);
+        assert_eq!(summary.state_slots, [false; 3]);
+        assert_eq!(summary.sound_mode, SoundSessionMode::Compatibility);
+        assert_eq!(summary.rom_cheat_read_hits, 0);
+    }
+}

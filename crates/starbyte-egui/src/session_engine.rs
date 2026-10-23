@@ -1006,6 +1006,73 @@ mod tests {
     }
 
     #[test]
+    fn worker_preserves_pitch_speed_mute_and_volume_across_sound_modes() {
+        let dir = tempfile::tempdir().unwrap();
+        let rom = dir.path().join("audio-policy-worker.sfc");
+        std::fs::write(&rom, starbyte_core::testing::demo::demo_rom_bytes()).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(dir.path().join("saves")),
+            state_dir: Some(dir.path().join("states")),
+            cache_dir: Some(dir.path().join("cache")),
+            config_path: None,
+        };
+        let mut owner = OwnedSession::create(assets).unwrap();
+        // All command-path assertions run with audio muted so CI does not
+        // require, or imply success opening, an actual speaker device.
+        owner.set_audio(true, true, 0.35);
+        let (worker, _, _) = owner.spawn_with_ports().unwrap();
+        for mode in [
+            SoundSessionMode::Compatibility,
+            SoundSessionMode::Persistent,
+            SoundSessionMode::Isolated,
+        ] {
+            let loaded = worker
+                .queue_launch_with_state(SessionLaunchRequest {
+                    rom_path: rom.clone(),
+                    sound_mode: mode,
+                    cheats: Vec::new(),
+                })
+                .unwrap()
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap()
+                .unwrap();
+            assert_eq!(loaded.controls.sound_mode, mode);
+            for (speed, pitch) in [
+                (100_u16, 1.0_f32),
+                (100, 1.25),
+                (150, 1.5),
+                (160, 1.0),
+                (75, 0.75),
+            ] {
+                // Includes a custom-pitch-only change at fixed 100% speed
+                // and pitch-preserving speed changes, not just fast-forward.
+                worker.configure_playback_speed(speed, pitch).unwrap();
+                worker.configure_sound(true, true, 0.35).unwrap();
+                let actual = worker
+                    .transact(|engine| {
+                        Ok((
+                            engine.speed_percent,
+                            engine.pitch_factor,
+                            engine.sound_enabled,
+                            engine.muted,
+                            engine.volume,
+                            engine.session.controls_snapshot().sound_mode,
+                        ))
+                    })
+                    .unwrap();
+                assert_eq!(actual.0, speed);
+                assert!((actual.1 - pitch).abs() < f32::EPSILON);
+                assert!(actual.2);
+                assert!(actual.3);
+                assert!((actual.4 - 0.35).abs() < f32::EPSILON);
+                assert_eq!(actual.5, mode);
+            }
+        }
+        worker.shutdown().unwrap();
+    }
+
+    #[test]
     fn worker_sound_diagnostics_are_queried_asynchronously_after_mode_changes() {
         let dir = tempfile::tempdir().unwrap();
         let rom = dir.path().join("worker-sound-diagnostics.sfc");

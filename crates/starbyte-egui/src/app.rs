@@ -19,6 +19,7 @@ use crate::{
     scheduler::EmulatorScheduler,
     session_engine::{
         ControlsPort, InputPort, OwnedSession, PublishedGameFrame, RenderPort, WorkerLaunchResponse,
+        WorkerSaveResponse,
     },
     video_upload::upload_rgba,
     worker::{AppWorker, WorkerCommand, WorkerCommandKind, WorkerEvent},
@@ -667,6 +668,10 @@ struct FullLibraryWorker {
     input: InputPort,
     render: RenderPort,
     pending_launches: Vec<FullLibraryPendingLaunch>,
+    pending_saves: Vec<(SessionSaveAction, Receiver<Result<WorkerSaveResponse, String>>)>,
+    last_focus: Option<bool>,
+    last_playing: Option<bool>,
+    last_pause_when_unfocused: Option<bool>,
 }
 
 struct FullLibraryPendingLaunch {
@@ -979,6 +984,7 @@ impl StarbyteApp {
             );
             let published = owner.controls_port();
             let (engine, input, render) = owner.spawn_with_ports()?;
+            engine.set_speed_percent(initial_speed);
             engine.set_pause_when_unfocused(app.config.ui.pause_when_unfocused);
             app.session_view.attach_worker(published);
             app.full_worker = Some(FullLibraryWorker {
@@ -986,6 +992,10 @@ impl StarbyteApp {
                 input,
                 render,
                 pending_launches: Vec::new(),
+                pending_saves: Vec::new(),
+                last_focus: None,
+                last_playing: None,
+                last_pause_when_unfocused: None,
             });
             if let Some(path) = startup_rom {
                 app.open_local_rom(&path, &cc.egui_ctx);
@@ -1066,10 +1076,27 @@ impl StarbyteApp {
                 )),
             }
         }
+
         worker.pending_launches = waiting;
+        let mut completed_saves = Vec::new();
+        let mut pending_saves = Vec::new();
+        for (action, reply) in std::mem::take(&mut worker.pending_saves) {
+            match reply.try_recv() {
+                Ok(result) => completed_saves.push((action, result)),
+                Err(TryRecvError::Empty) => pending_saves.push((action, reply)),
+                Err(TryRecvError::Disconnected) => completed_saves.push((
+                    action,
+                    Err("Emulation worker closed the save receipt".to_owned()),
+                )),
+            }
+        }
+        worker.pending_saves = pending_saves;
         // Never show an obsolete picture while another cartridge is
         // installing. Completed launch replies are applied first.
-        let frame = if worker.pending_launches.is_empty() && completed.is_empty() {
+        let frame = if worker.pending_launches.is_empty()
+            && completed.is_empty()
+            && completed_saves.is_empty()
+        {
             worker.engine.take_latest_frame()
         } else {
             None
@@ -1112,8 +1139,9 @@ impl StarbyteApp {
                         "done",
                         "Installed on emulation worker",
                     );
-                    if let Some(worker) = &self.full_worker {
+                    if let Some(worker) = &mut self.full_worker {
                         worker.engine.set_playing(true);
+                        worker.last_playing = Some(true);
                     }
                 }
                 Err(error) => {
@@ -1122,6 +1150,38 @@ impl StarbyteApp {
                     // The existing cartridge, its saves and its worker
                     // clock remain untouched when replacement fails.
                 }
+            }
+        }
+        for (action, result) in completed_saves {
+            match result {
+                Ok(saved) => {
+                    // Older save receipts must not redraw an earlier game
+                    // after the next cartridge has been installed.
+                    if saved.controls.session.rom_path != self.session_snapshot().rom_path {
+                        continue;
+                    }
+                    if let Some(restored) = saved.restored_frame {
+                        self.session_view.accept_worker_frame(&restored);
+                        if let Some(rgba) = &restored.rgba {
+                            upload_rgba(
+                                ctx,
+                                &mut self.framebuffer_texture,
+                                "starbyte-framebuffer",
+                                restored.status.framebuffer_width,
+                                restored.status.framebuffer_height,
+                                rgba,
+                            );
+                        }
+                    }
+                    self.status_line = match action {
+                        SessionSaveAction::QuickSave => "Quick save stored (F5).".to_owned(),
+                        SessionSaveAction::QuickLoad => "Quick save restored (F8).".to_owned(),
+                        SessionSaveAction::SaveSlot(slot) => format!("Saved disk slot {slot}."),
+                        SessionSaveAction::LoadSlot(slot) => format!("Restored disk slot {slot}."),
+                        SessionSaveAction::FlushSram => "Cartridge SRAM persisted.".to_owned(),
+                    };
+                }
+                Err(error) => self.status_line = format!("Save/restore failed: {error}"),
             }
         }
         if self
@@ -1147,6 +1207,27 @@ impl StarbyteApp {
             if let Some(error) = worker.engine.take_error() {
                 self.record_playback_error(&error);
             }
+        }
+    }
+
+    fn queue_full_worker_save(&mut self, action: SessionSaveAction) {
+        if !self.session_snapshot().has_rom {
+            self.status_line = "Load a game before saving or restoring.".to_owned();
+            return;
+        }
+        let Some(worker) = &mut self.full_worker else {
+            return;
+        };
+        if !worker.pending_launches.is_empty() {
+            self.status_line = "A new cartridge is still installing.".to_owned();
+            return;
+        }
+        match worker.engine.queue_save_action_with_frame(action) {
+            Ok(reply) => {
+                worker.pending_saves.push((action, reply));
+                self.status_line = "Saving or restoring on the emulator worker...".to_owned();
+            }
+            Err(error) => self.status_line = error,
         }
     }
 
@@ -1404,6 +1485,26 @@ impl StarbyteApp {
     }
 
     fn sync_loaded_game_cheats(&mut self) {
+        if let Some(worker) = &self.full_worker {
+            if !self.session_snapshot().has_rom {
+                return;
+            }
+            let cheats = self
+                .loaded_game_id
+                .as_ref()
+                .and_then(|game_id| {
+                    self.library_snapshot
+                        .entries
+                        .iter()
+                        .find(|entry| &entry.game_id == game_id)
+                        .map(|entry| entry.cheats.clone())
+                })
+                .unwrap_or_default();
+            if let Err(error) = worker.engine.queue_update_cheats(cheats) {
+                warn!("could not queue worker cheat changes: {error}");
+            }
+            return;
+        }
         let Some(game_id) = self.loaded_game_id.clone() else {
             self.session.clear_active_cheats();
             return;
@@ -1722,6 +1823,16 @@ impl StarbyteApp {
     /// Apply the existing persisted audio preferences to the live mixer.
     /// The session mute control is intentionally not saved as mute-on-startup.
     fn sync_audio_volume(&self) {
+        if let Some(worker) = &self.full_worker {
+            if let Err(error) = worker.engine.configure_sound(
+                self.config.audio.enabled,
+                self.audio_muted,
+                self.config.audio.volume,
+            ) {
+                warn!("could not update worker audio: {error}");
+            }
+            return;
+        }
         if let Some(output) = &self.audio_output {
             output.set_volume(audible_output_volume(
                 self.config.audio.enabled,
@@ -1735,6 +1846,38 @@ impl StarbyteApp {
     /// The frontend flushes writable SRAM before switching modes. The
     /// read-only diagnostic remains opt-in; silent compatibility is a fallback.
     fn restart_game_with_audio_mode(&mut self, mode: SoundSessionMode, ctx: &egui::Context) {
+        if self.full_worker.is_some() {
+            let Some(path) = self.session_snapshot().rom_path else {
+                self.status_line = "Load a game before changing sound mode.".to_owned();
+                return;
+            };
+            let cheats = self
+                .loaded_game_id
+                .as_ref()
+                .and_then(|game_id| {
+                    self.library_snapshot
+                        .entries
+                        .iter()
+                        .find(|entry| &entry.game_id == game_id)
+                        .map(|entry| entry.cheats.clone())
+                })
+                .unwrap_or_default();
+            let job_id = self.next_job_id;
+            self.next_job_id += 1;
+            self.latest_rom_job_id = Some(job_id);
+            self.queue_full_worker_launch(
+                job_id,
+                path.clone(),
+                self.loaded_game_id.clone(),
+                SessionLaunchRequest {
+                    rom_path: path,
+                    sound_mode: mode,
+                    cheats,
+                },
+            );
+            self.confirm_experimental_audio = false;
+            return;
+        }
         let Some(path) = self.session.loaded_rom_path().map(Path::to_path_buf) else {
             self.status_line = "Load a game before testing experimental audio.".to_owned();
             return;
@@ -1817,7 +1960,7 @@ impl StarbyteApp {
             }
         }
         ui.separator();
-        let mode = self.session.sound_session_mode();
+        let mode = self.session_controls().sound_mode;
         match mode {
             SoundSessionMode::Compatibility => {
                 ui.label("Compatibility mode: normal game sound is not yet enabled.");
@@ -2639,7 +2782,7 @@ impl StarbyteApp {
                 }
                 if ui
                     .add_enabled(
-                        self.session.has_quick_save(),
+                        self.has_quick_save(),
                         egui::Button::new("Quick Load (F8)"),
                     )
                     .clicked()
@@ -2952,7 +3095,11 @@ impl StarbyteApp {
                 if prefs.status_sound {
                     separator(ui);
                     let sound = audio_playback_status(
-                        self.session.isolated_audio_driver_enabled(),
+                        if self.full_worker.is_some() {
+                            self.session_controls().sound_mode != SoundSessionMode::Compatibility
+                        } else {
+                            self.session.isolated_audio_driver_enabled()
+                        },
                         self.config.audio.enabled,
                         self.audio_muted,
                         self.config.audio.volume,
@@ -3421,7 +3568,7 @@ impl StarbyteApp {
         if self.loaded_game_id.as_deref() == Some(entry.game_id.as_str()) {
             ui.label(format!(
                 "Game Genie ROM-read matches: {} (bus observations, not proof of gameplay effect)",
-                self.session.rom_cheat_read_hits()
+                self.session_input_diagnostics().rom_cheat_read_hits
             ));
         }
         if entry.cheats.is_empty() {
@@ -3614,7 +3761,19 @@ impl StarbyteApp {
         }
     }
 
+    fn has_quick_save(&self) -> bool {
+        if self.full_worker.is_some() {
+            self.session_controls().has_quick_save
+        } else {
+            self.session.has_quick_save()
+        }
+    }
+
     fn quick_save(&mut self) {
+        if self.full_worker.is_some() {
+            self.queue_full_worker_save(SessionSaveAction::QuickSave);
+            return;
+        }
         match self.session.apply_save_action(SessionSaveAction::QuickSave) {
             Ok(_) => self.status_line = "Quick save stored for this session (F5).".to_owned(),
             Err(error) => self.status_line = error.to_string(),
@@ -3622,6 +3781,10 @@ impl StarbyteApp {
     }
 
     fn quick_load(&mut self, ctx: &egui::Context) {
+        if self.full_worker.is_some() {
+            self.queue_full_worker_save(SessionSaveAction::QuickLoad);
+            return;
+        }
         match self.session.apply_save_action(SessionSaveAction::QuickLoad) {
             Ok(_) => {
                 self.clear_audio();
@@ -3635,6 +3798,10 @@ impl StarbyteApp {
     }
 
     fn save_persistent_slot(&mut self, slot: u8) {
+        if self.full_worker.is_some() {
+            self.queue_full_worker_save(SessionSaveAction::SaveSlot(slot));
+            return;
+        }
         match self
             .session
             .apply_save_action(SessionSaveAction::SaveSlot(slot))
@@ -3645,6 +3812,10 @@ impl StarbyteApp {
     }
 
     fn load_persistent_slot(&mut self, slot: u8, ctx: &egui::Context) {
+        if self.full_worker.is_some() {
+            self.queue_full_worker_save(SessionSaveAction::LoadSlot(slot));
+            return;
+        }
         match self
             .session
             .apply_save_action(SessionSaveAction::LoadSlot(slot))
@@ -3842,7 +4013,7 @@ impl StarbyteApp {
             }
             if ui
                 .add_enabled(
-                    self.session.has_quick_save(),
+                    self.has_quick_save(),
                     egui::Button::new("Quick Load (F8)"),
                 )
                 .clicked()
@@ -4210,7 +4381,7 @@ impl StarbyteApp {
                 if self.loaded_game_id.as_deref() == Some(entry.game_id.as_str()) {
                     ui.label(format!(
                         "Game Genie ROM-read matches: {} (bus observations, not proof of gameplay effect)",
-                        self.session.rom_cheat_read_hits()
+                        self.session_input_diagnostics().rom_cheat_read_hits
                     ));
                 }
                 if entry.cheats.is_empty() {
@@ -4362,7 +4533,7 @@ impl eframe::App for StarbyteApp {
             {
                 self.quick_save();
             }
-            if ctx.input(|input| input.key_pressed(egui::Key::F8)) && self.session.has_quick_save()
+            if ctx.input(|input| input.key_pressed(egui::Key::F8)) && self.has_quick_save()
             {
                 self.quick_load(ctx);
             }
@@ -4510,17 +4681,25 @@ impl eframe::App for StarbyteApp {
             let focused = ctx.input(|input| input.focused);
             let sample = self.effective_controller_sample(ctx);
             let speed = self.effective_speed_percent(ctx);
-            if let Some(worker) = &self.full_worker {
+            if let Some(worker) = &mut self.full_worker {
                 if focused {
                     worker.input.submit(sample.held, sample.pressed);
                 } else {
                     worker.input.clear();
                 }
-                worker.engine.set_focused(focused);
-                worker
-                    .engine
-                    .set_pause_when_unfocused(self.config.ui.pause_when_unfocused);
-                worker.engine.set_playing(self.is_playing);
+                if worker.last_focus != Some(focused) {
+                    worker.engine.set_focused(focused);
+                    worker.last_focus = Some(focused);
+                }
+                let pause_policy = self.config.ui.pause_when_unfocused;
+                if worker.last_pause_when_unfocused != Some(pause_policy) {
+                    worker.engine.set_pause_when_unfocused(pause_policy);
+                    worker.last_pause_when_unfocused = Some(pause_policy);
+                }
+                if worker.last_playing != Some(self.is_playing) {
+                    worker.engine.set_playing(self.is_playing);
+                    worker.last_playing = Some(self.is_playing);
+                }
                 if speed != self.last_effective_speed_percent {
                     let pitch = audio_pitch_factor(
                         self.config.audio.pitch_mode,

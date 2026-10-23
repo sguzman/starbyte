@@ -19,8 +19,8 @@ a released state and verifies both registers clear after subsequent frames.
 This proves input reaches the actual virtual SNES hardware, rather than
 only updating an egui diagnostic overlay or testing a bitset in isolation.
 
-It does **not** verify the user's physical Wooting/gamepad hardware or
-Hyprland focus behavior, and the default GUI has not switched owners.
+It does **not** verify physical keyboards/gamepads or Hyprland focus
+behavior, and the default GUI has not switched owners.
 Source counts remain A 7/8 (88%), B 15/18 (83%), P 18/20 (90%), C 8/16
 (50%) and D 11/15 (73%).
 

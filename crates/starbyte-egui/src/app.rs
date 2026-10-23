@@ -717,6 +717,8 @@ pub struct StarbyteApp {
     worker_save_smoke_receipt: Option<(SessionSaveAction, Result<(), String>)>,
     worker_save_smoke_screenshot: Option<Result<PathBuf, String>>,
     worker_save_smoke_step_receipt: Option<Result<u64, String>>,
+    worker_save_smoke_step_count: u32,
+    worker_save_smoke_previous_step_frame: Option<u64>,
     worker_no_redraw_smoke: bool,
     worker_no_redraw_gap: Option<(Instant, u64)>,
     audio_output: Option<AudioOutput>,
@@ -942,6 +944,8 @@ impl StarbyteApp {
             worker_save_smoke_receipt: None,
             worker_save_smoke_screenshot: None,
             worker_save_smoke_step_receipt: None,
+            worker_save_smoke_step_count: 0,
+            worker_save_smoke_previous_step_frame: None,
             worker_no_redraw_smoke,
             worker_no_redraw_gap: None,
             audio_output: None,
@@ -1476,7 +1480,9 @@ impl StarbyteApp {
                     // Native acceptance also exercises the complete window's
                     // formerly synchronous frame-step control while paused.
                     self.is_playing = false;
-                    self.pending_step_frames = 1;
+                    self.pending_step_frames = 60;
+                    self.worker_save_smoke_step_count = 0;
+                    self.worker_save_smoke_previous_step_frame = None;
                     self.worker_save_smoke_stage = Some(WorkerSaveSmokeStage::AwaitStep);
                     return;
                 }
@@ -1497,20 +1503,34 @@ impl StarbyteApp {
                 return;
             };
             match outcome {
-                Ok(frame)
-                    if self.pending_step_frames == 0
-                        && self.session_snapshot().frame == frame
-                        && self.framebuffer_texture.is_some()
-                        && !self.is_playing =>
-                {
-                    println!(
-                        "STARBYTE_FULL_LIBRARY_SAVE_SMOKE_OK frame={frame} slot=1 quick=true screenshot=true step=true"
-                    );
+                Ok(frame) => {
+                    let expected = self.worker_save_smoke_previous_step_frame.map(|last| last + 1);
+                    if expected.is_some_and(|expected| expected != frame) {
+                        println!(
+                            "STARBYTE_FULL_LIBRARY_SAVE_SMOKE_FAILED step_gap={frame} expected={expected:?}"
+                        );
+                    } else {
+                        self.worker_save_smoke_previous_step_frame = Some(frame);
+                        self.worker_save_smoke_step_count += 1;
+                        if self.worker_save_smoke_step_count < 60 {
+                            return;
+                        }
+                        if self.pending_step_frames == 0
+                            && self.session_snapshot().frame == frame
+                            && self.framebuffer_texture.is_some()
+                            && !self.is_playing
+                        {
+                            println!(
+                                "STARBYTE_FULL_LIBRARY_SAVE_SMOKE_OK frame={frame} slot=1 quick=true screenshot=true step_frames=60"
+                            );
+                        } else {
+                            println!(
+                                "STARBYTE_FULL_LIBRARY_SAVE_SMOKE_FAILED step_state={frame} remaining={}",
+                                self.pending_step_frames
+                            );
+                        }
+                    }
                 }
-                Ok(frame) => println!(
-                    "STARBYTE_FULL_LIBRARY_SAVE_SMOKE_FAILED step_state={frame} remaining={}",
-                    self.pending_step_frames
-                ),
                 Err(error) => {
                     println!("STARBYTE_FULL_LIBRARY_SAVE_SMOKE_FAILED step={error}");
                 }

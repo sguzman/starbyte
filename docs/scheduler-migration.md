@@ -23,7 +23,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [ ] 🧪 Confirm format, Clippy and full workspace tests on the exact commit.
 - [ ] 🖥️ Verify worker scheduling while Hyprland is off-workspace or occluded.
 
-## Milestone B: thread-owned frontend session — 10/13 source tasks (77%)
+## Milestone B: thread-owned frontend session — 13/16 source tasks (81%)
 
 - [x] 🧠 Define `OwnedSession` wrapping `FrontendSession` in `session_engine.rs`.
 - [x] 🎵 Produce PCM on the worker and enqueue it to the existing bounded Rodio worker.
@@ -35,11 +35,14 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [x] 🖼️ Build a renderer-only adapter that consumes published snapshots and updates egui textures.
 - [x] ⌨️ Expire stale input heartbeat after missing window callbacks, preventing endlessly held keys.
 - [x] 💾 Publish restored still frames after quick-save and disk-state loads, including while paused.
+- [x] 🎮 Support nonblocking ROM replacement with old-game preservation after failed cartridge loads.
+- [x] 📸 Share an owned screenshot payload with the established frontend instead of borrowing emulator pixels from the UI.
+- [x] 🔊 Publish actual audio-device, submitted PCM, and dropped-buffer diagnostics alongside video frames.
 - [ ] 🔄 Replace all live `StarbyteApp.session` access with worker commands and snapshots.
 - [ ] 📊 Move current emulation telemetry (FPS, frame gaps, overlays) to worker-produced truth.
 - [ ] 🎚️ Preserve every current audio speed/pitch control and its per-mode behavior through the handoff.
 
-## Milestone P: opt-in threaded preview parity — 10/13 source tasks (77%)
+## Milestone P: opt-in threaded preview parity — 13/16 source tasks (81%)
 
 - [x] 🖼️ Display coalesced worker frames using egui textures without advancing the emulator from UI redraws.
 - [x] 🎮 Reuse configured twelve-button keyboard bindings and support several gamepads with analog D-pad emulation.
@@ -51,7 +54,10 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [x] 📊 Show actual worker FPS, hitches, CPU time and superseded video-frame counts.
 - [x] 🎚️ Add worker-controlled mute, audio enable, volume and independent pitch-mode selectors.
 - [x] 🧩 Honor the existing individual View → Status bar metric visibility choices.
-- [ ] 🔉 Complete speaker/device diagnostics and ensure full audio quality parity.
+- [x] 📂 Open a replacement cartridge asynchronously without blocking menus or discarding the old game on load failure.
+- [x] 🔉 Add real device/sink diagnostics and a mute-aware 440 Hz speaker check.
+- [x] 🎮 Show worker-produced hardware input and cheat-interception diagnostics.
+- [ ] 🎼 Verify actual background audio quality and speaker/device recovery on Hyprland.
 - [ ] 🧪 Verify preview menus, gamepads, screenshots and save slots natively on Hyprland.
 - [ ] ✅ Confirm format, compile, Clippy and tests on the exact preview commit.
 
@@ -59,9 +65,11 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 not a separate repository, not the default UI, and not a substitute for the
 complete Starbyte library application.
 
-## Milestone C: native GUI migration — 1/9 source tasks (11%; default worker integration still 0%)
+## Milestone C: native GUI migration — 3/11 source tasks (27%; default worker integration still 0%)
 
 - [x] 🧱 Introduce frontend-neutral SessionControlsSnapshot and migrate the existing disk-slot menu to it; worker can serialize the same summary.
+- [x] 🎮 Migrate the existing input overlay to frontend-neutral SessionInputDiagnostics that the worker can also publish.
+- [x] 📸 Migrate the existing screenshot action to a shared owned SessionScreenshot payload that the worker can capture as well.
 - [ ] 🎬 Route game-launch success/error replies through the emulation worker.
 - [ ] ⌨️ Send controller inputs without losing key-down/up edges; preserve F5/F8/F9/Escape.
 - [ ] 🪟 Display the latest completed RGBA texture without blocking the worker.
@@ -124,7 +132,8 @@ state as a fixed background-pause regression.
   flush and framebuffer copying controlled by renderer-update heartbeats.
 - `scheduler_video.rs`: renderer-only texture and telemetry adapter (not yet attached to the live GUI).
 - `main.rs`: explicit headless worker smoke (including a memory quick-save/restore roundtrip) and opt-in native-preview routes, no production default switch.
-- `threaded_preview.rs`: opt-in worker-powered egui player with configured twelve-button keyboard/gamepad input, independent FPS, audio controls, live clock policies, status visibility, asynchronous save/load, disk slots and F12 screenshots.
+- `threaded_preview.rs`: opt-in worker-powered egui player with configured twelve-button keyboard/gamepad input, independent FPS, audio controls and speaker check, live clock policies, status visibility, asynchronous save/load, ROM replacement, disk slots and F12 screenshots.
 - `preview_gamepads.rs`: multi-controller button and analog-axis input aggregation, independent of SNES frame pacing.
 - `starbyte-frontend::SessionControlsSnapshot`: common typed summary of ROM, mode, quick-save, durable slots, and cheat-read diagnostics; adopted by the legacy slot menu as a low-risk UI migration seam.
+- `starbyte-frontend::SessionInputDiagnostics` and `SessionScreenshot`: neutral hardware readout and owned RGBA capture shared by the established UI and the worker.
 - `.github/workflows/ci.yml`: headless worker (including memory quick-save roundtrip) and Weston threaded-preview smoke tasks authored; completion not yet verified.

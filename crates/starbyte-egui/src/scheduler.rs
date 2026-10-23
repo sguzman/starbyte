@@ -9,7 +9,7 @@
 use std::{
     collections::VecDeque,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError},
         Arc, Mutex,
     },
@@ -73,6 +73,44 @@ impl WorkerRateWindow {
             last_gap_ms: self.last_gap_ms,
             hitches_40ms: self.hitches_40ms,
         }
+    }
+}
+
+/// A window may lose Wayland frame callbacks before the GUI has a chance
+/// to report blur. This opt-in heartbeat implements the default pause policy
+/// even when the compositor stops invoking eframe::App::update entirely.
+/// Crucially, when background pause is disabled, expiry never stops frames.
+struct GuiHeartbeat {
+    origin: Instant,
+    enabled: AtomicBool,
+    last_ms: AtomicU64,
+}
+
+impl GuiHeartbeat {
+    const STALE_AFTER_MS: u64 = 500;
+
+    fn new() -> Self {
+        Self {
+            origin: Instant::now(),
+            enabled: AtomicBool::new(false),
+            last_ms: AtomicU64::new(0),
+        }
+    }
+
+    fn pulse(&self) {
+        self.last_ms
+            .store(self.origin.elapsed().as_millis() as u64, Ordering::Release);
+        self.enabled.store(true, Ordering::Release);
+    }
+
+    fn is_recent(&self) -> bool {
+        self.is_recent_at(self.origin.elapsed().as_millis() as u64)
+    }
+
+    fn is_recent_at(&self, now_ms: u64) -> bool {
+        !self.enabled.load(Ordering::Acquire)
+            || now_ms.saturating_sub(self.last_ms.load(Ordering::Acquire))
+                <= Self::STALE_AFTER_MS
     }
 }
 
@@ -222,6 +260,7 @@ fn apply_command<Machine>(
 pub struct EmulatorScheduler<Machine: Send + 'static, Frame: Send + 'static> {
     commands: Sender<Command<Machine>>,
     frames: Arc<FrameMailbox<Frame>>,
+    gui_heartbeat: Arc<GuiHeartbeat>,
     join: Option<JoinHandle<Machine>>,
 }
 
@@ -249,6 +288,8 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
         let (sender, receiver) = mpsc::channel();
         let frames = Arc::new(FrameMailbox::default());
         let publication = Arc::clone(&frames);
+        let gui_heartbeat = Arc::new(GuiHeartbeat::new());
+        let worker_heartbeat = Arc::clone(&gui_heartbeat);
         let join = thread::Builder::new()
             .name("starbyte-emulation".to_owned())
             .spawn(move || {
@@ -256,6 +297,7 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
                     machine,
                     receiver,
                     publication,
+                    worker_heartbeat,
                     base_interval,
                     &mut step,
                     &mut on_pause,
@@ -264,6 +306,7 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
         Ok(Self {
             commands: sender,
             frames,
+            gui_heartbeat,
             join: Some(join),
         })
     }
@@ -278,6 +321,12 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
 
     pub fn set_pause_when_unfocused(&self, enabled: bool) {
         let _ = self.commands.send(Command::PauseWhenUnfocused(enabled));
+    }
+
+    /// Opt in to compositor-stall detection and acknowledge a real UI paint.
+    /// The preview should call this from every update, including when unfocused.
+    pub fn gui_heartbeat(&self) {
+        self.gui_heartbeat.pulse();
     }
 
     pub fn set_speed_percent(&self, speed: u16) {
@@ -375,6 +424,7 @@ fn run_owned_clock<Machine, Frame>(
     mut machine: Machine,
     commands: Receiver<Command<Machine>>,
     frames: Arc<FrameMailbox<Frame>>,
+    gui_heartbeat: Arc<GuiHeartbeat>,
     base_interval: Duration,
     step: &mut impl FnMut(&mut Machine) -> Result<Frame, String>,
     on_pause: &mut impl FnMut(&mut Machine),
@@ -396,7 +446,9 @@ fn run_owned_clock<Machine, Frame>(
                 Err(TryRecvError::Disconnected) => return machine,
             }
         }
-        let running = policy.should_run();
+        let running = policy.playing
+            && (!policy.pause_when_unfocused
+                || (policy.focused && gui_heartbeat.is_recent()));
         if was_running && !running {
             on_pause(&mut machine);
             // A deliberate pause is not a gameplay hitch, and restarting
@@ -479,6 +531,29 @@ mod tests {
         assert_eq!(policy.interval(Duration::from_millis(20)), Duration::from_millis(10));
         policy.playing = false;
         assert!(!policy.should_run());
+    }
+
+    #[test]
+    fn compositor_stall_pauses_only_when_pause_policy_is_enabled() {
+        let beat = GuiHeartbeat::new();
+        assert!(beat.is_recent());
+        beat.pulse();
+        let last = beat.last_ms.load(Ordering::Acquire);
+        assert!(beat.is_recent_at(last + GuiHeartbeat::STALE_AFTER_MS));
+        assert!(!beat.is_recent_at(last + GuiHeartbeat::STALE_AFTER_MS + 1));
+
+        let mut policy = ClockPolicy {
+            playing: true,
+            focused: true,
+            ..Default::default()
+        };
+        assert!(!(!policy.pause_when_unfocused
+            || (policy.focused
+                && beat.is_recent_at(last + GuiHeartbeat::STALE_AFTER_MS + 1))));
+        policy.pause_when_unfocused = false;
+        assert!(!policy.pause_when_unfocused
+            || (policy.focused
+                && beat.is_recent_at(last + GuiHeartbeat::STALE_AFTER_MS + 1)));
     }
 
     #[test]

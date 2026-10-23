@@ -1504,7 +1504,9 @@ impl StarbyteApp {
             };
             match outcome {
                 Ok(frame) => {
-                    let expected = self.worker_save_smoke_previous_step_frame.map(|last| last + 1);
+                    let expected = self
+                        .worker_save_smoke_previous_step_frame
+                        .map(|last| last + 1);
                     if expected.is_some_and(|expected| expected != frame) {
                         println!(
                             "STARBYTE_FULL_LIBRARY_SAVE_SMOKE_FAILED step_gap={frame} expected={expected:?}"

@@ -425,11 +425,8 @@ impl eframe::App for ThreadedPreviewApp {
         // Poll device releases even when the window lacks focus, but only
         // transmit gameplay input while focused. This matches the existing
         // Keyboard / Gamepad / Auto input selection.
-        let (keyboard_enabled, gamepad_enabled) = controller_input_sources(
-            self.input_mode,
-            ctx.wants_keyboard_input(),
-            false,
-        );
+        let (keyboard_enabled, gamepad_enabled) =
+            controller_input_sources(self.input_mode, ctx.wants_keyboard_input(), false);
         let gamepad = self.gamepads.poll(focused && gamepad_enabled);
         if focused {
             let keyboard = if keyboard_enabled {

@@ -627,6 +627,42 @@ mod tests {
     }
 
     #[test]
+    fn lost_gui_heartbeat_suspends_only_when_background_pause_is_enabled() {
+        let worker = EmulatorScheduler::spawn(
+            0_u64,
+            Duration::from_millis(4),
+            |machine| {
+                *machine += 1;
+                Ok(*machine)
+            },
+        )
+        .unwrap();
+        worker.gui_heartbeat();
+        worker.set_playing(true);
+        // The mock GUI deliberately stops sending paint heartbeats here.
+        std::thread::sleep(Duration::from_millis(750));
+        // Serialize this observation after any frame already in progress.
+        let stopped = worker.transact(|machine| Ok(*machine)).unwrap();
+        std::thread::sleep(Duration::from_millis(120));
+        let still_stopped = worker.transact(|machine| Ok(*machine)).unwrap();
+        assert_eq!(
+            stopped, still_stopped,
+            "an expired GUI heartbeat must suspend focused gameplay by default"
+        );
+
+        // The same compositor stall must not stop a user who explicitly
+        // disabled the background pause option.
+        worker.set_pause_when_unfocused(false);
+        std::thread::sleep(Duration::from_millis(100));
+        let resumed = worker.transact(|machine| Ok(*machine)).unwrap();
+        assert!(
+            resumed > still_stopped,
+            "background-allowed emulation did not resume independently of redraws"
+        );
+        assert_eq!(worker.shutdown().unwrap(), resumed);
+    }
+
+    #[test]
     fn mailbox_drops_obsolete_video_without_dropping_emulation() {
         let box_of_frames = FrameMailbox::default();
         box_of_frames.push(1);

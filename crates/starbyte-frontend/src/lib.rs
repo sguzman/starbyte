@@ -92,6 +92,32 @@ pub struct SessionScreenshot {
     pub rgba: Vec<u8>,
 }
 
+/// The PCM counts for one completed emulation frame. These values are
+/// frontend-neutral and used by the legacy game view, the independent worker,
+/// and their performance diagnostics.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionAudioFrameMetrics {
+    pub stereo_pairs: usize,
+    pub nonzero_pairs: usize,
+    pub has_valid_stereo_pcm: bool,
+}
+
+impl SessionAudioFrameMetrics {
+    pub fn from_samples(samples: &[i16]) -> Self {
+        if samples.len() % 2 != 0 {
+            return Self::default();
+        }
+        Self {
+            stereo_pairs: samples.len() / 2,
+            nonzero_pairs: samples
+                .chunks_exact(2)
+                .filter(|pair| pair[0] != 0 || pair[1] != 0)
+                .count(),
+            has_valid_stereo_pcm: !samples.is_empty(),
+        }
+    }
+}
+
 /// Optional experimental SPC700 diagnostics formatted at the emulator
 /// ownership boundary. No frontend needs to inspect private APU state.
 #[derive(Debug, Clone, Default)]
@@ -521,6 +547,13 @@ impl FrontendSession {
             height: status.framebuffer_height,
             rgba: self.framebuffer_rgba().to_vec(),
         })
+    }
+
+    /// Count generated PCM without retaining or transferring sample slices
+    /// across emulation and rendering threads.
+    #[must_use]
+    pub fn audio_frame_metrics(&self) -> SessionAudioFrameMetrics {
+        SessionAudioFrameMetrics::from_samples(self.frame_audio_samples())
     }
 
     /// Generated stereo PCM for the most recently emulated SNES frame.
@@ -1381,6 +1414,32 @@ mod tests {
         session.run_frame().unwrap();
 
         assert_eq!(session.host_read_u8(0x7E0010), 0xAA);
+    }
+}
+
+#[cfg(test)]
+mod session_audio_frame_metrics_tests {
+    use super::SessionAudioFrameMetrics;
+
+    #[test]
+    fn silence_and_nonzero_stereo_are_counted_consistently() {
+        let empty = SessionAudioFrameMetrics::from_samples(&[]);
+        assert!(!empty.has_valid_stereo_pcm);
+        assert_eq!(empty.stereo_pairs, 0);
+        assert_eq!(empty.nonzero_pairs, 0);
+
+        let measured = SessionAudioFrameMetrics::from_samples(&[
+            0, 0, 1, 0, 0, -2, 0, 0,
+        ]);
+        assert!(measured.has_valid_stereo_pcm);
+        assert_eq!(measured.stereo_pairs, 4);
+        assert_eq!(measured.nonzero_pairs, 2);
+    }
+
+    #[test]
+    fn odd_pcm_input_is_rejected() {
+        let measured = SessionAudioFrameMetrics::from_samples(&[1, 2, 3]);
+        assert_eq!(measured, SessionAudioFrameMetrics::default());
     }
 }
 

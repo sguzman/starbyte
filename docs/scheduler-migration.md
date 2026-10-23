@@ -39,6 +39,24 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [ ] 📊 Move current emulation telemetry (FPS, frame gaps, overlays) to worker-produced truth.
 - [ ] 🎚️ Preserve every current audio speed/pitch control and its per-mode behavior through the handoff.
 
+## Milestone P: opt-in threaded preview parity — 8/11 source tasks (73%)
+
+- [x] 🖼️ Display coalesced worker frames using egui textures without advancing the emulator from UI redraws.
+- [x] 🎮 Reuse configured twelve-button keyboard bindings and support several gamepads with analog D-pad emulation.
+- [x] ⏱️ Follow configured playback speed and independent audio-pitch defaults.
+- [x] 💤 Apply background pause and compositor heartbeat policies separately from manual Pause.
+- [x] 💾 Route memory quick saves/loads and three persistent disk slots through worker ownership.
+- [x] 📬 Queue preview saves and loads asynchronously to avoid freezing menus.
+- [x] 📸 Capture screenshots through the worker and write PNG files on a separate I/O thread.
+- [x] 📊 Show actual worker FPS, hitches, CPU time and superseded video-frame counts.
+- [ ] 🎚️ Match the full audio controls including live mute, volume, pitch-mode selectors and speaker diagnostics.
+- [ ] 🧪 Verify preview menus, gamepads, screenshots and save slots natively on Hyprland.
+- [ ] ✅ Confirm format, compile, Clippy and tests on the exact preview commit.
+
+**Isolation:** The preview is explicitly selected with `--threaded-preview`. It is
+not a separate repository, not the default UI, and not a substitute for the
+complete Starbyte library application.
+
 ## Milestone C: native GUI migration — 0/8 integrated tasks (0%)
 
 - [ ] 🎬 Route game-launch success/error replies through the emulation worker.
@@ -103,5 +121,6 @@ state as a fixed background-pause regression.
   flush and framebuffer copying controlled by renderer-update heartbeats.
 - `scheduler_video.rs`: renderer-only texture and telemetry adapter (not yet attached to the live GUI).
 - `main.rs`: explicit headless worker smoke (including a memory quick-save/restore roundtrip) and opt-in native-preview routes, no production default switch.
-- `threaded_preview.rs`: experimental worker-powered egui player with configured 12-button keyboard input, normal playback speed/pitch, manual/background pause, memory quick save/load and disk save slots. Visible but unfocused windows continue receiving game pictures.
+- `threaded_preview.rs`: opt-in worker-powered egui player with configured twelve-button keyboard/gamepad input, independent FPS, live clock policies, speed and pitch, asynchronous save/load, disk slots and F12 screenshots.
+- `preview_gamepads.rs`: multi-controller button and analog-axis input aggregation, independent of SNES frame pacing.
 - `.github/workflows/ci.yml`: headless worker (including memory quick-save roundtrip) and Weston threaded-preview smoke tasks authored; completion not yet verified.

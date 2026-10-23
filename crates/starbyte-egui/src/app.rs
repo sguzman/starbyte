@@ -1701,7 +1701,8 @@ impl StarbyteApp {
             if let Ok(path) = &result {
                 if path.is_file() {
                     if let Some(WorkerReplacementSmoke::AwaitReceiptRace {
-                        screenshot_written, ..
+                        screenshot_written,
+                        ..
                     }) = &mut self.worker_replacement_smoke
                     {
                         *screenshot_written = true;
@@ -6328,9 +6329,9 @@ impl eframe::App for StarbyteApp {
                             let job_id = self.next_job_id;
                             self.next_job_id += 1;
                             self.latest_rom_job_id = Some(job_id);
-                            let missing = self.cache_root.join(format!(
-                                "absent-worker-receipt-cartridge-{job_id}.sfc"
-                            ));
+                            let missing = self
+                                .cache_root
+                                .join(format!("absent-worker-receipt-cartridge-{job_id}.sfc"));
                             if missing.exists() {
                                 println!(
                                     "STARBYTE_FULL_LIBRARY_RECEIPT_RACE_SMOKE_FAILED fixture_exists"

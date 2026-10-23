@@ -143,6 +143,10 @@ jobs:
             }
           cat "$RUNNER_TEMP/starbyte-full-no-redraw.log"
           grep -F "STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_OK advanced_frames=" "$RUNNER_TEMP/starbyte-full-no-redraw.log"
+          # Measure worker-produced frames per real elapsed second without
+          # egui callbacks. This is virtual-Weston pacing evidence, not
+          # physical Hyprland/GPU-present timing or speaker verification.
+          grep -F "STARBYTE_FULL_LIBRARY_CLOCK_PACING_SMOKE_OK advanced_frames=" "$RUNNER_TEMP/starbyte-full-no-redraw.log"
           # The complementary policy case: pause the actual owner on focus
           # loss, withhold egui callbacks for two seconds, then resume without
           # a catch-up burst. This does not require a physical Hyprland session.

@@ -825,6 +825,15 @@ enum WorkerReplacementSmoke {
         screenshot_written: bool,
         stepped_frame: Option<u64>,
     },
+    /// A newer failed request must not hide the older success that actually
+    /// installed a cartridge on the exclusive owner.
+    AwaitSupersededInstall {
+        installed_job: u64,
+        rom_path: PathBuf,
+        started_at: u64,
+        deadline: Instant,
+        newer_error_reported: bool,
+    },
 }
 
 /// Native-only synthetic egui key events exercise the original window's
@@ -1521,17 +1530,13 @@ impl StarbyteApp {
             None
         };
         for (pending, result) in completed {
-            if is_superseded_rom_load(self.latest_rom_job_id, pending.job_id) {
-                self.update_job(
-                    pending.job_id,
-                    "Load Game",
-                    "superseded",
-                    "Newer ROM selected",
-                );
-                continue;
-            }
+            let superseded = is_superseded_rom_load(self.latest_rom_job_id, pending.job_id);
             match result {
                 Ok(reply) => {
+                    // Even a superseded response may have already installed
+                    // its cartridge on the sole owner. Reconcile the session
+                    // and generation, so a later failed selection cannot
+                    // leave the GUI pointing at an ejected cartridge.
                     self.worker_presentation = WorkerPresentationMetrics::default();
                     self.session_view.accept_worker_frame(&reply.frame);
                     self.worker_audio = reply.frame.audio_diagnostics;
@@ -1556,13 +1561,22 @@ impl StarbyteApp {
                     self.pending_step_frames = 0;
                     self.frame_performance = FramePerformance::default();
                     self.frame_rate.reset();
-                    self.status_line = format!("Loaded {}", pending.original_path.display());
-                    self.update_job(
-                        pending.job_id,
-                        "Load Game",
-                        "done",
-                        "Installed on emulation worker",
-                    );
+                    if superseded {
+                        self.update_job(
+                            pending.job_id,
+                            "Load Game",
+                            "superseded",
+                            "Newer ROM selected after worker installation",
+                        );
+                    } else {
+                        self.status_line = format!("Loaded {}", pending.original_path.display());
+                        self.update_job(
+                            pending.job_id,
+                            "Load Game",
+                            "done",
+                            "Installed on emulation worker",
+                        );
+                    }
                     if let Some(worker) = &mut self.full_worker {
                         worker.engine.set_playing(true);
                         worker.last_playing = Some(true);
@@ -1573,6 +1587,15 @@ impl StarbyteApp {
                     self.sync_loaded_game_cheats();
                 }
                 Err(error) => {
+                    if superseded {
+                        self.update_job(
+                            pending.job_id,
+                            "Load Game",
+                            "superseded",
+                            "Newer ROM selected",
+                        );
+                        continue;
+                    }
                     self.update_job(pending.job_id, "Load Game", "failed", &error);
                     self.status_line = format!("Could not install ROM: {error}");
                     match &mut self.worker_replacement_smoke {
@@ -1580,6 +1603,9 @@ impl StarbyteApp {
                         | Some(WorkerReplacementSmoke::AwaitReceiptRace {
                             error_reported, ..
                         }) => *error_reported = true,
+                        Some(WorkerReplacementSmoke::AwaitSupersededInstall {
+                            newer_error_reported, ..
+                        }) => *newer_error_reported = true,
                         _ => {}
                     }
                     // Failed installation leaves the previous cartridge
@@ -6554,7 +6580,55 @@ impl eframe::App for StarbyteApp {
                             println!(
                                 "STARBYTE_FULL_LIBRARY_RECEIPT_RACE_SMOKE_OK retained_rom=true screenshot_written=true step_uploaded=true pending_step_cleared=true"
                             );
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            // Exercise a queued successful re-install followed
+                            // by a newer invalid request in the same owner
+                            // command stream. The older success is superseded
+                            // for job status, but owns the actual cartridge.
+                            let installed_job = self.next_job_id;
+                            self.next_job_id += 1;
+                            self.latest_rom_job_id = Some(installed_job);
+                            let started_at = worker.engine.completed_frames();
+                            self.queue_full_worker_launch(
+                                installed_job,
+                                previous_rom.clone(),
+                                None,
+                                SessionLaunchRequest {
+                                    rom_path: previous_rom.clone(),
+                                    sound_mode: SoundSessionMode::Persistent,
+                                    cheats: Vec::new(),
+                                },
+                            );
+                            let newer_job = self.next_job_id;
+                            self.next_job_id += 1;
+                            self.latest_rom_job_id = Some(newer_job);
+                            let missing = self
+                                .cache_root
+                                .join(format!("absent-worker-superseded-{newer_job}.sfc"));
+                            if missing.exists() {
+                                println!(
+                                    "STARBYTE_FULL_LIBRARY_SUPERSEDED_INSTALL_SMOKE_FAILED fixture_exists"
+                                );
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                return;
+                            }
+                            self.queue_full_worker_launch(
+                                newer_job,
+                                missing.clone(),
+                                None,
+                                SessionLaunchRequest {
+                                    rom_path: missing,
+                                    sound_mode: SoundSessionMode::Persistent,
+                                    cheats: Vec::new(),
+                                },
+                            );
+                            self.worker_replacement_smoke =
+                                Some(WorkerReplacementSmoke::AwaitSupersededInstall {
+                                    installed_job,
+                                    rom_path: previous_rom,
+                                    started_at,
+                                    deadline: Instant::now() + Duration::from_secs(8),
+                                    newer_error_reported: false,
+                                });
                             return;
                         }
                         if Instant::now() >= deadline {
@@ -6572,6 +6646,49 @@ impl eframe::App for StarbyteApp {
                                 error_reported,
                                 screenshot_written,
                                 stepped_frame,
+                            });
+                    }
+                    WorkerReplacementSmoke::AwaitSupersededInstall {
+                        installed_job,
+                        rom_path,
+                        started_at,
+                        deadline,
+                        newer_error_reported,
+                    } => {
+                        let worker = self.full_worker.as_ref().unwrap();
+                        let advanced = worker.engine.completed_frames().saturating_sub(started_at);
+                        let installed = self.worker_active_launch_id == Some(installed_job)
+                            && self.session_snapshot().rom_path.as_ref() == Some(&rom_path)
+                            && worker.pending_launches.is_empty()
+                            && self.is_playing;
+                        let superseded_record = self
+                            .jobs
+                            .iter()
+                            .any(|job| job.id == installed_job && job.state == "superseded");
+                        if newer_error_reported && installed && superseded_record && advanced >= 10
+                        {
+                            println!(
+                                "STARBYTE_FULL_LIBRARY_SUPERSEDED_INSTALL_SMOKE_OK active_owner_synced=true newer_failure_reported=true advanced_frames={advanced}"
+                            );
+                            self.worker_replacement_smoke = None;
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            return;
+                        }
+                        if Instant::now() >= deadline {
+                            println!(
+                                "STARBYTE_FULL_LIBRARY_SUPERSEDED_INSTALL_SMOKE_FAILED installed={installed} superseded={superseded_record} failure={newer_error_reported} advanced={advanced}"
+                            );
+                            self.worker_replacement_smoke = None;
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            return;
+                        }
+                        self.worker_replacement_smoke =
+                            Some(WorkerReplacementSmoke::AwaitSupersededInstall {
+                                installed_job,
+                                rom_path,
+                                started_at,
+                                deadline,
+                                newer_error_reported,
                             });
                     }
                 }

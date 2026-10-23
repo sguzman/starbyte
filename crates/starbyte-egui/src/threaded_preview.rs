@@ -18,8 +18,8 @@ use starbyte_core::{
     manifest::{AssetConfig, AudioPitchMode, InputDeviceMode, RuntimeConfig, UiSettings},
 };
 use starbyte_frontend::{
-    SessionControlsSnapshot, SessionLaunchRequest, SessionSaveAction, SessionSaveOutcome,
-    SessionScreenshot, SoundSessionMode,
+    InstalledStatus, LibraryEntry, LibraryFilter, LibrarySnapshot, SessionControlsSnapshot,
+    SessionLaunchRequest, SessionSaveAction, SessionSaveOutcome, SessionScreenshot, SoundSessionMode,
 };
 
 use crate::{
@@ -28,6 +28,7 @@ use crate::{
         write_png_screenshot,
     },
     preview_gamepads::{PreviewGamepads, merge_sources},
+    worker::{AppWorker, WorkerCommand, WorkerCommandKind, WorkerEvent},
     scheduler::EmulatorScheduler,
     scheduler_video::WorkerDisplay,
     session_engine::{
@@ -83,22 +84,33 @@ pub struct ThreadedPreviewApp {
     exit_after_frames: Option<u64>,
     last_error: Option<String>,
     screenshot_root: PathBuf,
-    loaded_rom_path: PathBuf,
+    loaded_rom_path: Option<PathBuf>,
     status_note: Option<String>,
     pending: Vec<PendingOperation>,
+    library_assets: AssetConfig,
+    library_config: RuntimeConfig,
+    library_worker: Option<AppWorker>,
+    library_snapshot: Option<LibrarySnapshot>,
+    library_status: String,
+    show_library: bool,
+    next_library_job: u64,
+    pending_library_rom: Option<u64>,
 }
 
 impl ThreadedPreviewApp {
     pub fn new(
         assets: AssetConfig,
         config: &RuntimeConfig,
-        rom_path: PathBuf,
+        rom_path: Option<PathBuf>,
         exit_after_frames: Option<u64>,
         preview_background: bool,
     ) -> Result<Self> {
         let screenshot_root = assets.screenshot_root();
-        let mut session = OwnedSession::create(assets)?;
-        session.load_rom(&rom_path, SoundSessionMode::Persistent)?;
+        let mut session = OwnedSession::create(assets.clone())?;
+        if let Some(path) = &rom_path {
+            session.load_rom(path, SoundSessionMode::Persistent)?;
+        }
+        let starts_playing = rom_path.is_some();
         session.set_audio(
             config.audio.enabled,
             config.audio.mute_on_startup,
@@ -123,15 +135,15 @@ impl ThreadedPreviewApp {
         let pause_when_unfocused = config.ui.pause_when_unfocused && !preview_background;
         engine.set_pause_when_unfocused(pause_when_unfocused);
         engine.set_focused(true);
-        engine.set_playing(true);
-        Ok(Self {
+        engine.set_playing(starts_playing);
+        let mut app = Self {
             engine,
             input,
             render,
             display: WorkerDisplay::default(),
             controls,
             focused: true,
-            playing: true,
+            playing: starts_playing,
             pause_when_unfocused,
             integer_scale: config.video.integer_scale,
             speed_percent,
@@ -154,7 +166,19 @@ impl ThreadedPreviewApp {
             loaded_rom_path: rom_path,
             status_note: None,
             pending: Vec::new(),
-        })
+            library_assets: assets,
+            library_config: config.clone(),
+            library_worker: None,
+            library_snapshot: None,
+            library_status: "Not scanned".to_owned(),
+            show_library: !starts_playing,
+            next_library_job: 1,
+            pending_library_rom: None,
+        };
+        if app.show_library {
+            app.refresh_library();
+        }
+        Ok(app)
     }
 
     /// Tab fast-forward is a temporary worker-clock rate, independent of
@@ -179,6 +203,14 @@ impl ThreadedPreviewApp {
     }
 
     fn queue_rom_load(&mut self, path: PathBuf) {
+        self.queue_rom_launch(SessionLaunchRequest {
+            rom_path: path,
+            sound_mode: SoundSessionMode::Persistent,
+            cheats: Vec::new(),
+        });
+    }
+
+    fn queue_rom_launch(&mut self, request: SessionLaunchRequest) {
         if self
             .pending
             .iter()
@@ -187,11 +219,8 @@ impl ThreadedPreviewApp {
             self.last_error = Some("Wait for the current ROM load to finish.".to_owned());
             return;
         }
-        match self.engine.queue_launch_with_state(SessionLaunchRequest {
-            rom_path: path.clone(),
-            sound_mode: SoundSessionMode::Persistent,
-            cheats: Vec::new(),
-        }) {
+        let path = request.rom_path.clone();
+        match self.engine.queue_launch_with_state(request) {
             Ok(reply) => {
                 self.input.clear();
                 self.status_note = Some(format!("Loading {}...", path.display()));
@@ -199,6 +228,91 @@ impl ThreadedPreviewApp {
                 self.pending.push(PendingOperation::LoadRom { path, reply });
             }
             Err(error) => self.last_error = Some(error),
+        }
+    }
+
+    fn refresh_library(&mut self) {
+        if self.library_worker.is_none() {
+            self.library_worker = Some(AppWorker::spawn(self.library_assets.clone()));
+        }
+        let job_id = self.next_library_job;
+        self.next_library_job += 1;
+        self.library_status = "Scanning local library...".to_owned();
+        self.library_worker.as_ref().unwrap().submit(WorkerCommand {
+            job_id,
+            config: self.library_config.clone(),
+            filter: LibraryFilter {
+                installed_only: true,
+                ..LibraryFilter::default()
+            },
+            kind: WorkerCommandKind::RefreshSnapshot,
+        });
+    }
+
+    fn queue_library_entry(&mut self, entry: LibraryEntry) {
+        if entry.installed_status != InstalledStatus::Installed {
+            self.last_error = Some("Game is not installed locally".to_owned());
+            return;
+        }
+        if self.pending.iter().any(|op| matches!(op, PendingOperation::LoadRom { .. })) {
+            self.last_error = Some("Wait for cartridge installation to finish".to_owned());
+            return;
+        }
+        let Some(worker) = &self.library_worker else { return; };
+        let job_id = self.next_library_job;
+        self.next_library_job += 1;
+        self.pending_library_rom = Some(job_id);
+        self.library_status = format!("Preparing {}...", entry.display_title);
+        worker.submit(WorkerCommand {
+            job_id,
+            config: self.library_config.clone(),
+            filter: LibraryFilter {
+                installed_only: true,
+                ..LibraryFilter::default()
+            },
+            kind: WorkerCommandKind::MaterializeRom { entry },
+        });
+    }
+
+    fn poll_library_events(&mut self) {
+        let mut launch = None;
+        if let Some(worker) = &self.library_worker {
+            while let Some(event) = worker.try_recv() {
+                match event {
+                    WorkerEvent::SnapshotReady { snapshot, status, .. } => {
+                        self.library_snapshot = Some(snapshot);
+                        self.library_status = status;
+                    }
+                    WorkerEvent::RomReady { job_id, request, .. }
+                        if self.pending_library_rom == Some(job_id) =>
+                    {
+                        self.pending_library_rom = None;
+                        self.library_status = "Cartridge prepared".to_owned();
+                        launch = Some(request);
+                    }
+                    WorkerEvent::JobFailed { job_id, error, .. }
+                        if self.pending_library_rom == Some(job_id) =>
+                    {
+                        self.pending_library_rom = None;
+                        self.last_error = Some(format!("Library ROM preparation failed: {error}"));
+                    }
+                    WorkerEvent::JobFailed { error, .. } => {
+                        self.library_status = format!("Library scan failed: {error}");
+                    }
+                    WorkerEvent::JobSuperseded { job_id, .. }
+                        if self.pending_library_rom == Some(job_id) =>
+                    {
+                        self.pending_library_rom = None;
+                    }
+                    WorkerEvent::JobStarted { .. }
+                    | WorkerEvent::RomReady { .. }
+                    | WorkerEvent::DirectRomReady { .. }
+                    | WorkerEvent::JobSuperseded { .. } => {}
+                }
+            }
+        }
+        if let Some(request) = launch {
+            self.queue_rom_launch(request);
         }
     }
 
@@ -247,9 +361,10 @@ impl ThreadedPreviewApp {
                         let _ = self.engine.take_latest_frame();
                         self.controls = response.controls;
                         self.display.import_frame(ctx, response.frame);
-                        self.loaded_rom_path = path;
-                        self.status_note =
-                            Some(format!("Loaded {}", self.loaded_rom_path.display()));
+                        self.loaded_rom_path = Some(path.clone());
+                        self.engine.set_playing(true);
+                        self.playing = true;
+                        self.status_note = Some(format!("Loaded {}", path.display()));
                         self.last_error = None;
                     }
                     Ok(Err(error)) => {
@@ -378,6 +493,24 @@ mod pitch_mode_tests {
     use super::*;
 
     #[test]
+    fn library_preview_starts_with_no_cartridge_and_no_emulation() {
+        let temp = tempfile::tempdir().unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(temp.path().join("saves")),
+            state_dir: Some(temp.path().join("states")),
+            cache_dir: Some(temp.path().join("cache")),
+            config_path: None,
+        };
+        let app = ThreadedPreviewApp::new(assets, &RuntimeConfig::default(), None, None, false)
+            .unwrap();
+        assert!(!app.playing);
+        assert!(!app.controls.session.has_rom);
+        assert!(app.show_library);
+        assert!(app.loaded_rom_path.is_none());
+    }
+
+    #[test]
     fn custom_pitch_is_independent_of_fast_forward_speed() {
         assert_eq!(pitch_for(AudioPitchMode::Custom, 80, 100), 0.8);
         assert_eq!(pitch_for(AudioPitchMode::Custom, 80, 400), 0.8);
@@ -398,6 +531,7 @@ impl eframe::App for ThreadedPreviewApp {
         // tells the worker that Wayland stopped delivering redraws. With
         // background pause disabled, emulation continues regardless.
         self.engine.gui_heartbeat();
+        self.poll_library_events();
         let focused = ctx.input(|input| input.focused);
         let fast_forwarding = focused
             && !ctx.wants_keyboard_input()
@@ -520,6 +654,20 @@ impl eframe::App for ThreadedPreviewApp {
                         }
                     });
                 });
+                ui.menu_button("Library", |ui| {
+                    if ui.button("Browse installed games").clicked() {
+                        self.show_library = true;
+                        if self.library_worker.is_none() {
+                            self.refresh_library();
+                        }
+                        ui.close();
+                    }
+                    if ui.button("Refresh installed games").clicked() {
+                        self.show_library = true;
+                        self.refresh_library();
+                        ui.close();
+                    }
+                });
                 ui.menu_button("View", |ui| {
                     if ui
                         .checkbox(&mut self.pause_when_unfocused, "Pause in background")
@@ -631,13 +779,11 @@ impl eframe::App for ThreadedPreviewApp {
                         }
                     }
                 });
-                ui.label("Threaded preview (not the normal Starbyte library)");
-                ui.small(
-                    self.loaded_rom_path
-                        .file_name()
-                        .map(|name| name.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| self.loaded_rom_path.display().to_string()),
-                );
+                ui.label("Threaded preview");
+                ui.small(self.loaded_rom_path.as_ref().map_or_else(
+                    || "No game loaded".to_owned(),
+                    |path| path.display().to_string(),
+                ));
             });
         });
         if focused && ctx.input(|input| input.key_pressed(egui::Key::F5)) {
@@ -668,6 +814,43 @@ impl eframe::App for ThreadedPreviewApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
+        let mut selected = None;
+        if self.show_library {
+            egui::SidePanel::left("worker_library")
+                .resizable(true)
+                .default_width(280.0)
+                .min_width(200.0)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.heading("SNES Library");
+                        if ui.small_button("Refresh").clicked() {
+                            self.refresh_library();
+                        }
+                        if ui.small_button("Close").clicked() {
+                            self.show_library = false;
+                        }
+                    });
+                    ui.small(&self.library_status);
+                    if let Some(snapshot) = &self.library_snapshot {
+                        ui.label(format!("{} installed games", snapshot.installed_count));
+                        ui.separator();
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            for entry in &snapshot.entries {
+                                if entry.installed_status == InstalledStatus::Installed
+                                    && ui.button(&entry.display_title).clicked()
+                                {
+                                    selected = Some(entry.clone());
+                                }
+                            }
+                        });
+                    } else {
+                        ui.label("Scanning local library...");
+                    }
+                });
+        }
+        if let Some(entry) = selected {
+            self.queue_library_entry(entry);
+        }
         egui::CentralPanel::default().show(ctx, |ui| {
             let bounds = ui.max_rect();
             ui.painter().rect_filled(bounds, 0.0, Color32::BLACK);
@@ -677,7 +860,13 @@ impl eframe::App for ThreadedPreviewApp {
                 ui.label(message);
             }
             let available = ui.available_size();
-            self.display.draw(ui, available, self.integer_scale);
+            if self.controls.session.has_rom {
+                self.display.draw(ui, available, self.integer_scale);
+            } else {
+                ui.centered_and_justified(|ui| {
+                    ui.label("Open a ROM or select an installed library game");
+                });
+            }
             if self.show_input_diagnostics {
                 let diag = self.display.input_diagnostics();
                 ui.painter().text(

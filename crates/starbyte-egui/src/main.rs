@@ -167,8 +167,6 @@ fn main() -> Result<()> {
         return run_scheduler_smoke(assets, rom.expect("--demo generates a built-in ROM"));
     }
     if args.threaded_preview {
-        let path =
-            rom.ok_or_else(|| anyhow::anyhow!("--threaded-preview requires --demo or --rom"))?;
         return eframe::run_native(
             "Starbyte (threaded preview)",
             options,
@@ -183,7 +181,7 @@ fn main() -> Result<()> {
                 let app = crate::threaded_preview::ThreadedPreviewApp::new(
                     assets.clone(),
                     &config,
-                    path.clone(),
+                    rom.clone(),
                     args.exit_after_frames,
                     args.preview_background,
                 )
@@ -363,10 +361,6 @@ fn validate_frame_exit_args(args: &Args) -> Result<()> {
         args.exit_after_frames.is_none() || args.demo || args.rom.is_some(),
         "--exit-after-frames requires --demo or --rom"
     );
-    anyhow::ensure!(
-        !args.threaded_preview || args.demo || args.rom.is_some(),
-        "--threaded-preview requires --demo or --rom"
-    );
     Ok(())
 }
 
@@ -495,9 +489,9 @@ mod speaker_cli_tests {
     }
 
     #[test]
-    fn threaded_preview_is_explicit_and_requires_a_game() {
+    fn threaded_preview_can_open_a_library_without_a_startup_game() {
         let missing = Args::try_parse_from(["starbyte-egui", "--threaded-preview"]).unwrap();
-        assert!(validate_frame_exit_args(&missing).is_err());
+        assert!(validate_frame_exit_args(&missing).is_ok());
         let demo = Args::try_parse_from([
             "starbyte-egui",
             "--demo",

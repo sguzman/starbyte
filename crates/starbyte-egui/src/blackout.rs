@@ -1,7 +1,11 @@
 //! Passive gameplay diagnostics: a bounded periodic status snapshot and
 //! additional sustained-blackout reports. Neither pauses the guest or
 //! presumes that a fade is a confirmed deadlock.
-use std::path::Path;
+use std::{
+    path::Path,
+    sync::mpsc::{self, SyncSender},
+    thread,
+};
 
 use starbyte_frontend::FrontendSession;
 use tracing::warn;
@@ -17,6 +21,48 @@ fn periodic_status_due(frame: u64) -> bool {
 /// A handful of stray pixels must not suppress reports from an otherwise black scene.
 const MIN_VISIBLE_PIXELS: usize = 32;
 
+/// Immutable diagnostic payload for a bounded background file writer.
+/// Filesystem latency must not block the SNES emulation clock.
+#[derive(Debug)]
+struct DiagnosticReport {
+    frame: u64,
+    report: String,
+    periodic: bool,
+    blackout: bool,
+}
+
+impl DiagnosticReport {
+    fn write(self) {
+        let diagnostics_dir = if cfg!(target_os = "linux") {
+            Path::new("/tmp/starbyte/diagnostics").to_path_buf()
+        } else {
+            std::env::temp_dir().join("starbyte").join("diagnostics")
+        };
+        if let Err(error) = std::fs::create_dir_all(&diagnostics_dir) {
+            warn!(%error, "could not create gameplay diagnostic directory");
+            return;
+        }
+        if self.periodic {
+            // Overwrite instead of accumulating one file per heartbeat.
+            let path = diagnostics_dir.join("latest-status.txt");
+            if let Err(error) = std::fs::write(&path, &self.report) {
+                warn!(%error, path = %path.display(), "could not write periodic gameplay status");
+            }
+        }
+        if self.blackout {
+            let path = diagnostics_dir.join(format!("black-screen-{}.txt", self.frame));
+            match std::fs::write(&path, &self.report) {
+                Ok(()) => warn!(
+                    path = %path.display(),
+                    frame = self.frame,
+                    "saved sustained-black-screen diagnostic; game continues"
+                ),
+                Err(error) => warn!(%error, "could not write black-screen diagnostic"),
+            }
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct BlackScreenMonitor {
     saw_visible_frame: bool,
@@ -28,6 +74,7 @@ pub struct BlackScreenMonitor {
     /// Chrono USA $0158 field-loop tick samples, tracked only across rendered frames.
     last_field_tick: Option<u16>,
     field_tick_changes: u64,
+    report_sender: Option<SyncSender<DiagnosticReport>>,
 }
 
 impl BlackScreenMonitor {
@@ -150,33 +197,38 @@ impl BlackScreenMonitor {
             self.blackout_checkpoints.join("\n"),
             scanline_registers,
         );
-        // These are ephemeral QA artifacts, never application cache or user data.
-        // Linux reports always go under /tmp for easy Jobflick attachment.
-        let diagnostics_dir = if cfg!(target_os = "linux") {
-            Path::new("/tmp/starbyte/diagnostics").to_path_buf()
-        } else {
-            std::env::temp_dir().join("starbyte").join("diagnostics")
-        };
-        if let Err(error) = std::fs::create_dir_all(&diagnostics_dir) {
-            warn!(%error, "could not create gameplay diagnostic directory");
-            return;
-        }
-        if periodic_report {
-            // Overwrite instead of accumulating one file per heartbeat.
-            let path = diagnostics_dir.join("latest-status.txt");
-            if let Err(error) = std::fs::write(&path, &report) {
-                warn!(%error, path = %path.display(), "could not write periodic gameplay status");
+        // Reports are ephemeral QA artifacts, but writing them can stall on
+        // a slow filesystem. Bound their queue and do disk I/O off-thread,
+        // independent of Wayland repaints and the worker clock.
+        self.enqueue_report(DiagnosticReport {
+            frame,
+            report,
+            periodic: periodic_report,
+            blackout: blackout_report,
+        });
+    }
+
+    fn enqueue_report(&mut self, report: DiagnosticReport) {
+        if self.report_sender.is_none() {
+            let (sender, receiver) = mpsc::sync_channel::<DiagnosticReport>(2);
+            if let Err(error) = thread::Builder::new()
+                .name("starbyte-diagnostics".to_owned())
+                .spawn(move || {
+                    while let Ok(report) = receiver.recv() {
+                        report.write();
+                    }
+                })
+            {
+                warn!(%error, "could not start diagnostic file writer");
+                return;
             }
+            self.report_sender = Some(sender);
         }
-        if blackout_report {
-            let path = diagnostics_dir.join(format!("black-screen-{frame}.txt"));
-            match std::fs::write(&path, &report) {
-                Ok(()) => warn!(
-                    path = %path.display(),
-                    frame,
-                    "saved sustained-black-screen diagnostic; game continues"
-                ),
-                Err(error) => warn!(%error, "could not write black-screen diagnostic"),
+        if let Some(sender) = &self.report_sender {
+            if let Err(error) = sender.try_send(report) {
+                // Diagnostic reports are secondary to uninterrupted gameplay.
+                // Keep at most two pending reports, never a growing backlog.
+                warn!(%error, "diagnostic queue full or closed; skipping this report");
             }
         }
     }
@@ -214,7 +266,29 @@ impl BlackScreenMonitor {
 
 #[cfg(test)]
 mod tests {
-    use super::BlackScreenMonitor;
+    use super::{BlackScreenMonitor, DiagnosticReport};
+    use std::sync::mpsc;
+
+    #[test]
+    fn saturated_diagnostic_queue_drops_reports_without_blocking_clock() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let mut monitor = BlackScreenMonitor {
+            report_sender: Some(sender),
+            ..Default::default()
+        };
+        let payload = |frame| DiagnosticReport {
+            frame,
+            report: "diagnostic".to_owned(),
+            periodic: true,
+            blackout: false,
+        };
+        monitor.enqueue_report(payload(1));
+        // No writer is draining this channel. The second enqueue must
+        // return immediately instead of blocking a game frame.
+        monitor.enqueue_report(payload(2));
+        assert_eq!(receiver.try_recv().unwrap().frame, 1);
+        assert!(receiver.try_recv().is_err());
+    }
 
     #[test]
     fn periodic_report_does_not_depend_on_blackout_or_visible_pixels() {

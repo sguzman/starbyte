@@ -3,7 +3,7 @@
 //! presumes that a fade is a confirmed deadlock.
 use std::path::Path;
 
-use starbyte_core::Emulator;
+use starbyte_frontend::FrontendSession;
 use tracing::warn;
 
 const REPORT_AFTER_BLACK_FRAMES: u32 = 180;
@@ -34,11 +34,15 @@ impl BlackScreenMonitor {
     /// Sample framebuffer/CPU status after a successfully completed frame.
     pub fn observe(
         &mut self,
-        emulator: &Emulator,
+        session: &FrontendSession,
         _cache_root: &Path,
         audio_pairs: usize,
         nonzero_pairs: usize,
     ) {
+        // The legacy diagnostic boundary is isolated here, rather than
+        // exposing Emulator to the rest of the frontend UI. The threaded
+        // path will eventually run this monitor inside the sole owner.
+        let emulator = session.emulator();
         let frame = emulator.timing().frame;
         let visible = emulator
             .framebuffer()

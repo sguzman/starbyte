@@ -30,6 +30,22 @@ jobs:
           python3 scripts/qa-chrono-usa.py --help
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked
+  # The workspace uses Rust 2024 let-chains, stabilized in 1.88.
+  # Test the declared compiler floor independently of current stable.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libudev-dev libasound2-dev
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88.0"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv-1.88
+      - name: Verify declared Rust 1.88 minimum
+        run: cargo check --workspace --all-targets --locked
   test:
     strategy:
       fail-fast: false

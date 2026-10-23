@@ -1,8 +1,20 @@
 # Emulation scheduler migration
 
-**Status: in progress. Commit [`3817af9`](https://github.com/sguzman/starbyte/commit/3817af966f3f4a3d5b970a594078e04a52f0458f) passed [CI run 40034370165](https://github.com/sguzman/starbyte/actions/runs/40034370165): Linux, Windows, formatting/Clippy and original-window native Weston integration. Verified source progress is 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. The complete original library worker is still opt-in; production-default cutover, physical Hyprland and audible-device quality remain unverified.**
+**Status: in progress. Commit [`7950e27`](https://github.com/sguzman/starbyte/commit/7950e27a6ef32bfe9be02c67330af3c5238447dc) passed [CI run 40036684106](https://github.com/sguzman/starbyte/actions/runs/40036684106): Linux, Windows, formatting/Clippy and original-window native Weston integration. Verified source progress is 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. The complete original library worker is still opt-in; production-default cutover, physical Hyprland and audible-device quality remain unverified.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
+
+## Verified independent worker NTSC pacing during no-redraw gap — 2026-10-23
+
+Code commit [`7950e27`](https://github.com/sguzman/starbyte/commit/7950e27a6ef32bfe9be02c67330af3c5238447dc) passed [CI 40036684106](https://github.com/sguzman/starbyte/actions/runs/40036684106) across all three Linux/Weston, Windows and formatting/Clippy jobs.
+
+- The original worker-backed window now measures **completed owner frames per actual monotonic wall-clock second** during a two-second gap with no egui callback, excluding fake UI repaint FPS. Native Weston recorded `STARBYTE_FULL_LIBRARY_CLOCK_PACING_SMOKE_OK advanced_frames=121 fps=59.91 wall_ms=2019`; the nominal hardware NTSC target is approximately 60.10 FPS.
+- Its check tolerates 48–72 FPS to allow CI host contention while rejecting serious timing regressions. It separately requires a new framebuffer upload when original-window callbacks resume, and still proves no shadow legacy emulator was instantiated.
+- The check is **virtual-Wayland pacing only**, not a visible/focused physical Hyprland, real GPU present, or audible-sound measurement. D 11/15 and total 69/77 (90%) remain unchanged.
+
+## Compiler floor integrity — 2026-10-23
+
+The source uses Rust 2024 `if let` chains, stabilized with Rust **1.88**. The previously declared workspace minimum of 1.85 was inconsistent with that existing source. The workspace declaration is corrected to **1.88**, and a separate CI job checks `cargo check --workspace --all-targets --locked` with Rust **1.88.0**. This is a compiler compatibility gate, not a newly accepted emulator scheduling task.
 
 ## Verified native single-owner gate and failed-replacement step accounting — 2026-10-23
 
@@ -501,9 +513,8 @@ not demonstrated production readiness. The original complete StarbyteApp can
 execute on the independent owner behind `--native-worker-preview`, but its
 normal/default runtime still retains the synchronous `FrontendSession`.
 The remaining eight tasks across milestones A/P/C/D include physical Hyprland,
-audible audio/device quality, native input/save verification and deliberate default cutover. The workspace declares
-Rust 1.85; newly introduced post-1.85 let-chain expressions were rewritten,
-but a real MSRV build has not been performed in this environment.
+audible audio/device quality, native input/save verification and deliberate default cutover. The workspace declares Rust 1.88, with a dedicated pinned-version CI compile gate;
+this does not count as physical Hyprland acceptance.
 
 ## First confirmed CI evidence (2026-10-23)
 

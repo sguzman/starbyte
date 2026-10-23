@@ -355,29 +355,45 @@ impl OwnedSession {
     }
 
     pub fn quick_save(&mut self) -> anyhow::Result<()> {
-        self.session.quick_save()
+        self.session
+            .apply_save_action(SessionSaveAction::QuickSave)
+            .map(|_| ())
     }
 
     pub fn quick_load(&mut self) -> anyhow::Result<()> {
         if let Some(audio) = &self.audio {
             audio.clear();
         }
-        self.session.quick_load()
+        self.session
+            .apply_save_action(SessionSaveAction::QuickLoad)
+            .map(|_| ())
     }
 
     pub fn save_slot(&mut self, slot: u8) -> anyhow::Result<std::path::PathBuf> {
-        self.session.save_state_slot(slot)
+        match self
+            .session
+            .apply_save_action(SessionSaveAction::SaveSlot(slot))?
+        {
+            SessionSaveOutcome::SavedTo(path) => Ok(path),
+            SessionSaveOutcome::Completed => {
+                anyhow::bail!("disk save returned no slot path")
+            }
+        }
     }
 
     pub fn load_slot(&mut self, slot: u8) -> anyhow::Result<()> {
         if let Some(audio) = &self.audio {
             audio.clear();
         }
-        self.session.load_state_slot(slot)
+        self.session
+            .apply_save_action(SessionSaveAction::LoadSlot(slot))
+            .map(|_| ())
     }
 
     pub fn flush_sram(&mut self) -> anyhow::Result<()> {
-        self.session.flush_save_ram()
+        self.session
+            .apply_save_action(SessionSaveAction::FlushSram)
+            .map(|_| ())
     }
 
     pub fn snapshot(&self) -> SessionSnapshot {

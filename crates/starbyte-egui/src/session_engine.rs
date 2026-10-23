@@ -203,7 +203,10 @@ impl ControlsPort {
     }
 
     fn publish(&self, next: SessionControlsSnapshot) {
-        *self.state.lock().unwrap_or_else(|poison| poison.into_inner()) = next;
+        *self
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = next;
     }
 
     pub fn latest(&self) -> SessionControlsSnapshot {
@@ -519,7 +522,9 @@ impl OwnedSession {
     }
 
     pub fn save_slot(&mut self, slot: u8) -> anyhow::Result<std::path::PathBuf> {
-        let outcome = self.session.apply_save_action(SessionSaveAction::SaveSlot(slot))?;
+        let outcome = self
+            .session
+            .apply_save_action(SessionSaveAction::SaveSlot(slot))?;
         self.publish_controls();
         match outcome {
             SessionSaveOutcome::SavedTo(path) => Ok(path),
@@ -1149,7 +1154,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(published.latest().session.rom_path, Some(rom.clone()));
-        assert_eq!(published.latest().session.rom_path, launch.controls.session.rom_path);
+        assert_eq!(
+            published.latest().session.rom_path,
+            launch.controls.session.rom_path
+        );
         assert!(!published.latest().has_quick_save);
         let saved = worker
             .queue_save_action_with_frame(SessionSaveAction::QuickSave)

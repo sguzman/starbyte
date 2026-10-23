@@ -16,9 +16,13 @@ use crate::{
     audio::{AudioDeviceStatus, AudioOutput},
     blackout::BlackScreenMonitor,
     logging::SharedLogBuffer,
+    session_engine::ControlsPort,
     video_upload::upload_rgba,
     worker::{AppWorker, WorkerCommand, WorkerCommandKind, WorkerEvent},
 };
+
+#[cfg(test)]
+use crate::session_engine::PublishedGameFrame;
 
 use starbyte_core::{
     input::ControllerState,
@@ -606,11 +610,63 @@ fn filtered_sorted_cheats<'a>(
     results
 }
 
+/// The original library shell can read either its established synchronous
+/// session or worker-published snapshots. Frame data from an independent
+/// owner is accepted only when its install/restore acknowledgement arrives.
+#[derive(Default)]
+struct SessionViewBridge {
+    worker_controls: Option<ControlsPort>,
+    worker_frame: Option<SessionSnapshot>,
+    worker_input: Option<SessionInputDiagnostics>,
+}
+
+impl SessionViewBridge {
+    fn snapshot(&self, legacy: &FrontendSession) -> SessionSnapshot {
+        self.worker_frame
+            .clone()
+            .unwrap_or_else(|| legacy.snapshot())
+    }
+
+    fn controls(&self, legacy: &FrontendSession) -> SessionControlsSnapshot {
+        if let Some(worker) = &self.worker_controls {
+            let mut controls = worker.latest();
+            // Save/cheat availability is published only on mutations,
+            // while emulated counters must come from the frame stream.
+            if let Some(frame) = &self.worker_frame {
+                controls.session = frame.clone();
+            }
+            controls
+        } else {
+            legacy.controls_snapshot()
+        }
+    }
+
+    fn input_diagnostics(&self, legacy: &FrontendSession) -> SessionInputDiagnostics {
+        self.worker_input
+            .unwrap_or_else(|| legacy.input_diagnostics())
+    }
+
+    #[cfg(test)]
+    fn attach_worker(&mut self, controls: ControlsPort) {
+        let initial = controls.latest();
+        self.worker_frame = Some(initial.session.clone());
+        self.worker_controls = Some(controls);
+        self.worker_input = Some(SessionInputDiagnostics::default());
+    }
+
+    #[cfg(test)]
+    fn accept_worker_frame(&mut self, frame: &PublishedGameFrame) {
+        self.worker_frame = Some(frame.status.clone());
+        self.worker_input = Some(frame.input_diagnostics);
+    }
+}
+
 pub struct StarbyteApp {
     assets: AssetConfig,
     config: RuntimeConfig,
     cache_root: PathBuf,
     session: FrontendSession,
+    session_view: SessionViewBridge,
     audio_output: Option<AudioOutput>,
     speaker_probe: SpeakerProbeState,
     /// Session mute defaults from persisted startup preference, then follows
@@ -822,6 +878,7 @@ impl StarbyteApp {
             config,
             cache_root,
             session,
+            session_view: SessionViewBridge::default(),
             audio_output: None,
             speaker_probe: SpeakerProbeState::Idle,
             audio_muted,
@@ -1134,15 +1191,15 @@ impl StarbyteApp {
     /// the full native library is switched to worker-published snapshots.
     /// Menus and status bars should not read the emulator owner directly.
     fn session_snapshot(&self) -> SessionSnapshot {
-        self.session.snapshot()
+        self.session_view.snapshot(&self.session)
     }
 
     fn session_controls(&self) -> SessionControlsSnapshot {
-        self.session.controls_snapshot()
+        self.session_view.controls(&self.session)
     }
 
     fn session_input_diagnostics(&self) -> SessionInputDiagnostics {
-        self.session.input_diagnostics()
+        self.session_view.input_diagnostics(&self.session)
     }
 
     fn selected_entry(&self) -> Option<LibraryEntry> {
@@ -4388,6 +4445,61 @@ impl Drop for StarbyteApp {
         if let Err(error) = self.session.flush_save_ram() {
             warn!("could not persist cartridge SRAM on exit: {error}");
         }
+    }
+}
+
+#[cfg(test)]
+mod session_view_bridge_tests {
+    use super::*;
+    use crate::session_engine::OwnedSession;
+
+    #[test]
+    fn full_library_read_only_views_can_consume_worker_state_without_owner_borrow() {
+        let dir = tempfile::tempdir().unwrap();
+        let rom = dir.path().join("full-ui-session-view.sfc");
+        std::fs::write(&rom, starbyte_core::testing::demo::demo_rom_bytes()).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(dir.path().join("saves")),
+            state_dir: Some(dir.path().join("states")),
+            cache_dir: Some(dir.path().join("cache")),
+            config_path: None,
+        };
+        let legacy = FrontendSession::new(assets.clone()).unwrap();
+        let mut bridge = SessionViewBridge::default();
+        assert!(!bridge.snapshot(&legacy).has_rom);
+        assert!(!bridge.controls(&legacy).has_quick_save);
+
+        let owner = OwnedSession::create(assets).unwrap();
+        bridge.attach_worker(owner.controls_port());
+        let (worker, _, _) = owner.spawn_with_ports().unwrap();
+        let launched = worker
+            .queue_launch_with_state(SessionLaunchRequest {
+                rom_path: rom.clone(),
+                sound_mode: SoundSessionMode::Persistent,
+                cheats: Vec::new(),
+            })
+            .unwrap()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap();
+        bridge.accept_worker_frame(&launched.frame);
+        assert_eq!(bridge.snapshot(&legacy).rom_path, Some(rom));
+        assert!(bridge.controls(&legacy).session.has_rom);
+        assert_eq!(
+            bridge.input_diagnostics(&legacy).host_bits,
+            launched.frame.input_diagnostics.host_bits
+        );
+        worker
+            .queue_save_action_with_frame(SessionSaveAction::QuickSave)
+            .unwrap()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap();
+        assert!(bridge.controls(&legacy).has_quick_save);
+        // The original empty session was never mutated or moved into egui.
+        assert!(!legacy.snapshot().has_rom);
+        worker.shutdown().unwrap();
     }
 }
 

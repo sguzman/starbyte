@@ -694,6 +694,10 @@ mod tests {
             stopped, still_stopped,
             "an expired GUI heartbeat must suspend focused gameplay by default"
         );
+        assert!(
+            !worker.is_emulating(),
+            "worker running status must reflect the missing-redraw pause"
+        );
 
         // The same compositor stall must not stop a user who explicitly
         // disabled the background pause option.
@@ -703,6 +707,10 @@ mod tests {
         assert!(
             resumed > still_stopped,
             "background-allowed emulation did not resume independently of redraws"
+        );
+        assert!(
+            worker.is_emulating(),
+            "background-allowed worker must publish effective running status"
         );
         assert!(worker.shutdown().unwrap() >= resumed);
     }

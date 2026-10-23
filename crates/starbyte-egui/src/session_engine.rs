@@ -999,6 +999,75 @@ mod tests {
     }
 
     #[test]
+    fn worker_shutdown_persists_battery_sram_without_gui_flush() {
+        let dir = tempfile::tempdir().unwrap();
+        let rom_path = dir.path().join("battery-worker.sfc");
+        // The built-in demo normally has no SRAM. Give the synthetic LoROM
+        // a 2 KiB battery region without bundling any commercial ROM.
+        let mut rom = starbyte_core::testing::demo::demo_rom_bytes();
+        rom[0x7FD8] = 0x01;
+        std::fs::write(&rom_path, rom).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(dir.path().join("battery")),
+            state_dir: Some(dir.path().join("states")),
+            cache_dir: Some(dir.path().join("cache")),
+            config_path: None,
+        };
+        let mut owner = OwnedSession::create(assets.clone()).unwrap();
+        owner.set_audio(false, true, 0.0);
+        owner.load_rom(&rom_path, SoundSessionMode::Persistent).unwrap();
+        let (worker, _, _) = owner.spawn_with_ports().unwrap();
+        let applied = worker
+            .queue_update_cheats(vec![CheatEntry {
+                id: "worker-sram".to_owned(),
+                game_id: "battery-worker".to_owned(),
+                name: "Write battery byte".to_owned(),
+                code: "700000:5A".to_owned(),
+                source: "test".to_owned(),
+                kind: "Action Replay".to_owned(),
+                enabled: true,
+            }])
+            .unwrap()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap();
+        assert_eq!(applied, 1);
+        let _ = worker
+            .queue_step_frame()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap();
+        worker
+            .queue_clear_cheats()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap();
+        let stored = worker
+            .transact(|engine| Ok(engine.session.host_read_u8(0x700000)))
+            .unwrap();
+        assert_eq!(stored, 0x5A);
+        let save_path = worker
+            .transact(|engine| {
+                engine
+                    .session
+                    .save_ram_path()
+                    .ok_or_else(|| "test cartridge has no writable battery SRAM".to_owned())
+            })
+            .unwrap();
+        assert!(!save_path.exists(), "test must exercise shutdown's first SRAM flush");
+        let returned = worker.shutdown().unwrap();
+        assert!(returned.shutdown_finalized);
+        assert_eq!(std::fs::read(&save_path).unwrap()[0], 0x5A);
+
+        let mut reopened = FrontendSession::new(assets).unwrap();
+        reopened.load_rom_with_persistent_audio(&rom_path).unwrap();
+        assert_eq!(reopened.host_read_u8(0x700000), 0x5A);
+    }
+
+    #[test]
     fn paused_worker_steps_one_frame_without_enqueuing_audio() {
         let dir = tempfile::tempdir().unwrap();
         let rom = dir.path().join("step-demo.sfc");

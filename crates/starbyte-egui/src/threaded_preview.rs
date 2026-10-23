@@ -20,7 +20,10 @@ use starbyte_core::{
 use starbyte_frontend::{SessionScreenshot, SoundSessionMode};
 
 use crate::{
-    app::{input_actions, parse_egui_key, set_controller_flag, write_png_screenshot},
+    app::{
+        controller_input_sources, input_actions, parse_egui_key, set_controller_flag,
+        write_png_screenshot,
+    },
     preview_gamepads::{PreviewGamepads, merge_sources},
     scheduler::EmulatorScheduler,
     scheduler_video::WorkerDisplay,
@@ -422,14 +425,17 @@ impl eframe::App for ThreadedPreviewApp {
         // Poll device releases even when the window lacks focus, but only
         // transmit gameplay input while focused. This matches the existing
         // Keyboard / Gamepad / Auto input selection.
-        let gamepad = self
-            .gamepads
-            .poll(focused && self.input_mode != InputDeviceMode::Keyboard);
+        let (keyboard_enabled, gamepad_enabled) = controller_input_sources(
+            self.input_mode,
+            ctx.wants_keyboard_input(),
+            false,
+        );
+        let gamepad = self.gamepads.poll(focused && gamepad_enabled);
         if focused {
-            let keyboard = if self.input_mode == InputDeviceMode::Gamepad {
-                (ControllerState::default(), ControllerState::default())
-            } else {
+            let keyboard = if keyboard_enabled {
                 self.keyboard(ctx)
+            } else {
+                (ControllerState::default(), ControllerState::default())
             };
             let (held, pressed) = merge_sources(keyboard, gamepad);
             self.input.submit(held, pressed);

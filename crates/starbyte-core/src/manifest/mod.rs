@@ -1025,8 +1025,11 @@ mod ui_theme_tests {
         assert!(!loaded.ui.status_frame);
         assert!(!loaded.ui.status_apu_steps);
         assert!(!loaded.ui.status_audio_samples);
-        let old = text.lines().filter(|line| !line.starts_with("status_")
-            && !line.starts_with("show_status_bar")).collect::<Vec<_>>().join("\n");
+        let old = text
+            .lines()
+            .filter(|line| !line.starts_with("status_") && !line.starts_with("show_status_bar"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let legacy: RuntimeConfig = toml::from_str(&old).unwrap();
         assert!(legacy.ui.show_status_bar);
         assert!(legacy.ui.status_sound);

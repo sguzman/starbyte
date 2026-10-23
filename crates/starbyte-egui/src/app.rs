@@ -738,6 +738,8 @@ pub struct StarbyteApp {
     worker_no_redraw_smoke: bool,
     worker_no_redraw_gap: Option<(Instant, u64)>,
     worker_focus_pause_smoke: Option<WorkerFocusPauseSmoke>,
+    worker_panic_smoke: bool,
+    worker_panic_sent: bool,
     audio_output: Option<AudioOutput>,
     speaker_probe: SpeakerProbeState,
     /// Session mute defaults from persisted startup preference, then follows
@@ -841,6 +843,7 @@ impl StarbyteApp {
         worker_save_smoke: bool,
         worker_no_redraw_smoke: bool,
         worker_focus_pause_smoke: bool,
+        worker_panic_smoke: bool,
         logs: SharedLogBuffer,
     ) -> Result<Self> {
         // Headless Weston has no keyboard focus until a compositor explicitly
@@ -852,6 +855,7 @@ impl StarbyteApp {
             || worker_save_smoke
             || worker_no_redraw_smoke
             || worker_focus_pause_smoke
+            || worker_panic_smoke
         {
             // The pause smoke begins with playable frames before it toggles
             // the real scheduler policy; Weston may have no keyboard focus.
@@ -976,6 +980,8 @@ impl StarbyteApp {
             worker_no_redraw_gap: None,
             worker_focus_pause_smoke: worker_focus_pause_smoke
                 .then_some(WorkerFocusPauseSmoke::WaitingForGame),
+            worker_panic_smoke,
+            worker_panic_sent: false,
             audio_output: None,
             speaker_probe: SpeakerProbeState::Idle,
             audio_muted,
@@ -5386,6 +5392,33 @@ impl eframe::App for StarbyteApp {
                 }
             }
             self.last_effective_speed_percent = speed;
+            if self.worker_panic_smoke {
+                if self.worker_panic_sent {
+                    if self.worker_exit_reported
+                        && self.playback_error.is_some()
+                        && !self.is_playing
+                    {
+                        println!("STARBYTE_FULL_LIBRARY_WORKER_EXIT_SMOKE_OK playback_stopped=true");
+                        self.worker_panic_smoke = false;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        return;
+                    }
+                } else if self.session_snapshot().frame >= 15
+                    && self.framebuffer_texture.is_some()
+                {
+                    self.worker_panic_sent = true;
+                    if let Some(worker) = &self.full_worker {
+                        if let Err(error) = worker.engine.post(|_| {
+                            panic!("synthetic native worker-exit acceptance fault")
+                        }) {
+                            println!("STARBYTE_FULL_LIBRARY_WORKER_EXIT_SMOKE_FAILED {error}");
+                            self.worker_panic_smoke = false;
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            return;
+                        }
+                    }
+                }
+            }
             if let Some(worker) = &self.full_worker {
                 match self.worker_focus_pause_smoke {
                     Some(WorkerFocusPauseSmoke::WaitingForPause)

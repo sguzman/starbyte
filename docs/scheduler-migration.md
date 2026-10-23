@@ -23,7 +23,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [ ] 🧪 Confirm format, Clippy and full workspace tests on the exact commit.
 - [ ] 🖥️ Verify worker scheduling while Hyprland is off-workspace or occluded.
 
-## Milestone B: thread-owned frontend session — 14/17 source tasks (82%)
+## Milestone B: thread-owned frontend session — 15/18 source tasks (83%)
 
 - [x] 🧠 Define `OwnedSession` wrapping `FrontendSession` in `session_engine.rs`.
 - [x] 🎵 Produce PCM on the worker and enqueue it to the existing bounded Rodio worker.
@@ -38,12 +38,13 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [x] 🎮 Support nonblocking ROM replacement with old-game preservation after failed cartridge loads.
 - [x] 📸 Share an owned screenshot payload with the established frontend instead of borrowing emulator pixels from the UI.
 - [x] 🔊 Publish actual audio-device, submitted PCM, and dropped-buffer diagnostics alongside video frames.
-- [x] 💾 Run final SRAM flush and PCM invalidation on the emulation owner thread before shutdown/join, including failure to keep the GUI responsive.
+- [x] 💾 Run final SRAM flush and PCM invalidation on the emulation owner thread before shutdown/join.
+- [x] 📬 Process command bursts in bounded batches; surface fatal worker exits and queue cheat/save commands without stalling UI frames.
 - [ ] 🔄 Replace all live `StarbyteApp.session` access with worker commands and snapshots.
 - [ ] 📊 Move current emulation telemetry (FPS, frame gaps, overlays) to worker-produced truth.
 - [ ] 🎚️ Preserve every current audio speed/pitch control and its per-mode behavior through the handoff.
 
-## Milestone P: opt-in threaded preview parity — 14/17 source tasks (82%)
+## Milestone P: opt-in threaded preview parity — 15/18 source tasks (83%)
 
 - [x] 🖼️ Display coalesced worker frames using egui textures without advancing the emulator from UI redraws.
 - [x] 🎮 Reuse configured twelve-button keyboard bindings and support several gamepads with analog D-pad emulation.
@@ -59,6 +60,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [x] 🔉 Add real device/sink diagnostics and a mute-aware 440 Hz speaker check.
 - [x] 🎮 Show worker-produced hardware input and cheat-interception diagnostics.
 - [x] ⏩ Use Tab for temporary configured fast-forward speed, with transition-only audio/scheduler updates.
+- [x] 🛡️ Release stale gamepad holds on lost compositor focus and expose a worker-owned clear-cheats action.
 - [ ] 🎼 Verify actual background audio quality and speaker/device recovery on Hyprland.
 - [ ] 🧪 Verify preview menus, gamepads, screenshots and save slots natively on Hyprland.
 - [ ] ✅ Confirm format, compile, Clippy and tests on the exact preview commit.
@@ -67,13 +69,14 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 not a separate repository, not the default UI, and not a substitute for the
 complete Starbyte library application.
 
-## Milestone C: native GUI migration — 5/13 source tasks (38%; default worker integration still 0%)
+## Milestone C: native GUI migration — 6/14 source tasks (43%; default worker integration still 0%)
 
 - [x] 🧱 Introduce frontend-neutral SessionControlsSnapshot and migrate the existing disk-slot menu to it; worker can serialize the same summary.
 - [x] 🎮 Migrate the existing input overlay to frontend-neutral SessionInputDiagnostics that the worker can also publish.
 - [x] 📸 Migrate the existing screenshot action to a shared owned SessionScreenshot payload that the worker can capture as well.
 - [x] 🔊 Use shared frontend PCM metrics and sound diagnostics in both legacy app and worker, without direct emulator access from ordinary menus.
 - [x] 🛡️ Isolate deep blackout-monitor emulator inspection behind the FrontendSession boundary for later migration into worker ownership.
+- [x] 💾 Route the established F5/F8 and durable-slot actions through frontend-neutral SessionSaveAction and implement the same command on the worker.
 - [ ] 🎬 Route game-launch success/error replies through the emulation worker.
 - [ ] ⌨️ Send controller inputs without losing key-down/up edges; preserve F5/F8/F9/Escape.
 - [ ] 🪟 Display the latest completed RGBA texture without blocking the worker.
@@ -94,6 +97,13 @@ complete Starbyte library application.
 - [ ] 🌌 Switch to another Hyprland workspace; confirm continued emulation and sound when allowed.
 - [ ] 💤 Repeat with background pause checked; verify true stop, no catch-up burst and clean resume.
 - [ ] 🛡️ Confirm manual Pause, gamepad, cheats, screenshot, quick/disk saves and SRAM across restarts.
+
+**Implementation note:** These source milestones measure API and preview
+coverage, not demonstrated full-app readiness. Native StarbyteApp still owns
+`FrontendSession` and renders emulated frames synchronously. The remaining
+eight full-UI cutover tasks are blocking, not cosmetic. The workspace declares
+Rust 1.85; newly introduced post-1.85 let-chain expressions were rewritten,
+but a real MSRV build has not been performed in this environment.
 
 ## Architectural invariants
 

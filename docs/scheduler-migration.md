@@ -2,6 +2,7 @@
 
 **Status: in progress. Commit [`7950e27`](https://github.com/sguzman/starbyte/commit/7950e27a6ef32bfe9be02c67330af3c5238447dc) passed [CI run 40036684106](https://github.com/sguzman/starbyte/actions/runs/40036684106): Linux, Windows, formatting/Clippy and original-window native Weston integration. Verified source progress is 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. The complete original library worker is still opt-in; production-default cutover, physical Hyprland and audible-device quality remain unverified.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
+**Machine-readable source checklist:** [scheduler-progress.json](scheduler-progress.json) (77 stable task IDs and checked-status parity tested by Rust CI).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
 
 ## Verified independent worker NTSC pacing during no-redraw gap — 2026-10-23

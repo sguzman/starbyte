@@ -36,7 +36,9 @@ fn scheduler_ledger_matches_checked_roadmap_and_declared_percentages() {
                     .or_else(|| line.strip_prefix("- [ ] ").map(|text| (false, text)))
             })
             .collect();
-        let tasks = milestone["tasks"].as_array().expect("tasks must be an array");
+        let tasks = milestone["tasks"]
+            .as_array()
+            .expect("tasks must be an array");
         assert_eq!(tasks.len(), checkboxes.len(), "{id}: task count mismatch");
         let mut accepted = 0_u64;
         for (index, (task, (checked, source_text))) in
@@ -66,7 +68,11 @@ fn scheduler_ledger_matches_checked_roadmap_and_declared_percentages() {
         assert_eq!(milestone["total"].as_u64(), Some(n), "{id}");
         assert_eq!(milestone["percent"].as_u64(), Some(percent), "{id}");
         assert!(
-            section.lines().next().unwrap_or_default().contains(&format!("— {accepted}/{n}")),
+            section
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .contains(&format!("— {accepted}/{n}")),
             "{id}: checklist heading fraction drift"
         );
         total += n;

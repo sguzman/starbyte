@@ -1592,7 +1592,12 @@ impl StarbyteApp {
                     if let Some(restored) = saved.restored_frame {
                         self.session_view.accept_worker_frame(&restored);
                         self.worker_audio = restored.audio_diagnostics;
-                        self.worker_cpu = restored.last_frame_cpu;
+                        // Restored stills do not emulate a frame. Keep the
+                        // last measured worker CPU cost rather than reporting
+                        // a misleading 0 ms sample after F8/disk restore.
+                        if !restored.last_frame_cpu.is_zero() {
+                            self.worker_cpu = restored.last_frame_cpu;
+                        }
                         self.last_audio_pairs = restored.stereo_pairs;
                         self.last_audio_nonzero_pairs = restored.nonzero_pairs;
                         upload_worker_frame(

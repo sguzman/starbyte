@@ -165,6 +165,19 @@ jobs:
             }
           cat "$RUNNER_TEMP/starbyte-full-worker-exit.log"
           grep -F "STARBYTE_FULL_LIBRARY_WORKER_EXIT_SMOKE_OK playback_stopped=true" "$RUNNER_TEMP/starbyte-full-worker-exit.log"
+          # This uses a synthetic battery-backed ROM and an actual normal
+          # eframe window close. After Drop joins the owner, the executable
+          # reopens the cartridge and validates the persisted SRAM byte.
+          timeout 90s target/debug/starbyte-egui --demo --native-worker-preview --exit-after-full-worker-sram \
+            --config "$RUNNER_TEMP/starbyte-full-sram-config.toml" \
+            --cache-dir "$RUNNER_TEMP/starbyte-full-sram-cache" \
+            > "$RUNNER_TEMP/starbyte-full-sram.log" 2>&1 || {
+              cat "$RUNNER_TEMP/weston.log"
+              cat "$RUNNER_TEMP/starbyte-full-sram.log"
+              exit 1
+            }
+          cat "$RUNNER_TEMP/starbyte-full-sram.log"
+          grep -F "STARBYTE_FULL_LIBRARY_SRAM_SMOKE_OK persisted_byte=5A" "$RUNNER_TEMP/starbyte-full-sram.log"
           # This acceptance shell consumes worker frames through egui while
           # executing game frames from a separate OS thread.
           timeout 90s target/debug/starbyte-egui --demo --threaded-preview --preview-background --exit-after-frames 30 \

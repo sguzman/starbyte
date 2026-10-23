@@ -1665,7 +1665,8 @@ impl StarbyteApp {
                         &mut self.worker_presentation,
                     ) {
                         if let Some(WorkerReplacementSmoke::AwaitReceiptRace {
-                            stepped_frame, ..
+                            stepped_frame,
+                            ..
                         }) = &mut self.worker_replacement_smoke
                         {
                             *stepped_frame = Some(frame.status.frame);
@@ -6953,7 +6954,6 @@ mod session_view_bridge_tests {
         assert_eq!(last_uploaded, Some(8));
         assert_eq!(metrics.successful_uploads, 2);
     }
-
 
     #[test]
     fn unexpected_worker_exit_is_reported_once_even_during_manual_pause() {

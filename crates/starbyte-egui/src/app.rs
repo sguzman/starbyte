@@ -1013,14 +1013,12 @@ impl StarbyteApp {
                 app.audio_muted,
                 app.config.audio.volume,
             );
-            owner.set_speed(
+            let initial_pitch = audio_pitch_factor(
+                app.config.audio.pitch_mode,
+                app.config.audio.pitch_percent,
                 initial_speed,
-                audio_pitch_factor(
-                    app.config.audio.pitch_mode,
-                    app.config.audio.pitch_percent,
-                    initial_speed,
-                ),
             );
+            owner.set_speed(initial_speed, initial_pitch);
             let published = owner.controls_port();
             let (engine, input, render) = owner.spawn_with_ports()?;
             engine.set_speed_percent(initial_speed);
@@ -1038,7 +1036,7 @@ impl StarbyteApp {
                 last_focus: None,
                 last_playing: None,
                 last_pause_when_unfocused: None,
-                last_playback: None,
+                last_playback: Some((initial_speed, initial_pitch)),
             });
             if let Some(path) = startup_rom {
                 app.open_local_rom(&path, &cc.egui_ctx);
@@ -5866,7 +5864,10 @@ mod playback_tests {
         assert!(worker_playback_update_needed(Some((100, 1.0)), (100, 1.25)));
         assert!(worker_playback_update_needed(Some((100, 1.0)), (200, 1.0)));
         let custom = audio_pitch_factor(AudioPitchMode::Custom, 125, 100);
-        assert!(worker_playback_update_needed(Some((100, 1.0)), (100, custom)));
+        assert!(worker_playback_update_needed(
+            Some((100, 1.0)),
+            (100, custom)
+        ));
     }
 
     #[test]

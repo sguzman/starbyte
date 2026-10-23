@@ -92,6 +92,15 @@ pub struct SessionScreenshot {
     pub rgba: Vec<u8>,
 }
 
+/// Optional experimental SPC700 diagnostics formatted at the emulator
+/// ownership boundary. No frontend needs to inspect private APU state.
+#[derive(Debug, Clone, Default)]
+pub struct SessionSoundDiagnostics {
+    pub uploaded_program: Option<String>,
+    pub spc700_status: Option<String>,
+    pub isolated_driver_enabled: bool,
+}
+
 /// Read-only joypad and cheat-interception counters published to user
 /// interfaces; never requires borrowing the mutable SNES bus or the
 /// emulation worker's machine from the GUI.
@@ -521,6 +530,30 @@ impl FrontendSession {
     #[must_use]
     pub fn frame_audio_samples(&self) -> &[i16] {
         &self.emulator.audio_samples().samples
+    }
+
+    /// Snapshot experimental sound-driver diagnostics without handing
+    /// emulator-private APU structures to the renderer.
+    #[must_use]
+    pub fn sound_diagnostics(&self) -> SessionSoundDiagnostics {
+        let uploaded_program = self
+            .emulator
+            .isolated_apu_upload()
+            .map(|upload| format!("Sound program uploaded: {} bytes", upload.bytes_written()));
+        let spc700_status = self
+            .emulator
+            .isolated_apu_spc700_status()
+            .map(|status| {
+                format!(
+                    "SPC700: {} instructions, PC ${:04X}, {:?}",
+                    status.instructions, status.pc, status.halt_state
+                )
+            });
+        SessionSoundDiagnostics {
+            uploaded_program,
+            spc700_status,
+            isolated_driver_enabled: self.emulator.isolated_apu_driver_probe_enabled(),
+        }
     }
 
     /// Compact flag used by the status bar. The renderer must not inspect
@@ -1371,5 +1404,9 @@ mod session_controls_snapshot_tests {
         assert!(!input.reading);
         assert_eq!(input.rom_cheat_read_hits, 0);
         assert!(session.capture_screenshot().is_none());
+        let sound = session.sound_diagnostics();
+        assert!(!sound.isolated_driver_enabled);
+        assert!(sound.uploaded_program.is_none());
+        assert!(sound.spc700_status.is_none());
     }
 }

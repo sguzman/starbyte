@@ -6640,7 +6640,7 @@ fn fit_game_size(source: Vec2, available: Vec2, integer_scale: bool) -> Vec2 {
     source * scale
 }
 
-pub(crate) /// Write an owned screenshot on a dedicated I/O thread. The emulator keeps
+/// Write an owned screenshot on a dedicated I/O thread. The emulator keeps
 /// producing PCM and frames without waiting for PNG compression or disk I/O.
 fn spawn_screenshot_writer(
     path: PathBuf,
@@ -6664,7 +6664,7 @@ fn spawn_screenshot_writer(
     Ok(receiver)
 }
 
-fn write_png_screenshot(
+pub(crate) fn write_png_screenshot(
     path: &Path,
     rgba: &[u8],
     width: u32,

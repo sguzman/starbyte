@@ -471,6 +471,13 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
         self.frames.replaced_count()
     }
 
+    /// Number of outstanding bounded asynchronous mutation/receipt jobs.
+    /// Includes an in-progress job; excludes unbounded policy updates.
+    /// Read without synchronously borrowing the emulator on the GUI thread.
+    pub fn outstanding_async_operations(&self) -> usize {
+        self.pending_posts.load(Ordering::Acquire)
+    }
+
     pub fn frame_stats(&self) -> WorkerFrameStats {
         self.frames.worker_frame_stats()
     }
@@ -909,9 +916,15 @@ mod tests {
         for _ in 1..MAX_PENDING_POSTS {
             worker.post(|_| {}).unwrap();
         }
+        assert_eq!(worker.outstanding_async_operations(), MAX_PENDING_POSTS);
         assert!(
             worker.post(|_| {}).is_err(),
             "async action quota allowed unbounded queue growth"
+        );
+        assert_eq!(
+            worker.outstanding_async_operations(),
+            MAX_PENDING_POSTS,
+            "rejected jobs must not inflate published queue depth"
         );
         release_tx.send(()).unwrap();
         assert_eq!(worker.shutdown().unwrap(), 0);

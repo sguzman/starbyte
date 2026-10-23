@@ -140,6 +140,19 @@ jobs:
             }
           cat "$RUNNER_TEMP/starbyte-full-no-redraw.log"
           grep -F "STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_OK advanced_frames=" "$RUNNER_TEMP/starbyte-full-no-redraw.log"
+          # The complementary policy case: pause the actual owner on focus
+          # loss, withhold egui callbacks for two seconds, then resume without
+          # a catch-up burst. This does not require a physical Hyprland session.
+          timeout 90s target/debug/starbyte-egui --demo --native-worker-preview --exit-after-full-worker-focus-pause \
+            --config "$RUNNER_TEMP/starbyte-full-focus-pause-config.toml" \
+            --cache-dir "$RUNNER_TEMP/starbyte-full-focus-pause-cache" \
+            > "$RUNNER_TEMP/starbyte-full-focus-pause.log" 2>&1 || {
+              cat "$RUNNER_TEMP/weston.log"
+              cat "$RUNNER_TEMP/starbyte-full-focus-pause.log"
+              exit 1
+            }
+          cat "$RUNNER_TEMP/starbyte-full-focus-pause.log"
+          grep -F "STARBYTE_FULL_LIBRARY_FOCUS_PAUSE_SMOKE_OK paused_frames=" "$RUNNER_TEMP/starbyte-full-focus-pause.log"
           # This acceptance shell consumes worker frames through egui while
           # executing game frames from a separate OS thread.
           timeout 90s target/debug/starbyte-egui --demo --threaded-preview --preview-background --exit-after-frames 30 \

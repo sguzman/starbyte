@@ -365,9 +365,11 @@ mod routing_tests {
         AppWorker, WorkerCommand, WorkerCommandKind, WorkerEvent, build_launch_request,
         direct_launch_request, handle_command, worker_loop,
     };
+    use crate::session_engine::OwnedSession;
     use starbyte_core::manifest::{AssetConfig, RuntimeConfig};
     use starbyte_frontend::{
-        CheatEntry, InstalledStatus, LibraryEntry, LibraryFilter, SoundSessionMode,
+        CheatEntry, InstalledStatus, LibraryEntry, LibraryFilter, LocalRomInfo,
+        LocalRomSourceKind, SessionSaveAction, SoundSessionMode,
     };
     use std::{
         path::PathBuf,
@@ -476,6 +478,105 @@ mod routing_tests {
             event,
             WorkerEvent::DirectRomReady { job_id: 1, .. }
         )));
+    }
+
+    #[test]
+    fn indexed_library_launch_reaches_exclusive_emulation_worker() {
+        use std::time::{Duration, Instant};
+
+        // A built-in, copyright-free SNES ROM exercises the real library
+        // materialization -> typed request -> sole emulation owner boundary.
+        // No Wayland window, commercial game asset or UI-owned emulator.
+        let temp = tempfile::tempdir().unwrap();
+        let rom = temp.path().join("library-demo.sfc");
+        let bytes = starbyte_core::testing::demo::demo_rom_bytes();
+        std::fs::write(&rom, bytes).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(temp.path().join("saves")),
+            state_dir: Some(temp.path().join("states")),
+            cache_dir: Some(temp.path().join("cache")),
+            config_path: None,
+        };
+        let entry = LibraryEntry {
+            game_id: "library-demo".to_owned(),
+            display_title: "Library Demo".to_owned(),
+            installed_status: InstalledStatus::Installed,
+            local: Some(LocalRomInfo {
+                game_id: "library-demo".to_owned(),
+                title: "Library Demo".to_owned(),
+                normalized_title: "library demo".to_owned(),
+                rom_path: rom.clone(),
+                source_kind: LocalRomSourceKind::File,
+                archive_member_path: None,
+                extracted_cache_path: None,
+                mapper: "LoROM".to_owned(),
+                coprocessor: None,
+                region: "NTSC".to_owned(),
+                file_size_bytes: std::fs::metadata(&rom).unwrap().len(),
+            }),
+            metadata: None,
+            cover: None,
+            cheats: Vec::new(),
+        };
+        let library = AppWorker::spawn(assets.clone());
+        library.submit(WorkerCommand {
+            job_id: 1,
+            config: RuntimeConfig::default(),
+            filter: LibraryFilter::default(),
+            kind: WorkerCommandKind::MaterializeRom { entry },
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let request = loop {
+            assert!(Instant::now() < deadline, "library worker did not prepare a cartridge");
+            match library.try_recv() {
+                Some(WorkerEvent::RomReady {
+                    job_id: 1,
+                    request,
+                    ..
+                }) => break request,
+                Some(WorkerEvent::JobFailed { error, .. }) => panic!("library error: {error}"),
+                _ => std::thread::sleep(Duration::from_millis(10)),
+            }
+        };
+        assert_eq!(request.rom_path, rom);
+        assert_eq!(request.sound_mode, SoundSessionMode::Persistent);
+
+        let mut owner = OwnedSession::create(assets).unwrap();
+        owner.set_audio(false, true, 0.0);
+        let (engine, _input, render) = owner.spawn_with_ports().unwrap();
+        render.set_visible(true);
+        let response = engine
+            .queue_launch_with_state(request)
+            .unwrap()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        assert!(response.controls.session.has_rom);
+        assert!(!response.controls.has_quick_save);
+        assert_eq!(response.controls.sound_mode, SoundSessionMode::Persistent);
+        assert_eq!(response.frame.status.rom_path.as_deref(), Some(rom.as_path()));
+        assert!(response.frame.rgba.is_some());
+
+        engine.set_pause_when_unfocused(false);
+        engine.set_focused(false);
+        engine.set_playing(true);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while engine.completed_frames() < 5 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(engine.completed_frames() >= 5, "background clock did not advance");
+        engine.set_playing(false);
+        engine.invoke(|_| Ok(())).unwrap();
+        let save = engine
+            .queue_save_action_with_frame(SessionSaveAction::QuickSave)
+            .unwrap()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        assert!(save.controls.has_quick_save);
+        let returned = engine.shutdown().unwrap();
+        assert_eq!(returned.snapshot().rom_path.as_deref(), Some(rom.as_path()));
     }
 
     #[test]

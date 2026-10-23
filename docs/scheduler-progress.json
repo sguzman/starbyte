@@ -1,0 +1,460 @@
+{
+  "schema_version": 1,
+  "project": "Starbyte",
+  "subject": "Emulation scheduler migration",
+  "source": "docs/scheduler-migration.md",
+  "interpretation": "Accepted status mirrors the human-reviewed source checklist. A passing virtual Weston job does not establish physical Hyprland, audible speakers, gamepad, or production cutover.",
+  "last_verified_code": {
+    "commit": "84a28dddb788375f5a55f37693ceaa6691887286",
+    "ci_run": 40037119277,
+    "jobs": [
+      "test (ubuntu-latest)",
+      "test (windows-latest)",
+      "lint",
+      "msrv"
+    ],
+    "conclusion": "success"
+  },
+  "overall": {
+    "accepted": 69,
+    "total": 77,
+    "percent": 90
+  },
+  "milestones": [
+    {
+      "id": "A",
+      "title": "clock and ownership foundation",
+      "accepted": 7,
+      "total": 8,
+      "percent": 88,
+      "acceptance_scope": "checklist-backed; unverified physical acceptance remains pending",
+      "tasks": [
+        {
+          "id": "A-01",
+          "status": "accepted",
+          "text": "⏱️ Move deadline pacing into `scheduler.rs` with a dedicated OS thread."
+        },
+        {
+          "id": "A-02",
+          "status": "accepted",
+          "text": "🎮 Give the worker exclusive ownership of a generic machine object."
+        },
+        {
+          "id": "A-03",
+          "status": "accepted",
+          "text": "🖼️ Replace an unbounded video queue with a one-frame mailbox."
+        },
+        {
+          "id": "A-04",
+          "status": "accepted",
+          "text": "💤 Add independent Play, Focus, Background-pause and Speed commands."
+        },
+        {
+          "id": "A-05",
+          "status": "accepted",
+          "text": "🛑 Make a failed emulation frame halt the worker and expose its error."
+        },
+        {
+          "id": "A-06",
+          "status": "accepted",
+          "text": "📦 Bound outstanding asynchronous operations to 128 without blocking the GUI or losing separately ordered policy commands."
+        },
+        {
+          "id": "A-07",
+          "status": "accepted",
+          "text": "🧪 Confirm format, Clippy and full workspace tests on code commit `d0254a7` (CI run 39951239026)."
+        },
+        {
+          "id": "A-08",
+          "status": "pending",
+          "text": "🖥️ Verify worker scheduling while Hyprland is off-workspace or occluded."
+        }
+      ]
+    },
+    {
+      "id": "B",
+      "title": "thread-owned frontend session",
+      "accepted": 18,
+      "total": 18,
+      "percent": 100,
+      "acceptance_scope": "source-only; physical Hyprland and production default are separately gated",
+      "tasks": [
+        {
+          "id": "B-01",
+          "status": "accepted",
+          "text": "🧠 Define `OwnedSession` wrapping `FrontendSession` in `session_engine.rs`."
+        },
+        {
+          "id": "B-02",
+          "status": "accepted",
+          "text": "🎵 Produce PCM on the worker and enqueue it to the existing bounded Rodio worker."
+        },
+        {
+          "id": "B-03",
+          "status": "accepted",
+          "text": "💾 Serialize quick saves, durable slots and SRAM operations on the worker."
+        },
+        {
+          "id": "B-04",
+          "status": "accepted",
+          "text": "⏳ Flush SRAM periodically on the worker and at manual/background pause transitions, independent of UI redraws."
+        },
+        {
+          "id": "B-05",
+          "status": "accepted",
+          "text": "🎮 Publish an atomic held-controller state with latched short-press edges."
+        },
+        {
+          "id": "B-06",
+          "status": "accepted",
+          "text": "🖼️ Skip unnecessary RGBA copies after 300 ms without UI repaint heartbeats, even when Wayland never reports the window as minimized."
+        },
+        {
+          "id": "B-07",
+          "status": "accepted",
+          "text": "📬 Expose typed ROM, save, cheat, audio and input command methods."
+        },
+        {
+          "id": "B-08",
+          "status": "accepted",
+          "text": "🖼️ Build a renderer-only adapter that consumes published snapshots and updates egui textures."
+        },
+        {
+          "id": "B-09",
+          "status": "accepted",
+          "text": "⌨️ Expire stale input heartbeat after missing window callbacks, preventing endlessly held keys."
+        },
+        {
+          "id": "B-10",
+          "status": "accepted",
+          "text": "💾 Publish restored still frames after quick-save and disk-state loads, including while paused."
+        },
+        {
+          "id": "B-11",
+          "status": "accepted",
+          "text": "🎮 Support nonblocking ROM replacement with old-game preservation after failed cartridge loads."
+        },
+        {
+          "id": "B-12",
+          "status": "accepted",
+          "text": "📸 Share an owned screenshot payload with the established frontend instead of borrowing emulator pixels from the UI."
+        },
+        {
+          "id": "B-13",
+          "status": "accepted",
+          "text": "🔊 Publish actual audio-device, submitted PCM, and dropped-buffer diagnostics alongside video frames."
+        },
+        {
+          "id": "B-14",
+          "status": "accepted",
+          "text": "💾 Run final SRAM flush and PCM invalidation on the emulation owner thread before shutdown/join."
+        },
+        {
+          "id": "B-15",
+          "status": "accepted",
+          "text": "📬 Process command bursts in bounded batches; surface fatal worker exits and queue cheat/save commands without stalling UI frames."
+        },
+        {
+          "id": "B-16",
+          "status": "accepted",
+          "text": "🔄 Replace all live `StarbyteApp.session` access in opt-in worker mode with worker commands and snapshots. Optional legacy session is never constructed with the worker; bridge reads published state without fallback. CI 40032643086 verified Linux, Windows and original-window native Weston, including owner finalization."
+        },
+        {
+          "id": "B-17",
+          "status": "accepted",
+          "text": "📊 Move opt-in original-window emulation telemetry (FPS, frame gaps, overlays) to worker-produced truth, with separately labeled renderer delivery and texture submission measurements and bounded asynchronous owner-job depth (CI 40030994642). Production default cutover remains separate."
+        },
+        {
+          "id": "B-18",
+          "status": "accepted",
+          "text": "🎚️ Preserve current speed/pitch/mute/volume control semantics across sound modes through the opt-in original-app worker handoff (worker command test and pitch-mode mapping, CI 40011629443; physical audibility separately gated)."
+        }
+      ]
+    },
+    {
+      "id": "P",
+      "title": "opt-in threaded preview parity",
+      "accepted": 18,
+      "total": 20,
+      "percent": 90,
+      "acceptance_scope": "checklist-backed; unverified physical acceptance remains pending",
+      "tasks": [
+        {
+          "id": "P-01",
+          "status": "accepted",
+          "text": "🖼️ Display coalesced worker frames using egui textures without advancing the emulator from UI redraws."
+        },
+        {
+          "id": "P-02",
+          "status": "accepted",
+          "text": "🎮 Reuse configured twelve-button keyboard bindings and support several gamepads with analog D-pad emulation."
+        },
+        {
+          "id": "P-03",
+          "status": "accepted",
+          "text": "⏱️ Follow configured playback speed and independent audio-pitch defaults."
+        },
+        {
+          "id": "P-04",
+          "status": "accepted",
+          "text": "💤 Apply background pause and compositor heartbeat policies separately from manual Pause."
+        },
+        {
+          "id": "P-05",
+          "status": "accepted",
+          "text": "💾 Route memory quick saves/loads and three persistent disk slots through worker ownership."
+        },
+        {
+          "id": "P-06",
+          "status": "accepted",
+          "text": "📬 Queue preview saves and loads asynchronously to avoid freezing menus."
+        },
+        {
+          "id": "P-07",
+          "status": "accepted",
+          "text": "📸 Capture screenshots through the worker and write PNG files on a separate I/O thread."
+        },
+        {
+          "id": "P-08",
+          "status": "accepted",
+          "text": "📊 Show actual worker FPS, hitches, CPU time and superseded video-frame counts."
+        },
+        {
+          "id": "P-09",
+          "status": "accepted",
+          "text": "🎚️ Add worker-controlled mute, audio enable, volume and independent pitch-mode selectors."
+        },
+        {
+          "id": "P-10",
+          "status": "accepted",
+          "text": "🧩 Honor the existing individual View → Status bar metric visibility choices."
+        },
+        {
+          "id": "P-11",
+          "status": "accepted",
+          "text": "📂 Open a replacement cartridge asynchronously without blocking menus or discarding the old game on load failure."
+        },
+        {
+          "id": "P-12",
+          "status": "accepted",
+          "text": "🔉 Add real device/sink diagnostics and a mute-aware 440 Hz speaker check."
+        },
+        {
+          "id": "P-13",
+          "status": "accepted",
+          "text": "🎮 Show worker-produced hardware input and cheat-interception diagnostics."
+        },
+        {
+          "id": "P-14",
+          "status": "accepted",
+          "text": "⏩ Use Tab for temporary configured fast-forward speed, with transition-only audio/scheduler updates."
+        },
+        {
+          "id": "P-15",
+          "status": "accepted",
+          "text": "🛡️ Release stale gamepad holds on lost compositor focus and expose a worker-owned clear-cheats action."
+        },
+        {
+          "id": "P-16",
+          "status": "accepted",
+          "text": "📚 Start the opt-in preview with no cartridge, browse installed games from the real asynchronous library index, and launch each selected ROM/ZIP plus matching cheats on the sole emulation owner."
+        },
+        {
+          "id": "P-17",
+          "status": "accepted",
+          "text": "🔎 Search the installed library while rendering only visible rows; disable save/pause controls until a cartridge is installed."
+        },
+        {
+          "id": "P-18",
+          "status": "pending",
+          "text": "🎼 Verify actual background audio quality and speaker/device recovery on Hyprland."
+        },
+        {
+          "id": "P-19",
+          "status": "pending",
+          "text": "🧪 Verify preview menus, gamepads, screenshots and save slots natively on Hyprland."
+        },
+        {
+          "id": "P-20",
+          "status": "accepted",
+          "text": "✅ Confirm format, compile, Clippy and native Weston preview smoke at code commit `d0254a7`."
+        }
+      ]
+    },
+    {
+      "id": "C",
+      "title": "native GUI migration",
+      "accepted": 15,
+      "total": 16,
+      "percent": 94,
+      "acceptance_scope": "checklist-backed; unverified physical acceptance remains pending",
+      "tasks": [
+        {
+          "id": "C-01",
+          "status": "accepted",
+          "text": "🧱 Introduce frontend-neutral SessionControlsSnapshot and migrate the existing disk-slot menu to it; worker can serialize the same summary."
+        },
+        {
+          "id": "C-02",
+          "status": "accepted",
+          "text": "🎮 Migrate the existing input overlay to frontend-neutral SessionInputDiagnostics that the worker can also publish."
+        },
+        {
+          "id": "C-03",
+          "status": "accepted",
+          "text": "📸 Migrate the existing screenshot action to a shared owned SessionScreenshot payload that the worker can capture as well."
+        },
+        {
+          "id": "C-04",
+          "status": "accepted",
+          "text": "🔊 Use shared frontend PCM metrics and sound diagnostics in both legacy app and worker, without direct emulator access from ordinary menus."
+        },
+        {
+          "id": "C-05",
+          "status": "accepted",
+          "text": "🛡️ Isolate deep blackout-monitor emulator inspection behind the FrontendSession boundary for later migration into worker ownership."
+        },
+        {
+          "id": "C-06",
+          "status": "accepted",
+          "text": "💾 Route the established F5/F8 and durable-slot actions through frontend-neutral SessionSaveAction; the worker uses the same action dispatcher for quick save/load, durable slots and SRAM."
+        },
+        {
+          "id": "C-07",
+          "status": "accepted",
+          "text": "🖼️ Share validated nearest-filtered RGBA texture uploads between the legacy player and threaded preview, without adding an intermediate copy to the legacy loop."
+        },
+        {
+          "id": "C-08",
+          "status": "accepted",
+          "text": "🎬 Share one typed ROM launch request (resolved path, sound/save mode and matching cheats) across library, direct-file, startup, sound-mode restart and worker APIs, without executing a frame between installation and cheat selection."
+        },
+        {
+          "id": "C-09",
+          "status": "accepted",
+          "text": "🎬 Route game-launch success/error replies through the emulation worker, with native full-window Weston failure/survivor acceptance (CI 40013247831)."
+        },
+        {
+          "id": "C-10",
+          "status": "accepted",
+          "text": "⌨️ Send controller inputs without losing key-down/up edges; preserve F5/F8/F9/Escape. Native original-window key-event smoke and actual SNES joypad press/release regression passed (CI 40015689046, 40002095002)."
+        },
+        {
+          "id": "C-11",
+          "status": "accepted",
+          "text": "🪟 Display the latest completed RGBA texture without blocking the worker (opt-in full library, Weston catch-up after a two-second callback gap, CI 40009459833)."
+        },
+        {
+          "id": "C-12",
+          "status": "accepted",
+          "text": "🏠 Keep the full library, menus, recent covers and View status-bar toggles intact (opt-in original-window Weston acceptance, CI 40021161371)."
+        },
+        {
+          "id": "C-13",
+          "status": "accepted",
+          "text": "⏸️ Keep manual Pause, automatic focus pause, background-allowed gameplay and their resumes independent (original full-library Weston, CI 40011629443)."
+        },
+        {
+          "id": "C-14",
+          "status": "accepted",
+          "text": "💾 Preserve original disk-slot, SRAM and sound-mode namespaces. Native original-window persistent/compatibility slot switch, disk/quick save/restore and battery SRAM restart tests passed (CI 40015689046, 40000854342)."
+        },
+        {
+          "id": "C-15",
+          "status": "accepted",
+          "text": "🧹 Complete the opt-in original-window worker shutdown handoff: stop clock, flush SRAM, clear audio and join exactly once (CI 40016711374; production-default cutover remains separately gated)."
+        },
+        {
+          "id": "C-16",
+          "status": "pending",
+          "text": "🚀 Make the worker the default runtime only after passing acceptance gates."
+        }
+      ]
+    },
+    {
+      "id": "D",
+      "title": "validation",
+      "accepted": 11,
+      "total": 15,
+      "percent": 73,
+      "acceptance_scope": "checklist-backed; unverified physical acceptance remains pending",
+      "tasks": [
+        {
+          "id": "D-01",
+          "status": "accepted",
+          "text": "🧪 Add a display-server-free, real built-in ROM smoke path (`--demo --scheduler-smoke`) to CI."
+        },
+        {
+          "id": "D-02",
+          "status": "accepted",
+          "text": "🖥️ Add an opt-in `--threaded-preview` native egui shell and Weston smoke that requires a rendered texture."
+        },
+        {
+          "id": "D-03",
+          "status": "accepted",
+          "text": "🧪 Add a `cargo test` built-in demo ROM integration test for background frames, hidden-window copy suppression and reappearance, neutral controls, screenshot capture and quick-save state."
+        },
+        {
+          "id": "D-04",
+          "status": "accepted",
+          "text": "🎬 Add direct/worker launch-request tests for failed ROM preservation, restored save-mode namespaces and memory quick-save invalidation after a successful ROM replacement."
+        },
+        {
+          "id": "D-05",
+          "status": "accepted",
+          "text": "🔗 Add a compositor-free integration test from an installed library entry through ROM materialization, exclusive worker launch, unfocused gameplay frames and a worker-owned quick save."
+        },
+        {
+          "id": "D-06",
+          "status": "accepted",
+          "text": "✅ Confirm Linux CI format/Clippy and Linux+Windows tests pass on `d0254a7`."
+        },
+        {
+          "id": "D-07",
+          "status": "accepted",
+          "text": "🟩 Confirm the headless scheduler smoke and both native Weston smokes complete on `d0254a7`."
+        },
+        {
+          "id": "D-08",
+          "status": "accepted",
+          "text": "🎮 Test the opt-in library selection coordinator from installed entry through asynchronous ROM preparation, owned-session launch, still-frame upload and compositor-independent frame progress (Linux test run on `adddfa9`)."
+        },
+        {
+          "id": "D-09",
+          "status": "accepted",
+          "text": "🪟 Add and pass a dedicated native Weston smoke for `--threaded-preview --exit-after-library-scan` without a startup ROM, with a real indexed built-in SNES demo file (Linux CI run 39955310386)."
+        },
+        {
+          "id": "D-10",
+          "status": "accepted",
+          "text": "🎮 Add and pass native Weston indexed-library game launch: scan the local demo, select the installed entry through the ROM preparation worker, install it on the exclusive SNES worker, and upload 30 rendered egui frames (`STARBYTE_THREADED_LIBRARY_PLAY_SMOKE_OK`; run 39959433627)."
+        },
+        {
+          "id": "D-11",
+          "status": "accepted",
+          "text": "🌙 In native Weston, suppress egui callback work and heartbeats for two seconds with background pause disabled; verify the worker advances at least 45 independent frames (observed 121 on commit `135cf2e`, run 39962498642)."
+        },
+        {
+          "id": "D-12",
+          "status": "pending",
+          "text": "🪟 Run Wayland window visible/focused and confirm accurate ~60.1 emulated FPS."
+        },
+        {
+          "id": "D-13",
+          "status": "pending",
+          "text": "🌌 Switch to another Hyprland workspace; confirm continued emulation and sound when allowed."
+        },
+        {
+          "id": "D-14",
+          "status": "pending",
+          "text": "💤 Repeat with background pause checked; verify true stop, no catch-up burst and clean resume."
+        },
+        {
+          "id": "D-15",
+          "status": "pending",
+          "text": "🛡️ Confirm manual Pause, gamepad, cheats, screenshot, quick/disk saves and SRAM across restarts."
+        }
+      ]
+    }
+  ]
+}

@@ -286,14 +286,9 @@ impl ThreadedPreviewApp {
     }
 
     fn queue_rom_preparation(&mut self, kind: WorkerCommandKind, status: String) {
-        if self
-            .pending
-            .iter()
-            .any(|operation| matches!(operation, PendingOperation::LoadRom { .. }))
-        {
-            self.last_error = Some("Wait for cartridge installation to finish".to_owned());
-            return;
-        }
+        // Preparation runs on a separate ROM I/O lane and may proceed while
+        // a prior cartridge is being installed. Its latest request is
+        // handed to queue_rom_launch after materialization completes.
         if self.library_worker.is_none() {
             self.library_worker = Some(AppWorker::spawn(self.library_assets.clone()));
         }
@@ -861,6 +856,36 @@ mod pitch_mode_tests {
         assert_eq!(app.loaded_rom_path.as_deref(), Some(good.as_path()));
         assert!(app.playing);
         assert!(app.controls.session.has_rom);
+    }
+
+    #[test]
+    fn direct_preparation_can_supersede_an_install_in_flight() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("first.sfc");
+        let next = temp.path().join("next.sfc");
+        let demo = starbyte_core::testing::demo::demo_rom_bytes();
+        std::fs::write(&first, &demo).unwrap();
+        std::fs::write(&next, &demo).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(temp.path().join("saves")),
+            state_dir: Some(temp.path().join("states")),
+            cache_dir: Some(temp.path().join("cache")),
+            config_path: None,
+        };
+        let mut config = RuntimeConfig::default();
+        config.audio.enabled = false;
+        let mut app =
+            ThreadedPreviewApp::new(assets, &config, None, None, true, false, false).unwrap();
+        app.queue_rom_launch(SessionLaunchRequest {
+            rom_path: first,
+            sound_mode: SoundSessionMode::Persistent,
+            cheats: Vec::new(),
+        });
+        assert!(app.pending.iter().any(|op| matches!(op, PendingOperation::LoadRom { .. })));
+        app.queue_rom_load(next);
+        assert!(app.pending_library_rom.is_some());
+        assert!(app.last_error.is_none());
     }
 
     #[test]

@@ -18,8 +18,8 @@ use crate::{
     logging::SharedLogBuffer,
     scheduler::EmulatorScheduler,
     session_engine::{
-        ControlsPort, InputPort, OwnedSession, PublishedGameFrame, RenderPort, WorkerLaunchResponse,
-        WorkerSaveResponse,
+        ControlsPort, InputPort, OwnedSession, PublishedGameFrame, RenderPort,
+        WorkerLaunchResponse, WorkerSaveResponse,
     },
     video_upload::upload_rgba,
     worker::{AppWorker, WorkerCommand, WorkerCommandKind, WorkerEvent},
@@ -668,7 +668,10 @@ struct FullLibraryWorker {
     input: InputPort,
     render: RenderPort,
     pending_launches: Vec<FullLibraryPendingLaunch>,
-    pending_saves: Vec<(SessionSaveAction, Receiver<Result<WorkerSaveResponse, String>>)>,
+    pending_saves: Vec<(
+        SessionSaveAction,
+        Receiver<Result<WorkerSaveResponse, String>>,
+    )>,
     last_focus: Option<bool>,
     last_playing: Option<bool>,
     last_pause_when_unfocused: Option<bool>,
@@ -4012,10 +4015,7 @@ impl StarbyteApp {
                 self.quick_save();
             }
             if ui
-                .add_enabled(
-                    self.has_quick_save(),
-                    egui::Button::new("Quick Load (F8)"),
-                )
+                .add_enabled(self.has_quick_save(), egui::Button::new("Quick Load (F8)"))
                 .clicked()
             {
                 self.quick_load(ctx);
@@ -4533,8 +4533,7 @@ impl eframe::App for StarbyteApp {
             {
                 self.quick_save();
             }
-            if ctx.input(|input| input.key_pressed(egui::Key::F8)) && self.has_quick_save()
-            {
+            if ctx.input(|input| input.key_pressed(egui::Key::F8)) && self.has_quick_save() {
                 self.quick_load(ctx);
             }
             if ctx.input(|input| input.key_pressed(egui::Key::F12))

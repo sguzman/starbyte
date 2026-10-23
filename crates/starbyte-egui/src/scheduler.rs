@@ -729,7 +729,10 @@ mod tests {
         while !worker.is_emulating() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert!(worker.is_emulating(), "worker did not report active gameplay");
+        assert!(
+            worker.is_emulating(),
+            "worker did not report active gameplay"
+        );
         worker.set_focused(false);
         let deadline = Instant::now() + Duration::from_secs(2);
         while worker.is_emulating() && Instant::now() < deadline {

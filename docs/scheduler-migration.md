@@ -1,8 +1,32 @@
 # Emulation scheduler migration
 
-**Status: in progress. Commit [`51e729b`](https://github.com/sguzman/starbyte/commit/51e729bc106fea64c34cfb01040f5afa798bf80f) passed [CI run 40011629443](https://github.com/sguzman/starbyte/actions/runs/40011629443): Linux, Windows, format/Clippy, native full-library Weston focus/manual-pause continuity, and worker speed/pitch/mute/volume control-path regressions. Tracked source progress is 62/77 (81%), with full-GUI migration 10/16 (63%). Production-default handoff, physical Hyprland and audible-device quality remain unverified.**
+**Status: in progress. Commit [`5d5ef8e`](https://github.com/sguzman/starbyte/commit/5d5ef8e3a57e9966cb6d725f9e3c9905afc64f36) passed [CI run 40013247831](https://github.com/sguzman/starbyte/actions/runs/40013247831): Linux, Windows, format/Clippy and original-window Weston failed-ROM-replacement continuity. Tracked source progress is 63/77 (82%), with full-GUI migration 11/16 (69%). Production-default handoff, physical Hyprland and audible-device quality remain unverified.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
+
+## Verified full-window failure-safe cartridge replacement — 2026-10-23
+
+Commit [`5d5ef8e`](https://github.com/sguzman/starbyte/commit/5d5ef8e3a57e9966cb6d725f9e3c9905afc64f36)
+passed [CI 40013247831](https://github.com/sguzman/starbyte/actions/runs/40013247831)
+with **Linux, Windows and formatting/Clippy all green**, including the full
+original Starbyte library window under native Weston.
+
+The hidden replacement acceptance begins actual original-window gameplay,
+queues an asynchronous ROM installation for a deliberately absent cartridge,
+and verifies the worker's failure is acknowledged in the ordinary UI while
+the **previous valid ROM path and active installed-cartridge generation**
+remain unchanged. The surviving game must continue at least 10 more frames.
+The test observed `STARBYTE_FULL_LIBRARY_REPLACEMENT_SMOKE_OK
+retained_rom=true advanced_frames=10`. Both successful original-window
+installation and failed replacement now have native-window acceptance, so
+the worker launch reply/error integration item is checked.
+
+**Progress:** 63/77 tracked source tasks (**82%**), with full native GUI
+migration C 11/16 (**69%**). Milestones A 7/8 (88%), B 16/18 (89%),
+P 18/20 (90%), D 11/15 (73%) are unchanged. The legacy runtime remains
+the default. This is Weston virtual-Wayland proof, not verified physical
+Hyprland audio/workspace behavior, real-game compatibility or a production
+default-owner switch.
 
 ## Verified manual-pause independence and audio-policy handoff — 2026-10-23
 
@@ -358,7 +382,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 not a separate repository, not the default UI, and not a substitute for the
 complete Starbyte library application.
 
-## Milestone C: native GUI migration — 10/16 source tasks (63%; default worker integration still 0%)
+## Milestone C: native GUI migration — 11/16 source tasks (69%; production-default worker cutover still pending)
 
 - [x] 🧱 Introduce frontend-neutral SessionControlsSnapshot and migrate the existing disk-slot menu to it; worker can serialize the same summary.
 - [x] 🎮 Migrate the existing input overlay to frontend-neutral SessionInputDiagnostics that the worker can also publish.
@@ -368,7 +392,7 @@ complete Starbyte library application.
 - [x] 💾 Route the established F5/F8 and durable-slot actions through frontend-neutral SessionSaveAction; the worker uses the same action dispatcher for quick save/load, durable slots and SRAM.
 - [x] 🖼️ Share validated nearest-filtered RGBA texture uploads between the legacy player and threaded preview, without adding an intermediate copy to the legacy loop.
 - [x] 🎬 Share one typed ROM launch request (resolved path, sound/save mode and matching cheats) across library, direct-file, startup, sound-mode restart and worker APIs, without executing a frame between installation and cheat selection.
-- [ ] 🎬 Route game-launch success/error replies through the emulation worker.
+- [x] 🎬 Route game-launch success/error replies through the emulation worker, with native full-window Weston failure/survivor acceptance (CI 40013247831).
 - [ ] ⌨️ Send controller inputs without losing key-down/up edges; preserve F5/F8/F9/Escape.
 - [x] 🪟 Display the latest completed RGBA texture without blocking the worker (opt-in full library, Weston catch-up after a two-second callback gap, CI 40009459833).
 - [ ] 🏠 Keep the full library, menus, recent covers and View status-bar toggles intact.

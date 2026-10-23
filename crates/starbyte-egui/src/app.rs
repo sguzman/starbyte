@@ -3305,8 +3305,7 @@ impl StarbyteApp {
     }
 
     fn save_screenshot(&mut self) {
-        let snapshot = self.session.snapshot();
-        if !snapshot.has_rom {
+        let Some(screenshot) = self.session.capture_screenshot() else {
             self.status_line = "Load a game before taking a screenshot.".to_owned();
             return;
         }
@@ -3317,12 +3316,12 @@ impl StarbyteApp {
         let path = self
             .assets
             .screenshot_root()
-            .join(format!("starbyte-{timestamp}-frame-{}.png", snapshot.frame));
+            .join(format!("starbyte-{timestamp}-frame-{}.png", screenshot.frame));
         match write_png_screenshot(
             &path,
-            self.session.framebuffer_rgba(),
-            snapshot.framebuffer_width,
-            snapshot.framebuffer_height,
+            &screenshot.rgba,
+            screenshot.width,
+            screenshot.height,
         ) {
             Ok(()) => self.status_line = format!("Screenshot saved to {}", path.display()),
             Err(error) => {

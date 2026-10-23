@@ -13,13 +13,14 @@ again. Disabling `pause_when_unfocused` alone does not create a game clock.
 The correct long-term owner of ROM state, frame timing and save mutations is a
 dedicated emulation thread. The renderer merely consumes completed frames.
 
-## Milestone A: clock and ownership foundation — 5/7 source tasks (71%)
+## Milestone A: clock and ownership foundation — 6/8 source tasks (75%)
 
 - [x] ⏱️ Move deadline pacing into `scheduler.rs` with a dedicated OS thread.
 - [x] 🎮 Give the worker exclusive ownership of a generic machine object.
 - [x] 🖼️ Replace an unbounded video queue with a one-frame mailbox.
 - [x] 💤 Add independent Play, Focus, Background-pause and Speed commands.
 - [x] 🛑 Make a failed emulation frame halt the worker and expose its error.
+- [x] 📦 Bound outstanding asynchronous operations to 128 without blocking the GUI or losing separately ordered policy commands.
 - [ ] 🧪 Confirm format, Clippy and full workspace tests on the exact commit.
 - [ ] 🖥️ Verify worker scheduling while Hyprland is off-workspace or occluded.
 
@@ -69,7 +70,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 not a separate repository, not the default UI, and not a substitute for the
 complete Starbyte library application.
 
-## Milestone C: native GUI migration — 6/14 source tasks (43%; default worker integration still 0%)
+## Milestone C: native GUI migration — 7/15 source tasks (47%; default worker integration still 0%)
 
 - [x] 🧱 Introduce frontend-neutral SessionControlsSnapshot and migrate the existing disk-slot menu to it; worker can serialize the same summary.
 - [x] 🎮 Migrate the existing input overlay to frontend-neutral SessionInputDiagnostics that the worker can also publish.
@@ -77,6 +78,7 @@ complete Starbyte library application.
 - [x] 🔊 Use shared frontend PCM metrics and sound diagnostics in both legacy app and worker, without direct emulator access from ordinary menus.
 - [x] 🛡️ Isolate deep blackout-monitor emulator inspection behind the FrontendSession boundary for later migration into worker ownership.
 - [x] 💾 Route the established F5/F8 and durable-slot actions through frontend-neutral SessionSaveAction; the worker uses the same action dispatcher for quick save/load, durable slots and SRAM.
+- [x] 🖼️ Share validated nearest-filtered RGBA texture uploads between the legacy player and threaded preview, without adding an intermediate copy to the legacy loop.
 - [ ] 🎬 Route game-launch success/error replies through the emulation worker.
 - [ ] ⌨️ Send controller inputs without losing key-down/up edges; preserve F5/F8/F9/Escape.
 - [ ] 🪟 Display the latest completed RGBA texture without blocking the worker.
@@ -90,7 +92,7 @@ complete Starbyte library application.
 
 - [x] 🧪 Add a display-server-free, real built-in ROM smoke path (`--demo --scheduler-smoke`) to CI.
 - [x] 🖥️ Add an opt-in `--threaded-preview` native egui shell and Weston smoke that requires a rendered texture.
-- [x] 🧪 Add a `cargo test` built-in demo ROM integration test for background frames, neutral controls, screenshot capture and quick-save state.
+- [x] 🧪 Add a `cargo test` built-in demo ROM integration test for background frames, hidden-window copy suppression and reappearance, neutral controls, screenshot capture and quick-save state.
 - [ ] ✅ Confirm Linux CI format/Clippy and Linux+Windows tests pass.
 - [ ] 🟩 Confirm the scheduler smoke actually completes on the exact commit.
 - [ ] 🪟 Run Wayland window visible/focused and confirm accurate ~60.1 emulated FPS.
@@ -178,6 +180,7 @@ state as a fixed background-pause regression.
 - `session_engine.rs`: worker-owned SNES session, audio, input port, periodic SRAM
   flush and framebuffer copying controlled by renderer-update heartbeats; built-in demo integration tests run without a compositor.
 - `scheduler_video.rs`: renderer-only texture and telemetry adapter (not yet attached to the live GUI).
+- `video_upload.rs`: the same framebuffer upload boundary is already used by the established local game view and opt-in worker renderer.
 - `main.rs`: explicit headless worker smoke (including a memory quick-save/restore roundtrip, failed ROM load preservation and temporary PNG validation) and opt-in native-preview routes, no production default switch.
 - `threaded_preview.rs`: opt-in worker-powered egui player with configured twelve-button keyboard/gamepad input, independent FPS, audio controls and speaker check, live clock policies, status visibility, asynchronous save/load, ROM replacement, disk slots and F12 screenshots.
 - `preview_gamepads.rs`: multi-controller button and analog-axis input aggregation, independent of SNES frame pacing.

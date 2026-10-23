@@ -5,6 +5,12 @@ on:
     branches: ["**"]
   pull_request:
 
+# Rapid direct-to-main development can queue many superseded CI runs.
+# Keep the newest result authoritative and avoid wasting runner minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     runs-on: ubuntu-latest

@@ -14,12 +14,13 @@ use anyhow::Result;
 use eframe::egui::{self, Color32};
 use starbyte_core::{
     input::ControllerState,
-    manifest::{AssetConfig, AudioPitchMode, RuntimeConfig},
+    manifest::{AssetConfig, AudioPitchMode, InputDeviceMode, RuntimeConfig},
 };
 use starbyte_frontend::SoundSessionMode;
 
 use crate::{
     app::{input_actions, parse_egui_key, set_controller_flag},
+    preview_gamepads::{merge_sources, PreviewGamepads},
     scheduler::EmulatorScheduler,
     scheduler_video::WorkerDisplay,
     session_engine::{InputPort, OwnedSession, PublishedGameFrame, RenderPort},
@@ -51,6 +52,8 @@ pub struct ThreadedPreviewApp {
     pitch_mode: AudioPitchMode,
     pitch_percent: u16,
     keyboard_bindings: BTreeMap<String, String>,
+    gamepads: PreviewGamepads,
+    input_mode: InputDeviceMode,
     exit_after_frames: Option<u64>,
     last_error: Option<String>,
     pending: Vec<PendingOperation>,
@@ -103,6 +106,8 @@ impl ThreadedPreviewApp {
             pitch_mode: config.audio.pitch_mode,
             pitch_percent: config.audio.pitch_percent,
             keyboard_bindings: config.input.keyboard_bindings.clone(),
+            gamepads: PreviewGamepads::new(config.input.gamepad_bindings.clone()),
+            input_mode: config.input.active_device,
             exit_after_frames,
             last_error: None,
             pending: Vec::new(),
@@ -161,13 +166,12 @@ impl ThreadedPreviewApp {
         self.pending = still_pending;
     }
 
-    fn keyboard(&self, ctx: &egui::Context) {
+    fn keyboard(&self, ctx: &egui::Context) -> (ControllerState, ControllerState) {
         // Use the same persisted keyboard bindings as the established game
         // view, including X/Y and shoulder buttons. Never forward keystrokes
         // intended for a text field or keybinding editor to a game.
         if ctx.wants_keyboard_input() {
-            self.input.clear();
-            return;
+            return (ControllerState::default(), ControllerState::default());
         }
         let (held, pressed) = ctx.input(|input| {
             let mut held = ControllerState::default();
@@ -182,7 +186,7 @@ impl ThreadedPreviewApp {
             }
             (held, pressed)
         });
-        self.input.submit(held, pressed);
+        (held, pressed)
     }
 
 }
@@ -203,11 +207,21 @@ impl eframe::App for ThreadedPreviewApp {
         // framebuffer publication enabled in this preview; the single-slot
         // mailbox safely discards frames when Wayland withholds redraws.
         self.render.set_visible(true);
+        // Poll device releases even when the window lacks focus, but only
+        // transmit gameplay input while focused. This matches the existing
+        // Keyboard / Gamepad / Auto input selection.
+        let gamepad = self.gamepads.poll(
+            focused && self.input_mode != InputDeviceMode::Keyboard,
+        );
         if focused {
-            self.keyboard(ctx);
+            let keyboard = if self.input_mode == InputDeviceMode::Gamepad {
+                (ControllerState::default(), ControllerState::default())
+            } else {
+                self.keyboard(ctx)
+            };
+            let (held, pressed) = merge_sources(keyboard, gamepad);
+            self.input.submit(held, pressed);
         } else {
-            // Flush short press edges too; a previous key must not remain
-            // latched after focus has moved to another application.
             self.input.clear();
         }
 

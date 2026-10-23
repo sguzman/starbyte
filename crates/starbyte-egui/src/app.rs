@@ -1207,10 +1207,8 @@ impl StarbyteApp {
                 Ok(result) => screenshot_writes.push((generation, result)),
                 Err(TryRecvError::Empty) => writes_pending.push((generation, response)),
                 Err(TryRecvError::Disconnected) => {
-                    screenshot_writes.push((
-                        generation,
-                        Err("Screenshot PNG writer stopped".to_owned()),
-                    ));
+                    screenshot_writes
+                        .push((generation, Err("Screenshot PNG writer stopped".to_owned())));
                 }
             }
         }

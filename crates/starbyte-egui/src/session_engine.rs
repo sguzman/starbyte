@@ -6,6 +6,7 @@
 use std::{
     io,
     sync::{
+        mpsc::Receiver,
         atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering},
         Arc,
     },
@@ -469,6 +470,20 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
     pub fn quick_save_game(&self) -> Result<(), String> {
         self.transact(|engine| engine.quick_save().map_err(|e| e.to_string()))
     }
+    /// The GUI must never synchronously wait for a save that could be
+    /// delayed by a slow emulation frame or disk flush.
+    pub fn queue_quick_save(&self) -> Result<Receiver<Result<(), String>>, String> {
+        self.submit_transaction(|engine| engine.quick_save().map_err(|e| e.to_string()))
+    }
+
+    pub fn queue_save_slot(
+        &self,
+        slot: u8,
+    ) -> Result<Receiver<Result<(), String>>, String> {
+        self.submit_transaction(move |engine| {
+            engine.save_slot(slot).map(|_| ()).map_err(|e| e.to_string())
+        })
+    }
 
     pub fn quick_load_game(&self) -> Result<(), String> {
         self.transact(|engine| engine.quick_load().map_err(|e| e.to_string()))
@@ -478,6 +493,14 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
     /// transaction, even when the scheduler is deliberately paused.
     pub fn quick_load_with_frame(&self) -> Result<PublishedGameFrame, String> {
         self.transact(|engine| {
+            engine.quick_load().map_err(|e| e.to_string())?;
+            Ok(engine.capture_frame())
+        })
+    }
+    pub fn queue_quick_load_with_frame(
+        &self,
+    ) -> Result<Receiver<Result<PublishedGameFrame, String>>, String> {
+        self.submit_transaction(|engine| {
             engine.quick_load().map_err(|e| e.to_string())?;
             Ok(engine.capture_frame())
         })
@@ -496,6 +519,15 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
         slot: u8,
     ) -> Result<PublishedGameFrame, String> {
         self.transact(move |engine| {
+            engine.load_slot(slot).map_err(|e| e.to_string())?;
+            Ok(engine.capture_frame())
+        })
+    }
+    pub fn queue_load_slot_with_frame(
+        &self,
+        slot: u8,
+    ) -> Result<Receiver<Result<PublishedGameFrame, String>>, String> {
+        self.submit_transaction(move |engine| {
             engine.load_slot(slot).map_err(|e| e.to_string())?;
             Ok(engine.capture_frame())
         })

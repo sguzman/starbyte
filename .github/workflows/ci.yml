@@ -191,6 +191,19 @@ jobs:
             }
           cat "$RUNNER_TEMP/starbyte-full-replacement.log"
           grep -F "STARBYTE_FULL_LIBRARY_REPLACEMENT_SMOKE_OK retained_rom=true advanced_frames=" "$RUNNER_TEMP/starbyte-full-replacement.log"
+          # Press F5, F8, F9 and Escape through the original window's egui
+          # key-event pipeline. Verify saves, restore, library navigation,
+          # continued worker progress and fresh video after returning.
+          timeout 90s target/debug/starbyte-egui --demo --native-worker-preview --exit-after-full-worker-shortcuts \
+            --config "$RUNNER_TEMP/starbyte-full-shortcuts-config.toml" \
+            --cache-dir "$RUNNER_TEMP/starbyte-full-shortcuts-cache" \
+            > "$RUNNER_TEMP/starbyte-full-shortcuts.log" 2>&1 || {
+              cat "$RUNNER_TEMP/weston.log"
+              cat "$RUNNER_TEMP/starbyte-full-shortcuts.log"
+              exit 1
+            }
+          cat "$RUNNER_TEMP/starbyte-full-shortcuts.log"
+          grep -F "STARBYTE_FULL_LIBRARY_SHORTCUT_SMOKE_OK f5=true f8=true f9=true escape=true frame=" "$RUNNER_TEMP/starbyte-full-shortcuts.log"
           # This acceptance shell consumes worker frames through egui while
           # executing game frames from a separate OS thread.
           timeout 90s target/debug/starbyte-egui --demo --threaded-preview --preview-background --exit-after-frames 30 \

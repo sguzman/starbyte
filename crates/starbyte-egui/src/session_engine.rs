@@ -716,6 +716,50 @@ mod tests {
     }
 
     #[test]
+    fn background_worker_runs_demo_and_captures_screenshot_without_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let rom = dir.path().join("built-in-demo.sfc");
+        std::fs::write(&rom, starbyte_core::testing::demo::demo_rom_bytes()).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(dir.path().join("saves")),
+            state_dir: Some(dir.path().join("states")),
+            cache_dir: Some(dir.path().join("cache")),
+            config_path: None,
+        };
+        let mut engine = OwnedSession::create(assets).unwrap();
+        engine.load_rom(&rom, SoundSessionMode::Persistent).unwrap();
+        engine.set_audio(false, true, 0.0);
+        let (worker, _input, _render) = engine.spawn_with_ports().unwrap();
+        worker.set_pause_when_unfocused(false);
+        worker.set_focused(false);
+        worker.set_playing(true);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while worker.completed_frames() < 5 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(15));
+        }
+        assert!(
+            worker.completed_frames() >= 5,
+            "independent clock did not produce background frames"
+        );
+        worker.set_playing(false);
+        worker.invoke(|_| Ok(())).unwrap();
+        let controls = worker.read_controls().unwrap();
+        assert!(controls.session.has_rom);
+        assert!(!controls.has_quick_save);
+        let reply = worker.queue_screenshot_pixels().unwrap();
+        let image = reply.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
+        assert!(image.frame >= 5);
+        assert_eq!(
+            image.rgba.len(),
+            image.width as usize * image.height as usize * 4
+        );
+        worker.quick_save_game().unwrap();
+        assert!(worker.read_controls().unwrap().has_quick_save);
+        assert_eq!(worker.shutdown().unwrap().snapshot().rom_path, Some(rom));
+    }
+
+    #[test]
     fn detached_session_has_no_game_until_loaded() {
         let engine = OwnedSession::create(AssetConfig::default()).unwrap();
         assert!(!engine.snapshot().has_rom);

@@ -63,6 +63,7 @@ pub struct ThreadedPreviewApp {
     audio_muted: bool,
     audio_volume: f32,
     status_settings: UiSettings,
+    show_input_diagnostics: bool,
     keyboard_bindings: BTreeMap<String, String>,
     gamepads: PreviewGamepads,
     input_mode: InputDeviceMode,
@@ -125,6 +126,7 @@ impl ThreadedPreviewApp {
             audio_muted: config.audio.mute_on_startup,
             audio_volume: config.audio.volume,
             status_settings: config.ui.clone(),
+            show_input_diagnostics: false,
             keyboard_bindings: config.input.keyboard_bindings.clone(),
             gamepads: PreviewGamepads::new(config.input.gamepad_bindings.clone()),
             input_mode: config.input.active_device,
@@ -453,6 +455,10 @@ impl eframe::App for ThreadedPreviewApp {
                         self.engine.set_pause_when_unfocused(self.pause_when_unfocused);
                     }
                     ui.checkbox(&mut self.integer_scale, "Integer scale");
+                    ui.checkbox(
+                        &mut self.show_input_diagnostics,
+                        "Input diagnostics",
+                    );
                     ui.menu_button("Status bar", |ui| {
                         let prefs = &mut self.status_settings;
                         ui.checkbox(&mut prefs.show_status_bar, "Show status bar");
@@ -618,6 +624,22 @@ impl eframe::App for ThreadedPreviewApp {
             }
             let available = ui.available_size();
             self.display.draw(ui, available, self.integer_scale);
+            if self.show_input_diagnostics {
+                let diag = self.display.input_diagnostics();
+                ui.painter().text(
+                    bounds.left_top() + egui::vec2(12.0, 12.0),
+                    egui::Align2::LEFT_TOP,
+                    format!(
+                        "SNES host {:04X} | latched {:04X} | reading {}\nROM cheat hits {}",
+                        diag.host_bits,
+                        diag.latched_bits,
+                        diag.reading,
+                        diag.rom_cheat_read_hits
+                    ),
+                    egui::TextStyle::Monospace.resolve(ui.style()),
+                    Color32::LIGHT_YELLOW,
+                );
+            }
         });
         if self.status_settings.show_status_bar {
             egui::TopBottomPanel::bottom("worker_preview_stats").show(ctx, |ui| {

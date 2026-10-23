@@ -5325,8 +5325,7 @@ impl eframe::App for StarbyteApp {
             ) && self.session_snapshot().frame >= 15
                 && self.framebuffer_texture.is_some()
             {
-                self.worker_focus_pause_smoke =
-                    Some(WorkerFocusPauseSmoke::WaitingForPause);
+                self.worker_focus_pause_smoke = Some(WorkerFocusPauseSmoke::WaitingForPause);
             }
             let focused = match self.worker_focus_pause_smoke {
                 Some(WorkerFocusPauseSmoke::WaitingForPause)

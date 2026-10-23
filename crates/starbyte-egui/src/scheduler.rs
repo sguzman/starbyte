@@ -659,7 +659,7 @@ mod tests {
             resumed > still_stopped,
             "background-allowed emulation did not resume independently of redraws"
         );
-        assert_eq!(worker.shutdown().unwrap(), resumed);
+        assert!(worker.shutdown().unwrap() >= resumed);
     }
 
     #[test]

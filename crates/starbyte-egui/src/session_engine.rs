@@ -6,9 +6,9 @@
 use std::{
     io,
     sync::{
-        mpsc::Receiver,
-        atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering},
+        mpsc::Receiver,
     },
     time::{Duration, Instant},
 };

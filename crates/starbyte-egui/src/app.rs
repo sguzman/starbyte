@@ -757,6 +757,16 @@ enum WorkerReplacementSmoke {
         deadline: Instant,
         error_reported: bool,
     },
+    /// Capture and paused step are submitted before a second failing launch;
+    /// both receipts must remain valid for the surviving cartridge.
+    AwaitReceiptRace {
+        previous_rom: PathBuf,
+        previous_owner: Option<u64>,
+        deadline: Instant,
+        error_reported: bool,
+        screenshot_written: bool,
+        stepped_frame: Option<u64>,
+    },
 }
 
 /// Native-only synthetic egui key events exercise the original window's
@@ -1401,7 +1411,12 @@ impl StarbyteApp {
             } else {
                 None
             };
-        let completed_step = if let Some((generation, reply)) = worker.pending_step.take() {
+        // A replacement may fail, leaving the prior cartridge installed.
+        // Keep its completed step in the receiver until the install outcome is
+        // known; consuming the receipt while a launch is pending loses it.
+        let completed_step = if !worker.pending_launches.is_empty() {
+            None
+        } else if let Some((generation, reply)) = worker.pending_step.take() {
             match reply.try_recv() {
                 Ok(result) => Some((generation, result)),
                 Err(TryRecvError::Empty) => {
@@ -1490,10 +1505,12 @@ impl StarbyteApp {
                 Err(error) => {
                     self.update_job(pending.job_id, "Load Game", "failed", &error);
                     self.status_line = format!("Could not install ROM: {error}");
-                    if let Some(WorkerReplacementSmoke::AwaitFailure { error_reported, .. }) =
-                        &mut self.worker_replacement_smoke
-                    {
-                        *error_reported = true;
+                    match &mut self.worker_replacement_smoke {
+                        Some(WorkerReplacementSmoke::AwaitFailure { error_reported, .. })
+                        | Some(WorkerReplacementSmoke::AwaitReceiptRace {
+                            error_reported, ..
+                        }) => *error_reported = true,
+                        _ => {}
                     }
                     // Failed installation leaves the previous cartridge
                     // active. A library refresh might have deferred its
@@ -1593,6 +1610,14 @@ impl StarbyteApp {
             }
             match result {
                 Ok(frame) => {
+                    if let Some(WorkerReplacementSmoke::AwaitReceiptRace {
+                        stepped_frame, ..
+                    }) = &mut self.worker_replacement_smoke
+                    {
+                        if frame.rgba.is_some() {
+                            *stepped_frame = Some(frame.status.frame);
+                        }
+                    }
                     self.session_view.accept_worker_frame(&frame);
                     self.worker_audio = frame.audio_diagnostics;
                     self.worker_cpu = frame.last_frame_cpu;
@@ -1672,6 +1697,16 @@ impl StarbyteApp {
             }
             if self.worker_save_smoke_stage == Some(WorkerSaveSmokeStage::AwaitScreenshot) {
                 self.worker_save_smoke_screenshot = Some(result.clone());
+            }
+            if let Ok(path) = &result {
+                if path.is_file() {
+                    if let Some(WorkerReplacementSmoke::AwaitReceiptRace {
+                        screenshot_written, ..
+                    }) = &mut self.worker_replacement_smoke
+                    {
+                        *screenshot_written = true;
+                    }
+                }
             }
             match result {
                 Ok(path) => {
@@ -6279,7 +6314,49 @@ impl eframe::App for StarbyteApp {
                             println!(
                                 "STARBYTE_FULL_LIBRARY_REPLACEMENT_SMOKE_OK retained_rom=true advanced_frames={advanced}"
                             );
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            // Submit both operations while the old cartridge
+                            // is still installed, then request another broken
+                            // replacement before either receipt is polled.
+                            self.is_playing = false;
+                            if let Some(worker) = &mut self.full_worker {
+                                worker.engine.set_playing(false);
+                                worker.last_playing = Some(false);
+                            }
+                            self.save_screenshot();
+                            self.pending_step_frames = 1;
+                            self.queue_full_worker_step();
+                            let job_id = self.next_job_id;
+                            self.next_job_id += 1;
+                            self.latest_rom_job_id = Some(job_id);
+                            let missing = self.cache_root.join(format!(
+                                "absent-worker-receipt-cartridge-{job_id}.sfc"
+                            ));
+                            if missing.exists() {
+                                println!(
+                                    "STARBYTE_FULL_LIBRARY_RECEIPT_RACE_SMOKE_FAILED fixture_exists"
+                                );
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                return;
+                            }
+                            self.queue_full_worker_launch(
+                                job_id,
+                                missing.clone(),
+                                None,
+                                SessionLaunchRequest {
+                                    rom_path: missing,
+                                    sound_mode: SoundSessionMode::Persistent,
+                                    cheats: Vec::new(),
+                                },
+                            );
+                            self.worker_replacement_smoke =
+                                Some(WorkerReplacementSmoke::AwaitReceiptRace {
+                                    previous_rom,
+                                    previous_owner,
+                                    deadline: Instant::now() + Duration::from_secs(8),
+                                    error_reported: false,
+                                    screenshot_written: false,
+                                    stepped_frame: None,
+                                });
                             return;
                         }
                         if Instant::now() >= deadline {
@@ -6296,6 +6373,46 @@ impl eframe::App for StarbyteApp {
                                 started_at,
                                 deadline,
                                 error_reported,
+                            });
+                    }
+                    WorkerReplacementSmoke::AwaitReceiptRace {
+                        previous_rom,
+                        previous_owner,
+                        deadline,
+                        error_reported,
+                        screenshot_written,
+                        stepped_frame,
+                    } => {
+                        let worker = self.full_worker.as_ref().unwrap();
+                        let retained = self.session_snapshot().rom_path.as_ref()
+                            == Some(&previous_rom)
+                            && self.worker_active_launch_id == previous_owner
+                            && worker.pending_launches.is_empty()
+                            && !self.is_playing;
+                        let step_uploaded = stepped_frame.is_some()
+                            && stepped_frame == self.last_worker_texture_frame;
+                        if error_reported && retained && screenshot_written && step_uploaded {
+                            println!(
+                                "STARBYTE_FULL_LIBRARY_RECEIPT_RACE_SMOKE_OK retained_rom=true screenshot_written=true step_uploaded=true"
+                            );
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            return;
+                        }
+                        if Instant::now() >= deadline {
+                            println!(
+                                "STARBYTE_FULL_LIBRARY_RECEIPT_RACE_SMOKE_FAILED receipt={error_reported} retained={retained} screenshot={screenshot_written} step_uploaded={step_uploaded}"
+                            );
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            return;
+                        }
+                        self.worker_replacement_smoke =
+                            Some(WorkerReplacementSmoke::AwaitReceiptRace {
+                                previous_rom,
+                                previous_owner,
+                                deadline,
+                                error_reported,
+                                screenshot_written,
+                                stepped_frame,
                             });
                     }
                 }

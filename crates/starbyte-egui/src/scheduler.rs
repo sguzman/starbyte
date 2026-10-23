@@ -290,8 +290,22 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
     pub fn spawn_with_pause_hook(
         machine: Machine,
         base_interval: Duration,
+        step: impl FnMut(&mut Machine) -> Result<Frame, String> + Send + 'static,
+        on_pause: impl FnMut(&mut Machine) + Send + 'static,
+    ) -> std::io::Result<Self> {
+        Self::spawn_with_hooks(machine, base_interval, step, on_pause, |_| {})
+    }
+
+    /// Finalize cartridge state on the emulation owner thread before join
+    /// returns the machine for inspection. In particular, SRAM writes and
+    /// stale PCM invalidation must not first occur on the GUI thread during
+    /// Drop of the returned session.
+    pub fn spawn_with_hooks(
+        machine: Machine,
+        base_interval: Duration,
         mut step: impl FnMut(&mut Machine) -> Result<Frame, String> + Send + 'static,
         mut on_pause: impl FnMut(&mut Machine) + Send + 'static,
+        mut on_shutdown: impl FnMut(&mut Machine) + Send + 'static,
     ) -> std::io::Result<Self> {
         let (sender, receiver) = mpsc::channel();
         let frames = Arc::new(FrameMailbox::default());
@@ -309,6 +323,7 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
                     base_interval,
                     &mut step,
                     &mut on_pause,
+                    &mut on_shutdown,
                 )
             })?;
         Ok(Self {
@@ -448,6 +463,14 @@ impl<Machine: Send + 'static, Frame: Send + 'static> Drop for EmulatorScheduler<
     }
 }
 
+fn finish_on_worker<Machine>(
+    mut machine: Machine,
+    on_shutdown: &mut impl FnMut(&mut Machine),
+) -> Machine {
+    on_shutdown(&mut machine);
+    machine
+}
+
 fn run_owned_clock<Machine, Frame>(
     mut machine: Machine,
     commands: Receiver<Command<Machine>>,
@@ -456,6 +479,7 @@ fn run_owned_clock<Machine, Frame>(
     base_interval: Duration,
     step: &mut impl FnMut(&mut Machine) -> Result<Frame, String>,
     on_pause: &mut impl FnMut(&mut Machine),
+    on_shutdown: &mut impl FnMut(&mut Machine),
 ) -> Machine {
     let mut policy = ClockPolicy::default();
     let mut was_running = false;
@@ -467,11 +491,11 @@ fn run_owned_clock<Machine, Frame>(
             match commands.try_recv() {
                 Ok(command) => {
                     if !apply_command(command, &mut machine, &mut policy) {
-                        return machine;
+                        return finish_on_worker(machine, on_shutdown);
                     }
                 }
                 Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => return machine,
+                Err(TryRecvError::Disconnected) => return finish_on_worker(machine, on_shutdown),
             }
         }
         let running = policy.playing
@@ -489,10 +513,10 @@ fn run_owned_clock<Machine, Frame>(
             match commands.recv_timeout(Duration::from_millis(50)) {
                 Ok(command) => {
                     if !apply_command(command, &mut machine, &mut policy) {
-                        return machine;
+                        return finish_on_worker(machine, on_shutdown);
                     }
                 }
-                Err(RecvTimeoutError::Disconnected) => return machine,
+                Err(RecvTimeoutError::Disconnected) => return finish_on_worker(machine, on_shutdown),
                 Err(RecvTimeoutError::Timeout) => {}
             }
             continue;
@@ -518,10 +542,10 @@ fn run_owned_clock<Machine, Frame>(
             match commands.recv_timeout(deadline.duration_since(now)) {
                 Ok(command) => {
                     if !apply_command(command, &mut machine, &mut policy) {
-                        return machine;
+                        return finish_on_worker(machine, on_shutdown);
                     }
                 }
-                Err(RecvTimeoutError::Disconnected) => return machine,
+                Err(RecvTimeoutError::Disconnected) => return finish_on_worker(machine, on_shutdown),
                 Err(RecvTimeoutError::Timeout) => {}
             }
             continue;
@@ -752,6 +776,28 @@ mod tests {
             "queued GUI commands prevented the emulation clock from advancing"
         );
         assert!(worker.shutdown().unwrap() >= 3);
+    }
+
+    #[test]
+    fn shutdown_finalizer_runs_on_emulator_owner_thread() {
+        #[derive(Default)]
+        struct Machine {
+            shutdown_thread: Option<String>,
+        }
+        let worker = EmulatorScheduler::spawn_with_hooks(
+            Machine::default(),
+            Duration::from_millis(2),
+            |_| Ok(()),
+            |_| {},
+            |machine| {
+                machine.shutdown_thread = std::thread::current()
+                    .name()
+                    .map(str::to_owned);
+            },
+        )
+        .unwrap();
+        let returned = worker.shutdown().unwrap();
+        assert_eq!(returned.shutdown_thread.as_deref(), Some("starbyte-emulation"));
     }
 
     #[test]

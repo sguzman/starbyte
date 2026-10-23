@@ -999,6 +999,68 @@ mod tests {
     }
 
     #[test]
+    fn worker_input_port_reaches_real_snes_auto_joypad_and_releases() {
+        let dir = tempfile::tempdir().unwrap();
+        let rom_path = dir.path().join("worker-joypad.sfc");
+        let mut rom = starbyte_core::testing::demo::demo_rom_bytes();
+        // Enable SNES automatic joypad polling, then run a tight loop.
+        rom[..7].copy_from_slice(&[0xA9, 0x01, 0x8D, 0x00, 0x42, 0x80, 0xFE]);
+        std::fs::write(&rom_path, rom).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(dir.path().join("saves")),
+            state_dir: Some(dir.path().join("states")),
+            cache_dir: Some(dir.path().join("cache")),
+            config_path: None,
+        };
+        let mut owner = OwnedSession::create(assets).unwrap();
+        owner.set_audio(false, true, 0.0);
+        owner.load_rom(&rom_path, SoundSessionMode::Persistent).unwrap();
+        let (worker, input, _) = owner.spawn_with_ports().unwrap();
+        let pressed = ControllerState {
+            start: true,
+            right: true,
+            ..ControllerState::default()
+        };
+        input.submit(pressed, pressed);
+        let mut last = None;
+        for _ in 0..3 {
+            last = Some(
+                worker
+                    .queue_step_frame()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(3))
+                    .unwrap()
+                    .unwrap(),
+            );
+        }
+        let latched = last.unwrap().input_diagnostics;
+        assert_eq!(latched.host_bits, pressed.to_bits());
+        assert_eq!(latched.latched_bits, pressed.to_bits());
+        assert!(!latched.reading);
+
+        // The same independent port must release the actual emulated
+        // register state, not only the presenter-side held-key overlay.
+        input.submit(ControllerState::default(), ControllerState::default());
+        let mut released = None;
+        for _ in 0..3 {
+            released = Some(
+                worker
+                    .queue_step_frame()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(3))
+                    .unwrap()
+                    .unwrap(),
+            );
+        }
+        let released = released.unwrap().input_diagnostics;
+        assert_eq!(released.host_bits, 0);
+        assert_eq!(released.latched_bits, 0);
+        assert!(!released.reading);
+        worker.shutdown().unwrap();
+    }
+
+    #[test]
     fn worker_shutdown_persists_battery_sram_without_gui_flush() {
         let dir = tempfile::tempdir().unwrap();
         let rom_path = dir.path().join("battery-worker.sfc");

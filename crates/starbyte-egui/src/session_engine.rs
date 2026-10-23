@@ -408,7 +408,7 @@ impl OwnedSession {
     /// must display the restored picture immediately, not wait for Play.
     pub fn capture_frame(&self) -> PublishedGameFrame {
         let status = self.session.snapshot();
-        let samples = &self.session.emulator().audio_samples().samples;
+        let samples = &self.session.frame_audio_samples();
         let stereo_pairs = samples.len() / 2;
         let nonzero_pairs = samples
             .chunks_exact(2)
@@ -445,7 +445,7 @@ impl OwnedSession {
         }
 
         let status = self.session.snapshot();
-        let samples = &self.session.emulator().audio_samples().samples;
+        let samples = &self.session.frame_audio_samples();
         let stereo_pairs = samples.len() / 2;
         let nonzero_pairs = samples.chunks_exact(2)
             .filter(|pair| pair[0] != 0 || pair[1] != 0)

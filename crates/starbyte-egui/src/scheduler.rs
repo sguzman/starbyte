@@ -10,7 +10,7 @@ use std::{
     collections::VecDeque,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError},
     },
     thread::{self, JoinHandle},
@@ -21,6 +21,9 @@ use std::{
 /// the machine owner and starving game-frame deadlines. Long commands such as
 /// ROM loads remain serialized by design.
 const MAX_COMMANDS_PER_TICK: usize = 64;
+/// Bound queued asynchronous file/cheat operations. Pause, focus, and speed
+/// commands use the same ordered channel but are intentionally exempt.
+const MAX_PENDING_POSTS: usize = 128;
 
 /// Hardware NTSC frame period used by the existing player.
 pub const NTSC_FRAME_INTERVAL: Duration = Duration::from_nanos(16_639_357);
@@ -255,6 +258,7 @@ fn apply_command<Machine>(
     command: Command<Machine>,
     machine: &mut Machine,
     policy: &mut ClockPolicy,
+    pending_posts: &AtomicUsize,
 ) -> bool {
     match command {
         Command::Run(running) => policy.playing = running,
@@ -264,7 +268,10 @@ fn apply_command<Machine>(
         Command::Invoke(action, response) => {
             let _ = response.send(action(machine));
         }
-        Command::Post(action) => action(machine),
+        Command::Post(action) => {
+            action(machine);
+            pending_posts.fetch_sub(1, Ordering::AcqRel);
+        }
         Command::Shutdown => return false,
     }
     true
@@ -278,6 +285,7 @@ pub struct EmulatorScheduler<Machine: Send + 'static, Frame: Send + 'static> {
     commands: Sender<Command<Machine>>,
     frames: Arc<FrameMailbox<Frame>>,
     gui_heartbeat: Arc<GuiHeartbeat>,
+    pending_posts: Arc<AtomicUsize>,
     join: Option<JoinHandle<Machine>>,
 }
 
@@ -321,6 +329,8 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
         let publication = Arc::clone(&frames);
         let gui_heartbeat = Arc::new(GuiHeartbeat::new());
         let worker_heartbeat = Arc::clone(&gui_heartbeat);
+        let pending_posts = Arc::new(AtomicUsize::new(0));
+        let worker_pending_posts = Arc::clone(&pending_posts);
         let join = thread::Builder::new()
             .name("starbyte-emulation".to_owned())
             .spawn(move || {
@@ -329,6 +339,7 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
                     receiver,
                     publication,
                     worker_heartbeat,
+                    worker_pending_posts,
                     base_interval,
                     &mut step,
                     &mut on_pause,
@@ -339,6 +350,7 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
             commands: sender,
             frames,
             gui_heartbeat,
+            pending_posts,
             join: Some(join),
         })
     }
@@ -383,9 +395,17 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
     /// One-way state/input updates must never block a menu or gamepad read.
     /// The worker applies each update before its next frame.
     pub fn post(&self, action: impl FnOnce(&mut Machine) + Send + 'static) -> Result<(), String> {
-        self.commands
-            .send(Command::Post(Box::new(action)))
-            .map_err(|_| "emulation worker is not running".to_owned())
+        // Do not let repeated F5/cheat/screenshot requests allocate an
+        // unbounded backlog when the worker is busy with disk I/O.
+        self.pending_posts
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |pending| {
+                (pending < MAX_PENDING_POSTS).then_some(pending + 1)
+            })
+            .map_err(|_| "emulation worker operation queue is full".to_owned())?;
+        self.commands.send(Command::Post(Box::new(action))).map_err(|_| {
+            self.pending_posts.fetch_sub(1, Ordering::AcqRel);
+            "emulation worker is not running".to_owned()
+        })
     }
 
     /// Queue a user-initiated operation without blocking the egui event
@@ -482,6 +502,7 @@ fn run_owned_clock<Machine, Frame>(
     commands: Receiver<Command<Machine>>,
     frames: Arc<FrameMailbox<Frame>>,
     gui_heartbeat: Arc<GuiHeartbeat>,
+    pending_posts: Arc<AtomicUsize>,
     base_interval: Duration,
     step: &mut impl FnMut(&mut Machine) -> Result<Frame, String>,
     on_pause: &mut impl FnMut(&mut Machine),
@@ -496,7 +517,7 @@ fn run_owned_clock<Machine, Frame>(
         for _ in 0..MAX_COMMANDS_PER_TICK {
             match commands.try_recv() {
                 Ok(command) => {
-                    if !apply_command(command, &mut machine, &mut policy) {
+                    if !apply_command(command, &mut machine, &mut policy, &pending_posts) {
                         return finish_on_worker(machine, on_shutdown);
                     }
                 }
@@ -517,7 +538,7 @@ fn run_owned_clock<Machine, Frame>(
             deadline = Instant::now();
             match commands.recv_timeout(Duration::from_millis(50)) {
                 Ok(command) => {
-                    if !apply_command(command, &mut machine, &mut policy) {
+                    if !apply_command(command, &mut machine, &mut policy, &pending_posts) {
                         return finish_on_worker(machine, on_shutdown);
                     }
                 }
@@ -548,7 +569,7 @@ fn run_owned_clock<Machine, Frame>(
         if now < deadline {
             match commands.recv_timeout(deadline.duration_since(now)) {
                 Ok(command) => {
-                    if !apply_command(command, &mut machine, &mut policy) {
+                    if !apply_command(command, &mut machine, &mut policy, &pending_posts) {
                         return finish_on_worker(machine, on_shutdown);
                     }
                 }
@@ -793,6 +814,34 @@ mod tests {
         // No frame means the worker stopped cleanly on its error, without a
         // compositor-dependent repaint or a lost session.
         assert_eq!(worker.completed_frames(), 0);
+        assert_eq!(worker.shutdown().unwrap(), 0);
+    }
+
+    #[test]
+    fn asynchronous_actions_are_bounded_without_blocking_gui() {
+        let worker = EmulatorScheduler::spawn(
+            0_u64,
+            Duration::from_millis(2),
+            |machine| Ok(*machine),
+        )
+        .unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        worker
+            .post(move |_| {
+                let _ = started_tx.send(());
+                let _ = release_rx.recv();
+            })
+            .unwrap();
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        for _ in 1..MAX_PENDING_POSTS {
+            worker.post(|_| {}).unwrap();
+        }
+        assert!(
+            worker.post(|_| {}).is_err(),
+            "async action quota allowed unbounded queue growth"
+        );
+        release_tx.send(()).unwrap();
         assert_eq!(worker.shutdown().unwrap(), 0);
     }
 

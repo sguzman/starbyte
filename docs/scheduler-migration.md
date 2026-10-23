@@ -1,8 +1,31 @@
 # Emulation scheduler migration
 
-**Status: in progress. Commit [`88da6d7`](https://github.com/sguzman/starbyte/commit/88da6d7b4f542392ae670e346da39db6dac8af2a) passed [CI run 39997413540](https://github.com/sguzman/starbyte/actions/runs/39997413540): Linux, Windows, lint/Clippy, full-window Weston playback/saves/60-step acceptance, and complementary two-second no-egui-callback background-run versus focus-pause/resume checks. Full default-app ownership transfer and physical Hyprland/audio validation remain outstanding.**
+**Status: in progress. Commit [`f201823`](https://github.com/sguzman/starbyte/commit/f2018235217838bff01647d8ff153dc6446b6f3b) passed [CI run 39998845470](https://github.com/sguzman/starbyte/actions/runs/39998845470): Linux, Windows, lint/Clippy, native Weston full-window playback, save/restore, 60-frame stepping, two-second focus pause/resume, background continuation and unexpected worker termination reporting. Default-app ownership transfer and physical Hyprland/audio validation remain outstanding.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
+
+## Verified original-window owner failure reporting — 2026-10-23
+
+Commit [`f201823`](https://github.com/sguzman/starbyte/commit/f2018235217838bff01647d8ff153dc6446b6f3b)
+passed [CI 39998845470](https://github.com/sguzman/starbyte/actions/runs/39998845470)
+with green Linux, Windows and lint/Clippy jobs. The opt-in **complete
+original library window** now detects a finished emulation-owner thread,
+reports a playback error even if the player was manually paused, and
+does not repeatedly log the same fatal exit on subsequent redraws.
+
+A new hidden native acceptance mode begins playback, injects a synthetic
+panic into *only* the dedicated emulation owner, and waits for the ordinary
+window to mark playback stopped. Linux Weston recorded
+`STARBYTE_FULL_LIBRARY_WORKER_EXIT_SMOKE_OK playback_stopped=true`.
+The earlier focus policy acceptance passed again in the same run:
+`STARBYTE_FULL_LIBRARY_FOCUS_PAUSE_SMOKE_OK paused_frames=0 resumed_frames=11`.
+
+This intentionally fatal test never runs in normal desktop launches.
+It proves the original GUI sees an unexpected worker exit; it does **not**
+prove recovery after an emulator crash, physical Hyprland off-workspace
+sound quality, SRAM integrity during a panic, or default worker readiness.
+Roadmap counts remain A 7/8 (88%), B 15/18 (83%), P 18/20 (90%),
+C 8/16 (50%) and D 11/15 (73%). The legacy player remains the default.
 
 ## Verified native focus pause and background continuation — 2026-10-23
 

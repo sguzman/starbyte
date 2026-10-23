@@ -828,6 +828,9 @@ pub struct StarbyteApp {
     worker_panic_smoke: bool,
     worker_panic_sent: bool,
     worker_sram_smoke: bool,
+    /// The SRAM native smoke also proves the actual StarbyteApp Drop path
+    /// finalized and joined the owner before reopening the cartridge.
+    worker_verify_shutdown: bool,
     worker_sram_smoke_started: bool,
     worker_sram_smoke_reply: Option<Receiver<Result<usize, String>>>,
     worker_replacement_smoke: Option<WorkerReplacementSmoke>,
@@ -1088,6 +1091,7 @@ impl StarbyteApp {
             worker_panic_smoke,
             worker_panic_sent: false,
             worker_sram_smoke,
+            worker_verify_shutdown: worker_sram_smoke,
             worker_sram_smoke_started: false,
             worker_sram_smoke_reply: None,
             worker_replacement_smoke: worker_replacement_smoke
@@ -6326,8 +6330,24 @@ impl eframe::App for StarbyteApp {
 impl Drop for StarbyteApp {
     fn drop(&mut self) {
         if let Some(worker) = self.full_worker.take() {
-            if worker.engine.shutdown().is_err() {
-                warn!("emulation worker thread panicked during shutdown");
+            // Taking the Option and consuming shutdown() permits exactly
+            // one owner-thread finalization and join for this application.
+            match worker.engine.shutdown() {
+                Ok(owner) => {
+                    if self.worker_verify_shutdown {
+                        let (finalized, audio_released) = owner.finalization_state();
+                        if finalized && audio_released {
+                            println!(
+                                "STARBYTE_FULL_LIBRARY_OWNER_SHUTDOWN_SMOKE_OK finalized=true audio_released=true"
+                            );
+                        } else {
+                            println!(
+                                "STARBYTE_FULL_LIBRARY_OWNER_SHUTDOWN_SMOKE_FAILED finalized={finalized} audio_released={audio_released}"
+                            );
+                        }
+                    }
+                }
+                Err(_) => warn!("emulation worker thread panicked during shutdown"),
             }
         } else if let Err(error) = self.session.flush_save_ram() {
             warn!("could not persist cartridge SRAM on exit: {error}");

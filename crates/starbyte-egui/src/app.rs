@@ -759,6 +759,21 @@ enum WorkerReplacementSmoke {
     },
 }
 
+/// Native-only synthetic egui key events exercise the original window's
+/// actual F5/F8/F9/Escape handlers, not direct save/navigation calls.
+#[derive(Clone, Copy)]
+enum WorkerShortcutSmoke {
+    WaitingForGame,
+    PressSave,
+    AwaitSave { deadline: Instant },
+    PressLoad,
+    AwaitLoad { deadline: Instant },
+    PressLibrary,
+    AwaitLibrary { deadline: Instant, started_at: u64 },
+    PressReturn,
+    AwaitReturn { deadline: Instant, started_at: u64 },
+}
+
 struct FullLibraryPendingLaunch {
     job_id: u64,
     original_path: PathBuf,
@@ -796,6 +811,7 @@ pub struct StarbyteApp {
     worker_sram_smoke_started: bool,
     worker_sram_smoke_reply: Option<Receiver<Result<usize, String>>>,
     worker_replacement_smoke: Option<WorkerReplacementSmoke>,
+    worker_shortcut_smoke: Option<WorkerShortcutSmoke>,
     audio_output: Option<AudioOutput>,
     speaker_probe: SpeakerProbeState,
     /// Session mute defaults from persisted startup preference, then follows
@@ -904,6 +920,7 @@ impl StarbyteApp {
         worker_panic_smoke: bool,
         worker_sram_smoke: bool,
         worker_replacement_smoke: bool,
+        worker_shortcut_smoke: bool,
         logs: SharedLogBuffer,
     ) -> Result<Self> {
         // Headless Weston has no keyboard focus until a compositor explicitly
@@ -918,6 +935,7 @@ impl StarbyteApp {
             || worker_panic_smoke
             || worker_sram_smoke
             || worker_replacement_smoke
+            || worker_shortcut_smoke
         {
             // The pause smoke begins with playable frames before it toggles
             // the real scheduler policy; Weston may have no keyboard focus.
@@ -1051,6 +1069,8 @@ impl StarbyteApp {
             worker_sram_smoke_reply: None,
             worker_replacement_smoke: worker_replacement_smoke
                 .then_some(WorkerReplacementSmoke::WaitingForGame),
+            worker_shortcut_smoke: worker_shortcut_smoke
+                .then_some(WorkerShortcutSmoke::WaitingForGame),
             audio_output: None,
             speaker_probe: SpeakerProbeState::Idle,
             audio_muted,
@@ -1779,6 +1799,90 @@ impl StarbyteApp {
             }
             WorkerSaveSmokeStage::AwaitScreenshot | WorkerSaveSmokeStage::AwaitStep => {}
         }
+    }
+
+    fn advance_full_worker_shortcut_smoke(&mut self, ctx: &egui::Context) {
+        let Some(stage) = self.worker_shortcut_smoke else {
+            return;
+        };
+        let next = match stage {
+            WorkerShortcutSmoke::WaitingForGame => {
+                if self.session_snapshot().frame >= 15 && self.framebuffer_texture.is_some() {
+                    WorkerShortcutSmoke::PressSave
+                } else {
+                    stage
+                }
+            }
+            WorkerShortcutSmoke::AwaitSave { deadline } => {
+                if self.session_controls().has_quick_save
+                    && self.full_worker.as_ref().is_some_and(|w| w.pending_saves.is_empty())
+                {
+                    WorkerShortcutSmoke::PressLoad
+                } else if Instant::now() >= deadline {
+                    println!("STARBYTE_FULL_LIBRARY_SHORTCUT_SMOKE_FAILED quick_save");
+                    self.worker_shortcut_smoke = None;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                } else {
+                    stage
+                }
+            }
+            WorkerShortcutSmoke::AwaitLoad { deadline } => {
+                if self.status_line.starts_with("Quick save restored")
+                    && self.full_worker.as_ref().is_some_and(|w| w.pending_saves.is_empty())
+                {
+                    WorkerShortcutSmoke::PressLibrary
+                } else if Instant::now() >= deadline {
+                    println!("STARBYTE_FULL_LIBRARY_SHORTCUT_SMOKE_FAILED quick_load");
+                    self.worker_shortcut_smoke = None;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                } else {
+                    stage
+                }
+            }
+            WorkerShortcutSmoke::AwaitLibrary { deadline, started_at } => {
+                if !self.play_view
+                    && self.full_worker.as_ref().is_some_and(|w| {
+                        w.engine.completed_frames().saturating_sub(started_at) >= 10
+                    })
+                {
+                    WorkerShortcutSmoke::PressReturn
+                } else if Instant::now() >= deadline {
+                    println!("STARBYTE_FULL_LIBRARY_SHORTCUT_SMOKE_FAILED library_navigation");
+                    self.worker_shortcut_smoke = None;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                } else {
+                    stage
+                }
+            }
+            WorkerShortcutSmoke::AwaitReturn { deadline, started_at } => {
+                if self.play_view
+                    && self.last_worker_texture_frame.is_some_and(|frame| frame >= started_at + 10)
+                {
+                    println!(
+                        "STARBYTE_FULL_LIBRARY_SHORTCUT_SMOKE_OK f5=true f8=true f9=true escape=true frame={}",
+                        self.last_worker_texture_frame.unwrap_or_default()
+                    );
+                    self.worker_shortcut_smoke = None;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                } else if Instant::now() >= deadline {
+                    println!("STARBYTE_FULL_LIBRARY_SHORTCUT_SMOKE_FAILED return_to_game");
+                    self.worker_shortcut_smoke = None;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                } else {
+                    stage
+                }
+            }
+            WorkerShortcutSmoke::PressSave
+            | WorkerShortcutSmoke::PressLoad
+            | WorkerShortcutSmoke::PressLibrary
+            | WorkerShortcutSmoke::PressReturn => stage,
+        };
+        self.worker_shortcut_smoke = Some(next);
     }
 
     fn current_filter(&self) -> LibraryFilter {
@@ -5215,6 +5319,49 @@ impl StarbyteApp {
 
 impl eframe::App for StarbyteApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // Only the hidden native acceptance mode injects virtual key presses.
+        // They enter the same egui input pipeline used by desktop hotkeys.
+        let shortcut = match self.worker_shortcut_smoke {
+            Some(WorkerShortcutSmoke::PressSave) => {
+                self.worker_shortcut_smoke = Some(WorkerShortcutSmoke::AwaitSave {
+                    deadline: Instant::now() + Duration::from_secs(8),
+                });
+                Some(egui::Key::F5)
+            }
+            Some(WorkerShortcutSmoke::PressLoad) => {
+                self.worker_shortcut_smoke = Some(WorkerShortcutSmoke::AwaitLoad {
+                    deadline: Instant::now() + Duration::from_secs(8),
+                });
+                Some(egui::Key::F8)
+            }
+            Some(WorkerShortcutSmoke::PressLibrary) => {
+                let started_at = self.full_worker.as_ref().map_or(0, |w| w.engine.completed_frames());
+                self.worker_shortcut_smoke = Some(WorkerShortcutSmoke::AwaitLibrary {
+                    deadline: Instant::now() + Duration::from_secs(8),
+                    started_at,
+                });
+                Some(egui::Key::F9)
+            }
+            Some(WorkerShortcutSmoke::PressReturn) => {
+                let started_at = self.full_worker.as_ref().map_or(0, |w| w.engine.completed_frames());
+                self.worker_shortcut_smoke = Some(WorkerShortcutSmoke::AwaitReturn {
+                    deadline: Instant::now() + Duration::from_secs(8),
+                    started_at,
+                });
+                Some(egui::Key::Escape)
+            }
+            _ => None,
+        };
+        if let Some(key) = shortcut {
+            raw_input.focused = true;
+            raw_input.events.push(egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
         // Eframe calls this before egui sees the key events. Otherwise Tab
         // navigates toolbar buttons rather than functioning as fast-forward.
         let active = self.play_view
@@ -5863,6 +6010,7 @@ impl eframe::App for StarbyteApp {
                 self.queue_full_worker_step();
             }
             self.advance_full_worker_save_smoke(ctx);
+            self.advance_full_worker_shortcut_smoke(ctx);
             if self.worker_no_redraw_smoke
                 && self.session_snapshot().has_rom
                 && self.session_snapshot().frame >= 10

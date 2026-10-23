@@ -161,6 +161,22 @@ struct Args {
         hide = true
     )]
     exit_after_full_worker_panic: bool,
+
+    /// CI only: close the original library window after a worker-owned
+    /// battery write, then reopen the cartridge to verify SRAM durability.
+    #[arg(
+        long,
+        requires_all = ["demo", "native_worker_preview"],
+        conflicts_with_all = [
+            "exit_after_frames",
+            "exit_after_full_worker_saves",
+            "exit_after_full_worker_no_redraw",
+            "exit_after_full_worker_focus_pause",
+            "exit_after_full_worker_panic"
+        ],
+        hide = true
+    )]
+    exit_after_full_worker_sram: bool,
 }
 
 fn main() -> Result<()> {
@@ -224,7 +240,13 @@ fn main() -> Result<()> {
         let demo_dir = cache_root.join("built-in");
         std::fs::create_dir_all(&demo_dir)?;
         let path = demo_dir.join("starbyte-display-demo.sfc");
-        std::fs::write(&path, starbyte_core::testing::demo::demo_rom_bytes())?;
+        let mut demo = starbyte_core::testing::demo::demo_rom_bytes();
+        if args.exit_after_full_worker_sram {
+            // Unlike the normal display fixture, this synthetic cartridge
+            // has battery RAM and can prove owner-thread shutdown persistence.
+            demo[0x7FD8] = 0x01;
+        }
+        std::fs::write(&path, demo)?;
         Some(path)
     } else {
         args.rom.clone()
@@ -272,6 +294,9 @@ fn main() -> Result<()> {
         .map_err(|error| anyhow::anyhow!("threaded preview failed: {error}"));
     }
 
+    let verify_battery_sram = args.exit_after_full_worker_sram;
+    let verification_assets = assets.clone();
+    let verification_rom = rom.clone();
     eframe::run_native(
         "Starbyte",
         options,
@@ -290,13 +315,28 @@ fn main() -> Result<()> {
                 args.exit_after_full_worker_no_redraw,
                 args.exit_after_full_worker_focus_pause,
                 args.exit_after_full_worker_panic,
+                args.exit_after_full_worker_sram,
                 log_lines.clone(),
             )
             .map_err(|error| std::io::Error::other(error.to_string()))?;
             Ok(Box::new(app))
         }),
     )
-    .map_err(|error| anyhow::anyhow!("failed to launch egui frontend: {error}"))
+    .map_err(|error| anyhow::anyhow!("failed to launch egui frontend: {error}"))?;
+
+    if verify_battery_sram {
+        // run_native has returned, so the original StarbyteApp was dropped
+        // and its exclusive emulation owner was joined/finalized.
+        let rom_path = verification_rom.expect("--demo supplies a synthetic battery cartridge");
+        let mut reopened = starbyte_frontend::FrontendSession::new(verification_assets)?;
+        reopened.load_rom_with_persistent_audio(&rom_path)?;
+        anyhow::ensure!(
+            reopened.host_read_u8(0x700000) == 0x5A,
+            "full library window failed to persist worker-owned battery SRAM"
+        );
+        println!("STARBYTE_FULL_LIBRARY_SRAM_SMOKE_OK persisted_byte=5A");
+    }
+    Ok(())
 }
 
 /// Drive an actual ROM through the worker without constructing any window.
@@ -543,6 +583,14 @@ mod speaker_cli_tests {
         ])
         .unwrap();
         assert!(panic_check.exit_after_full_worker_panic);
+        let battery_check = Args::try_parse_from([
+            "starbyte-egui",
+            "--demo",
+            "--native-worker-preview",
+            "--exit-after-full-worker-sram",
+        ])
+        .unwrap();
+        assert!(battery_check.exit_after_full_worker_sram);
         assert!(
             Args::try_parse_from(["starbyte-egui", "--demo", "--exit-after-full-worker-saves"])
                 .is_err()

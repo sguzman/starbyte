@@ -776,12 +776,22 @@ enum WorkerShortcutSmoke {
 
 /// CI-only original-window disk slot isolation across actual menu sound
 /// policy transitions. Uses only the built-in synthetic cartridge.
+#[derive(Clone, Copy)]
 enum WorkerModeSmoke {
     WaitingForGame,
-    AwaitPersistentSave { deadline: Instant },
-    AwaitCompatibility { deadline: Instant, previous_owner: Option<u64> },
-    AwaitCompatibilitySave { deadline: Instant },
-    AwaitPersistentReturn { deadline: Instant },
+    AwaitPersistentSave {
+        deadline: Instant,
+    },
+    AwaitCompatibility {
+        deadline: Instant,
+        previous_owner: Option<u64>,
+    },
+    AwaitCompatibilitySave {
+        deadline: Instant,
+    },
+    AwaitPersistentReturn {
+        deadline: Instant,
+    },
 }
 
 struct FullLibraryPendingLaunch {
@@ -1998,7 +2008,7 @@ impl StarbyteApp {
                     && !controls.has_quick_save
                 {
                     println!(
-                        "STARBYTE_FULL_LIBRARY_MODE_SMOKE_OK persistent_slot=true compatibility_slot=true isolated_namespaces=true"
+                        "STARBYTE_FULL_LIBRARY_MODE_SMOKE_OK persistent_slot=true compatibility_slot=true separate_slots=true"
                     );
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     return;

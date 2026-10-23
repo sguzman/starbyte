@@ -1392,9 +1392,8 @@ impl StarbyteApp {
                 Err(error) => {
                     self.update_job(pending.job_id, "Load Game", "failed", &error);
                     self.status_line = format!("Could not install ROM: {error}");
-                    if let Some(WorkerReplacementSmoke::AwaitFailure {
-                        error_reported, ..
-                    }) = &mut self.worker_replacement_smoke
+                    if let Some(WorkerReplacementSmoke::AwaitFailure { error_reported, .. }) =
+                        &mut self.worker_replacement_smoke
                     {
                         *error_reported = true;
                     }
@@ -5610,8 +5609,7 @@ impl eframe::App for StarbyteApp {
             if let Some(stage) = self.worker_replacement_smoke.take() {
                 match stage {
                     WorkerReplacementSmoke::WaitingForGame => {
-                        if self.session_snapshot().frame >= 15
-                            && self.framebuffer_texture.is_some()
+                        if self.session_snapshot().frame >= 15 && self.framebuffer_texture.is_some()
                         {
                             let previous_rom = self.session_snapshot().rom_path.unwrap();
                             let previous_owner = self.worker_active_launch_id;
@@ -5626,7 +5624,9 @@ impl eframe::App for StarbyteApp {
                                 .cache_root
                                 .join(format!("absent-worker-cartridge-{job_id}.sfc"));
                             if missing.exists() {
-                                println!("STARBYTE_FULL_LIBRARY_REPLACEMENT_SMOKE_FAILED fixture_exists");
+                                println!(
+                                    "STARBYTE_FULL_LIBRARY_REPLACEMENT_SMOKE_FAILED fixture_exists"
+                                );
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                                 return;
                             }
@@ -5662,11 +5662,11 @@ impl eframe::App for StarbyteApp {
                     } => {
                         let worker = self.full_worker.as_ref().unwrap();
                         let advanced = worker.engine.completed_frames().saturating_sub(started_at);
-                        let old_cartridge_retained =
-                            self.session_snapshot().rom_path.as_ref() == Some(&previous_rom)
-                                && self.worker_active_launch_id == previous_owner
-                                && self.is_playing
-                                && worker.pending_launches.is_empty();
+                        let old_cartridge_retained = self.session_snapshot().rom_path.as_ref()
+                            == Some(&previous_rom)
+                            && self.worker_active_launch_id == previous_owner
+                            && self.is_playing
+                            && worker.pending_launches.is_empty();
                         if error_reported && old_cartridge_retained && advanced >= 10 {
                             println!(
                                 "STARBYTE_FULL_LIBRARY_REPLACEMENT_SMOKE_OK retained_rom=true advanced_frames={advanced}"

@@ -103,6 +103,15 @@ struct Args {
         conflicts_with_all = ["rom", "demo", "exit_after_frames", "speaker_test"]
     )]
     exit_after_library_scan: bool,
+
+    /// CI only: index the local library, launch its first installed game
+    /// through the emulation worker, render 30 frames and exit.
+    #[arg(
+        long,
+        requires = "threaded_preview",
+        conflicts_with_all = ["rom", "demo", "exit_after_frames", "exit_after_library_scan", "speaker_test"]
+    )]
+    exit_after_library_play: bool,
 }
 
 fn main() -> Result<()> {
@@ -198,9 +207,10 @@ fn main() -> Result<()> {
                     assets.clone(),
                     &config,
                     rom.clone(),
-                    args.exit_after_frames,
+                    args.exit_after_frames.or(args.exit_after_library_play.then_some(30)),
                     args.preview_background,
                     args.exit_after_library_scan,
+                    args.exit_after_library_play,
                 )
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
                 Ok(Box::new(app))
@@ -518,6 +528,21 @@ mod speaker_cli_tests {
         assert!(validate_frame_exit_args(&bounded).is_ok());
         assert!(bounded.exit_after_library_scan);
         assert!(Args::try_parse_from(["starbyte-egui", "--exit-after-library-scan"]).is_err());
+        let launch = Args::try_parse_from([
+            "starbyte-egui",
+            "--threaded-preview",
+            "--exit-after-library-play",
+        ])
+        .unwrap();
+        assert!(validate_frame_exit_args(&launch).is_ok());
+        assert!(launch.exit_after_library_play);
+        assert!(Args::try_parse_from(["starbyte-egui", "--exit-after-library-play"]).is_err());
+        assert!(
+            Args::try_parse_from([
+                "starbyte-egui", "--threaded-preview", "--demo", "--exit-after-library-play"
+            ])
+            .is_err()
+        );
         assert!(
             Args::try_parse_from([
                 "starbyte-egui",

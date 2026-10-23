@@ -126,3 +126,17 @@ jobs:
             }
           cat "$RUNNER_TEMP/starbyte-threaded-library.log"
           grep -F "STARBYTE_THREADED_LIBRARY_SMOKE_OK installed=" "$RUNNER_TEMP/starbyte-threaded-library.log"
+          # Stronger native acceptance: select the installed demo *through
+          # the library UI coordinator*, launch it on the owner worker and
+          # require a real egui texture from the worker's completed frame.
+          timeout 90s target/debug/starbyte-egui --threaded-preview --preview-background --exit-after-library-play \
+            --rom-dir "$RUNNER_TEMP/starbyte-ci-cache/built-in" \
+            --config "$RUNNER_TEMP/starbyte-library-play-config.toml" \
+            --cache-dir "$RUNNER_TEMP/starbyte-library-play-cache" \
+            > "$RUNNER_TEMP/starbyte-threaded-library-play.log" 2>&1 || {
+              cat "$RUNNER_TEMP/weston.log"
+              cat "$RUNNER_TEMP/starbyte-threaded-library-play.log"
+              exit 1
+            }
+          cat "$RUNNER_TEMP/starbyte-threaded-library-play.log"
+          grep -F "STARBYTE_THREADED_LIBRARY_PLAY_SMOKE_OK" "$RUNNER_TEMP/starbyte-threaded-library-play.log"

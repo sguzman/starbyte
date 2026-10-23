@@ -99,6 +99,8 @@ pub struct ThreadedPreviewApp {
     input_mode: InputDeviceMode,
     exit_after_frames: Option<u64>,
     exit_after_library_scan: bool,
+    exit_after_library_play: bool,
+    library_play_selected: bool,
     last_error: Option<String>,
     screenshot_root: PathBuf,
     loaded_rom_path: Option<PathBuf>,
@@ -124,6 +126,7 @@ impl ThreadedPreviewApp {
         exit_after_frames: Option<u64>,
         preview_background: bool,
         exit_after_library_scan: bool,
+        exit_after_library_play: bool,
     ) -> Result<Self> {
         let screenshot_root = assets.screenshot_root();
         // The worker owns cartridge installation even at startup. Creating
@@ -181,6 +184,8 @@ impl ThreadedPreviewApp {
             input_mode: config.input.active_device,
             exit_after_frames,
             exit_after_library_scan,
+            exit_after_library_play,
+            library_play_selected: false,
             last_error: None,
             screenshot_root,
             loaded_rom_path: None,
@@ -333,12 +338,20 @@ impl ThreadedPreviewApp {
 
     fn poll_library_events(&mut self) {
         let mut launch = None;
+        let mut auto_select = None;
         if let Some(worker) = &self.library_worker {
             while let Some(event) = worker.try_recv() {
                 match event {
                     WorkerEvent::SnapshotReady {
                         snapshot, status, ..
                     } => {
+                        if self.exit_after_library_play && !self.library_play_selected {
+                            auto_select = snapshot
+                                .entries
+                                .iter()
+                                .find(|entry| entry.installed_status == InstalledStatus::Installed)
+                                .cloned();
+                        }
                         // Refresh the index only when the library snapshot
                         // changes, not on every egui repaint.
                         self.library_matches =
@@ -378,6 +391,10 @@ impl ThreadedPreviewApp {
                     | WorkerEvent::JobSuperseded { .. } => {}
                 }
             }
+        }
+        if let Some(entry) = auto_select {
+            self.library_play_selected = true;
+            self.queue_library_entry(entry);
         }
         if let Some(request) = launch {
             self.queue_rom_launch(request);
@@ -571,7 +588,7 @@ mod pitch_mode_tests {
             config_path: None,
         };
         let app =
-            ThreadedPreviewApp::new(assets, &RuntimeConfig::default(), None, None, false, false)
+            ThreadedPreviewApp::new(assets, &RuntimeConfig::default(), None, None, false, false, false)
                 .unwrap();
         assert!(!app.playing);
         assert!(!app.controls.session.has_rom);
@@ -596,7 +613,7 @@ mod pitch_mode_tests {
         };
         let mut config = RuntimeConfig::default();
         config.audio.enabled = false;
-        let mut app = ThreadedPreviewApp::new(assets, &config, None, None, true, false).unwrap();
+        let mut app = ThreadedPreviewApp::new(assets, &config, None, None, true, false, false).unwrap();
         let entry = LibraryEntry {
             game_id: "preview-demo".to_owned(),
             display_title: "Preview Demo".to_owned(),
@@ -665,7 +682,8 @@ mod pitch_mode_tests {
         let mut config = RuntimeConfig::default();
         config.audio.enabled = false;
         let mut app =
-            ThreadedPreviewApp::new(assets, &config, Some(rom.clone()), None, true, false).unwrap();
+            ThreadedPreviewApp::new(assets, &config, Some(rom.clone()), None, true, false, false)
+                .unwrap();
         // Constructor never borrowed an emulator to load the cartridge and
         // never stepped a frame on the window thread.
         assert!(!app.controls.session.has_rom);
@@ -703,7 +721,7 @@ mod pitch_mode_tests {
         };
         let mut config = RuntimeConfig::default();
         config.audio.enabled = false;
-        let mut app = ThreadedPreviewApp::new(assets, &config, None, None, true, false).unwrap();
+        let mut app = ThreadedPreviewApp::new(assets, &config, None, None, true, false, false).unwrap();
         app.queue_rom_load(rom.clone());
         let ctx = egui::Context::default();
         let deadline = Instant::now() + Duration::from_secs(6);
@@ -739,7 +757,7 @@ mod pitch_mode_tests {
         };
         let mut config = RuntimeConfig::default();
         config.audio.enabled = false;
-        let mut app = ThreadedPreviewApp::new(assets, &config, None, None, true, false).unwrap();
+        let mut app = ThreadedPreviewApp::new(assets, &config, None, None, true, false, false).unwrap();
         app.queue_rom_load(first);
         let older = app.pending_library_rom.unwrap();
         app.queue_rom_load(second.clone());
@@ -776,7 +794,7 @@ mod pitch_mode_tests {
         };
         let mut config = RuntimeConfig::default();
         config.audio.enabled = false;
-        let mut app = ThreadedPreviewApp::new(assets, &config, None, None, true, false).unwrap();
+        let mut app = ThreadedPreviewApp::new(assets, &config, None, None, true, false, false).unwrap();
         let ctx = egui::Context::default();
         app.queue_rom_load(good.clone());
         let deadline = Instant::now() + Duration::from_secs(6);
@@ -1180,10 +1198,17 @@ impl eframe::App for ThreadedPreviewApp {
         if let Some(limit) = self.exit_after_frames {
             let rendered = self.display.status().map_or(0, |status| status.frame);
             if rendered >= limit && self.display.texture().is_some() {
-                println!(
-                    "STARBYTE_THREADED_PREVIEW_SMOKE_OK worker_frames={} rendered_frame={rendered}",
-                    self.engine.completed_frames()
-                );
+                if self.exit_after_library_play {
+                    println!(
+                        "STARBYTE_THREADED_LIBRARY_PLAY_SMOKE_OK worker_frames={} rendered_frame={rendered}",
+                        self.engine.completed_frames()
+                    );
+                } else {
+                    println!(
+                        "STARBYTE_THREADED_PREVIEW_SMOKE_OK worker_frames={} rendered_frame={rendered}",
+                        self.engine.completed_frames()
+                    );
+                }
                 self.exit_after_frames = None;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }

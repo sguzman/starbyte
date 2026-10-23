@@ -3333,7 +3333,10 @@ impl StarbyteApp {
     }
 
     fn draw_persistent_slots(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        match self.session.sound_session_mode() {
+        // This same neutral snapshot can later arrive over the worker's
+        // command channel. No GUI borrow of Emulator is needed for this menu.
+        let controls = self.session.controls_snapshot();
+        match controls.sound_mode {
             SoundSessionMode::Compatibility => {
                 ui.label("Compatibility slots (your existing game states)");
             }
@@ -3352,7 +3355,10 @@ impl StarbyteApp {
                     self.save_persistent_slot(slot);
                 }
                 if ui
-                    .add_enabled(self.session.has_state_slot(slot), egui::Button::new("Load"))
+                    .add_enabled(
+                        controls.state_slots[(slot - 1) as usize],
+                        egui::Button::new("Load"),
+                    )
                     .clicked()
                 {
                     self.load_persistent_slot(slot, ctx);

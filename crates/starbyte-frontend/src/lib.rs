@@ -1506,9 +1506,11 @@ mod session_launch_request_tests {
         let snapshot = session.launch_game(&make_request(rom.clone())).unwrap();
         assert_eq!(snapshot.rom_path.as_deref(), Some(rom.as_path()));
         assert_eq!(session.sound_session_mode(), SoundSessionMode::Persistent);
-        assert!(session
-            .launch_game(&make_request(dir.path().join("missing.sfc")))
-            .is_err());
+        assert!(
+            session
+                .launch_game(&make_request(dir.path().join("missing.sfc")))
+                .is_err()
+        );
         assert_eq!(session.loaded_rom_path(), Some(rom.as_path()));
         assert_eq!(session.sound_session_mode(), SoundSessionMode::Persistent);
     }

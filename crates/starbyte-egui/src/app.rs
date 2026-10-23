@@ -5483,7 +5483,7 @@ fn gameplay_key_active(input: &egui::InputState, key: egui::Key) -> bool {
 }
 
 /// Decide which physical inputs may control the emulated pad.
-fn controller_input_sources(
+pub(crate) fn controller_input_sources(
     mode: InputDeviceMode,
     keyboard_focused: bool,
     binding_keyboard: bool,

@@ -1484,6 +1484,46 @@ mod session_save_command_tests {
     }
 
     #[test]
+    fn shared_save_commands_keep_compatibility_and_sound_slots_separate() {
+        let dir = tempfile::tempdir().unwrap();
+        let rom = dir.path().join("demo.sfc");
+        std::fs::write(&rom, starbyte_core::testing::demo::demo_rom_bytes()).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(dir.path().join("save")),
+            state_dir: Some(dir.path().join("states")),
+            cache_dir: Some(dir.path().join("cache")),
+            config_path: None,
+        };
+        let mut session = FrontendSession::new(assets).unwrap();
+        session.load_rom(&rom).unwrap();
+        let compatibility = session
+            .apply_save_action(SessionSaveAction::SaveSlot(1))
+            .unwrap();
+        let SessionSaveOutcome::SavedTo(compatibility_path) = compatibility else {
+            panic!("disk slot save did not return its actual path");
+        };
+        assert!(compatibility_path.is_file());
+        assert!(compatibility_path.to_string_lossy().ends_with(".slot1.state.json"));
+
+        session.apply_save_action(SessionSaveAction::QuickSave).unwrap();
+        assert!(session.has_quick_save());
+        session.load_rom_with_persistent_audio(&rom).unwrap();
+        assert!(!session.has_quick_save(), "ROM reload must clear memory quick saves");
+        assert!(!session.has_state_slot(1), "sound mode must not see compatibility slots");
+        let sound_slot = session
+            .apply_save_action(SessionSaveAction::SaveSlot(1))
+            .unwrap();
+        let SessionSaveOutcome::SavedTo(sound_path) = sound_slot else {
+            panic!("sound-mode save did not return its actual path");
+        };
+        assert_ne!(sound_path, compatibility_path);
+        assert!(sound_path.to_string_lossy().ends_with(".sound.slot1.state.json"));
+        assert!(sound_path.is_file());
+        session.apply_save_action(SessionSaveAction::LoadSlot(1)).unwrap();
+    }
+
+    #[test]
     fn invalid_slot_ids_remain_rejected_by_existing_path_validation() {
         let mut session = FrontendSession::new(AssetConfig::default()).unwrap();
         assert!(session.apply_save_action(SessionSaveAction::SaveSlot(0)).is_err());

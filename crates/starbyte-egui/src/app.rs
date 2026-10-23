@@ -32,10 +32,10 @@ use starbyte_core::{
     },
 };
 use starbyte_frontend::{
-    CheatEntry, CoverAsset, FrontendSession, InstalledStatus, LibraryEntry, LibraryFilter, LibraryService,
-    LibrarySnapshot, LibraryTarget, SessionControlsSnapshot, SessionInputDiagnostics,
-    SessionLaunchRequest, SessionSaveAction, SessionSaveOutcome, SessionScreenshot,
-    SessionSnapshot, SessionSoundDiagnostics, SoundSessionMode,
+    CheatEntry, CoverAsset, FrontendSession, InstalledStatus, LibraryEntry, LibraryFilter,
+    LibraryService, LibrarySnapshot, LibraryTarget, SessionControlsSnapshot,
+    SessionInputDiagnostics, SessionLaunchRequest, SessionSaveAction, SessionSaveOutcome,
+    SessionScreenshot, SessionSnapshot, SessionSoundDiagnostics, SoundSessionMode,
 };
 
 // NTSC SNES video: 341 dots/scanline × 262 lines × 4 master clocks/dot
@@ -778,11 +778,19 @@ struct WorkerShellPaintCounts {
 enum WorkerShortcutSmoke {
     WaitingForGame,
     PressSave,
-    AwaitSave { deadline: Instant },
+    AwaitSave {
+        deadline: Instant,
+    },
     PressLoad,
-    AwaitLoad { deadline: Instant, started_at: u64 },
+    AwaitLoad {
+        deadline: Instant,
+        started_at: u64,
+    },
     PressReturn,
-    AwaitReturn { deadline: Instant, started_at: u64 },
+    AwaitReturn {
+        deadline: Instant,
+        started_at: u64,
+    },
     AwaitStatusMetrics {
         deadline: Instant,
         before: WorkerShellPaintCounts,
@@ -1884,7 +1892,9 @@ impl StarbyteApp {
         let cover_path = self.cache_root.join("native-shell-acceptance-cover.png");
         write_png_screenshot(
             &cover_path,
-            &[240, 110, 40, 255, 30, 130, 210, 255, 80, 220, 130, 255, 15, 35, 70, 255],
+            &[
+                240, 110, 40, 255, 30, 130, 210, 255, 80, 220, 130, 255, 15, 35, 70, 255,
+            ],
             2,
             2,
         )?;
@@ -2077,9 +2087,17 @@ impl StarbyteApp {
                 before,
             } => {
                 let now = self.worker_shell_paints;
-                let recent_matches = self.session_snapshot().rom_path.as_ref().is_some_and(
-                    |rom| self.config.library.recent_roms.iter().any(|recent| recent == rom),
-                );
+                let recent_matches = self
+                    .session_snapshot()
+                    .rom_path
+                    .as_ref()
+                    .is_some_and(|rom| {
+                        self.config
+                            .library
+                            .recent_roms
+                            .iter()
+                            .any(|recent| recent == rom)
+                    });
                 if now.menu > before.menu
                     && now.status > before.status
                     && now.recent > before.recent
@@ -2100,7 +2118,9 @@ impl StarbyteApp {
                         before: now,
                     }
                 } else if Instant::now() >= deadline {
-                    println!("STARBYTE_FULL_LIBRARY_SHELL_SMOKE_FAILED original_library_panels recent={recent_matches} counts={now:?}");
+                    println!(
+                        "STARBYTE_FULL_LIBRARY_SHELL_SMOKE_FAILED original_library_panels recent={recent_matches} counts={now:?}"
+                    );
                     self.worker_shortcut_smoke = None;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     return;
@@ -2157,7 +2177,9 @@ impl StarbyteApp {
                         .as_ref()
                         .is_some_and(|worker| worker.engine.completed_frames() >= started_at + 3)
                 {
-                    println!("STARBYTE_FULL_LIBRARY_SHELL_SMOKE_OK menu=true recent_cards=true cover_texture=true library=true status_metrics=true view_toggles=true");
+                    println!(
+                        "STARBYTE_FULL_LIBRARY_SHELL_SMOKE_OK menu=true recent_cards=true cover_texture=true library=true status_metrics=true view_toggles=true"
+                    );
                     self.worker_shortcut_smoke = None;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     return;

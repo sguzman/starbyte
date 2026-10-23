@@ -4354,6 +4354,11 @@ impl StarbyteApp {
         // This same neutral snapshot can later arrive over the worker's
         // command channel. No GUI borrow of Emulator is needed for this menu.
         let controls = self.session_controls();
+        let game_ready = controls.session.has_rom
+            && self
+                .full_worker
+                .as_ref()
+                .is_none_or(|worker| worker.pending_launches.is_empty());
         match controls.sound_mode {
             SoundSessionMode::Compatibility => {
                 ui.label("Compatibility slots (your existing game states)");
@@ -4369,12 +4374,15 @@ impl StarbyteApp {
         for slot in 1..=3 {
             ui.horizontal(|ui| {
                 ui.label(format!("Slot {slot}"));
-                if ui.button("Save").clicked() {
+                if ui
+                    .add_enabled(game_ready, egui::Button::new("Save"))
+                    .clicked()
+                {
                     self.save_persistent_slot(slot);
                 }
                 if ui
                     .add_enabled(
-                        controls.state_slots[(slot - 1) as usize],
+                        game_ready && controls.state_slots[(slot - 1) as usize],
                         egui::Button::new("Load"),
                     )
                     .clicked()
@@ -4526,15 +4534,23 @@ impl StarbyteApp {
         } else {
             ui.label("No ROM selected");
         }
+        let game_ready = snapshot.has_rom
+            && self
+                .full_worker
+                .as_ref()
+                .is_none_or(|worker| worker.pending_launches.is_empty());
         ui.horizontal_wrapped(|ui| {
             if ui
-                .add_enabled(snapshot.has_rom, egui::Button::new("Quick Save (F5)"))
+                .add_enabled(game_ready, egui::Button::new("Quick Save (F5)"))
                 .clicked()
             {
                 self.quick_save();
             }
             if ui
-                .add_enabled(self.has_quick_save(), egui::Button::new("Quick Load (F8)"))
+                .add_enabled(
+                    game_ready && self.has_quick_save(),
+                    egui::Button::new("Quick Load (F8)"),
+                )
                 .clicked()
             {
                 self.quick_load(ctx);

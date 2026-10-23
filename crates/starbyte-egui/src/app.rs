@@ -3394,7 +3394,10 @@ impl StarbyteApp {
         }
         if self.show_input_overlay {
             let focused = ui.ctx().input(|input| input.focused);
-            let (host, latched, busy) = self.session.emulator().joypad_status();
+            let diagnostics = self.session.input_diagnostics();
+            let host = diagnostics.host_bits;
+            let latched = diagnostics.latched_bits;
+            let busy = diagnostics.reading;
             let physical = if self.gamepad_buttons_down.is_empty() {
                 "none".to_owned()
             } else {

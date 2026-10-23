@@ -774,6 +774,16 @@ enum WorkerShortcutSmoke {
     AwaitReturn { deadline: Instant, started_at: u64 },
 }
 
+/// CI-only original-window disk slot isolation across actual menu sound
+/// policy transitions. Uses only the built-in synthetic cartridge.
+enum WorkerModeSmoke {
+    WaitingForGame,
+    AwaitPersistentSave { deadline: Instant },
+    AwaitCompatibility { deadline: Instant, previous_owner: Option<u64> },
+    AwaitCompatibilitySave { deadline: Instant },
+    AwaitPersistentReturn { deadline: Instant },
+}
+
 struct FullLibraryPendingLaunch {
     job_id: u64,
     original_path: PathBuf,
@@ -812,6 +822,7 @@ pub struct StarbyteApp {
     worker_sram_smoke_reply: Option<Receiver<Result<usize, String>>>,
     worker_replacement_smoke: Option<WorkerReplacementSmoke>,
     worker_shortcut_smoke: Option<WorkerShortcutSmoke>,
+    worker_mode_smoke: Option<WorkerModeSmoke>,
     audio_output: Option<AudioOutput>,
     speaker_probe: SpeakerProbeState,
     /// Session mute defaults from persisted startup preference, then follows
@@ -921,6 +932,7 @@ impl StarbyteApp {
         worker_sram_smoke: bool,
         worker_replacement_smoke: bool,
         worker_shortcut_smoke: bool,
+        worker_mode_smoke: bool,
         logs: SharedLogBuffer,
     ) -> Result<Self> {
         // Headless Weston has no keyboard focus until a compositor explicitly
@@ -936,6 +948,7 @@ impl StarbyteApp {
             || worker_sram_smoke
             || worker_replacement_smoke
             || worker_shortcut_smoke
+            || worker_mode_smoke
         {
             // The pause smoke begins with playable frames before it toggles
             // the real scheduler policy; Weston may have no keyboard focus.
@@ -1071,6 +1084,7 @@ impl StarbyteApp {
                 .then_some(WorkerReplacementSmoke::WaitingForGame),
             worker_shortcut_smoke: worker_shortcut_smoke
                 .then_some(WorkerShortcutSmoke::WaitingForGame),
+            worker_mode_smoke: worker_mode_smoke.then_some(WorkerModeSmoke::WaitingForGame),
             audio_output: None,
             speaker_probe: SpeakerProbeState::Idle,
             audio_muted,
@@ -1897,6 +1911,107 @@ impl StarbyteApp {
             | WorkerShortcutSmoke::PressReturn => stage,
         };
         self.worker_shortcut_smoke = Some(next);
+    }
+
+    fn advance_full_worker_mode_smoke(&mut self, ctx: &egui::Context) {
+        let Some(stage) = self.worker_mode_smoke.take() else {
+            return;
+        };
+        let controls = self.session_controls();
+        let settled = self.full_worker.as_ref().is_some_and(|worker| {
+            worker.pending_launches.is_empty() && worker.pending_saves.is_empty()
+        });
+        let next = match stage {
+            WorkerModeSmoke::WaitingForGame => {
+                if controls.session.frame >= 15
+                    && controls.sound_mode == SoundSessionMode::Persistent
+                    && self.framebuffer_texture.is_some()
+                    && settled
+                {
+                    self.queue_full_worker_save(SessionSaveAction::SaveSlot(1));
+                    WorkerModeSmoke::AwaitPersistentSave {
+                        deadline: Instant::now() + Duration::from_secs(8),
+                    }
+                } else {
+                    stage
+                }
+            }
+            WorkerModeSmoke::AwaitPersistentSave { deadline } => {
+                if settled && controls.state_slots[0] {
+                    let previous_owner = self.worker_active_launch_id;
+                    self.restart_game_with_audio_mode(SoundSessionMode::Compatibility, ctx);
+                    WorkerModeSmoke::AwaitCompatibility {
+                        deadline: Instant::now() + Duration::from_secs(8),
+                        previous_owner,
+                    }
+                } else if Instant::now() >= deadline {
+                    println!("STARBYTE_FULL_LIBRARY_MODE_SMOKE_FAILED sound_slot_save");
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                } else {
+                    stage
+                }
+            }
+            WorkerModeSmoke::AwaitCompatibility {
+                deadline,
+                previous_owner,
+            } => {
+                if settled
+                    && controls.sound_mode == SoundSessionMode::Compatibility
+                    && self.worker_active_launch_id != previous_owner
+                {
+                    if controls.state_slots[0] {
+                        println!("STARBYTE_FULL_LIBRARY_MODE_SMOKE_FAILED sound_slot_leaked");
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        return;
+                    }
+                    self.queue_full_worker_save(SessionSaveAction::SaveSlot(1));
+                    WorkerModeSmoke::AwaitCompatibilitySave {
+                        deadline: Instant::now() + Duration::from_secs(8),
+                    }
+                } else if Instant::now() >= deadline {
+                    println!("STARBYTE_FULL_LIBRARY_MODE_SMOKE_FAILED compatibility_install");
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                } else {
+                    stage
+                }
+            }
+            WorkerModeSmoke::AwaitCompatibilitySave { deadline } => {
+                if settled && controls.state_slots[0] {
+                    self.restart_game_with_audio_mode(SoundSessionMode::Persistent, ctx);
+                    WorkerModeSmoke::AwaitPersistentReturn {
+                        deadline: Instant::now() + Duration::from_secs(8),
+                    }
+                } else if Instant::now() >= deadline {
+                    println!("STARBYTE_FULL_LIBRARY_MODE_SMOKE_FAILED compatibility_slot_save");
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                } else {
+                    stage
+                }
+            }
+            WorkerModeSmoke::AwaitPersistentReturn { deadline } => {
+                if settled
+                    && controls.sound_mode == SoundSessionMode::Persistent
+                    && controls.state_slots[0]
+                    && !controls.has_quick_save
+                {
+                    println!(
+                        "STARBYTE_FULL_LIBRARY_MODE_SMOKE_OK persistent_slot=true compatibility_slot=true isolated_namespaces=true"
+                    );
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                } else if Instant::now() >= deadline {
+                    println!("STARBYTE_FULL_LIBRARY_MODE_SMOKE_FAILED persistent_slot_return");
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                } else {
+                    stage
+                }
+            }
+        };
+        self.worker_mode_smoke = Some(next);
     }
 
     fn current_filter(&self) -> LibraryFilter {
@@ -6031,6 +6146,7 @@ impl eframe::App for StarbyteApp {
             }
             self.advance_full_worker_save_smoke(ctx);
             self.advance_full_worker_shortcut_smoke(ctx);
+            self.advance_full_worker_mode_smoke(ctx);
             if self.worker_no_redraw_smoke
                 && self.session_snapshot().has_rom
                 && self.session_snapshot().frame >= 10

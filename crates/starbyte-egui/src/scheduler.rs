@@ -399,6 +399,12 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
             .map_err(|_| "emulation transaction result not delivered".to_owned())?
     }
 
+    /// A fatal worker panic must be visible to the renderer rather than
+    /// silently freezing the last successfully uploaded game frame.
+    pub fn is_worker_finished(&self) -> bool {
+        self.join.as_ref().is_some_and(JoinHandle::is_finished)
+    }
+
     pub fn take_error(&self) -> Option<String> {
         self.frames.take_error()
     }
@@ -682,6 +688,25 @@ mod tests {
         assert_eq!(a.recv_timeout(Duration::from_secs(1)).unwrap().unwrap(), 10);
         assert_eq!(b.recv_timeout(Duration::from_secs(1)).unwrap().unwrap(), 17);
         assert_eq!(worker.shutdown().unwrap(), 17);
+    }
+
+    #[test]
+    fn preview_can_detect_a_worker_panic_without_blocking_redraw() {
+        let worker = EmulatorScheduler::spawn(
+            0_u8,
+            Duration::from_millis(2),
+            |_machine| -> Result<u8, String> {
+                panic!("synthetic fatal worker panic")
+            },
+        )
+        .unwrap();
+        worker.set_playing(true);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !worker.is_worker_finished() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(worker.is_worker_finished());
+        assert!(worker.shutdown().is_err());
     }
 
     #[test]

@@ -81,6 +81,17 @@ impl SoundSessionMode {
     }
 }
 
+/// Owned RGBA screenshot pixels captured at one point in emulated time.
+/// Frontends can encode this away from the machine thread without borrowing
+/// the live emulator framebuffer.
+#[derive(Debug, Clone)]
+pub struct SessionScreenshot {
+    pub frame: u64,
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
 /// Read-only joypad and cheat-interception counters published to user
 /// interfaces; never requires borrowing the mutable SNES bus or the
 /// emulation worker's machine from the GUI.
@@ -486,6 +497,21 @@ impl FrontendSession {
             framebuffer_width: framebuffer.width() as u32,
             framebuffer_height: framebuffer.height() as u32,
         }
+    }
+
+    /// Copy a still image only when explicitly requested by the user,
+    /// never as part of ordinary menu redraws.
+    pub fn capture_screenshot(&self) -> Option<SessionScreenshot> {
+        let status = self.snapshot();
+        if !status.has_rom {
+            return None;
+        }
+        Some(SessionScreenshot {
+            frame: status.frame,
+            width: status.framebuffer_width,
+            height: status.framebuffer_height,
+            rgba: self.framebuffer_rgba().to_vec(),
+        })
     }
 
     /// Borrow framebuffer pixels as RGBA8.
@@ -1328,5 +1354,6 @@ mod session_controls_snapshot_tests {
         assert_eq!(input.latched_bits, 0);
         assert!(!input.reading);
         assert_eq!(input.rom_cheat_read_hits, 0);
+        assert!(session.capture_screenshot().is_none());
     }
 }

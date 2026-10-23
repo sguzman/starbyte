@@ -3,7 +3,12 @@
 //! Deliberately separate from the user's established library UI until all
 //! existing game controls, cheats, saves and layout panels are migrated.
 
-use std::{collections::BTreeMap, path::PathBuf, time::Duration};
+use std::{
+    collections::BTreeMap,
+    path::PathBuf,
+    sync::mpsc::{Receiver, TryRecvError},
+    time::Duration,
+};
 
 use anyhow::Result;
 use eframe::egui::{self, Color32};
@@ -28,6 +33,11 @@ fn pitch_for(mode: AudioPitchMode, custom_percent: u16, speed: u16) -> f32 {
     }
 }
 
+enum PendingOperation {
+    Save(Receiver<Result<(), String>>),
+    Restore(Receiver<Result<PublishedGameFrame, String>>),
+}
+
 pub struct ThreadedPreviewApp {
     engine: EmulatorScheduler<OwnedSession, PublishedGameFrame>,
     input: InputPort,
@@ -43,6 +53,7 @@ pub struct ThreadedPreviewApp {
     keyboard_bindings: BTreeMap<String, String>,
     exit_after_frames: Option<u64>,
     last_error: Option<String>,
+    pending: Vec<PendingOperation>,
 }
 
 impl ThreadedPreviewApp {
@@ -94,7 +105,60 @@ impl ThreadedPreviewApp {
             keyboard_bindings: config.input.keyboard_bindings.clone(),
             exit_after_frames,
             last_error: None,
+            pending: Vec::new(),
         })
+    }
+
+    fn queue_save(&mut self, result: Result<Receiver<Result<(), String>>, String>) {
+        match result {
+            Ok(reply) => self.pending.push(PendingOperation::Save(reply)),
+            Err(error) => self.last_error = Some(error),
+        }
+    }
+
+    fn queue_restore(
+        &mut self,
+        result: Result<Receiver<Result<PublishedGameFrame, String>>, String>,
+    ) {
+        match result {
+            Ok(reply) => self.pending.push(PendingOperation::Restore(reply)),
+            Err(error) => self.last_error = Some(error),
+        }
+    }
+
+    fn poll_operations(&mut self, ctx: &egui::Context) {
+        let mut still_pending = Vec::new();
+        for operation in std::mem::take(&mut self.pending) {
+            match operation {
+                PendingOperation::Save(reply) => match reply.try_recv() {
+                    Ok(Ok(())) => self.last_error = None,
+                    Ok(Err(error)) => self.last_error = Some(error),
+                    Err(TryRecvError::Empty) => {
+                        still_pending.push(PendingOperation::Save(reply));
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        self.last_error = Some("Save worker stopped unexpectedly".to_owned());
+                    }
+                },
+                PendingOperation::Restore(reply) => match reply.try_recv() {
+                    Ok(Ok(frame)) => {
+                        // Never paint stale video queued before the restored
+                        // frame, even when loading during a manual pause.
+                        let _ = self.engine.take_latest_frame();
+                        self.display.import_frame(ctx, frame);
+                        self.last_error = None;
+                    }
+                    Ok(Err(error)) => self.last_error = Some(error),
+                    Err(TryRecvError::Empty) => {
+                        still_pending.push(PendingOperation::Restore(reply));
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        self.last_error = Some("Load worker stopped unexpectedly".to_owned());
+                    }
+                },
+            }
+        }
+        self.pending = still_pending;
     }
 
     fn keyboard(&self, ctx: &egui::Context) {
@@ -160,38 +224,26 @@ impl eframe::App for ThreadedPreviewApp {
                         ui.close();
                     }
                     if ui.button("Quick Save (F5)").clicked() {
-                        self.last_error = self.engine.quick_save_game().err();
+                        let job = self.engine.queue_quick_save();
+                        self.queue_save(job);
                         ui.close();
                     }
                     if ui.button("Quick Load (F8)").clicked() {
-                        match self.engine.quick_load_with_frame() {
-                            Ok(frame) => {
-                                // Drop any still-queued picture from before
-                                // the restored state to avoid visual rollback.
-                                let _ = self.engine.take_latest_frame();
-                                self.display.import_frame(ctx, frame);
-                                self.last_error = None;
-                            }
-                            Err(error) => self.last_error = Some(error),
-                        }
+                        let job = self.engine.queue_quick_load_with_frame();
+                        self.queue_restore(job);
                         ui.close();
                     }
                     ui.separator();
                     ui.menu_button("Disk save slots", |ui| {
                         for slot in 1..=3_u8 {
                             if ui.button(format!("Save slot {slot}")).clicked() {
-                                self.last_error = self.engine.save_game_slot(slot).err();
+                                let job = self.engine.queue_save_slot(slot);
+                                self.queue_save(job);
                                 ui.close();
                             }
                             if ui.button(format!("Load slot {slot}")).clicked() {
-                                match self.engine.load_game_slot_with_frame(slot) {
-                                    Ok(frame) => {
-                                        let _ = self.engine.take_latest_frame();
-                                        self.display.import_frame(ctx, frame);
-                                        self.last_error = None;
-                                    }
-                                    Err(error) => self.last_error = Some(error),
-                                }
+                                let job = self.engine.queue_load_slot_with_frame(slot);
+                                self.queue_restore(job);
                                 ui.close();
                             }
                         }
@@ -234,20 +286,16 @@ impl eframe::App for ThreadedPreviewApp {
             });
         });
         if focused && ctx.input(|input| input.key_pressed(egui::Key::F5)) {
-            self.last_error = self.engine.quick_save_game().err();
+            let job = self.engine.queue_quick_save();
+            self.queue_save(job);
         }
         if focused && ctx.input(|input| input.key_pressed(egui::Key::F8)) {
-            match self.engine.quick_load_with_frame() {
-                Ok(frame) => {
-                    let _ = self.engine.take_latest_frame();
-                    self.display.import_frame(ctx, frame);
-                    self.last_error = None;
-                }
-                Err(error) => self.last_error = Some(error),
-            }
+            let job = self.engine.queue_quick_load_with_frame();
+            self.queue_restore(job);
         }
 
         self.display.poll(ctx, &self.engine);
+        self.poll_operations(ctx);
         // Acceptance requires both worker progress and a real texture upload
         // through the window renderer, not just counting hidden ticks.
         if let Some(limit) = self.exit_after_frames {

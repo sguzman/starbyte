@@ -746,6 +746,19 @@ enum WorkerFocusPauseSmoke {
     },
 }
 
+/// CI-only complete-window replacement error: a failed install must
+/// leave the previous cartridge, clock and save namespace intact.
+enum WorkerReplacementSmoke {
+    WaitingForGame,
+    AwaitFailure {
+        previous_rom: PathBuf,
+        previous_owner: Option<u64>,
+        started_at: u64,
+        deadline: Instant,
+        error_reported: bool,
+    },
+}
+
 struct FullLibraryPendingLaunch {
     job_id: u64,
     original_path: PathBuf,
@@ -782,6 +795,7 @@ pub struct StarbyteApp {
     worker_sram_smoke: bool,
     worker_sram_smoke_started: bool,
     worker_sram_smoke_reply: Option<Receiver<Result<usize, String>>>,
+    worker_replacement_smoke: Option<WorkerReplacementSmoke>,
     audio_output: Option<AudioOutput>,
     speaker_probe: SpeakerProbeState,
     /// Session mute defaults from persisted startup preference, then follows
@@ -889,6 +903,7 @@ impl StarbyteApp {
         worker_focus_pause_smoke: bool,
         worker_panic_smoke: bool,
         worker_sram_smoke: bool,
+        worker_replacement_smoke: bool,
         logs: SharedLogBuffer,
     ) -> Result<Self> {
         // Headless Weston has no keyboard focus until a compositor explicitly
@@ -902,6 +917,7 @@ impl StarbyteApp {
             || worker_focus_pause_smoke
             || worker_panic_smoke
             || worker_sram_smoke
+            || worker_replacement_smoke
         {
             // The pause smoke begins with playable frames before it toggles
             // the real scheduler policy; Weston may have no keyboard focus.
@@ -1033,6 +1049,8 @@ impl StarbyteApp {
             worker_sram_smoke,
             worker_sram_smoke_started: false,
             worker_sram_smoke_reply: None,
+            worker_replacement_smoke: worker_replacement_smoke
+                .then_some(WorkerReplacementSmoke::WaitingForGame),
             audio_output: None,
             speaker_probe: SpeakerProbeState::Idle,
             audio_muted,
@@ -1374,6 +1392,12 @@ impl StarbyteApp {
                 Err(error) => {
                     self.update_job(pending.job_id, "Load Game", "failed", &error);
                     self.status_line = format!("Could not install ROM: {error}");
+                    if let Some(WorkerReplacementSmoke::AwaitFailure {
+                        error_reported, ..
+                    }) = &mut self.worker_replacement_smoke
+                    {
+                        *error_reported = true;
+                    }
                     // Failed installation leaves the previous cartridge
                     // active. A library refresh might have deferred its
                     // cheat changes while the replacement was pending.
@@ -5583,6 +5607,91 @@ impl eframe::App for StarbyteApp {
                 }
             }
             self.last_effective_speed_percent = speed;
+            if let Some(stage) = self.worker_replacement_smoke.take() {
+                match stage {
+                    WorkerReplacementSmoke::WaitingForGame => {
+                        if self.session_snapshot().frame >= 15
+                            && self.framebuffer_texture.is_some()
+                        {
+                            let previous_rom = self.session_snapshot().rom_path.unwrap();
+                            let previous_owner = self.worker_active_launch_id;
+                            let started_at = self
+                                .full_worker
+                                .as_ref()
+                                .map_or(0, |worker| worker.engine.completed_frames());
+                            let job_id = self.next_job_id;
+                            self.next_job_id += 1;
+                            self.latest_rom_job_id = Some(job_id);
+                            let missing = self
+                                .cache_root
+                                .join(format!("absent-worker-cartridge-{job_id}.sfc"));
+                            if missing.exists() {
+                                println!("STARBYTE_FULL_LIBRARY_REPLACEMENT_SMOKE_FAILED fixture_exists");
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                return;
+                            }
+                            self.worker_replacement_smoke =
+                                Some(WorkerReplacementSmoke::AwaitFailure {
+                                    previous_rom,
+                                    previous_owner,
+                                    started_at,
+                                    deadline: Instant::now() + Duration::from_secs(8),
+                                    error_reported: false,
+                                });
+                            self.queue_full_worker_launch(
+                                job_id,
+                                missing.clone(),
+                                None,
+                                SessionLaunchRequest {
+                                    rom_path: missing,
+                                    sound_mode: SoundSessionMode::Persistent,
+                                    cheats: Vec::new(),
+                                },
+                            );
+                        } else {
+                            self.worker_replacement_smoke =
+                                Some(WorkerReplacementSmoke::WaitingForGame);
+                        }
+                    }
+                    WorkerReplacementSmoke::AwaitFailure {
+                        previous_rom,
+                        previous_owner,
+                        started_at,
+                        deadline,
+                        error_reported,
+                    } => {
+                        let worker = self.full_worker.as_ref().unwrap();
+                        let advanced = worker.engine.completed_frames().saturating_sub(started_at);
+                        let old_cartridge_retained =
+                            self.session_snapshot().rom_path.as_ref() == Some(&previous_rom)
+                                && self.worker_active_launch_id == previous_owner
+                                && self.is_playing
+                                && worker.pending_launches.is_empty();
+                        if error_reported && old_cartridge_retained && advanced >= 10 {
+                            println!(
+                                "STARBYTE_FULL_LIBRARY_REPLACEMENT_SMOKE_OK retained_rom=true advanced_frames={advanced}"
+                            );
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            return;
+                        }
+                        if Instant::now() >= deadline {
+                            println!(
+                                "STARBYTE_FULL_LIBRARY_REPLACEMENT_SMOKE_FAILED receipt={error_reported} retained={old_cartridge_retained} advanced={advanced}"
+                            );
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            return;
+                        }
+                        self.worker_replacement_smoke =
+                            Some(WorkerReplacementSmoke::AwaitFailure {
+                                previous_rom,
+                                previous_owner,
+                                started_at,
+                                deadline,
+                                error_reported,
+                            });
+                    }
+                }
+            }
             if self.worker_sram_smoke {
                 if !self.worker_sram_smoke_started
                     && self.session_snapshot().frame >= 15

@@ -381,6 +381,7 @@ fn run_owned_clock<Machine, Frame>(
 ) -> Machine {
     let mut policy = ClockPolicy::default();
     let mut was_running = false;
+    let mut active_speed = policy.speed_percent;
     let mut deadline = Instant::now();
     loop {
         let before = policy;
@@ -418,8 +419,16 @@ fn run_owned_clock<Machine, Frame>(
         }
 
         let interval = policy.interval(base_interval);
-        if !before.should_run() || before.speed_percent != policy.speed_percent {
+        if !before.should_run()
+            || !was_running
+            || active_speed != policy.speed_percent
+        {
+            // A command may arrive while waiting in recv_timeout. Comparing
+            // to the policy captured at the top of *this* iteration is not
+            // enough: it can already contain the changed speed. Track the
+            // speed from the last truly executed scheduling interval.
             deadline = Instant::now();
+            active_speed = policy.speed_percent;
         }
         let now = Instant::now();
         if now < deadline {

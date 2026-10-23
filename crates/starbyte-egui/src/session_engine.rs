@@ -66,16 +66,15 @@ impl InputPort {
     /// Call each visible UI update, even when no buttons are pressed.
     pub fn submit(&self, held: ControllerState, just_pressed: ControllerState) {
         let now_ms = self.state.started.elapsed().as_millis() as u64;
-        let previous = self
-            .state
-            .last_heartbeat_ms
-            .swap(now_ms, Ordering::AcqRel);
+        let previous = self.state.last_heartbeat_ms.swap(now_ms, Ordering::AcqRel);
         if now_ms.saturating_sub(previous) > Self::STALE_AFTER_MS {
             // A previous press that was never consumed while Wayland hid
             // the window must not be replayed on the first fresh update.
             self.state.pending_press_bits.store(0, Ordering::Release);
         }
-        self.state.held_bits.store(held.to_bits(), Ordering::Release);
+        self.state
+            .held_bits
+            .store(held.to_bits(), Ordering::Release);
         self.state
             .pending_press_bits
             .fetch_or(just_pressed.to_bits(), Ordering::AcqRel);
@@ -466,9 +465,7 @@ impl OwnedSession {
         let nonzero_pairs = metrics.nonzero_pairs;
 
         if self.sound_enabled && !self.muted && self.volume > 0.0 {
-            if self.audio.is_none()
-                && nonzero_pairs > 0
-                && Instant::now() >= self.next_audio_retry
+            if self.audio.is_none() && nonzero_pairs > 0 && Instant::now() >= self.next_audio_retry
             {
                 match AudioOutput::start() {
                     Ok(output) => self.audio = Some(output),
@@ -494,7 +491,9 @@ impl OwnedSession {
 
         Ok(PublishedGameFrame {
             status,
-            rgba: self.render.should_copy_framebuffer()
+            rgba: self
+                .render
+                .should_copy_framebuffer()
                 .then(|| self.session.framebuffer_rgba().to_vec()),
             last_frame_cpu: started.elapsed(),
             stereo_pairs,
@@ -523,12 +522,7 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
         self.post(move |engine| engine.set_input(state))
     }
 
-    pub fn configure_sound(
-        &self,
-        enabled: bool,
-        muted: bool,
-        volume: f32,
-    ) -> Result<(), String> {
+    pub fn configure_sound(&self, enabled: bool, muted: bool, volume: f32) -> Result<(), String> {
         self.post(move |engine| engine.set_audio(enabled, muted, volume))
     }
 
@@ -562,7 +556,9 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
         mode: SoundSessionMode,
     ) -> Result<Receiver<Result<PublishedGameFrame, String>>, String> {
         self.submit_transaction(move |engine| {
-            engine.load_rom(&path, mode).map_err(|error| error.to_string())?;
+            engine
+                .load_rom(&path, mode)
+                .map_err(|error| error.to_string())?;
             Ok(engine.capture_frame())
         })
     }
@@ -594,7 +590,8 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
         action: SessionSaveAction,
     ) -> Result<Receiver<Result<SessionSaveOutcome, String>>, String> {
         self.submit_transaction(move |engine| {
-            engine.session
+            engine
+                .session
                 .apply_save_action(action)
                 .map_err(|error| error.to_string())
         })
@@ -609,12 +606,12 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
         self.submit_transaction(|engine| engine.quick_save().map_err(|e| e.to_string()))
     }
 
-    pub fn queue_save_slot(
-        &self,
-        slot: u8,
-    ) -> Result<Receiver<Result<(), String>>, String> {
+    pub fn queue_save_slot(&self, slot: u8) -> Result<Receiver<Result<(), String>>, String> {
         self.submit_transaction(move |engine| {
-            engine.save_slot(slot).map(|_| ()).map_err(|e| e.to_string())
+            engine
+                .save_slot(slot)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
         })
     }
 
@@ -647,10 +644,7 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
         self.transact(move |engine| engine.load_slot(slot).map_err(|e| e.to_string()))
     }
 
-    pub fn load_game_slot_with_frame(
-        &self,
-        slot: u8,
-    ) -> Result<PublishedGameFrame, String> {
+    pub fn load_game_slot_with_frame(&self, slot: u8) -> Result<PublishedGameFrame, String> {
         self.transact(move |engine| {
             engine.load_slot(slot).map_err(|e| e.to_string())?;
             Ok(engine.capture_frame())
@@ -750,16 +744,27 @@ mod tests {
             port.take_frame_state_at(since + InputPort::STALE_AFTER_MS + 1),
             ControllerState::default()
         );
-        assert_eq!(port.take_frame_state_at(since + InputPort::STALE_AFTER_MS + 2),
-            ControllerState::default());
+        assert_eq!(
+            port.take_frame_state_at(since + InputPort::STALE_AFTER_MS + 2),
+            ControllerState::default()
+        );
     }
 
     #[test]
     fn controller_bits_round_trip() {
         let all = ControllerState {
-            b: true, y: true, select: true, start: true,
-            up: true, down: true, left: true, right: true,
-            a: true, x: true, l: true, r: true,
+            b: true,
+            y: true,
+            select: true,
+            start: true,
+            up: true,
+            down: true,
+            left: true,
+            right: true,
+            a: true,
+            x: true,
+            l: true,
+            r: true,
         };
         assert_eq!(controller_from_bits(all.to_bits()), all);
     }

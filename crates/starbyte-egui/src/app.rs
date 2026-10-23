@@ -6642,7 +6642,8 @@ impl eframe::App for StarbyteApp {
                                     deadline: Instant::now() + Duration::from_secs(8),
                                     newer_error_reported: false,
                                 });
-                            return;
+                            // Continue the ordinary egui repaint scheduler:
+                            // the asynchronous launch receipts arrive later.
                         }
                         if Instant::now() >= deadline {
                             println!(

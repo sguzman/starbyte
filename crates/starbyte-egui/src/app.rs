@@ -5830,6 +5830,98 @@ mod session_view_bridge_tests {
     }
 
     #[test]
+    fn full_library_worker_keeps_sound_mode_disk_slots_isolated() {
+        let dir = tempfile::tempdir().unwrap();
+        let rom = dir.path().join("sound-mode-slots.sfc");
+        std::fs::write(&rom, starbyte_core::testing::demo::demo_rom_bytes()).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(dir.path().join("saves")),
+            state_dir: Some(dir.path().join("states")),
+            cache_dir: Some(dir.path().join("cache")),
+            config_path: None,
+        };
+        let mut owner = OwnedSession::create(assets).unwrap();
+        owner.set_audio(false, true, 0.0);
+        let (worker, _, _) = owner.spawn_with_ports().unwrap();
+        let launch = |mode| SessionLaunchRequest {
+            rom_path: rom.clone(),
+            sound_mode: mode,
+            cheats: Vec::new(),
+        };
+        let persistent = worker
+            .queue_launch_with_state(launch(SoundSessionMode::Persistent))
+            .unwrap()
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        assert_eq!(persistent.controls.sound_mode, SoundSessionMode::Persistent);
+        assert!(!persistent.controls.state_slots[0]);
+        let persistent_slot = worker
+            .queue_save_action_with_frame(SessionSaveAction::SaveSlot(1))
+            .unwrap()
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        let SessionSaveOutcome::SavedTo(persistent_path) = persistent_slot.outcome else {
+            panic!("persistent save must return a disk path");
+        };
+        assert!(persistent_path.is_file());
+
+        let legacy = worker
+            .queue_launch_with_state(launch(SoundSessionMode::Compatibility))
+            .unwrap()
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        assert_eq!(legacy.controls.sound_mode, SoundSessionMode::Compatibility);
+        assert!(!legacy.controls.state_slots[0], "sound slots must not leak into legacy mode");
+        let legacy_slot = worker
+            .queue_save_action_with_frame(SessionSaveAction::SaveSlot(1))
+            .unwrap()
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        let SessionSaveOutcome::SavedTo(legacy_path) = legacy_slot.outcome else {
+            panic!("legacy save must return a disk path");
+        };
+        assert!(legacy_path.is_file());
+        assert_ne!(legacy_path, persistent_path);
+
+        let sound_again = worker
+            .queue_launch_with_state(launch(SoundSessionMode::Persistent))
+            .unwrap()
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        assert!(sound_again.controls.state_slots[0]);
+        assert!(!sound_again.controls.has_quick_save);
+        let legacy_again = worker
+            .queue_launch_with_state(launch(SoundSessionMode::Compatibility))
+            .unwrap()
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        assert!(legacy_again.controls.state_slots[0]);
+        assert!(!legacy_again.controls.has_quick_save);
+
+        let isolated = worker
+            .queue_launch_with_state(launch(SoundSessionMode::Isolated))
+            .unwrap()
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        assert_eq!(isolated.controls.sound_mode, SoundSessionMode::Isolated);
+        let denied = worker
+            .queue_save_action_with_frame(SessionSaveAction::SaveSlot(1))
+            .unwrap()
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+        assert!(denied.is_err(), "isolated sound mode must be read-only");
+        worker.shutdown().unwrap();
+    }
+
+    #[test]
     fn full_library_read_only_views_can_consume_worker_state_without_owner_borrow() {
         let dir = tempfile::tempdir().unwrap();
         let rom = dir.path().join("full-ui-session-view.sfc");

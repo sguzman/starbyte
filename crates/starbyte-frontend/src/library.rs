@@ -871,8 +871,9 @@ impl CoverProvider for LibretroCoverProvider {
                 path = %cache_path.display(),
                 "invalid cached cover; retrying download"
             );
-            fs::remove_file(&cache_path)
-                .with_context(|| format!("failed to remove invalid cover {}", cache_path.display()))?;
+            fs::remove_file(&cache_path).with_context(|| {
+                format!("failed to remove invalid cover {}", cache_path.display())
+            })?;
         }
         if let Some(parent) = cache_path.parent() {
             fs::create_dir_all(parent)?;

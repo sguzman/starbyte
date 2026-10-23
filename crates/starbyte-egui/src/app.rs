@@ -3306,7 +3306,7 @@ impl StarbyteApp {
         let Some(screenshot) = self.session.capture_screenshot() else {
             self.status_line = "Load a game before taking a screenshot.".to_owned();
             return;
-        }
+        };
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()

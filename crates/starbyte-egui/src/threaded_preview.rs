@@ -327,8 +327,10 @@ impl ThreadedPreviewApp {
             let mut held = ControllerState::default();
             let mut pressed = ControllerState::default();
             for &action in input_actions() {
-                if let Some(binding) = self.keyboard_bindings.get(action)
-                    && let Some(key) = parse_egui_key(binding)
+                if let Some(key) = self
+                    .keyboard_bindings
+                    .get(action)
+                    .and_then(|binding| parse_egui_key(binding))
                 {
                     set_controller_flag(&mut held, action, input.key_down(key));
                     set_controller_flag(&mut pressed, action, input.key_pressed(key));
@@ -482,14 +484,14 @@ impl eframe::App for ThreadedPreviewApp {
                                 .text("Volume"),
                         )
                         .changed();
-                    if changed
-                        && let Err(error) = self.engine.configure_sound(
+                    if changed {
+                        if let Err(error) = self.engine.configure_sound(
                             self.audio_enabled,
                             self.audio_muted,
                             self.audio_volume,
-                        )
-                    {
-                        self.last_error = Some(error);
+                        ) {
+                            self.last_error = Some(error);
+                        }
                     }
                     if ui
                         .add_enabled(

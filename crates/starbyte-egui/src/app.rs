@@ -1815,7 +1815,10 @@ impl StarbyteApp {
             }
             WorkerShortcutSmoke::AwaitSave { deadline } => {
                 if self.session_controls().has_quick_save
-                    && self.full_worker.as_ref().is_some_and(|w| w.pending_saves.is_empty())
+                    && self
+                        .full_worker
+                        .as_ref()
+                        .is_some_and(|w| w.pending_saves.is_empty())
                 {
                     WorkerShortcutSmoke::PressLoad
                 } else if Instant::now() >= deadline {
@@ -1829,7 +1832,10 @@ impl StarbyteApp {
             }
             WorkerShortcutSmoke::AwaitLoad { deadline } => {
                 if self.status_line.starts_with("Quick save restored")
-                    && self.full_worker.as_ref().is_some_and(|w| w.pending_saves.is_empty())
+                    && self
+                        .full_worker
+                        .as_ref()
+                        .is_some_and(|w| w.pending_saves.is_empty())
                 {
                     WorkerShortcutSmoke::PressLibrary
                 } else if Instant::now() >= deadline {
@@ -1841,7 +1847,10 @@ impl StarbyteApp {
                     stage
                 }
             }
-            WorkerShortcutSmoke::AwaitLibrary { deadline, started_at } => {
+            WorkerShortcutSmoke::AwaitLibrary {
+                deadline,
+                started_at,
+            } => {
                 if !self.play_view
                     && self.full_worker.as_ref().is_some_and(|w| {
                         w.engine.completed_frames().saturating_sub(started_at) >= 10
@@ -1857,9 +1866,14 @@ impl StarbyteApp {
                     stage
                 }
             }
-            WorkerShortcutSmoke::AwaitReturn { deadline, started_at } => {
+            WorkerShortcutSmoke::AwaitReturn {
+                deadline,
+                started_at,
+            } => {
                 if self.play_view
-                    && self.last_worker_texture_frame.is_some_and(|frame| frame >= started_at + 10)
+                    && self
+                        .last_worker_texture_frame
+                        .is_some_and(|frame| frame >= started_at + 10)
                 {
                     println!(
                         "STARBYTE_FULL_LIBRARY_SHORTCUT_SMOKE_OK f5=true f8=true f9=true escape=true frame={}",
@@ -5335,7 +5349,10 @@ impl eframe::App for StarbyteApp {
                 Some(egui::Key::F8)
             }
             Some(WorkerShortcutSmoke::PressLibrary) => {
-                let started_at = self.full_worker.as_ref().map_or(0, |w| w.engine.completed_frames());
+                let started_at = self
+                    .full_worker
+                    .as_ref()
+                    .map_or(0, |w| w.engine.completed_frames());
                 self.worker_shortcut_smoke = Some(WorkerShortcutSmoke::AwaitLibrary {
                     deadline: Instant::now() + Duration::from_secs(8),
                     started_at,
@@ -5343,7 +5360,10 @@ impl eframe::App for StarbyteApp {
                 Some(egui::Key::F9)
             }
             Some(WorkerShortcutSmoke::PressReturn) => {
-                let started_at = self.full_worker.as_ref().map_or(0, |w| w.engine.completed_frames());
+                let started_at = self
+                    .full_worker
+                    .as_ref()
+                    .map_or(0, |w| w.engine.completed_frames());
                 self.worker_shortcut_smoke = Some(WorkerShortcutSmoke::AwaitReturn {
                     deadline: Instant::now() + Duration::from_secs(8),
                     started_at,

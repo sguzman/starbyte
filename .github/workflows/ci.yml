@@ -197,7 +197,7 @@ jobs:
           grep -F "STARBYTE_FULL_LIBRARY_REPLACEMENT_SMOKE_OK retained_rom=true advanced_frames=" "$RUNNER_TEMP/starbyte-full-replacement.log"
           # A failed replacement must not discard the old cartridge's
           # asynchronous screenshot PNG or its paused single-step texture.
-          grep -F "STARBYTE_FULL_LIBRARY_RECEIPT_RACE_SMOKE_OK retained_rom=true screenshot_written=true step_uploaded=true" "$RUNNER_TEMP/starbyte-full-replacement.log"
+          grep -F "STARBYTE_FULL_LIBRARY_RECEIPT_RACE_SMOKE_OK retained_rom=true screenshot_written=true step_uploaded=true pending_step_cleared=true" "$RUNNER_TEMP/starbyte-full-replacement.log"
           # Press F5, F8, F9 and Escape through the original window's egui
           # key-event pipeline. Verify saves, restore, library navigation,
           # continued worker progress and fresh video after returning.

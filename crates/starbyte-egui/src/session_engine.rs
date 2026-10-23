@@ -815,7 +815,10 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(showed_video, "renderer did not receive a fresh frame after resurfacing");
+        assert!(
+            showed_video,
+            "renderer did not receive a fresh frame after resurfacing"
+        );
         worker.set_playing(false);
         worker.invoke(|_| Ok(())).unwrap();
         let controls = worker.read_controls().unwrap();

@@ -1208,7 +1208,12 @@ mod tests {
         owner.set_audio(true, true, 0.5);
         let worker = owner.spawn().unwrap();
         let response = worker.queue_speaker_check().unwrap();
-        assert!(response.recv_timeout(Duration::from_secs(3)).unwrap().is_err());
+        assert!(
+            response
+                .recv_timeout(Duration::from_secs(3))
+                .unwrap()
+                .is_err()
+        );
         assert_eq!(worker.frame_stats().fps, None);
         worker.shutdown().unwrap();
     }

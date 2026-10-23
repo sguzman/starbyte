@@ -1,8 +1,18 @@
 # Emulation scheduler migration
 
-**Status: in progress. Commit [`4020d64`](https://github.com/sguzman/starbyte/commit/4020d643847773833d39673ac22e5a65f1840add) passed [CI run 40030994642](https://github.com/sguzman/starbyte/actions/runs/40030994642): Linux, Windows, formatting/Clippy and original-window native Weston integration. Verified source progress is 68/77 (88%): A 7/8, B 17/18, P 18/20, C 15/16, D 11/15. The complete original library worker is still opt-in; production-default cutover, physical Hyprland and audible-device quality remain unverified.**
+**Status: in progress. Commit [`f4e6369`](https://github.com/sguzman/starbyte/commit/f4e63699d75dd2c0f7090dd3a14f79830176f188) passed [CI run 40032643086](https://github.com/sguzman/starbyte/actions/runs/40032643086): Linux, Windows, formatting/Clippy and original-window native Weston integration. Verified source progress is 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. The complete original library worker is still opt-in; production-default cutover, physical Hyprland and audible-device quality remain unverified.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
+
+## Verified single-session ownership in original window — 2026-10-23
+
+Commit [`f4e6369`](https://github.com/sguzman/starbyte/commit/f4e63699d75dd2c0f7090dd3a14f79830176f188) passed [CI 40032643086](https://github.com/sguzman/starbyte/actions/runs/40032643086): Linux original-window native Weston and all workspace tests, Windows tests/benchmark compilation, and formatting/Clippy.
+
+- The original egui app stores the legacy `FrontendSession` in an `Option` that is **None when the complete original window is started in worker mode**. Startup creates only the `OwnedSession` within the scheduler in that mode, not a shadow legacy emulator. Legacy mode retains the existing synchronous session path.
+- `SessionViewBridge` receives `Option<&FrontendSession>`, using its worker snapshot, controls and input diagnostics with no fallback session when a worker is attached; the worker-mode unit test intentionally passes `None`. Direct mutation calls use explicitly named legacy-only accessors.
+- Failed partial worker setup can drop an app with no legacy session without panicking, and native screenshot dispatch reads the published view before mutably borrowing worker command queues.
+- Native Weston logs reconfirmed independent no-redraw advancement (`advanced_frames=122 caught_up_frame=133`), failed-ROM replacement screenshot + stepped-still receipts, actual F5/F8/F9/Escape shortcuts, shell menus/cover/status rendering and owner-thread shutdown (`finalized=true audio_released=true`).
+- **Source milestone B is complete: 18/18.** Total 69/77 (90%). This does **not** authorize default cutover, or claim physical Hyprland/GPU/audio/gamepad acceptance; those separate tasks remain open.
 
 ## Verified independent worker and renderer telemetry acceptance — 2026-10-23
 
@@ -392,7 +402,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [x] 🧪 Confirm format, Clippy and full workspace tests on code commit `d0254a7` (CI run 39951239026).
 - [ ] 🖥️ Verify worker scheduling while Hyprland is off-workspace or occluded.
 
-## Milestone B: thread-owned frontend session — 17/18 source tasks (94%)
+## Milestone B: thread-owned frontend session — 18/18 source tasks (100%; source-only)
 
 - [x] 🧠 Define `OwnedSession` wrapping `FrontendSession` in `session_engine.rs`.
 - [x] 🎵 Produce PCM on the worker and enqueue it to the existing bounded Rodio worker.
@@ -409,7 +419,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [x] 🔊 Publish actual audio-device, submitted PCM, and dropped-buffer diagnostics alongside video frames.
 - [x] 💾 Run final SRAM flush and PCM invalidation on the emulation owner thread before shutdown/join.
 - [x] 📬 Process command bursts in bounded batches; surface fatal worker exits and queue cheat/save commands without stalling UI frames.
-- [ ] 🔄 Replace all live `StarbyteApp.session` access with worker commands and snapshots.
+- [x] 🔄 Replace all live `StarbyteApp.session` access in opt-in worker mode with worker commands and snapshots. Optional legacy session is never constructed with the worker; bridge reads published state without fallback. CI 40032643086 verified Linux, Windows and original-window native Weston, including owner finalization.
 - [x] 📊 Move opt-in original-window emulation telemetry (FPS, frame gaps, overlays) to worker-produced truth, with separately labeled renderer delivery and texture submission measurements and bounded asynchronous owner-job depth (CI 40030994642). Production default cutover remains separate.
 - [x] 🎚️ Preserve current speed/pitch/mute/volume control semantics across sound modes through the opt-in original-app worker handoff (worker command test and pitch-mode mapping, CI 40011629443; physical audibility separately gated).
 

@@ -5727,7 +5727,7 @@ fn fit_game_size(source: Vec2, available: Vec2, integer_scale: bool) -> Vec2 {
     source * scale
 }
 
-fn write_png_screenshot(path: &Path, rgba: &[u8], width: u32, height: u32) -> Result<()> {
+pub(crate) fn write_png_screenshot(path: &Path, rgba: &[u8], width: u32, height: u32) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }

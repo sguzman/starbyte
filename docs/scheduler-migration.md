@@ -120,9 +120,17 @@ That run also identified a failing **legacy** Weston smoke: the headless
 window had no keyboard focus, so its default `pause_when_unfocused=true`
 prevented progress until the 90-second timeout. The explicit bounded
 `--exit-after-frames` test session now disables focus pause without changing
-the default for real players. A newer green CI run is needed to establish the
-fix. The source formatter failures in that run were addressed with exact
-`rustfmt` diffs recovered from the lint logs.
+the default for real players. Source formatter failures were addressed with
+exact `rustfmt` diffs recovered from the lint logs.
+
+The subsequent [**green run 39887694659**](https://github.com/sguzman/starbyte/actions/runs/39887694659)
+at commit `4be0094` passed `cargo fmt`, Clippy, Windows and Linux tests, the
+headless worker smoke, and both native Weston checks. Its verified output
+included `STARBYTE_NATIVE_SMOKE_OK frame=30` (legacy window) and
+`STARBYTE_THREADED_PREVIEW_SMOKE_OK worker_frames=30 rendered_frame=30`
+(threaded window + real texture upload). **This is tested implementation
+evidence at that SHA**, not a claim that the default library has been
+migrated, nor that the newest commit or a Hyprland desktop is validated.
 
 The dedicated worker also now has a real lost-heartbeat test:
 default focus pause must suspend frames when Wayland stops repainting,

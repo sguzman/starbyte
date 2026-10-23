@@ -16,7 +16,7 @@ use std::{
 use starbyte_core::{input::ControllerState, manifest::AssetConfig};
 use starbyte_frontend::{
     CheatEntry, FrontendSession, SessionControlsSnapshot, SessionInputDiagnostics,
-    SessionSnapshot, SoundSessionMode,
+    SessionScreenshot, SessionSnapshot, SoundSessionMode,
 };
 
 use crate::{
@@ -395,6 +395,14 @@ impl OwnedSession {
         }
     }
 
+    /// Standalone screenshot capture uses the shared frontend API rather
+    /// than introducing a second direct emulator framebuffer access path.
+    pub fn capture_screenshot(&self) -> Result<SessionScreenshot, String> {
+        self.session
+            .capture_screenshot()
+            .ok_or_else(|| "Load a ROM before taking a screenshot".to_owned())
+    }
+
     /// Snapshot the current emulated framebuffer without advancing a frame.
     /// Needed after quick/disk state loads while the user is paused: the UI
     /// must display the restored picture immediately, not wait for Play.
@@ -620,11 +628,12 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
     }
 
     /// Capture the owning thread's framebuffer at a serialized point in
-    /// game time. The caller is responsible for writing PNG asynchronously.
-    pub fn queue_screenshot_frame(
+    /// game time. The caller writes/encodes PNG asynchronously, and the
+    /// returned type is the same one used by the established Starbyte UI.
+    pub fn queue_screenshot_pixels(
         &self,
-    ) -> Result<Receiver<Result<PublishedGameFrame, String>>, String> {
-        self.submit_transaction(|engine| Ok(engine.capture_frame()))
+    ) -> Result<Receiver<Result<SessionScreenshot, String>>, String> {
+        self.submit_transaction(|engine| engine.capture_screenshot())
     }
 
     pub fn read_controls(&self) -> Result<SessionControlsSnapshot, String> {

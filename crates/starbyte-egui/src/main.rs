@@ -168,7 +168,14 @@ fn main() -> Result<()> {
         return eframe::run_native(
             "Starbyte (threaded preview)",
             options,
-            Box::new(move |_cc| {
+            Box::new(move |cc| {
+                // Honor the same persisted System / Light / Dark choice as the
+                // established library, even in the opt-in worker preview.
+                cc.egui_ctx.set_theme(match config.ui.theme {
+                    UiTheme::System => egui::ThemePreference::System,
+                    UiTheme::Light => egui::ThemePreference::Light,
+                    UiTheme::Dark => egui::ThemePreference::Dark,
+                });
                 let app = crate::threaded_preview::ThreadedPreviewApp::new(
                     assets.clone(),
                     &config,

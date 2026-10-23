@@ -359,6 +359,20 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
             .map_err(|_| "emulation worker is not running".to_owned())
     }
 
+    /// Queue a user-initiated operation without blocking the egui event
+    /// loop. Poll the returned receiver to display completion or failure.
+    /// Operations are serialized with frames by the sole machine owner.
+    pub fn submit_transaction<Value: Send + 'static>(
+        &self,
+        action: impl FnOnce(&mut Machine) -> Result<Value, String> + Send + 'static,
+    ) -> Result<Receiver<Result<Value, String>>, String> {
+        let (sender, receiver) = mpsc::channel();
+        self.post(move |machine| {
+            let _ = sender.send(action(machine));
+        })?;
+        Ok(receiver)
+    }
+
     /// Return a value from the thread that exclusively owns the emulator.
     /// Use sparingly for user-requested save/load operations, not every paint.
     pub fn transact<Value: Send + 'static>(
@@ -635,6 +649,27 @@ mod tests {
         worker.post(|machine| *machine *= 2).unwrap();
         assert_eq!(worker.transact(|machine| Ok(*machine)).unwrap(), 42);
         assert_eq!(worker.shutdown().unwrap(), 42);
+    }
+
+    #[test]
+    fn deferred_transactions_execute_in_order_without_gui_waiting() {
+        let worker = EmulatorScheduler::spawn(
+            0_i32,
+            Duration::from_millis(2),
+            |machine| Ok(*machine),
+        )
+        .unwrap();
+        let a = worker.submit_transaction(|machine| {
+            *machine = 10;
+            Ok(*machine)
+        }).unwrap();
+        let b = worker.submit_transaction(|machine| {
+            *machine += 7;
+            Ok(*machine)
+        }).unwrap();
+        assert_eq!(a.recv_timeout(Duration::from_secs(1)).unwrap().unwrap(), 10);
+        assert_eq!(b.recv_timeout(Duration::from_secs(1)).unwrap().unwrap(), 17);
+        assert_eq!(worker.shutdown().unwrap(), 17);
     }
 
     #[test]

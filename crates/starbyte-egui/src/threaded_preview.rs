@@ -15,7 +15,7 @@ use anyhow::Result;
 use eframe::egui::{self, Color32};
 use starbyte_core::{
     input::ControllerState,
-    manifest::{AssetConfig, AudioPitchMode, InputDeviceMode, RuntimeConfig},
+    manifest::{AssetConfig, AudioPitchMode, InputDeviceMode, RuntimeConfig, UiSettings},
 };
 use starbyte_frontend::SoundSessionMode;
 
@@ -57,6 +57,7 @@ pub struct ThreadedPreviewApp {
     audio_enabled: bool,
     audio_muted: bool,
     audio_volume: f32,
+    status_settings: UiSettings,
     keyboard_bindings: BTreeMap<String, String>,
     gamepads: PreviewGamepads,
     input_mode: InputDeviceMode,
@@ -117,6 +118,7 @@ impl ThreadedPreviewApp {
             audio_enabled: config.audio.enabled,
             audio_muted: config.audio.mute_on_startup,
             audio_volume: config.audio.volume,
+            status_settings: config.ui.clone(),
             keyboard_bindings: config.input.keyboard_bindings.clone(),
             gamepads: PreviewGamepads::new(config.input.gamepad_bindings.clone()),
             input_mode: config.input.active_device,
@@ -367,6 +369,18 @@ impl eframe::App for ThreadedPreviewApp {
                         self.engine.set_pause_when_unfocused(self.pause_when_unfocused);
                     }
                     ui.checkbox(&mut self.integer_scale, "Integer scale");
+                    ui.menu_button("Status bar", |ui| {
+                        let prefs = &mut self.status_settings;
+                        ui.checkbox(&mut prefs.show_status_bar, "Show status bar");
+                        ui.add_enabled_ui(prefs.show_status_bar, |ui| {
+                            ui.checkbox(&mut prefs.status_fps, "Worker FPS");
+                            ui.checkbox(&mut prefs.status_sound, "Sound");
+                            ui.checkbox(&mut prefs.status_frame, "Frame counter");
+                            ui.checkbox(&mut prefs.status_apu_steps, "APU steps");
+                            ui.checkbox(&mut prefs.status_audio_samples, "Audio samples");
+                            ui.checkbox(&mut prefs.status_activity, "Frame diagnostics");
+                        });
+                    });
                 });
                 ui.menu_button("Audio", |ui| {
                     let mut changed = false;
@@ -499,41 +513,59 @@ impl eframe::App for ThreadedPreviewApp {
             let available = ui.available_size();
             self.display.draw(ui, available, self.integer_scale);
         });
-        egui::TopBottomPanel::bottom("worker_preview_stats").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if let Some(status) = self.display.status() {
-                    ui.label(format!(
-                        "Worker frame {} | APU steps {} | Samples {}",
-                        status.frame, status.apu_steps, status.audio_sample_count
-                    ));
-                }
-                ui.separator();
-                ui.label(format!(
-                    "CPU {:.2} ms",
-                    self.display.last_cpu_duration().as_secs_f32() * 1_000.0
-                ));
-                ui.separator();
-                let rate = self.engine.frame_stats();
-                if let Some(fps) = rate.fps {
-                    ui.label(format!(
-                        "Worker FPS {fps:.1} / {:.1}",
-                        60.0985 * f32::from(self.speed_percent) / 100.0
-                    ));
-                } else {
-                    ui.label("Worker FPS: measuring");
-                }
-                ui.separator();
-                ui.label(format!(
-                    "Frame gap {:.1} ms | 40ms+ hitches {}",
-                    rate.last_gap_ms, rate.hitches_40ms
-                ));
-                ui.separator();
-                ui.label(format!(
-                    "Video frames superseded {}",
-                    self.engine.skipped_video_frames()
-                ));
+        if self.status_settings.show_status_bar {
+            egui::TopBottomPanel::bottom("worker_preview_stats").show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    let prefs = &self.status_settings;
+                    let rate = self.engine.frame_stats();
+                    if prefs.status_fps {
+                        if let Some(fps) = rate.fps {
+                            ui.label(format!(
+                                "Worker FPS {fps:.1} / {:.1}",
+                                60.0985 * f32::from(self.speed_percent) / 100.0
+                            ));
+                        } else {
+                            ui.label("Worker FPS: measuring");
+                        }
+                    }
+                    if prefs.status_sound {
+                        ui.separator();
+                        let sound = if !self.audio_enabled {
+                            "Sound: disabled"
+                        } else if self.audio_muted || self.audio_volume <= 0.0 {
+                            "Sound: muted"
+                        } else {
+                            "Sound: enabled"
+                        };
+                        ui.label(sound);
+                    }
+                    if let Some(status) = self.display.status() {
+                        if prefs.status_frame {
+                            ui.separator();
+                            ui.label(format!("Frame {}", status.frame));
+                        }
+                        if prefs.status_apu_steps {
+                            ui.separator();
+                            ui.label(format!("APU steps {}", status.apu_steps));
+                        }
+                        if prefs.status_audio_samples {
+                            ui.separator();
+                            ui.label(format!("Audio samples {}", status.audio_sample_count));
+                        }
+                    }
+                    if prefs.status_activity {
+                        ui.separator();
+                        ui.label(format!(
+                            "CPU {:.2} ms | gap {:.1} ms | hitches {} | superseded {}",
+                            self.display.last_cpu_duration().as_secs_f32() * 1_000.0,
+                            rate.last_gap_ms,
+                            rate.hitches_40ms,
+                            self.engine.skipped_video_frames()
+                        ));
+                    }
+                });
             });
-        });
+        }
         // UI painting is still paced by egui, but the worker is NOT.
         ctx.request_repaint_after(Duration::from_millis(16));
     }

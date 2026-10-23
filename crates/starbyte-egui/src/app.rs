@@ -1561,20 +1561,11 @@ impl StarbyteApp {
                     if self.loaded_game_id.is_none()
                         && let Some(loaded_path) = self.session_snapshot().rom_path
                     {
-                        let recent = self.config.library.recent_roms.first();
-                        self.loaded_game_id = self
-                            .library_snapshot
-                            .entries
-                            .iter()
-                            .find(|entry| {
-                                entry.local.as_ref().is_some_and(|local| {
-                                    recent.is_some_and(|path| path == &local.rom_path)
-                                        || local.rom_path == loaded_path
-                                        || local.extracted_cache_path.as_deref()
-                                            == Some(loaded_path.as_path())
-                                })
-                            })
-                            .map(|entry| entry.game_id.clone());
+                        self.loaded_game_id = indexed_game_id_for_loaded_rom(
+                            &self.library_snapshot.entries,
+                            loaded_path.as_path(),
+                            self.config.library.recent_roms.first().map(PathBuf::as_path),
+                        );
                     }
                     self.update_snapshot_cheat_flags();
                     self.sync_loaded_game_cheats();
@@ -5302,6 +5293,7 @@ mod screenshot_writer_tests {
 mod session_view_bridge_tests {
     use super::*;
     use crate::session_engine::OwnedSession;
+    use starbyte_frontend::{LocalRomInfo, LocalRomSourceKind};
 
     #[test]
     fn full_library_read_only_views_can_consume_worker_state_without_owner_borrow() {
@@ -5334,7 +5326,42 @@ mod session_view_bridge_tests {
             .unwrap()
             .unwrap();
         bridge.accept_worker_frame(&launched.frame);
-        assert_eq!(bridge.snapshot(&legacy).rom_path, Some(rom));
+        assert_eq!(bridge.snapshot(&legacy).rom_path, Some(rom.clone()));
+        let entry = LibraryEntry {
+            game_id: "demo".to_owned(),
+            display_title: "Demo".to_owned(),
+            installed_status: InstalledStatus::Installed,
+            local: Some(LocalRomInfo {
+                game_id: "demo".to_owned(),
+                title: "Demo".to_owned(),
+                normalized_title: "demo".to_owned(),
+                rom_path: rom.clone(),
+                source_kind: LocalRomSourceKind::File,
+                archive_member_path: None,
+                extracted_cache_path: None,
+                mapper: "LoROM".to_owned(),
+                coprocessor: None,
+                region: "NTSC".to_owned(),
+                file_size_bytes: std::fs::metadata(&rom).unwrap().len(),
+            }),
+            metadata: None,
+            cover: None,
+            cheats: Vec::new(),
+        };
+        let loaded = bridge.snapshot(&legacy).rom_path.unwrap();
+        assert_eq!(
+            indexed_game_id_for_loaded_rom(&[entry.clone()], &loaded, None).as_deref(),
+            Some("demo")
+        );
+        let mut zip_entry = entry;
+        let zip_local = zip_entry.local.as_mut().unwrap();
+        zip_local.rom_path = dir.path().join("demo.zip");
+        zip_local.source_kind = LocalRomSourceKind::ZipArchiveMember;
+        zip_local.extracted_cache_path = Some(loaded.clone());
+        assert_eq!(
+            indexed_game_id_for_loaded_rom(&[zip_entry], &loaded, None).as_deref(),
+            Some("demo")
+        );
         assert!(bridge.controls(&legacy).session.has_rom);
         assert_eq!(
             bridge.input_diagnostics(&legacy).host_bits,
@@ -6569,6 +6596,26 @@ fn record_recent_rom(recent: &mut Vec<PathBuf>, path: &Path) {
     recent.retain(|old| old != &path);
     recent.insert(0, path);
     recent.truncate(8);
+}
+
+/// Reassociate a directly opened or ZIP-extracted game when the asynchronous
+/// library index arrives. Use the active session's ROM identity, regardless
+/// of whether it belongs to the legacy GUI or the independent worker.
+fn indexed_game_id_for_loaded_rom(
+    entries: &[LibraryEntry],
+    loaded_path: &Path,
+    recent_path: Option<&Path>,
+) -> Option<String> {
+    entries
+        .iter()
+        .find(|entry| {
+            entry.local.as_ref().is_some_and(|local| {
+                local.rom_path.as_path() == loaded_path
+                    || local.extracted_cache_path.as_deref() == Some(loaded_path)
+                    || recent_path.is_some_and(|path| path == local.rom_path.as_path())
+            })
+        })
+        .map(|entry| entry.game_id.clone())
 }
 
 fn empty_snapshot() -> LibrarySnapshot {

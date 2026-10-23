@@ -17,6 +17,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Prevent a burst of GUI input/config/snapshot commands from monopolizing
+/// the machine owner and starving game-frame deadlines. Long commands such as
+/// ROM loads remain serialized by design.
+const MAX_COMMANDS_PER_TICK: usize = 64;
+
 /// Hardware NTSC frame period used by the existing player.
 pub const NTSC_FRAME_INTERVAL: Duration = Duration::from_nanos(16_639_357);
 
@@ -452,7 +457,7 @@ fn run_owned_clock<Machine, Frame>(
     let mut deadline = Instant::now();
     loop {
         let before = policy;
-        loop {
+        for _ in 0..MAX_COMMANDS_PER_TICK {
             match commands.try_recv() {
                 Ok(command) => {
                     if !apply_command(command, &mut machine, &mut policy) {
@@ -696,6 +701,32 @@ mod tests {
         // compositor-dependent repaint or a lost session.
         assert_eq!(worker.completed_frames(), 0);
         assert_eq!(worker.shutdown().unwrap(), 0);
+    }
+
+    #[test]
+    fn pending_command_burst_does_not_starve_emulation_ticks() {
+        let worker = EmulatorScheduler::spawn(
+            0_u64,
+            Duration::from_millis(1),
+            |machine| {
+                *machine += 1;
+                Ok(*machine)
+            },
+        )
+        .unwrap();
+        worker.set_playing(true);
+        for _ in 0..5_000 {
+            worker.post(|_| {}).unwrap();
+        }
+        let until = Instant::now() + Duration::from_secs(2);
+        while worker.completed_frames() < 3 && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            worker.completed_frames() >= 3,
+            "queued GUI commands prevented the emulation clock from advancing"
+        );
+        assert!(worker.shutdown().unwrap() >= 3);
     }
 
     #[test]

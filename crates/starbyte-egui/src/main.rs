@@ -464,9 +464,13 @@ mod speaker_cli_tests {
         assert!(!normal.speaker_test);
         assert!(!normal.native_worker_preview);
         let integration = Args::try_parse_from([
-            "starbyte-egui", "--demo", "--native-worker-preview",
-            "--exit-after-frames", "30"
-        ]).unwrap();
+            "starbyte-egui",
+            "--demo",
+            "--native-worker-preview",
+            "--exit-after-frames",
+            "30",
+        ])
+        .unwrap();
         assert!(validate_frame_exit_args(&integration).is_ok());
     }
 

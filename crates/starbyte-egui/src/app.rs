@@ -18,8 +18,7 @@ use crate::{
     logging::SharedLogBuffer,
     scheduler::EmulatorScheduler,
     session_engine::{
-        ControlsPort, InputPort, OwnedSession, PublishedGameFrame, RenderPort,
-        WorkerLaunchResponse,
+        ControlsPort, InputPort, OwnedSession, PublishedGameFrame, RenderPort, WorkerLaunchResponse,
     },
     video_upload::upload_rgba,
     worker::{AppWorker, WorkerCommand, WorkerCommandKind, WorkerEvent},
@@ -1077,7 +1076,12 @@ impl StarbyteApp {
         };
         for (pending, result) in completed {
             if is_superseded_rom_load(self.latest_rom_job_id, pending.job_id) {
-                self.update_job(pending.job_id, "Load Game", "superseded", "Newer ROM selected");
+                self.update_job(
+                    pending.job_id,
+                    "Load Game",
+                    "superseded",
+                    "Newer ROM selected",
+                );
                 continue;
             }
             match result {
@@ -4679,8 +4683,8 @@ impl eframe::App for StarbyteApp {
 impl Drop for StarbyteApp {
     fn drop(&mut self) {
         if let Some(worker) = self.full_worker.take() {
-            if let Err(error) = worker.engine.shutdown() {
-                warn!("could not shut down emulation owner cleanly: {error}");
+            if worker.engine.shutdown().is_err() {
+                warn!("emulation worker thread panicked during shutdown");
             }
         } else if let Err(error) = self.session.flush_save_ram() {
             warn!("could not persist cartridge SRAM on exit: {error}");

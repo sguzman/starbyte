@@ -5666,6 +5666,7 @@ fn job_label(kind: &WorkerCommandKind) -> &'static str {
         WorkerCommandKind::RefreshCheats { .. } => "Refresh Cheats",
         WorkerCommandKind::RefreshAll => "Refresh All",
         WorkerCommandKind::MaterializeRom { .. } => "Load Game",
+        WorkerCommandKind::MaterializePath { .. } => "Open ROM",
     }
 }
 

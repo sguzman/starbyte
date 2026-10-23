@@ -1551,7 +1551,7 @@ impl StarbyteApp {
                     // indexed when it first loaded. Associate it after the
                     // asynchronous library scan, then apply matching cheats.
                     if self.loaded_game_id.is_none()
-                        && let Some(loaded_path) = self.session.loaded_rom_path()
+                        && let Some(loaded_path) = self.session_snapshot().rom_path
                     {
                         let recent = self.config.library.recent_roms.first();
                         self.loaded_game_id = self
@@ -1563,7 +1563,7 @@ impl StarbyteApp {
                                     recent.is_some_and(|path| path == &local.rom_path)
                                         || local.rom_path == loaded_path
                                         || local.extracted_cache_path.as_deref()
-                                            == Some(loaded_path)
+                                            == Some(loaded_path.as_path())
                                 })
                             })
                             .map(|entry| entry.game_id.clone());

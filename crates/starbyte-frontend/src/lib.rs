@@ -81,6 +81,23 @@ impl SoundSessionMode {
     }
 }
 
+/// Small, frontend-neutral menu/control state. It avoids exposing a
+/// borrowed Emulator to a renderer and can be published by a single-owner
+/// emulation worker without taking a UI-thread mutex.
+#[derive(Debug, Clone)]
+pub struct SessionControlsSnapshot {
+    /// Current cartridge and emulation counters.
+    pub session: SessionSnapshot,
+    /// Whether the current session contains an in-memory quick save.
+    pub has_quick_save: bool,
+    /// Availability of the three durable state slots for this ROM namespace.
+    pub state_slots: [bool; 3],
+    /// Distinguishes compatibility, isolated and sound-persistent save paths.
+    pub sound_mode: SoundSessionMode,
+    /// Number of intercepted ROM read patches, for diagnostic menus.
+    pub rom_cheat_read_hits: u64,
+}
+
 /// Frontend-agnostic emulator session used by UI shells.
 #[derive(Debug)]
 pub struct FrontendSession {
@@ -411,6 +428,24 @@ impl FrontendSession {
     #[must_use]
     pub fn rom_cheat_read_hits(&self) -> u64 {
         self.emulator.rom_read_patch_hits()
+    }
+
+    /// Capture all lightweight menu facts under one emulator owner.
+    /// Durable-slot existence is intentionally queried on demand, not at
+    /// 60 Hz while generating audio/video frames.
+    #[must_use]
+    pub fn controls_snapshot(&self) -> SessionControlsSnapshot {
+        SessionControlsSnapshot {
+            session: self.snapshot(),
+            has_quick_save: self.has_quick_save(),
+            state_slots: [
+                self.has_state_slot(1),
+                self.has_state_slot(2),
+                self.has_state_slot(3),
+            ],
+            sound_mode: self.sound_session_mode(),
+            rom_cheat_read_hits: self.rom_cheat_read_hits(),
+        }
     }
 
     /// Snapshot current session status for a host shell.

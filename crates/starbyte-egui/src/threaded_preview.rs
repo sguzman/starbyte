@@ -110,6 +110,7 @@ pub struct ThreadedPreviewApp {
     library_snapshot: Option<LibrarySnapshot>,
     library_status: String,
     library_query: String,
+    library_matches: Vec<usize>,
     show_library: bool,
     next_library_job: u64,
     pending_library_rom: Option<u64>,
@@ -191,6 +192,7 @@ impl ThreadedPreviewApp {
             library_snapshot: None,
             library_status: "Not scanned".to_owned(),
             library_query: String::new(),
+            library_matches: Vec::new(),
             show_library: rom_path.is_none(),
             next_library_job: 1,
             pending_library_rom: None,
@@ -337,6 +339,10 @@ impl ThreadedPreviewApp {
                     WorkerEvent::SnapshotReady {
                         snapshot, status, ..
                     } => {
+                        // Refresh the index only when the library snapshot
+                        // changes, not on every egui repaint.
+                        self.library_matches =
+                            indexed_installed_matches(&snapshot, &self.library_query);
                         self.library_snapshot = Some(snapshot);
                         self.library_status = status;
                     }
@@ -712,6 +718,95 @@ mod pitch_mode_tests {
         assert_eq!(app.loaded_rom_path.as_deref(), Some(rom.as_path()));
         assert!(app.controls.session.has_rom);
         assert!(app.display.texture().is_some());
+    }
+
+    #[test]
+    fn newer_direct_selection_wins_over_an_older_preparation_request() {
+        use std::time::Instant;
+
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("older.sfc");
+        let second = temp.path().join("newer.sfc");
+        let demo = starbyte_core::testing::demo::demo_rom_bytes();
+        std::fs::write(&first, &demo).unwrap();
+        std::fs::write(&second, &demo).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(temp.path().join("saves")),
+            state_dir: Some(temp.path().join("states")),
+            cache_dir: Some(temp.path().join("cache")),
+            config_path: None,
+        };
+        let mut config = RuntimeConfig::default();
+        config.audio.enabled = false;
+        let mut app = ThreadedPreviewApp::new(assets, &config, None, None, true, false).unwrap();
+        app.queue_rom_load(first);
+        let older = app.pending_library_rom.unwrap();
+        app.queue_rom_load(second.clone());
+        assert!(app.pending_library_rom.unwrap() > older);
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(6);
+        while Instant::now() < deadline {
+            app.poll_library_events();
+            app.poll_operations(&ctx);
+            if app.loaded_rom_path.as_deref() == Some(second.as_path()) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(app.loaded_rom_path.as_deref(), Some(second.as_path()));
+        assert!(app.controls.session.has_rom);
+        assert!(app.last_error.is_none());
+    }
+
+    #[test]
+    fn failed_direct_open_preserves_the_running_cartridge() {
+        use std::time::Instant;
+
+        let temp = tempfile::tempdir().unwrap();
+        let good = temp.path().join("working.sfc");
+        std::fs::write(&good, starbyte_core::testing::demo::demo_rom_bytes()).unwrap();
+        let missing = temp.path().join("not-present.sfc");
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(temp.path().join("saves")),
+            state_dir: Some(temp.path().join("states")),
+            cache_dir: Some(temp.path().join("cache")),
+            config_path: None,
+        };
+        let mut config = RuntimeConfig::default();
+        config.audio.enabled = false;
+        let mut app = ThreadedPreviewApp::new(assets, &config, None, None, true, false).unwrap();
+        let ctx = egui::Context::default();
+        app.queue_rom_load(good.clone());
+        let deadline = Instant::now() + Duration::from_secs(6);
+        while Instant::now() < deadline {
+            app.poll_library_events();
+            app.poll_operations(&ctx);
+            if app.loaded_rom_path.as_deref() == Some(good.as_path()) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(app.loaded_rom_path.as_deref(), Some(good.as_path()));
+        app.queue_rom_load(missing);
+        let deadline = Instant::now() + Duration::from_secs(6);
+        while Instant::now() < deadline {
+            app.poll_library_events();
+            app.poll_operations(&ctx);
+            if app
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("ROM load failed"))
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(app.last_error.is_some(), "missing ROM error was not delivered");
+        assert_eq!(app.loaded_rom_path.as_deref(), Some(good.as_path()));
+        assert!(app.playing);
+        assert!(app.controls.session.has_rom);
     }
 
     #[test]
@@ -1107,14 +1202,22 @@ impl eframe::App for ThreadedPreviewApp {
                         }
                     });
                     ui.small(&self.library_status);
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.library_query)
-                            .hint_text("Search installed games..."),
-                    );
+                    let query_changed = ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.library_query)
+                                .hint_text("Search installed games..."),
+                        )
+                        .changed();
+                    if query_changed {
+                        if let Some(snapshot) = &self.library_snapshot {
+                            self.library_matches =
+                                indexed_installed_matches(snapshot, &self.library_query);
+                        }
+                    }
                     if let Some(snapshot) = &self.library_snapshot {
                         ui.label(format!("{} installed games", snapshot.installed_count));
                         ui.separator();
-                        let matches = indexed_installed_matches(snapshot, &self.library_query);
+                        let matches = &self.library_matches;
                         egui::ScrollArea::vertical().show_rows(
                             ui,
                             28.0,

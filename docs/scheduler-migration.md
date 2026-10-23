@@ -1,8 +1,39 @@
 # Emulation scheduler migration
 
-**Status: in progress. Commit [`28fb308`](https://github.com/sguzman/starbyte/commit/28fb308244a0a5f0b89923b2d934ef7d95038ba7) passed [CI run 39992289325](https://github.com/sguzman/starbyte/actions/runs/39992289325): Linux, Windows, lint/Clippy, native Weston original-window worker playback, save/restore, screenshot, 60 contiguous paused frame steps, and a compositor-independent no-egui-callback interval. Full default-app ownership transfer and physical Hyprland/audio validation remain outstanding.**
+**Status: in progress. Commit [`08c5802`](https://github.com/sguzman/starbyte/commit/08c5802ee644b54e6327292212fb607e9615675a) passed [CI run 39994543237](https://github.com/sguzman/starbyte/actions/runs/39994543237): Linux, Windows, lint/Clippy, benchmark compilation, native Weston original-window worker playback, save/restore, screenshot, 60 contiguous paused frame steps and a compositor-independent no-egui-callback interval. Full default-app ownership transfer and physical Hyprland/audio validation remain outstanding.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
+
+## Latest full-library worker integration — 2026-10-23
+
+Commit [`08c5802`](https://github.com/sguzman/starbyte/commit/08c5802ee644b54e6327292212fb607e9615675a)
+passed [CI 39994543237](https://github.com/sguzman/starbyte/actions/runs/39994543237)
+with **all three jobs green** (Linux, Windows and lint/Clippy). Native Weston
+logged:
+
+- `STARBYTE_FULL_LIBRARY_WORKER_SMOKE_OK frame=31`
+- `STARBYTE_FULL_LIBRARY_SAVE_SMOKE_OK frame=83 slot=1 quick=true screenshot=true step_frames=60`
+- `STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_OK advanced_frames=121`
+
+In the original library UI's opt-in worker path, the Session panel now uses
+worker-produced FPS, frame gaps, emulation CPU, coalesced video frames and
+audio-drop diagnostics rather than its unused legacy frame-loop counters.
+The two frame-step buttons are disabled during exclusive cartridge
+installation so their requests cannot be redirected to the newly installed
+game. Library cheat refreshes no longer queue old cartridge patches behind
+an in-flight replacement; successful and failed installation responses
+resynchronize enabled cheats against whichever game is actually installed.
+
+A real owner-thread regression queues a quick save and then reinstalls the
+**same ROM path** with a different sound/save policy. It verifies that the
+receipt from the earlier namespace must be filtered by the successfully
+installed generation even though its ROM path still matches. The Windows
+and Linux test suites passed this regression.
+
+**Limits:** This is code and virtual-Wayland acceptance, not actual sound
+audibility, physical Hyprland off-workspace behavior or production-default
+cutover. Roadmap source-task counts stay at A 7/8 (88%), B 15/18 (83%),
+P 18/20 (90%), C 8/16 (50%), D 11/15 (73%).
 
 ## Verified 60-step and save-generation checkpoint — 2026-10-23
 

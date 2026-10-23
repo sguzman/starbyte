@@ -2579,14 +2579,15 @@ impl StarbyteApp {
                     } else if self.background_suspended {
                         "FPS: paused (background)".to_owned()
                     } else {
-                        self.frame_rate
-                            .fps(Instant::now())
-                            .map_or_else(|| "FPS: --".to_owned(), |value| {
+                        self.frame_rate.fps(Instant::now()).map_or_else(
+                            || "FPS: --".to_owned(),
+                            |value| {
                                 format!(
                                     "FPS: {value:.1} / {:.1}",
                                     speed_target_fps(self.last_effective_speed_percent)
                                 )
-                            })
+                            },
+                        )
                     };
                     ui.label(RichText::new(fps).monospace())
                         .on_hover_text("Completed emulated frames per real second.");
@@ -2604,8 +2605,9 @@ impl StarbyteApp {
                             .as_ref()
                             .map_or(0, AudioOutput::submitted_nonzero_frames),
                     );
-                    ui.label(RichText::new(sound).monospace())
-                        .on_hover_text("Host sound state; PCM delivery does not prove speaker audibility.");
+                    ui.label(RichText::new(sound).monospace()).on_hover_text(
+                        "Host sound state; PCM delivery does not prove speaker audibility.",
+                    );
                 }
                 if prefs.status_frame || prefs.status_apu_steps || prefs.status_audio_samples {
                     let snapshot = self.session.snapshot();
@@ -2615,7 +2617,9 @@ impl StarbyteApp {
                     }
                     if prefs.status_apu_steps {
                         separator(ui);
-                        ui.label(RichText::new(format!("APU steps {}", snapshot.apu_steps)).monospace());
+                        ui.label(
+                            RichText::new(format!("APU steps {}", snapshot.apu_steps)).monospace(),
+                        );
                     }
                     if prefs.status_audio_samples {
                         separator(ui);
@@ -2631,9 +2635,11 @@ impl StarbyteApp {
                     separator(ui);
                     ui.label(self.status_line.as_str());
                 }
-                let active = self.jobs.iter().filter(|job| {
-                    job.state == "running" || job.state == "queued"
-                }).count();
+                let active = self
+                    .jobs
+                    .iter()
+                    .filter(|job| job.state == "running" || job.state == "queued")
+                    .count();
                 if active > 0 {
                     separator(ui);
                     ui.label(format!("{active} background job(s)"));
@@ -2674,8 +2680,7 @@ impl StarbyteApp {
                         let index = self.library_snapshot.entries.iter().position(|entry| {
                             entry.local.as_ref().is_some_and(|local| {
                                 local.rom_path == path
-                                    || local.extracted_cache_path.as_deref()
-                                        == Some(path.as_path())
+                                    || local.extracted_cache_path.as_deref() == Some(path.as_path())
                             })
                         });
                         let (title, game_id, cover_path, installed) = if let Some(index) = index {
@@ -2698,11 +2703,7 @@ impl StarbyteApp {
                         };
                         let available = installed || path.is_file();
                         let cover = game_id.as_deref().and_then(|id| {
-                            self.ensure_cover_texture_path(
-                                ctx,
-                                id,
-                                cover_path.as_deref(),
-                            )
+                            self.ensure_cover_texture_path(ctx, id, cover_path.as_deref())
                         });
                         // Constrain both min and max card width. An ordinary
                         // vertical_centered UI inherits the entire horizontal
@@ -3311,16 +3312,11 @@ impl StarbyteApp {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let path = self
-            .assets
-            .screenshot_root()
-            .join(format!("starbyte-{timestamp}-frame-{}.png", screenshot.frame));
-        match write_png_screenshot(
-            &path,
-            &screenshot.rgba,
-            screenshot.width,
-            screenshot.height,
-        ) {
+        let path = self.assets.screenshot_root().join(format!(
+            "starbyte-{timestamp}-frame-{}.png",
+            screenshot.frame
+        ));
+        match write_png_screenshot(&path, &screenshot.rgba, screenshot.width, screenshot.height) {
             Ok(()) => self.status_line = format!("Screenshot saved to {}", path.display()),
             Err(error) => {
                 warn!("could not save screenshot: {error}");
@@ -3572,9 +3568,7 @@ impl StarbyteApp {
     fn draw_library_browser(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let previous_query = self.search_query.clone();
         ui.horizontal(|ui| {
-            if self.session.snapshot().has_rom
-                && ui.button("Return to Game (Esc / F9)").clicked()
-            {
+            if self.session.snapshot().has_rom && ui.button("Return to Game (Esc / F9)").clicked() {
                 self.play_view = true;
                 ctx.request_repaint();
             }
@@ -3951,8 +3945,8 @@ impl eframe::App for StarbyteApp {
             && self.pending_gamepad_bind.is_none()
             && !ctx.wants_keyboard_input();
         route_fast_forward_tab(raw_input, active, &mut self.tab_fast_forward_held);
-        let menu_shortcut_enabled = self.pending_keyboard_bind.is_none()
-            && self.pending_gamepad_bind.is_none();
+        let menu_shortcut_enabled =
+            self.pending_keyboard_bind.is_none() && self.pending_gamepad_bind.is_none();
         let was_visible = self.config.ui.show_menu_bar;
         update_alt_menu_visibility(
             raw_input,
@@ -4037,7 +4031,8 @@ impl eframe::App for StarbyteApp {
         let available = ctx.available_rect();
         let compact = is_compact_layout(available.width(), available.height());
         if self.config.ui.show_menu_bar {
-            egui::TopBottomPanel::top("top_bar").show(ctx, |ui| self.draw_top_bar(ui, ctx, compact));
+            egui::TopBottomPanel::top("top_bar")
+                .show(ctx, |ui| self.draw_top_bar(ui, ctx, compact));
         }
         // Recents belong to the library, not a live game framebuffer.
         // Never decode covers or allocate game cards in the play loop.
@@ -5733,7 +5728,12 @@ fn fit_game_size(source: Vec2, available: Vec2, integer_scale: bool) -> Vec2 {
     source * scale
 }
 
-pub(crate) fn write_png_screenshot(path: &Path, rgba: &[u8], width: u32, height: u32) -> Result<()> {
+pub(crate) fn write_png_screenshot(
+    path: &Path,
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -5794,13 +5794,7 @@ mod menu_bar_shortcut_tests {
     fn plain_alt_toggles_visible_and_hidden_once_per_release() {
         let (mut visible, mut was_down, mut armed) = (false, false, false);
         for expected in [true, false] {
-            update_alt_menu_visibility(
-                &input(true),
-                true,
-                &mut visible,
-                &mut was_down,
-                &mut armed,
-            );
+            update_alt_menu_visibility(&input(true), true, &mut visible, &mut was_down, &mut armed);
             assert_ne!(visible, expected);
             update_alt_menu_visibility(
                 &input(false),
@@ -5816,13 +5810,7 @@ mod menu_bar_shortcut_tests {
     #[test]
     fn alt_chord_does_not_hide_menus() {
         let (mut visible, mut was_down, mut armed) = (true, false, false);
-        update_alt_menu_visibility(
-            &input(true),
-            true,
-            &mut visible,
-            &mut was_down,
-            &mut armed,
-        );
+        update_alt_menu_visibility(&input(true), true, &mut visible, &mut was_down, &mut armed);
         let mut chord = input(true);
         chord.events.push(egui::Event::Key {
             key: egui::Key::F9,
@@ -5831,57 +5819,21 @@ mod menu_bar_shortcut_tests {
             repeat: false,
             modifiers: chord.modifiers,
         });
-        update_alt_menu_visibility(
-            &chord,
-            true,
-            &mut visible,
-            &mut was_down,
-            &mut armed,
-        );
-        update_alt_menu_visibility(
-            &input(false),
-            true,
-            &mut visible,
-            &mut was_down,
-            &mut armed,
-        );
+        update_alt_menu_visibility(&chord, true, &mut visible, &mut was_down, &mut armed);
+        update_alt_menu_visibility(&input(false), true, &mut visible, &mut was_down, &mut armed);
         assert!(visible);
     }
 
     #[test]
     fn disabled_for_rebinding_and_unfocused_windows() {
         let (mut visible, mut was_down, mut armed) = (false, false, false);
-        update_alt_menu_visibility(
-            &input(true),
-            false,
-            &mut visible,
-            &mut was_down,
-            &mut armed,
-        );
-        update_alt_menu_visibility(
-            &input(false),
-            true,
-            &mut visible,
-            &mut was_down,
-            &mut armed,
-        );
+        update_alt_menu_visibility(&input(true), false, &mut visible, &mut was_down, &mut armed);
+        update_alt_menu_visibility(&input(false), true, &mut visible, &mut was_down, &mut armed);
         assert!(!visible);
-        update_alt_menu_visibility(
-            &input(true),
-            true,
-            &mut visible,
-            &mut was_down,
-            &mut armed,
-        );
+        update_alt_menu_visibility(&input(true), true, &mut visible, &mut was_down, &mut armed);
         let mut blurred = input(false);
         blurred.focused = false;
-        update_alt_menu_visibility(
-            &blurred,
-            true,
-            &mut visible,
-            &mut was_down,
-            &mut armed,
-        );
+        update_alt_menu_visibility(&blurred, true, &mut visible, &mut was_down, &mut armed);
         assert!(!visible);
     }
 }

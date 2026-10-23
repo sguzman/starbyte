@@ -1,8 +1,45 @@
 # Emulation scheduler migration
 
-**Status: in progress. Commit [`f7114d9`](https://github.com/sguzman/starbyte/commit/f7114d9032356594e6250aab9a38d3ab1b42ed36) passed [CI run 40002095002](https://github.com/sguzman/starbyte/actions/runs/40002095002): Linux, Windows, lint/Clippy, native Weston worker GUI acceptance, battery-backed SRAM on actual GUI shutdown, and end-to-end SNES joypad press/release via the worker InputPort. Default-app ownership transfer and physical Hyprland/audio validation remain outstanding.**
+**Status: in progress. Commit [`a0fbdd8`](https://github.com/sguzman/starbyte/commit/a0fbdd8cb10494352d6a782c447f814287d4c37a) passed [CI run 40007158503](https://github.com/sguzman/starbyte/actions/runs/40007158503): Linux, Windows, lint/Clippy and original-window native Weston acceptance, including worker-owned saves, battery SRAM, joypad integration, delayed screenshot receipts and async worker sound-diagnostics coverage. Default-app ownership transfer and physical Hyprland/audio validation remain outstanding.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
+
+## Verified original-window async status, sound modes and screenshot ownership — 2026-10-23
+
+Commit [`a0fbdd8`](https://github.com/sguzman/starbyte/commit/a0fbdd8cb10494352d6a782c447f814287d4c37a)
+passed [CI run 40007158503](https://github.com/sguzman/starbyte/actions/runs/40007158503)
+with **Linux, Windows and lint/Clippy green**, including the existing
+native Weston original-window tests. The new source/test coverage:
+
+- **Delayed PNG completions:** an asynchronous screenshot retains its
+  selected-cartridge generation through PNG encoding. A late completion
+  still writes its requested image but cannot overwrite a newer game's UI
+  status; the generation predicate has a focused regression.
+- **Exclusive SRAM owner:** the original window skips its legacy UI-thread
+  30-second SRAM flush whenever the independent worker owns the game.
+  The worker already flushes on its own 30-second cadence, pause and
+  shutdown; native battery-backed SRAM shutdown acceptance remains green.
+- **Sound/save namespaces:** an actual worker-mode integration test
+  switches the same built-in synthetic cartridge among persistent sound,
+  compatibility and isolated diagnostic modes. Persistent and legacy
+  disk-slot paths are distinct; switching back finds the appropriate
+  slot; memory quick saves are invalidated; isolated diagnostic mode
+  refuses durable saves.
+- **SPC700 panel detail:** the original opt-in full-library sound panel
+  no longer substitutes a generic placeholder for emulated SPC700
+  diagnostics. It requests owned APU information asynchronously only
+  while visible, at most once per second, and ignores replies from
+  superseded ROM generations. A worker-side test verifies the typed
+  query reflects sound-driver enablement across a mode replacement.
+
+**Evidence boundary:** CI demonstrates compilation, unit/integration
+coverage and native virtual-Wayland regression stability. It has *not*
+visually exercised every open/close state of this sound panel or reproduced
+a delayed PNG race during a native ROM replacement. Physical Hyprland
+focus transitions, speaker audibility and full default runtime cutover
+are still unverified. Source-task progress stays A 7/8 (88%), B 15/18
+(83%), P 18/20 (90%), C 8/16 (50%), D 11/15 (73%). The established
+legacy player remains the default.
 
 ## Verified worker input through SNES auto joypad — 2026-10-23
 

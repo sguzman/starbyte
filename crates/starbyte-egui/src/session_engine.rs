@@ -203,7 +203,16 @@ pub struct PublishedGameFrame {
 /// picture so a manually paused game can update without another SNES frame.
 pub struct WorkerSaveResponse {
     pub outcome: SessionSaveOutcome,
+    pub controls: SessionControlsSnapshot,
     pub restored_frame: Option<PublishedGameFrame>,
+}
+
+/// A cartridge launch acknowledgement with the authoritative new cartridge's
+/// menu state and still video. A failed launch must preserve the previous UI
+/// state and cannot fabricate an acknowledgement.
+pub struct WorkerLaunchResponse {
+    pub controls: SessionControlsSnapshot,
+    pub frame: PublishedGameFrame,
 }
 
 /// Exclusive, thread-owned game state. All save mutations stay serialized
@@ -373,6 +382,18 @@ impl OwnedSession {
         self.session.set_active_cheats(cheats)
     }
 
+    fn process_launch(
+        &mut self,
+        request: &SessionLaunchRequest,
+    ) -> Result<WorkerLaunchResponse, String> {
+        self.launch_game(request)
+            .map_err(|error| error.to_string())?;
+        Ok(WorkerLaunchResponse {
+            controls: self.session.controls_snapshot(),
+            frame: self.capture_frame(),
+        })
+    }
+
     fn process_save_action(
         &mut self,
         action: SessionSaveAction,
@@ -395,6 +416,7 @@ impl OwnedSession {
         }
         Ok(WorkerSaveResponse {
             outcome,
+            controls: self.session.controls_snapshot(),
             restored_frame: if restoring && capture_restored_frame {
                 Some(self.capture_frame())
             } else {
@@ -447,6 +469,10 @@ impl OwnedSession {
 
     pub fn snapshot(&self) -> SessionSnapshot {
         self.session.snapshot()
+    }
+
+    pub fn controls_snapshot(&self) -> SessionControlsSnapshot {
+        self.session.controls_snapshot()
     }
     pub fn audio_diagnostics(&self) -> WorkerAudioDiagnostics {
         let Some(output) = self.audio.as_ref() else {
@@ -617,11 +643,18 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
         request: SessionLaunchRequest,
     ) -> Result<Receiver<Result<PublishedGameFrame, String>>, String> {
         self.submit_transaction(move |engine| {
-            engine
-                .launch_game(&request)
-                .map_err(|error| error.to_string())?;
-            Ok(engine.capture_frame())
+            engine.process_launch(&request).map(|reply| reply.frame)
         })
+    }
+
+    /// The complete library can update ROM identity, save-slot availability,
+    /// sound mode and still video from one serialized completion. The UI does
+    /// not need to block the worker for follow-up menu reads.
+    pub fn queue_launch_with_state(
+        &self,
+        request: SessionLaunchRequest,
+    ) -> Result<Receiver<Result<WorkerLaunchResponse, String>>, String> {
+        self.submit_transaction(move |engine| engine.process_launch(&request))
     }
 
     pub fn update_cheats(&self, cheats: Vec<CheatEntry>) -> Result<usize, String> {
@@ -914,6 +947,7 @@ mod tests {
             .unwrap();
         assert!(matches!(saved.outcome, SessionSaveOutcome::Completed));
         assert!(saved.restored_frame.is_none());
+        assert!(saved.controls.has_quick_save);
         assert!(worker.read_controls().unwrap().has_quick_save);
         let restored = worker
             .queue_save_action_with_frame(SessionSaveAction::QuickLoad)
@@ -922,6 +956,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(matches!(restored.outcome, SessionSaveOutcome::Completed));
+        assert!(restored.controls.has_quick_save);
         let still = restored.restored_frame.expect("paused restore should capture video");
         assert!(still.status.has_rom);
         assert_eq!(
@@ -930,6 +965,23 @@ mod tests {
                 * still.status.framebuffer_height as usize
                 * 4
         );
+        let durable = worker
+            .queue_save_action_with_frame(SessionSaveAction::SaveSlot(1))
+            .unwrap()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(durable.outcome, SessionSaveOutcome::SavedTo(_)));
+        assert!(durable.controls.state_slots[0]);
+        assert!(durable.restored_frame.is_none());
+        let slot_restore = worker
+            .queue_save_action_with_frame(SessionSaveAction::LoadSlot(1))
+            .unwrap()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap();
+        assert!(slot_restore.controls.state_slots[0]);
+        assert!(slot_restore.restored_frame.is_some());
         let reply = worker.queue_clear_cheats().unwrap();
         reply.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
         assert_eq!(worker.read_controls().unwrap().rom_cheat_read_hits, 0);
@@ -937,7 +989,7 @@ mod tests {
         // A launch request couples cartridge, sound mode and cheat list in
         // one worker-owned operation; reloading resets the old quick save.
         let reloaded = worker
-            .queue_launch_with_frame(SessionLaunchRequest {
+            .queue_launch_with_state(SessionLaunchRequest {
                 rom_path: rom.clone(),
                 sound_mode: SoundSessionMode::Persistent,
                 cheats: Vec::new(),
@@ -946,11 +998,13 @@ mod tests {
             .recv_timeout(Duration::from_secs(3))
             .unwrap()
             .unwrap();
-        assert!(reloaded.status.has_rom);
+        assert!(reloaded.frame.status.has_rom);
+        assert!(!reloaded.controls.has_quick_save);
+        assert!(reloaded.controls.state_slots[0]);
         assert!(!worker.read_controls().unwrap().has_quick_save);
         let missing = dir.path().join("not-a-cartridge.sfc");
         let failed = worker
-            .queue_launch_with_frame(SessionLaunchRequest {
+            .queue_launch_with_state(SessionLaunchRequest {
                 rom_path: missing,
                 sound_mode: SoundSessionMode::Persistent,
                 cheats: Vec::new(),

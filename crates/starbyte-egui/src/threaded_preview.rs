@@ -17,7 +17,10 @@ use starbyte_core::{
     input::ControllerState,
     manifest::{AssetConfig, AudioPitchMode, InputDeviceMode, RuntimeConfig, UiSettings},
 };
-use starbyte_frontend::{SessionSaveAction, SessionScreenshot, SoundSessionMode};
+use starbyte_frontend::{
+    SessionControlsSnapshot, SessionLaunchRequest, SessionSaveAction, SessionSaveOutcome,
+    SessionScreenshot, SoundSessionMode,
+};
 
 use crate::{
     app::{
@@ -27,7 +30,10 @@ use crate::{
     preview_gamepads::{PreviewGamepads, merge_sources},
     scheduler::EmulatorScheduler,
     scheduler_video::WorkerDisplay,
-    session_engine::{InputPort, OwnedSession, PublishedGameFrame, RenderPort, WorkerSaveResponse},
+    session_engine::{
+        InputPort, OwnedSession, PublishedGameFrame, RenderPort, WorkerLaunchResponse,
+        WorkerSaveResponse,
+    },
 };
 
 fn pitch_for(mode: AudioPitchMode, custom_percent: u16, speed: u16) -> f32 {
@@ -46,7 +52,7 @@ enum PendingOperation {
     PngWrite(Receiver<Result<PathBuf, String>>),
     LoadRom {
         path: PathBuf,
-        reply: Receiver<Result<PublishedGameFrame, String>>,
+        reply: Receiver<Result<WorkerLaunchResponse, String>>,
     },
 }
 
@@ -55,6 +61,7 @@ pub struct ThreadedPreviewApp {
     input: InputPort,
     render: RenderPort,
     display: WorkerDisplay,
+    controls: SessionControlsSnapshot,
     focused: bool,
     playing: bool,
     pause_when_unfocused: bool,
@@ -107,6 +114,7 @@ impl ThreadedPreviewApp {
             speed_percent,
         );
         session.set_speed(speed_percent, pitch_factor);
+        let controls = session.controls_snapshot();
         let (engine, input, render) = session.spawn_with_ports()?;
         engine.set_speed_percent(speed_percent);
         render.set_visible(true);
@@ -121,6 +129,7 @@ impl ThreadedPreviewApp {
             input,
             render,
             display: WorkerDisplay::default(),
+            controls,
             focused: true,
             playing: true,
             pause_when_unfocused,
@@ -178,10 +187,11 @@ impl ThreadedPreviewApp {
             self.last_error = Some("Wait for the current ROM load to finish.".to_owned());
             return;
         }
-        match self
-            .engine
-            .queue_load_game_with_frame(path.clone(), SoundSessionMode::Persistent)
-        {
+        match self.engine.queue_launch_with_state(SessionLaunchRequest {
+            rom_path: path.clone(),
+            sound_mode: SoundSessionMode::Persistent,
+            cheats: Vec::new(),
+        }) {
             Ok(reply) => {
                 self.input.clear();
                 self.status_note = Some(format!("Loading {}...", path.display()));
@@ -231,11 +241,12 @@ impl ThreadedPreviewApp {
         for operation in std::mem::take(&mut self.pending) {
             match operation {
                 PendingOperation::LoadRom { path, reply } => match reply.try_recv() {
-                    Ok(Ok(frame)) => {
+                    Ok(Ok(response)) => {
                         // A previous ROM's queued framebuffer must not be
                         // drawn after successful cartridge replacement.
                         let _ = self.engine.take_latest_frame();
-                        self.display.import_frame(ctx, frame);
+                        self.controls = response.controls;
+                        self.display.import_frame(ctx, response.frame);
                         self.loaded_rom_path = path;
                         self.status_note =
                             Some(format!("Loaded {}", self.loaded_rom_path.display()));
@@ -283,6 +294,10 @@ impl ThreadedPreviewApp {
                 },
                 PendingOperation::Save(reply) => match reply.try_recv() {
                     Ok(Ok(response)) => {
+                        self.controls = response.controls;
+                        if let SessionSaveOutcome::SavedTo(path) = response.outcome {
+                            self.status_note = Some(format!("Saved state to {}", path.display()));
+                        }
                         if let Some(frame) = response.restored_frame {
                             // Discard any framebuffer from before this
                             // restore, including while manually paused.
@@ -460,7 +475,13 @@ impl eframe::App for ThreadedPreviewApp {
                         self.queue_save(SessionSaveAction::QuickSave);
                         ui.close();
                     }
-                    if ui.button("Quick Load (F8)").clicked() {
+                    if ui
+                        .add_enabled(
+                            self.controls.has_quick_save,
+                            egui::Button::new("Quick Load (F8)"),
+                        )
+                        .clicked()
+                    {
                         self.queue_save(SessionSaveAction::QuickLoad);
                         ui.close();
                     }
@@ -486,7 +507,13 @@ impl eframe::App for ThreadedPreviewApp {
                                 self.queue_save(SessionSaveAction::SaveSlot(slot));
                                 ui.close();
                             }
-                            if ui.button(format!("Load slot {slot}")).clicked() {
+                            if ui
+                                .add_enabled(
+                                    self.controls.state_slots[usize::from(slot - 1)],
+                                    egui::Button::new(format!("Load slot {slot}")),
+                                )
+                                .clicked()
+                            {
                                 self.queue_save(SessionSaveAction::LoadSlot(slot));
                                 ui.close();
                             }

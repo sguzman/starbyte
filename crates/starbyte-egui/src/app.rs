@@ -744,6 +744,9 @@ pub struct StarbyteApp {
     worker_save_smoke_previous_step_frame: Option<u64>,
     worker_no_redraw_smoke: bool,
     worker_no_redraw_gap: Option<(Instant, u64)>,
+    /// After hidden-window clock acceptance, require a fresh RGBA upload.
+    worker_no_redraw_verify: Option<(Instant, u64, u64)>,
+    last_worker_texture_frame: Option<u64>,
     worker_focus_pause_smoke: Option<WorkerFocusPauseSmoke>,
     worker_panic_smoke: bool,
     worker_panic_sent: bool,
@@ -992,6 +995,8 @@ impl StarbyteApp {
             worker_save_smoke_previous_step_frame: None,
             worker_no_redraw_smoke,
             worker_no_redraw_gap: None,
+            worker_no_redraw_verify: None,
+            last_worker_texture_frame: None,
             worker_focus_pause_smoke: worker_focus_pause_smoke
                 .then_some(WorkerFocusPauseSmoke::WaitingForGame),
             worker_panic_smoke,
@@ -1308,6 +1313,7 @@ impl StarbyteApp {
                             reply.frame.status.framebuffer_height,
                             rgba,
                         );
+                        self.last_worker_texture_frame = Some(reply.frame.status.frame);
                     }
                     self.worker_active_launch_id = Some(pending.job_id);
                     self.worker_sound_diagnostics = None;
@@ -1381,6 +1387,7 @@ impl StarbyteApp {
                                 restored.status.framebuffer_height,
                                 rgba,
                             );
+                            self.last_worker_texture_frame = Some(restored.status.frame);
                         }
                     }
                     self.status_line = match action {
@@ -1414,6 +1421,7 @@ impl StarbyteApp {
                         frame.status.framebuffer_height,
                         rgba,
                     );
+                    self.last_worker_texture_frame = Some(frame.status.frame);
                 }
             }
         }
@@ -1449,6 +1457,7 @@ impl StarbyteApp {
                             frame.status.framebuffer_height,
                             rgba,
                         );
+                        self.last_worker_texture_frame = Some(frame.status.frame);
                     }
                     self.pending_step_frames = self.pending_step_frames.saturating_sub(1);
                     self.status_line = format!("Stepped to frame {}.", frame.status.frame);
@@ -5220,16 +5229,22 @@ impl eframe::App for StarbyteApp {
             let completed = self.full_worker.as_ref().map_or(0, |worker| {
                 worker.engine.completed_frames().saturating_sub(at_start)
             });
-            if completed >= 45 {
-                println!("STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_OK advanced_frames={completed}");
-            } else {
+            self.worker_no_redraw_gap = None;
+            if completed < 45 {
                 println!(
                     "STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_FAILED advanced_frames={completed}"
                 );
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                return;
             }
-            self.worker_no_redraw_gap = None;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            return;
+            // The old smoke stopped after checking only the emulation clock.
+            // Require a post-gap texture upload with a frame number that
+            // could not have been published before redraws were suppressed.
+            self.worker_no_redraw_verify = Some((
+                now + Duration::from_secs(5),
+                at_start + completed,
+                completed,
+            ));
         }
         // Theme is installed at construction and when the user changes it.
         // Replacing egui visuals on every repaint invalidates unnecessary UI
@@ -5239,6 +5254,30 @@ impl eframe::App for StarbyteApp {
         self.poll_gamepad_events(ctx.input(|input| input.focused));
         self.poll_worker_events(ctx);
         self.poll_full_worker(ctx);
+        if let Some((deadline, minimum_frame, completed)) = self.worker_no_redraw_verify {
+            if self
+                .last_worker_texture_frame
+                .is_some_and(|frame| frame >= minimum_frame)
+                && self.framebuffer_texture.is_some()
+            {
+                println!(
+                    "STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_OK advanced_frames={completed} caught_up_frame={}",
+                    self.last_worker_texture_frame.unwrap_or_default()
+                );
+                self.worker_no_redraw_verify = None;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                return;
+            }
+            if Instant::now() >= deadline {
+                println!(
+                    "STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_FAILED no_fresh_texture min_frame={minimum_frame} last_uploaded={:?}",
+                    self.last_worker_texture_frame
+                );
+                self.worker_no_redraw_verify = None;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                return;
+            }
+        }
         if self.speaker_probe.poll() {
             if let SpeakerProbeState::Finished(Err(error)) = &self.speaker_probe {
                 warn!("speaker test failed: {error}");

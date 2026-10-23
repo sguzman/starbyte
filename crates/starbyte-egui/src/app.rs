@@ -1372,7 +1372,9 @@ impl StarbyteApp {
         game_id: Option<String>,
         request: SessionLaunchRequest,
     ) {
-        self.pending_step_frames = 0;
+        // A request is not an installation. If a replacement fails, a
+        // previously queued paused single-step still belongs to the old
+        // cartridge; clear its count only after successful installation.
         let Some(worker) = &mut self.full_worker else {
             return;
         };
@@ -6477,6 +6479,16 @@ impl eframe::App for StarbyteApp {
                                     cheats: Vec::new(),
                                 },
                             );
+                            // The previous game's queued step must not be
+                            // canceled by a mere replacement request.
+                            if self.pending_step_frames != 1 {
+                                println!(
+                                    "STARBYTE_FULL_LIBRARY_RECEIPT_RACE_SMOKE_FAILED pending_step_lost_on_request={}",
+                                    self.pending_step_frames
+                                );
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                return;
+                            }
                             self.worker_replacement_smoke =
                                 Some(WorkerReplacementSmoke::AwaitReceiptRace {
                                     previous_rom,
@@ -6522,9 +6534,14 @@ impl eframe::App for StarbyteApp {
                             && !self.is_playing;
                         let step_uploaded = stepped_frame.is_some()
                             && stepped_frame == self.last_worker_texture_frame;
-                        if error_reported && retained && screenshot_written && step_uploaded {
+                        if error_reported
+                            && retained
+                            && screenshot_written
+                            && step_uploaded
+                            && self.pending_step_frames == 0
+                        {
                             println!(
-                                "STARBYTE_FULL_LIBRARY_RECEIPT_RACE_SMOKE_OK retained_rom=true screenshot_written=true step_uploaded=true"
+                                "STARBYTE_FULL_LIBRARY_RECEIPT_RACE_SMOKE_OK retained_rom=true screenshot_written=true step_uploaded=true pending_step_cleared=true"
                             );
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             return;
@@ -6747,7 +6764,9 @@ impl eframe::App for StarbyteApp {
                 // after an actual worker-owned frame reached the texture.
                 // A hidden second legacy emulator is an ownership violation.
                 if self.session.is_some() || self.full_worker.is_none() {
-                    println!("STARBYTE_FULL_LIBRARY_SINGLE_OWNER_SMOKE_FAILED shadow_legacy_session=true");
+                    println!(
+                        "STARBYTE_FULL_LIBRARY_SINGLE_OWNER_SMOKE_FAILED shadow_legacy_session=true"
+                    );
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     return;
                 }

@@ -4,12 +4,13 @@
 
 use std::time::Duration;
 
-use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions, Vec2};
+use eframe::egui::{self, TextureHandle, Vec2};
 use starbyte_frontend::{SessionInputDiagnostics, SessionSnapshot};
 
 use crate::{
     scheduler::EmulatorScheduler,
     session_engine::{OwnedSession, PublishedGameFrame, WorkerAudioDiagnostics},
+    video_upload::upload_rgba,
 };
 
 #[derive(Default)]
@@ -43,21 +44,14 @@ impl WorkerDisplay {
     /// or the newest coalesced frame from the continuous worker.
     pub fn import_frame(&mut self, ctx: &egui::Context, frame: PublishedGameFrame) {
         if let Some(rgba) = frame.rgba {
-            let width = frame.status.framebuffer_width as usize;
-            let height = frame.status.framebuffer_height as usize;
-            let expected = width.saturating_mul(height).saturating_mul(4);
-            if width > 0 && height > 0 && rgba.len() == expected {
-                let image = ColorImage::from_rgba_unmultiplied([width, height], &rgba);
-                if let Some(texture) = &mut self.texture {
-                    texture.set(image, TextureOptions::NEAREST);
-                } else {
-                    self.texture = Some(ctx.load_texture(
-                        "starbyte-worker-framebuffer",
-                        image,
-                        TextureOptions::NEAREST,
-                    ));
-                }
-            }
+            upload_rgba(
+                ctx,
+                &mut self.texture,
+                "starbyte-worker-framebuffer",
+                frame.status.framebuffer_width,
+                frame.status.framebuffer_height,
+                &rgba,
+            );
         }
         self.emulation_cpu = frame.last_frame_cpu;
         self.stereo_pairs = frame.stereo_pairs;

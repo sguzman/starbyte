@@ -553,6 +553,22 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
     pub fn update_cheats(&self, cheats: Vec<CheatEntry>) -> Result<usize, String> {
         self.transact(move |engine| Ok(engine.set_cheats(&cheats)))
     }
+    /// The full library's cheat toggle must not wait for the next SNES frame
+    /// on the UI thread. Apply all patches atomically between frames and
+    /// acknowledge the number of active runtime patches.
+    pub fn queue_update_cheats(
+        &self,
+        cheats: Vec<CheatEntry>,
+    ) -> Result<Receiver<Result<usize, String>>, String> {
+        self.submit_transaction(move |engine| Ok(engine.set_cheats(&cheats)))
+    }
+
+    pub fn queue_clear_cheats(&self) -> Result<Receiver<Result<(), String>>, String> {
+        self.submit_transaction(|engine| {
+            engine.session.clear_active_cheats();
+            Ok(())
+        })
+    }
 
     pub fn quick_save_game(&self) -> Result<(), String> {
         self.transact(|engine| engine.quick_save().map_err(|e| e.to_string()))

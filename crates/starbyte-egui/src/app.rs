@@ -1187,12 +1187,16 @@ impl StarbyteApp {
         } else {
             None
         };
-        // Never show an obsolete picture while another cartridge is
-        // installing. Completed launch replies are applied first.
+        // A paused restore or manual step may have a newer still frame than
+        // the last ordinary mailbox frame. Drain any pre-receipt video now,
+        // or the next egui callback could repaint an older cartridge/state.
+        let has_still_receipt =
+            !completed.is_empty() || !completed_saves.is_empty() || completed_step.is_some();
+        if has_still_receipt {
+            let _ = worker.engine.take_latest_frame();
+        }
         let frame = if worker.pending_launches.is_empty()
-            && completed.is_empty()
-            && completed_saves.is_empty()
-            && completed_step.is_none()
+            && !has_still_receipt
             && worker.pending_step.is_none()
         {
             worker.engine.take_latest_frame()

@@ -1,8 +1,18 @@
 # Emulation scheduler migration
 
-**Status: in progress. Commit [`8c455a5`](https://github.com/sguzman/starbyte/commit/8c455a5aada8eeb8c582e356d41cca8ff6ae7b61) passed [CI run 40025522747](https://github.com/sguzman/starbyte/actions/runs/40025522747): Linux, Windows, formatting/Clippy and original-window native Weston integration. Verified source progress is 67/77 (87%): A 7/8, B 16/18, P 18/20, C 15/16, D 11/15. The complete original library worker is still opt-in; production-default cutover, physical Hyprland and audible-device quality remain unverified.**
+**Status: in progress. Commit [`4020d64`](https://github.com/sguzman/starbyte/commit/4020d643847773833d39673ac22e5a65f1840add) passed [CI run 40030994642](https://github.com/sguzman/starbyte/actions/runs/40030994642): Linux, Windows, formatting/Clippy and original-window native Weston integration. Verified source progress is 68/77 (88%): A 7/8, B 17/18, P 18/20, C 15/16, D 11/15. The complete original library worker is still opt-in; production-default cutover, physical Hyprland and audible-device quality remain unverified.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
+
+## Verified independent worker and renderer telemetry acceptance — 2026-10-23
+
+[`4020d64`](https://github.com/sguzman/starbyte/commit/4020d643847773833d39673ac22e5a65f1840add) passed [CI 40030994642](https://github.com/sguzman/starbyte/actions/runs/40030994642), including all Linux and Windows tests, lint/Clippy, headless independent-clock checks and native Weston original-window smokes.
+
+- Owner-generated frames now carry a monotonic `ready_at` timestamp. The complete original library's worker path reports **worker-completed FPS, frame gaps and emulation CPU time** separately from **GUI frame-delivery age and successful egui texture submission CPU time**. A restore-only still does not erase the last genuine emulation CPU sample.
+- One shared worker-only upload adapter handles installed cartridge stills, ordinary video frames, restored save-state stills and paused manual steps. Invalid or missing RGBA buffers must not advance the recorded texture frame or success count; unit tests explicitly exercise failed and successful uploads.
+- The worker publishes a nonblocking, atomic count of outstanding bounded asynchronous operations, including the currently executing operation, and the full original-window overlay and Session panel label it distinctly. The backpressure regression verifies a 128-operation maximum and no spurious count increase after rejected submissions.
+- Native original-window regressions remained green: `STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_OK advanced_frames=121 caught_up_frame=133`, `STARBYTE_FULL_LIBRARY_RECEIPT_RACE_SMOKE_OK retained_rom=true screenshot_written=true step_uploaded=true`, and `STARBYTE_FULL_LIBRARY_SHELL_SMOKE_OK menu=true recent_cards=true cover_texture=true library=true status_metrics=true view_toggles=true`.
+- **Source-task acceptance:** This closes the opt-in worker telemetry ownership item in Milestone B, **17/18 (94%)**; total **68/77 (88%)**. It does **not** establish real GPU presentation timing, speaker audibility, physical Hyprland off-workspace playback or production-default worker cutover.
 
 ## Verified native failed-replacement receipt-race acceptance — 2026-10-23
 
@@ -382,7 +392,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [x] 🧪 Confirm format, Clippy and full workspace tests on code commit `d0254a7` (CI run 39951239026).
 - [ ] 🖥️ Verify worker scheduling while Hyprland is off-workspace or occluded.
 
-## Milestone B: thread-owned frontend session — 16/18 source tasks (89%)
+## Milestone B: thread-owned frontend session — 17/18 source tasks (94%)
 
 - [x] 🧠 Define `OwnedSession` wrapping `FrontendSession` in `session_engine.rs`.
 - [x] 🎵 Produce PCM on the worker and enqueue it to the existing bounded Rodio worker.
@@ -400,7 +410,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [x] 💾 Run final SRAM flush and PCM invalidation on the emulation owner thread before shutdown/join.
 - [x] 📬 Process command bursts in bounded batches; surface fatal worker exits and queue cheat/save commands without stalling UI frames.
 - [ ] 🔄 Replace all live `StarbyteApp.session` access with worker commands and snapshots.
-- [ ] 📊 Move current emulation telemetry (FPS, frame gaps, overlays) to worker-produced truth.
+- [x] 📊 Move opt-in original-window emulation telemetry (FPS, frame gaps, overlays) to worker-produced truth, with separately labeled renderer delivery and texture submission measurements and bounded asynchronous owner-job depth (CI 40030994642). Production default cutover remains separate.
 - [x] 🎚️ Preserve current speed/pitch/mute/volume control semantics across sound modes through the opt-in original-app worker handoff (worker command test and pitch-mode mapping, CI 40011629443; physical audibility separately gated).
 
 ## Milestone P: opt-in threaded preview parity — 18/20 source tasks (90%)

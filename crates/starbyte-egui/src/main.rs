@@ -94,6 +94,15 @@ struct Args {
     /// Useful for headless Weston acceptance; does not change saved settings.
     #[arg(long, requires = "threaded_preview")]
     preview_background: bool,
+
+    /// CI only: close the empty threaded library after indexing at least
+    /// one installed game. Verifies the real native Wayland library path.
+    #[arg(
+        long,
+        requires = "threaded_preview",
+        conflicts_with_all = ["rom", "demo", "exit_after_frames", "speaker_test"]
+    )]
+    exit_after_library_scan: bool,
 }
 
 fn main() -> Result<()> {
@@ -163,6 +172,13 @@ fn main() -> Result<()> {
         args.rom.clone()
     };
     let rom_dirs = args.rom_dirs.clone();
+    // The existing library receives these directories through StarbyteApp,
+    // but the independent preview needs them before its own worker scan.
+    for path in &rom_dirs {
+        if !config.library.rom_dirs.contains(path) {
+            config.library.rom_dirs.push(path.clone());
+        }
+    }
     if args.scheduler_smoke {
         return run_scheduler_smoke(assets, rom.expect("--demo generates a built-in ROM"));
     }
@@ -184,6 +200,7 @@ fn main() -> Result<()> {
                     rom.clone(),
                     args.exit_after_frames,
                     args.preview_background,
+                    args.exit_after_library_scan,
                 )
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
                 Ok(Box::new(app))
@@ -492,6 +509,26 @@ mod speaker_cli_tests {
     fn threaded_preview_can_open_a_library_without_a_startup_game() {
         let missing = Args::try_parse_from(["starbyte-egui", "--threaded-preview"]).unwrap();
         assert!(validate_frame_exit_args(&missing).is_ok());
+        let bounded = Args::try_parse_from([
+            "starbyte-egui",
+            "--threaded-preview",
+            "--exit-after-library-scan",
+        ])
+        .unwrap();
+        assert!(validate_frame_exit_args(&bounded).is_ok());
+        assert!(bounded.exit_after_library_scan);
+        assert!(
+            Args::try_parse_from(["starbyte-egui", "--exit-after-library-scan"]).is_err()
+        );
+        assert!(
+            Args::try_parse_from([
+                "starbyte-egui",
+                "--threaded-preview",
+                "--demo",
+                "--exit-after-library-scan",
+            ])
+            .is_err()
+        );
         let demo = Args::try_parse_from([
             "starbyte-egui",
             "--demo",

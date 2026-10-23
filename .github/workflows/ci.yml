@@ -112,3 +112,17 @@ jobs:
             }
           cat "$RUNNER_TEMP/starbyte-threaded-preview.log"
           grep -F "STARBYTE_THREADED_PREVIEW_SMOKE_OK" "$RUNNER_TEMP/starbyte-threaded-preview.log"
+          # Launch the worker-backed library without a startup ROM and prove
+          # that the virtual Wayland shell indexes the installed demo file.
+          # The demo fixture was written by the legacy native smoke above.
+          timeout 90s target/debug/starbyte-egui --threaded-preview --exit-after-library-scan \
+            --rom-dir "$RUNNER_TEMP/starbyte-ci-cache/built-in" \
+            --config "$RUNNER_TEMP/starbyte-library-smoke-config.toml" \
+            --cache-dir "$RUNNER_TEMP/starbyte-library-smoke-cache" \
+            > "$RUNNER_TEMP/starbyte-threaded-library.log" 2>&1 || {
+              cat "$RUNNER_TEMP/weston.log"
+              cat "$RUNNER_TEMP/starbyte-threaded-library.log"
+              exit 1
+            }
+          cat "$RUNNER_TEMP/starbyte-threaded-library.log"
+          grep -F "STARBYTE_THREADED_LIBRARY_SMOKE_OK installed=" "$RUNNER_TEMP/starbyte-threaded-library.log"

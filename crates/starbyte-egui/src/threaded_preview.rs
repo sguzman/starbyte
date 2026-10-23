@@ -83,6 +83,7 @@ pub struct ThreadedPreviewApp {
     gamepads: PreviewGamepads,
     input_mode: InputDeviceMode,
     exit_after_frames: Option<u64>,
+    exit_after_library_scan: bool,
     last_error: Option<String>,
     screenshot_root: PathBuf,
     loaded_rom_path: Option<PathBuf>,
@@ -106,6 +107,7 @@ impl ThreadedPreviewApp {
         rom_path: Option<PathBuf>,
         exit_after_frames: Option<u64>,
         preview_background: bool,
+        exit_after_library_scan: bool,
     ) -> Result<Self> {
         let screenshot_root = assets.screenshot_root();
         let mut session = OwnedSession::create(assets.clone())?;
@@ -163,6 +165,7 @@ impl ThreadedPreviewApp {
             gamepads: PreviewGamepads::new(config.input.gamepad_bindings.clone()),
             input_mode: config.input.active_device,
             exit_after_frames,
+            exit_after_library_scan,
             last_error: None,
             screenshot_root,
             loaded_rom_path: rom_path,
@@ -514,7 +517,8 @@ mod pitch_mode_tests {
             config_path: None,
         };
         let app =
-            ThreadedPreviewApp::new(assets, &RuntimeConfig::default(), None, None, false).unwrap();
+            ThreadedPreviewApp::new(assets, &RuntimeConfig::default(), None, None, false, false)
+                .unwrap();
         assert!(!app.playing);
         assert!(!app.controls.session.has_rom);
         assert!(app.show_library);
@@ -538,7 +542,7 @@ mod pitch_mode_tests {
         };
         let mut config = RuntimeConfig::default();
         config.audio.enabled = false;
-        let mut app = ThreadedPreviewApp::new(assets, &config, None, None, true).unwrap();
+        let mut app = ThreadedPreviewApp::new(assets, &config, None, None, true, false).unwrap();
         let entry = LibraryEntry {
             game_id: "preview-demo".to_owned(),
             display_title: "Preview Demo".to_owned(),
@@ -612,6 +616,18 @@ impl eframe::App for ThreadedPreviewApp {
         // background pause disabled, emulation continues regardless.
         self.engine.gui_heartbeat();
         self.poll_library_events();
+        if self.exit_after_library_scan {
+            if let Some(snapshot) = &self.library_snapshot {
+                if snapshot.installed_count > 0 {
+                    println!(
+                        "STARBYTE_THREADED_LIBRARY_SMOKE_OK installed={}",
+                        snapshot.installed_count
+                    );
+                    self.exit_after_library_scan = false;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        }
         let focused = ctx.input(|input| input.focused);
         let fast_forwarding = focused
             && !ctx.wants_keyboard_input()

@@ -3532,15 +3532,19 @@ impl StarbyteApp {
                     } else if self.background_suspended {
                         "FPS: paused (background)".to_owned()
                     } else if let Some(worker) = &self.full_worker {
-                        worker.engine.frame_stats().fps.map_or_else(
-                            || "Worker FPS: measuring".to_owned(),
-                            |value| {
-                                format!(
-                                    "Worker FPS: {value:.1} / {:.1}",
-                                    speed_target_fps(self.last_effective_speed_percent)
-                                )
-                            },
-                        )
+                        if !worker.engine.is_emulating() {
+                            "Worker FPS: paused (background)".to_owned()
+                        } else {
+                            worker.engine.frame_stats().fps.map_or_else(
+                                || "Worker FPS: measuring".to_owned(),
+                                |value| {
+                                    format!(
+                                        "Worker FPS: {value:.1} / {:.1}",
+                                        speed_target_fps(self.last_effective_speed_percent)
+                                    )
+                                },
+                            )
+                        }
                     } else {
                         self.frame_rate.fps(Instant::now()).map_or_else(
                             || "FPS: --".to_owned(),
@@ -4455,9 +4459,12 @@ impl StarbyteApp {
         if self.show_performance_overlay && self.full_worker.is_some() {
             if let Some(worker) = &self.full_worker {
                 let rate = worker.engine.frame_stats();
-                let fps = rate
-                    .fps
-                    .map_or_else(|| "--".to_owned(), |fps| format!("{fps:.1}"));
+                let fps = if worker.engine.is_emulating() {
+                    rate.fps
+                        .map_or_else(|| "--".to_owned(), |fps| format!("{fps:.1}"))
+                } else {
+                    "paused".to_owned()
+                };
                 let label = format!(
                     "Worker FPS {fps} / {:.1} | 40ms+ gaps: {} | last gap {:.1} ms\nLast emulation CPU {:.2} ms | video frames coalesced: {}\nAudio producer drops {} | mixer drops {} | empty sink {}",
                     speed_target_fps(self.last_effective_speed_percent),
@@ -4594,9 +4601,12 @@ impl StarbyteApp {
         });
         if let Some(worker) = &self.full_worker {
             let rate = worker.engine.frame_stats();
-            let fps = rate
-                .fps
-                .map_or_else(|| "--".to_owned(), |value| format!("{value:.1}"));
+            let fps = if worker.engine.is_emulating() {
+                rate.fps
+                    .map_or_else(|| "--".to_owned(), |value| format!("{value:.1}"))
+            } else {
+                "paused".to_owned()
+            };
             ui.label(format!(
                 "Worker FPS: {fps} / {:.1}; 40ms+ gaps: {}; last {:.1} ms",
                 speed_target_fps(self.last_effective_speed_percent),

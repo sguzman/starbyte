@@ -5499,6 +5499,32 @@ mod session_view_bridge_tests {
             indexed_game_id_for_loaded_rom(&[entry.clone()], &loaded, None).as_deref(),
             Some("demo")
         );
+        let unrelated_path = dir.path().join("previous.sfc");
+        let mut unrelated = entry.clone();
+        unrelated.game_id = "previous".to_owned();
+        let unrelated_local = unrelated.local.as_mut().unwrap();
+        unrelated_local.game_id = "previous".to_owned();
+        unrelated_local.rom_path = unrelated_path.clone();
+        assert_eq!(
+            indexed_game_id_for_loaded_rom(
+                &[unrelated.clone(), entry.clone()],
+                &loaded,
+                Some(unrelated_path.as_path()),
+            )
+            .as_deref(),
+            Some("demo"),
+            "the active worker ROM must outrank an earlier stale recent entry"
+        );
+        assert_eq!(
+            indexed_game_id_for_loaded_rom(
+                &[unrelated],
+                dir.path().join("not-indexed.sfc").as_path(),
+                Some(unrelated_path.as_path()),
+            )
+            .as_deref(),
+            Some("previous"),
+            "recent history remains a fallback for unmatched direct opens"
+        );
         let mut zip_entry = entry;
         let zip_local = zip_entry.local.as_mut().unwrap();
         zip_local.rom_path = dir.path().join("demo.zip");
@@ -6755,13 +6781,24 @@ fn indexed_game_id_for_loaded_rom(
     loaded_path: &Path,
     recent_path: Option<&Path>,
 ) -> Option<String> {
+    // A stale most-recent entry must never override the ROM actually
+    // installed on the worker, even when it appears first in the index.
     entries
         .iter()
         .find(|entry| {
             entry.local.as_ref().is_some_and(|local| {
                 local.rom_path.as_path() == loaded_path
                     || local.extracted_cache_path.as_deref() == Some(loaded_path)
-                    || recent_path.is_some_and(|path| path == local.rom_path.as_path())
+            })
+        })
+        .or_else(|| {
+            recent_path.and_then(|recent| {
+                entries.iter().find(|entry| {
+                    entry
+                        .local
+                        .as_ref()
+                        .is_some_and(|local| local.rom_path.as_path() == recent)
+                })
             })
         })
         .map(|entry| entry.game_id.clone())

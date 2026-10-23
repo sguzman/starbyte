@@ -611,7 +611,23 @@ impl eframe::App for ThreadedPreviewApp {
                         } else {
                             "Sound: enabled"
                         };
-                        ui.label(sound);
+                        let audio = self.display.audio_diagnostics();
+                        let status = audio
+                            .device_status
+                            .map(|value| value.label())
+                            .unwrap_or("not_attempted");
+                        ui.label(format!(
+                            "{sound} | device {status} | submitted {} (nonzero {})",
+                            audio.submitted_frames,
+                            audio.submitted_nonzero_frames
+                        ))
+                        .on_hover_text(format!(
+                            "Producer drops {} | worker drops {} | empty sink {}. \
+Mixer delivery does not establish speaker audibility.",
+                            audio.producer_dropped_frames,
+                            audio.worker_dropped_frames,
+                            audio.sink_empty_on_pcm
+                        ));
                     }
                     if let Some(status) = self.display.status() {
                         if prefs.status_frame {

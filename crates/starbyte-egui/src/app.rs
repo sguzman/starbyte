@@ -1235,23 +1235,22 @@ impl StarbyteApp {
             }
         }
         worker.pending_speaker_checks = waiting_tones;
-        let completed_sound = if let Some((generation, response)) =
-            worker.pending_sound_diagnostics.take()
-        {
-            match response.try_recv() {
-                Ok(result) => Some((generation, result)),
-                Err(TryRecvError::Empty) => {
-                    worker.pending_sound_diagnostics = Some((generation, response));
-                    None
+        let completed_sound =
+            if let Some((generation, response)) = worker.pending_sound_diagnostics.take() {
+                match response.try_recv() {
+                    Ok(result) => Some((generation, result)),
+                    Err(TryRecvError::Empty) => {
+                        worker.pending_sound_diagnostics = Some((generation, response));
+                        None
+                    }
+                    Err(TryRecvError::Disconnected) => Some((
+                        generation,
+                        Err("Emulation worker closed the sound diagnostics receipt".to_owned()),
+                    )),
                 }
-                Err(TryRecvError::Disconnected) => Some((
-                    generation,
-                    Err("Emulation worker closed the sound diagnostics receipt".to_owned()),
-                )),
-            }
-        } else {
-            None
-        };
+            } else {
+                None
+            };
         let completed_step = if let Some((generation, reply)) = worker.pending_step.take() {
             match reply.try_recv() {
                 Ok(result) => Some((generation, result)),
@@ -2639,17 +2638,18 @@ impl StarbyteApp {
                     && self.worker_active_launch_id.is_some()
                 {
                     if let Ok(reply) = worker.engine.queue_sound_diagnostics() {
-                        worker.pending_sound_diagnostics = Some((self.worker_active_launch_id, reply));
+                        worker.pending_sound_diagnostics =
+                            Some((self.worker_active_launch_id, reply));
                         self.worker_sound_requested_at = Instant::now();
                     }
                 }
             }
             if let Some(sound) = &self.worker_sound_diagnostics {
                 if let Some(uploaded) = &sound.uploaded_program {
-                    ui.label(uploaded);
+                    ui.label(uploaded.as_str());
                 }
                 if let Some(status) = &sound.spc700_status {
-                    ui.label(status);
+                    ui.label(status.as_str());
                 } else {
                     ui.label("SPC700: waiting for the game's sound-program handoff");
                 }

@@ -140,3 +140,15 @@ jobs:
             }
           cat "$RUNNER_TEMP/starbyte-threaded-library-play.log"
           grep -F "STARBYTE_THREADED_LIBRARY_PLAY_SMOKE_OK" "$RUNNER_TEMP/starbyte-threaded-library-play.log"
+          # Withhold native egui callbacks for two seconds while requiring
+          # substantial progress on the same independent SNES worker clock.
+          timeout 90s target/debug/starbyte-egui --demo --threaded-preview --preview-background --exit-after-repaint-gap \
+            --config "$RUNNER_TEMP/starbyte-no-redraw-config.toml" \
+            --cache-dir "$RUNNER_TEMP/starbyte-no-redraw-cache" \
+            > "$RUNNER_TEMP/starbyte-no-redraw.log" 2>&1 || {
+              cat "$RUNNER_TEMP/weston.log"
+              cat "$RUNNER_TEMP/starbyte-no-redraw.log"
+              exit 1
+            }
+          cat "$RUNNER_TEMP/starbyte-no-redraw.log"
+          grep -F "STARBYTE_NO_REPAINT_SMOKE_OK advanced_frames=" "$RUNNER_TEMP/starbyte-no-redraw.log"

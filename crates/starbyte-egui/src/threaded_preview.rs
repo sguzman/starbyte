@@ -101,6 +101,8 @@ pub struct ThreadedPreviewApp {
     exit_after_library_scan: bool,
     exit_after_library_play: bool,
     library_play_selected: bool,
+    repaint_gap_smoke_pending: bool,
+    repaint_gap_challenge: Option<(Instant, u64)>,
     last_error: Option<String>,
     screenshot_root: PathBuf,
     loaded_rom_path: Option<PathBuf>,
@@ -188,6 +190,8 @@ impl ThreadedPreviewApp {
             exit_after_library_scan,
             exit_after_library_play,
             library_play_selected: false,
+            repaint_gap_smoke_pending: false,
+            repaint_gap_challenge: None,
             last_error: None,
             screenshot_root,
             loaded_rom_path: None,
@@ -211,6 +215,12 @@ impl ThreadedPreviewApp {
             app.refresh_library();
         }
         Ok(app)
+    }
+
+    /// Native CI-only experiment. No actual compositor callbacks are
+    /// processed during the interval even if Weston asks for a repaint.
+    pub fn arm_repaint_gap_smoke(&mut self) {
+        self.repaint_gap_smoke_pending = true;
     }
 
     /// Tab fast-forward is a temporary worker-clock rate, independent of
@@ -932,7 +942,11 @@ mod pitch_mode_tests {
         assert!(!app.can_modify_running_game());
         app.queue_save(SessionSaveAction::QuickSave);
         assert!(app.last_error.is_some());
-        assert!(!app.pending.iter().any(|op| matches!(op, PendingOperation::Save(_))));
+        assert!(
+            !app.pending
+                .iter()
+                .any(|op| matches!(op, PendingOperation::Save(_)))
+        );
     }
 
     #[test]
@@ -1028,6 +1042,22 @@ mod pitch_mode_tests {
 
 impl eframe::App for ThreadedPreviewApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some((deadline, earlier_frames)) = self.repaint_gap_challenge {
+            let now = Instant::now();
+            if now < deadline {
+                ctx.request_repaint_after(deadline - now);
+                return;
+            }
+            let advanced = self.engine.completed_frames().saturating_sub(earlier_frames);
+            if advanced >= 45 {
+                println!("STARBYTE_NO_REPAINT_SMOKE_OK advanced_frames={advanced}");
+            } else {
+                println!("STARBYTE_NO_REPAINT_SMOKE_FAILED advanced_frames={advanced}");
+            }
+            self.repaint_gap_challenge = None;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
         // Deliberately independent of frame production: an absent heartbeat
         // tells the worker that Wayland stopped delivering redraws. With
         // background pause disabled, emulation continues regardless.
@@ -1358,6 +1388,18 @@ impl eframe::App for ThreadedPreviewApp {
             self.display.poll(ctx, &self.engine);
         }
         self.poll_operations(ctx);
+        if self.repaint_gap_smoke_pending
+            && self.engine.completed_frames() >= 10
+            && self.display.texture().is_some()
+        {
+            self.repaint_gap_smoke_pending = false;
+            self.repaint_gap_challenge = Some((
+                Instant::now() + Duration::from_secs(2),
+                self.engine.completed_frames(),
+            ));
+            ctx.request_repaint_after(Duration::from_secs(2));
+            return;
+        }
         // Acceptance requires both worker progress and a real texture upload
         // through the window renderer, not just counting hidden ticks.
         if let Some(limit) = self.exit_after_frames {

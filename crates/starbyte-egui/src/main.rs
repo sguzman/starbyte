@@ -112,6 +112,14 @@ struct Args {
         conflicts_with_all = ["rom", "demo", "exit_after_frames", "exit_after_library_scan", "speaker_test"]
     )]
     exit_after_library_play: bool,
+
+    /// CI: stop servicing egui for two seconds while the worker runs.
+    #[arg(
+        long,
+        requires_all = ["demo", "threaded_preview", "preview_background"],
+        conflicts_with_all = ["exit_after_frames", "exit_after_library_scan", "exit_after_library_play"]
+    )]
+    exit_after_repaint_gap: bool,
 }
 
 fn main() -> Result<()> {
@@ -203,7 +211,7 @@ fn main() -> Result<()> {
                     UiTheme::Light => egui::ThemePreference::Light,
                     UiTheme::Dark => egui::ThemePreference::Dark,
                 });
-                let app = crate::threaded_preview::ThreadedPreviewApp::new(
+                let mut app = crate::threaded_preview::ThreadedPreviewApp::new(
                     assets.clone(),
                     &config,
                     rom.clone(),
@@ -214,6 +222,9 @@ fn main() -> Result<()> {
                     args.exit_after_library_play,
                 )
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
+                if args.exit_after_repaint_gap {
+                    app.arm_repaint_gap_smoke();
+                }
                 Ok(Box::new(app))
             }),
         )
@@ -538,6 +549,25 @@ mod speaker_cli_tests {
         assert!(validate_frame_exit_args(&launch).is_ok());
         assert!(launch.exit_after_library_play);
         assert!(Args::try_parse_from(["starbyte-egui", "--exit-after-library-play"]).is_err());
+        let without_redraws = Args::try_parse_from([
+            "starbyte-egui",
+            "--threaded-preview",
+            "--preview-background",
+            "--demo",
+            "--exit-after-repaint-gap",
+        ])
+        .unwrap();
+        assert!(validate_frame_exit_args(&without_redraws).is_ok());
+        assert!(without_redraws.exit_after_repaint_gap);
+        assert!(
+            Args::try_parse_from([
+                "starbyte-egui",
+                "--threaded-preview",
+                "--demo",
+                "--exit-after-repaint-gap"
+            ])
+            .is_err()
+        );
         assert!(
             Args::try_parse_from([
                 "starbyte-egui",

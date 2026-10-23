@@ -1,9 +1,18 @@
 # Emulation scheduler migration
 
-**Status: in progress. Commit [`7950e27`](https://github.com/sguzman/starbyte/commit/7950e27a6ef32bfe9be02c67330af3c5238447dc) passed [CI run 40036684106](https://github.com/sguzman/starbyte/actions/runs/40036684106): Linux, Windows, formatting/Clippy and original-window native Weston integration. Verified source progress is 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. The complete original library worker is still opt-in; production-default cutover, physical Hyprland and audible-device quality remain unverified.**
+**Status: in progress. Commit [`32cc83c`](https://github.com/sguzman/starbyte/commit/32cc83c2909facb54d0378fee52387b7a2bb4a61) passed [CI run 40040187151](https://github.com/sguzman/starbyte/actions/runs/40040187151): Linux, Windows, formatting/Clippy, pinned Rust 1.88 and original-window native Weston integration. Verified source progress is 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. The complete original library worker is still opt-in; production-default cutover, physical Hyprland and audible-device quality remain unverified.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 **Machine-readable source checklist:** [scheduler-progress.json](scheduler-progress.json) (77 stable task IDs and checked-status parity tested by Rust CI).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
+
+## Verified superseded-install worker/UI reconciliation — 2026-10-23
+
+Code [`32cc83c`](https://github.com/sguzman/starbyte/commit/32cc83c2909facb54d0378fee52387b7a2bb4a61) passed [CI 40040187151](https://github.com/sguzman/starbyte/actions/runs/40040187151): Windows workspace tests/benchmark compilation, Linux workspace tests and actual original-window native Weston, formatting/Clippy, and pinned Rust 1.88 workspace compile.
+
+- A newer ROM *request* supersedes an older job's user-facing status, but an older successful owner transaction may have **already installed** a cartridge. Previously the full-window GUI discarded that successful receipt entirely, leaving displayed session identity, video, controls, save namespace and generation stale if the newer request then failed.
+- The full-window completion handler now **reconciles every successful installed cartridge in owner command order**, including superseded successes, while retaining the superseded job status instead of reporting an obsolete user-facing success. Superseded failures cannot overwrite newer errors.
+- The native original-window acceptance extends the real failed-ROM screenshot/paused-step race: it queues a successful same-ROM reinstallation and then a newer invalid ROM request. Its final marker recorded `STARBYTE_FULL_LIBRARY_SUPERSEDED_INSTALL_SMOKE_OK active_owner_synced=true newer_failure_reported=true advanced_frames=11`; the old receipt race remained green. The original worker FPS test also measured `122 frames / 2020 ms = 60.38 FPS` and verified no shadow legacy session.
+- The separate progress JSON tracks 77 stable task IDs with source parity checked by Rust tests. This fix and additional test strengthen opt-in worker correctness; no physical Hyprland, audible-device, gamepad or production cutover acceptance was performed. **Total remains 69/77 (90%).**
 
 ## Verified independent worker NTSC pacing during no-redraw gap — 2026-10-23
 

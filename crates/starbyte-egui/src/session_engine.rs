@@ -220,6 +220,9 @@ impl ControlsPort {
 
 /// A snapshot for the renderer; video frames coalesce when the UI is hidden.
 pub struct PublishedGameFrame {
+    /// Monotonic timestamp when the owned frame was ready for presentation.
+    /// The GUI can measure delivery delay without conflating it with SNES CPU time.
+    pub ready_at: Instant,
     pub status: SessionSnapshot,
     pub rgba: Option<Vec<u8>>,
     pub last_frame_cpu: Duration,
@@ -610,6 +613,7 @@ impl OwnedSession {
             nonzero_pairs,
             audio_diagnostics: self.audio_diagnostics(),
             input_diagnostics: self.session.input_diagnostics(),
+            ready_at: Instant::now(),
         }
     }
 
@@ -624,6 +628,7 @@ impl OwnedSession {
         let mut frame = stepped?;
         if frame.rgba.is_none() {
             frame.rgba = Some(self.session.framebuffer_rgba().to_vec());
+            frame.ready_at = Instant::now();
         }
         Ok(frame)
     }
@@ -694,6 +699,7 @@ impl OwnedSession {
             nonzero_pairs,
             audio_diagnostics: self.audio_diagnostics(),
             input_diagnostics: self.session.input_diagnostics(),
+            ready_at: Instant::now(),
         })
     }
 }

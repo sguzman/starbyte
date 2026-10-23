@@ -17,7 +17,7 @@ use starbyte_core::{
     input::ControllerState,
     manifest::{AssetConfig, AudioPitchMode, InputDeviceMode, RuntimeConfig, UiSettings},
 };
-use starbyte_frontend::SoundSessionMode;
+use starbyte_frontend::{SessionScreenshot, SoundSessionMode};
 
 use crate::{
     app::{input_actions, parse_egui_key, set_controller_flag, write_png_screenshot},
@@ -39,7 +39,7 @@ enum PendingOperation {
     Save(Receiver<Result<(), String>>),
     SpeakerCheck(Receiver<Result<(), String>>),
     Restore(Receiver<Result<PublishedGameFrame, String>>),
-    Screenshot(Receiver<Result<PublishedGameFrame, String>>),
+    Screenshot(Receiver<Result<SessionScreenshot, String>>),
     PngWrite(Receiver<Result<PathBuf, String>>),
     LoadRom {
         path: PathBuf,
@@ -176,7 +176,7 @@ impl ThreadedPreviewApp {
     }
 
     fn queue_screenshot(&mut self) {
-        match self.engine.queue_screenshot_frame() {
+        match self.engine.queue_screenshot_pixels() {
             Ok(reply) => self.pending.push(PendingOperation::Screenshot(reply)),
             Err(error) => self.last_error = Some(error),
         }
@@ -184,18 +184,18 @@ impl ThreadedPreviewApp {
 
     fn write_screenshot_async(
         &mut self,
-        frame: PublishedGameFrame,
+        capture: SessionScreenshot,
     ) -> Result<Receiver<Result<PathBuf, String>>, String> {
-        let rgba = frame.rgba.ok_or_else(|| "No screenshot pixels available".to_owned())?;
-        let width = frame.status.framebuffer_width;
-        let height = frame.status.framebuffer_height;
+        let rgba = capture.rgba;
+        let width = capture.width;
+        let height = capture.height;
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
         let path = self.screenshot_root.join(format!(
             "starbyte-{timestamp}-frame-{}.png",
-            frame.status.frame
+            capture.frame
         ));
         let (reply, result) = mpsc::channel();
         thread::Builder::new()

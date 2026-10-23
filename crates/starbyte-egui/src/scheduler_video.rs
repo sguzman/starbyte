@@ -120,6 +120,7 @@ mod tests {
         display.import_frame(
             &ctx,
             PublishedGameFrame {
+                ready_at: std::time::Instant::now(),
                 status: SessionSnapshot {
                     rom_path: None,
                     has_rom: true,

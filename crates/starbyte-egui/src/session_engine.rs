@@ -22,6 +22,7 @@ use starbyte_frontend::{
 
 use crate::{
     audio::{AudioDeviceStatus, AudioOutput},
+    blackout::BlackScreenMonitor,
     scheduler::{EmulatorScheduler, NTSC_FRAME_INTERVAL},
 };
 
@@ -219,6 +220,7 @@ pub struct WorkerLaunchResponse {
 /// with emulated frames, including when a compositor hides the entire window.
 pub struct OwnedSession {
     session: FrontendSession,
+    blackout_monitor: BlackScreenMonitor,
     audio: Option<AudioOutput>,
     sound_enabled: bool,
     muted: bool,
@@ -239,6 +241,7 @@ impl OwnedSession {
     pub fn from_session(session: FrontendSession) -> Self {
         Self {
             session,
+            blackout_monitor: BlackScreenMonitor::default(),
             audio: None,
             sound_enabled: true,
             muted: false,
@@ -359,11 +362,15 @@ impl OwnedSession {
         }
         self.input.clear();
         self.last_sram_flush = Instant::now();
-        match mode {
+        let result = match mode {
             SoundSessionMode::Compatibility => self.session.load_rom(path),
             SoundSessionMode::Isolated => self.session.load_rom_with_isolated_audio_probe(path),
             SoundSessionMode::Persistent => self.session.load_rom_with_persistent_audio(path),
+        };
+        if result.is_ok() {
+            self.blackout_monitor = BlackScreenMonitor::default();
         }
+        result
     }
 
     /// One serialized launch with its matching cheats and save namespace.
@@ -374,6 +381,7 @@ impl OwnedSession {
             output.clear();
         }
         self.session.launch_game(request)?;
+        self.blackout_monitor = BlackScreenMonitor::default();
         self.last_sram_flush = Instant::now();
         Ok(())
     }
@@ -539,6 +547,11 @@ impl OwnedSession {
         let metrics = self.session.audio_frame_metrics();
         let stereo_pairs = metrics.stereo_pairs;
         let nonzero_pairs = metrics.nonzero_pairs;
+        // Diagnostic CPU/PPU inspection belongs on the same thread as the
+        // emulator. It must not require a UI-thread borrow or depend on
+        // a Wayland frame callback while a game runs off-workspace.
+        self.blackout_monitor
+            .observe(&self.session, stereo_pairs, nonzero_pairs);
 
         if self.sound_enabled && !self.muted && self.volume > 0.0 {
             if self.audio.is_none() && nonzero_pairs > 0 && Instant::now() >= self.next_audio_retry
@@ -900,6 +913,13 @@ mod tests {
         assert!(
             worker.completed_frames() >= 5,
             "independent clock did not produce background frames"
+        );
+        let diagnosed = worker
+            .transact(|engine| Ok(engine.blackout_monitor.last_observed_frame()))
+            .unwrap();
+        assert!(
+            diagnosed >= 5,
+            "background emulation must also drive worker-owned diagnostics"
         );
         // No GUI heartbeat: game frames continue, but the mailbox must not
         // carry expensive RGBA copies that a hidden renderer cannot display.

@@ -35,7 +35,6 @@ impl BlackScreenMonitor {
     pub fn observe(
         &mut self,
         session: &FrontendSession,
-        _cache_root: &Path,
         audio_pairs: usize,
         nonzero_pairs: usize,
     ) {
@@ -185,6 +184,11 @@ impl BlackScreenMonitor {
                 Err(error) => warn!(%error, "could not write black-screen diagnostic"),
             }
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn last_observed_frame(&self) -> u64 {
+        self.last_frame
     }
 
     fn observe_visibility(&mut self, frame: u64, visible: bool) -> bool {

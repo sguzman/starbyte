@@ -16,10 +16,16 @@ pub enum WorkerCommandKind {
     RefreshSnapshot,
     RefreshMetadata,
     RefreshArtwork,
-    RefreshCovers { target: LibraryTarget },
-    RefreshCheats { target: LibraryTarget },
+    RefreshCovers {
+        target: LibraryTarget,
+    },
+    RefreshCheats {
+        target: LibraryTarget,
+    },
     RefreshAll,
-    MaterializeRom { entry: LibraryEntry },
+    MaterializeRom {
+        entry: LibraryEntry,
+    },
     MaterializePath {
         path: PathBuf,
         matching: Option<LibraryEntry>,

@@ -950,8 +950,7 @@ impl StarbyteApp {
         while let Some(event) = self.worker.try_recv() {
             match event {
                 WorkerEvent::JobStarted { job_id, label } => {
-                    if is_rom_job(&label)
-                        && is_superseded_rom_load(self.latest_rom_job_id, job_id)
+                    if is_rom_job(&label) && is_superseded_rom_load(self.latest_rom_job_id, job_id)
                     {
                         self.update_job(job_id, &label, "superseded", "Newer ROM selected");
                         continue;
@@ -1050,12 +1049,7 @@ impl StarbyteApp {
                         continue;
                     }
                     let detail = format!("Loaded {}", original_path.display());
-                    match self.complete_local_rom(
-                        &original_path,
-                        game_id,
-                        &request,
-                        ctx,
-                    ) {
+                    match self.complete_local_rom(&original_path, game_id, &request, ctx) {
                         Ok(()) => {
                             self.update_job(job_id, "Open ROM", "done", &detail);
                         }
@@ -1070,8 +1064,7 @@ impl StarbyteApp {
                     label,
                     error,
                 } => {
-                    if is_rom_job(&label)
-                        && is_superseded_rom_load(self.latest_rom_job_id, job_id)
+                    if is_rom_job(&label) && is_superseded_rom_load(self.latest_rom_job_id, job_id)
                     {
                         self.update_job(job_id, &label, "superseded", "Newer ROM selected");
                         continue;
@@ -1772,7 +1765,6 @@ impl StarbyteApp {
                 self.refresh_framebuffer(ctx);
                 self.blackout_monitor.observe(
                     &self.session,
-                    &self.cache_root,
                     self.last_audio_pairs,
                     self.last_audio_nonzero_pairs,
                 );

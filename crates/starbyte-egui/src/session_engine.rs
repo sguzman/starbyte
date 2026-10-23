@@ -302,6 +302,25 @@ impl OwnedSession {
         }
     }
 
+    /// Explicitly request the native Rodio speaker check from the same
+    /// worker that consumes game PCM. A muted or disabled game must never
+    /// produce an unexpected test tone.
+    pub fn speaker_check(&mut self) -> Result<(), String> {
+        if !self.sound_enabled || self.muted || self.volume <= 0.0 {
+            return Err("Enable and unmute sound before testing speakers".to_owned());
+        }
+        if self.audio.is_none() {
+            self.audio = Some(AudioOutput::start().map_err(|error| error.to_string())?);
+        }
+        let audio = self.audio.as_ref().expect("audio initialized above");
+        audio.set_volume(self.volume);
+        if audio.enqueue_live_test_tone() {
+            Ok(())
+        } else {
+            Err("Audio worker queue is full; speaker check was not submitted".to_owned())
+        }
+    }
+
     pub fn set_speed(&mut self, speed_percent: u16, pitch_factor: f32) {
         self.speed_percent = speed_percent.clamp(1, 1_600);
         self.pitch_factor = pitch_factor.clamp(0.25, 4.0);
@@ -485,6 +504,10 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
         volume: f32,
     ) -> Result<(), String> {
         self.post(move |engine| engine.set_audio(enabled, muted, volume))
+    }
+
+    pub fn queue_speaker_check(&self) -> Result<Receiver<Result<(), String>>, String> {
+        self.submit_transaction(|engine| engine.speaker_check())
     }
 
     pub fn configure_playback_speed(

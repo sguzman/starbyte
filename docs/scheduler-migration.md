@@ -1,8 +1,48 @@
 # Emulation scheduler migration
 
-**Status: in progress. Commit [`5d5ef8e`](https://github.com/sguzman/starbyte/commit/5d5ef8e3a57e9966cb6d725f9e3c9905afc64f36) passed [CI run 40013247831](https://github.com/sguzman/starbyte/actions/runs/40013247831): Linux, Windows, format/Clippy and original-window Weston failed-ROM-replacement continuity. Tracked source progress is 63/77 (82%), with full-GUI migration 11/16 (69%). Production-default handoff, physical Hyprland and audible-device quality remain unverified.**
+**Status: in progress. Commit [`432b221`](https://github.com/sguzman/starbyte/commit/432b2219ac9c89dc82c9183b2f2ef7c31b8a66d8) passed [CI run 40015689046](https://github.com/sguzman/starbyte/actions/runs/40015689046): Linux, Windows, formatting/Clippy and original-window native Weston keyboard shortcut and sound-mode save-slot parity, alongside previous worker acceptance. Tracked source progress is 65/77 (84%), with full-GUI migration 13/16 (81%). Production-default handoff, physical Hyprland and audible-device quality remain unverified.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
+
+## Verified original-window shortcut and save namespace parity — 2026-10-23
+
+Source commit [`432b221`](https://github.com/sguzman/starbyte/commit/432b2219ac9c89dc82c9183b2f2ef7c31b8a66d8)
+passed [CI 40015689046](https://github.com/sguzman/starbyte/actions/runs/40015689046)
+with **all Linux, Windows and format/Clippy jobs green**, including the
+expanded native Weston full-library suite.
+
+- **Actual shortcut event path:** synthetic egui key events enter the same
+  `raw_input_hook` and ordinary application hotkey handlers as physical
+  F5, F8, F9 and Escape input. The complete original window successfully
+  quick-saves, restores, visits its library while the independent SNES worker
+  continues making progress, returns to the game, and uploads a fresh
+  framebuffer. The native result was
+  `STARBYTE_FULL_LIBRARY_SHORTCUT_SMOKE_OK f5=true f8=true f9=true escape=true frame=44`.
+  The earlier real-owner SNES auto-joypad integration separately verified
+  pressed **and released** button bits at the emulated hardware register.
+- **Original-window save mode switching:** starting with persistent sound,
+  the complete library saves disk slot 1, reinstalls the same cartridge in
+  compatibility mode, verifies the persistent slot is **not available in
+  that separate namespace**, saves a compatibility slot, returns to
+  persistent sound, and verifies the original persistent slot reappears
+  without an inherited quick save. The native result was
+  `STARBYTE_FULL_LIBRARY_MODE_SMOKE_OK persistent_slot=true compatibility_slot=true separate_slots=true`.
+  Existing worker integration tests additionally verify isolated diagnostic
+  mode rejects durable saves; previous native full-window SRAM acceptance
+  reopened a battery-backed cartridge after UI shutdown and recovered its
+  written byte `0x5A`.
+
+These two native checks close the opt-in complete-window Milestone C
+controller/shortcut and save-namespace tasks, lifting C to **13/16 (81%)**.
+Tracked source coverage is **65/77 (84%)**: A 7/8 (88%), B 16/18 (89%),
+P 18/20 (90%), C 13/16 (81%), D 11/15 (73%).
+
+**Acceptance boundary:** synthesized egui keys and virtual Weston are not
+proof of a specific physical keyboard or gamepad, actual audible output or
+off-workspace Hyprland behavior. Original window library View toggles/covers
+still require explicit parity acceptance. The stable legacy player remains
+the production default; independent emulation in the complete original
+library is still opt-in.
 
 ## Verified full-window failure-safe cartridge replacement — 2026-10-23
 
@@ -382,7 +422,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 not a separate repository, not the default UI, and not a substitute for the
 complete Starbyte library application.
 
-## Milestone C: native GUI migration — 11/16 source tasks (69%; production-default worker cutover still pending)
+## Milestone C: native GUI migration — 13/16 source tasks (81%; production-default worker cutover still pending)
 
 - [x] 🧱 Introduce frontend-neutral SessionControlsSnapshot and migrate the existing disk-slot menu to it; worker can serialize the same summary.
 - [x] 🎮 Migrate the existing input overlay to frontend-neutral SessionInputDiagnostics that the worker can also publish.
@@ -393,11 +433,11 @@ complete Starbyte library application.
 - [x] 🖼️ Share validated nearest-filtered RGBA texture uploads between the legacy player and threaded preview, without adding an intermediate copy to the legacy loop.
 - [x] 🎬 Share one typed ROM launch request (resolved path, sound/save mode and matching cheats) across library, direct-file, startup, sound-mode restart and worker APIs, without executing a frame between installation and cheat selection.
 - [x] 🎬 Route game-launch success/error replies through the emulation worker, with native full-window Weston failure/survivor acceptance (CI 40013247831).
-- [ ] ⌨️ Send controller inputs without losing key-down/up edges; preserve F5/F8/F9/Escape.
+- [x] ⌨️ Send controller inputs without losing key-down/up edges; preserve F5/F8/F9/Escape. Native original-window key-event smoke and actual SNES joypad press/release regression passed (CI 40015689046, 40002095002).
 - [x] 🪟 Display the latest completed RGBA texture without blocking the worker (opt-in full library, Weston catch-up after a two-second callback gap, CI 40009459833).
 - [ ] 🏠 Keep the full library, menus, recent covers and View status-bar toggles intact.
 - [x] ⏸️ Keep manual Pause, automatic focus pause, background-allowed gameplay and their resumes independent (original full-library Weston, CI 40011629443).
-- [ ] 💾 Preserve original disk-slot, SRAM and sound-mode namespaces.
+- [x] 💾 Preserve original disk-slot, SRAM and sound-mode namespaces. Native original-window persistent/compatibility slot switch, disk/quick save/restore and battery SRAM restart tests passed (CI 40015689046, 40000854342).
 - [ ] 🧹 Complete full-application orderly shutdown handoff: stop clock, flush SRAM, clear audio and join exactly once (worker finalizer implemented and covered, not yet installed in normal StarbyteApp).
 - [ ] 🚀 Make the worker the default runtime only after passing acceptance gates.
 

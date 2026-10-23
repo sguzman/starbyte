@@ -23,8 +23,9 @@ pub fn upload_rgba(
     let Ok(h) = usize::try_from(height) else {
         return false;
     };
-    if w == 0 || h == 0 || w.checked_mul(h).and_then(|pixels| pixels.checked_mul(4))
-        != Some(rgba.len())
+    if w == 0
+        || h == 0
+        || w.checked_mul(h).and_then(|pixels| pixels.checked_mul(4)) != Some(rgba.len())
     {
         return false;
     }
@@ -50,7 +51,14 @@ mod tests {
         assert!(texture.is_none());
         assert!(!upload_rgba(&ctx, &mut texture, "bad", 1, 1, &[1, 2, 3]));
         assert!(texture.is_none());
-        assert!(!upload_rgba(&ctx, &mut texture, "bad", u32::MAX, u32::MAX, &[]));
+        assert!(!upload_rgba(
+            &ctx,
+            &mut texture,
+            "bad",
+            u32::MAX,
+            u32::MAX,
+            &[]
+        ));
         assert!(texture.is_none());
     }
 }

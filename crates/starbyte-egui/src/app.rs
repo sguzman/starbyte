@@ -762,16 +762,48 @@ enum WorkerReplacementSmoke {
 /// Native-only synthetic egui key events exercise the original window's
 /// actual F5/F8/F9/Escape handlers, not direct save/navigation calls.
 #[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Default)]
+struct WorkerShellPaintCounts {
+    menu: u32,
+    status: u32,
+    recent: u32,
+    recent_cards: u32,
+    library: u32,
+    fps: u32,
+    sound: u32,
+    frame: u32,
+}
+
 enum WorkerShortcutSmoke {
     WaitingForGame,
     PressSave,
     AwaitSave { deadline: Instant },
     PressLoad,
-    AwaitLoad { deadline: Instant },
-    PressLibrary,
-    AwaitLibrary { deadline: Instant, started_at: u64 },
+    AwaitLoad { deadline: Instant, started_at: u64 },
     PressReturn,
     AwaitReturn { deadline: Instant, started_at: u64 },
+    AwaitStatusMetrics {
+        deadline: Instant,
+        before: WorkerShellPaintCounts,
+    },
+    AwaitStatusFiltered {
+        deadline: Instant,
+        before: WorkerShellPaintCounts,
+    },
+    AwaitLibraryShown {
+        deadline: Instant,
+        started_at: u64,
+        before: WorkerShellPaintCounts,
+    },
+    AwaitLibraryHidden {
+        deadline: Instant,
+        before: WorkerShellPaintCounts,
+    },
+    AwaitLibraryRestored {
+        deadline: Instant,
+        started_at: u64,
+        before: WorkerShellPaintCounts,
+    },
 }
 
 /// CI-only original-window disk slot isolation across actual menu sound
@@ -835,6 +867,7 @@ pub struct StarbyteApp {
     worker_sram_smoke_reply: Option<Receiver<Result<usize, String>>>,
     worker_replacement_smoke: Option<WorkerReplacementSmoke>,
     worker_shortcut_smoke: Option<WorkerShortcutSmoke>,
+    worker_shell_paints: WorkerShellPaintCounts,
     worker_mode_smoke: Option<WorkerModeSmoke>,
     audio_output: Option<AudioOutput>,
     speaker_probe: SpeakerProbeState,
@@ -1098,6 +1131,7 @@ impl StarbyteApp {
                 .then_some(WorkerReplacementSmoke::WaitingForGame),
             worker_shortcut_smoke: worker_shortcut_smoke
                 .then_some(WorkerShortcutSmoke::WaitingForGame),
+            worker_shell_paints: WorkerShellPaintCounts::default(),
             worker_mode_smoke: worker_mode_smoke.then_some(WorkerModeSmoke::WaitingForGame),
             audio_output: None,
             speaker_probe: SpeakerProbeState::Idle,
@@ -1907,11 +1941,169 @@ impl StarbyteApp {
                         "STARBYTE_FULL_LIBRARY_SHORTCUT_SMOKE_OK f5=true f8=true f9=true escape=true frame={}",
                         self.last_worker_texture_frame.unwrap_or_default()
                     );
+                    // The original View/status shell is a separate parity
+                    // gate. Keep this same real native window open to test
+                    // panel rendering and per-metric visibility while SNES
+                    // emulation remains owned by the independent worker.
+                    self.config.ui.show_status_bar = true;
+                    self.config.ui.status_fps = true;
+                    self.config.ui.status_sound = true;
+                    self.config.ui.status_frame = true;
+                    WorkerShortcutSmoke::AwaitStatusMetrics {
+                        deadline: Instant::now() + Duration::from_secs(8),
+                        before: self.worker_shell_paints,
+                    }
+                } else if Instant::now() >= deadline {
+                    println!("STARBYTE_FULL_LIBRARY_SHORTCUT_SMOKE_FAILED return_to_game");
+                    self.worker_shortcut_smoke = None;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                } else {
+                    stage
+                }
+            }
+            WorkerShortcutSmoke::AwaitStatusMetrics { deadline, before } => {
+                let now = self.worker_shell_paints;
+                if now.status > before.status
+                    && now.fps > before.fps
+                    && now.sound > before.sound
+                    && now.frame > before.frame
+                {
+                    self.config.ui.status_fps = false;
+                    self.config.ui.status_sound = false;
+                    WorkerShortcutSmoke::AwaitStatusFiltered {
+                        deadline: Instant::now() + Duration::from_secs(8),
+                        before: now,
+                    }
+                } else if Instant::now() >= deadline {
+                    println!("STARBYTE_FULL_LIBRARY_SHELL_SMOKE_FAILED status_metrics");
+                    self.worker_shortcut_smoke = None;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                } else {
+                    stage
+                }
+            }
+            WorkerShortcutSmoke::AwaitStatusFiltered { deadline, before } => {
+                let now = self.worker_shell_paints;
+                if now.status > before.status && now.frame > before.frame {
+                    if now.fps != before.fps || now.sound != before.sound {
+                        println!("STARBYTE_FULL_LIBRARY_SHELL_SMOKE_FAILED status_filter");
+                        self.worker_shortcut_smoke = None;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        return;
+                    }
+                    self.play_view = false;
+                    self.config.ui.show_menu_bar = true;
+                    self.config.ui.show_recent_games_bar = true;
+                    self.config.ui.show_status_bar = true;
+                    WorkerShortcutSmoke::AwaitLibraryShown {
+                        deadline: Instant::now() + Duration::from_secs(8),
+                        started_at: self
+                            .full_worker
+                            .as_ref()
+                            .map_or(0, |worker| worker.engine.completed_frames()),
+                        before: now,
+                    }
+                } else if Instant::now() >= deadline {
+                    println!("STARBYTE_FULL_LIBRARY_SHELL_SMOKE_FAILED filtered_status_timeout");
+                    self.worker_shortcut_smoke = None;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                } else {
+                    stage
+                }
+            }
+            WorkerShortcutSmoke::AwaitLibraryShown {
+                deadline,
+                started_at,
+                before,
+            } => {
+                let now = self.worker_shell_paints;
+                let recent_matches = self.session_snapshot().rom_path.as_ref().is_some_and(
+                    |rom| self.config.library.recent_roms.iter().any(|recent| recent == rom),
+                );
+                if now.menu > before.menu
+                    && now.status > before.status
+                    && now.recent > before.recent
+                    && now.recent_cards > before.recent_cards
+                    && now.library > before.library
+                    && recent_matches
+                    && self
+                        .full_worker
+                        .as_ref()
+                        .is_some_and(|worker| worker.engine.completed_frames() >= started_at + 3)
+                {
+                    self.config.ui.show_menu_bar = false;
+                    self.config.ui.show_recent_games_bar = false;
+                    self.config.ui.show_status_bar = false;
+                    WorkerShortcutSmoke::AwaitLibraryHidden {
+                        deadline: Instant::now() + Duration::from_secs(8),
+                        before: now,
+                    }
+                } else if Instant::now() >= deadline {
+                    println!("STARBYTE_FULL_LIBRARY_SHELL_SMOKE_FAILED original_library_panels recent={recent_matches} counts={now:?}");
+                    self.worker_shortcut_smoke = None;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                } else {
+                    stage
+                }
+            }
+            WorkerShortcutSmoke::AwaitLibraryHidden { deadline, before } => {
+                let now = self.worker_shell_paints;
+                if now.library >= before.library + 3 {
+                    if now.menu != before.menu
+                        || now.recent != before.recent
+                        || now.status != before.status
+                    {
+                        println!("STARBYTE_FULL_LIBRARY_SHELL_SMOKE_FAILED hidden_panels {now:?}");
+                        self.worker_shortcut_smoke = None;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        return;
+                    }
+                    self.config.ui.show_menu_bar = true;
+                    self.config.ui.show_recent_games_bar = true;
+                    self.config.ui.show_status_bar = true;
+                    WorkerShortcutSmoke::AwaitLibraryRestored {
+                        deadline: Instant::now() + Duration::from_secs(8),
+                        started_at: self
+                            .full_worker
+                            .as_ref()
+                            .map_or(0, |worker| worker.engine.completed_frames()),
+                        before: now,
+                    }
+                } else if Instant::now() >= deadline {
+                    println!("STARBYTE_FULL_LIBRARY_SHELL_SMOKE_FAILED hidden_timeout");
+                    self.worker_shortcut_smoke = None;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                } else {
+                    stage
+                }
+            }
+            WorkerShortcutSmoke::AwaitLibraryRestored {
+                deadline,
+                started_at,
+                before,
+            } => {
+                let now = self.worker_shell_paints;
+                if now.menu > before.menu
+                    && now.status > before.status
+                    && now.recent > before.recent
+                    && now.recent_cards > before.recent_cards
+                    && now.library > before.library
+                    && self
+                        .full_worker
+                        .as_ref()
+                        .is_some_and(|worker| worker.engine.completed_frames() >= started_at + 3)
+                {
+                    println!("STARBYTE_FULL_LIBRARY_SHELL_SMOKE_OK menu=true recent_cards=true library=true status_metrics=true view_toggles=true");
                     self.worker_shortcut_smoke = None;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     return;
                 } else if Instant::now() >= deadline {
-                    println!("STARBYTE_FULL_LIBRARY_SHORTCUT_SMOKE_FAILED return_to_game");
+                    println!("STARBYTE_FULL_LIBRARY_SHELL_SMOKE_FAILED restored_panels {now:?}");
                     self.worker_shortcut_smoke = None;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     return;
@@ -3581,6 +3773,9 @@ impl StarbyteApp {
     /// The top panel contains only organized menus, not a wrapping toolbar.
     /// A tap of Alt toggles the entire panel, including during gameplay.
     fn draw_top_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, compact: bool) {
+        if self.worker_shortcut_smoke.is_some() {
+            self.worker_shell_paints.menu += 1;
+        }
         egui::MenuBar::new().ui(ui, |ui| {
             let file_menu = ui.menu_button("File", |ui| {
                 if ui.button("Open ROM...").clicked() {
@@ -3943,6 +4138,9 @@ impl StarbyteApp {
     }
 
     fn draw_status_bar(&mut self, ui: &mut egui::Ui) {
+        if self.worker_shortcut_smoke.is_some() {
+            self.worker_shell_paints.status += 1;
+        }
         let prefs = &self.config.ui;
         ui.horizontal(|ui| {
             let mut any = false;
@@ -3954,6 +4152,9 @@ impl StarbyteApp {
             };
             if self.play_view && self.session_snapshot().has_rom {
                 if prefs.status_fps {
+                    if self.worker_shortcut_smoke.is_some() {
+                        self.worker_shell_paints.fps += 1;
+                    }
                     separator(ui);
                     let fps = if !self.is_playing {
                         "FPS: paused".to_owned()
@@ -3988,6 +4189,9 @@ impl StarbyteApp {
                         .on_hover_text("Completed emulated frames per real second.");
                 }
                 if prefs.status_sound {
+                    if self.worker_shortcut_smoke.is_some() {
+                        self.worker_shell_paints.sound += 1;
+                    }
                     separator(ui);
                     let sound = audio_playback_status(
                         if self.full_worker.is_some() {
@@ -4023,6 +4227,9 @@ impl StarbyteApp {
                 if prefs.status_frame || prefs.status_apu_steps || prefs.status_audio_samples {
                     let snapshot = self.session_snapshot();
                     if prefs.status_frame {
+                        if self.worker_shortcut_smoke.is_some() {
+                            self.worker_shell_paints.frame += 1;
+                        }
                         separator(ui);
                         ui.label(RichText::new(format!("Frame {}", snapshot.frame)).monospace());
                     }
@@ -4072,6 +4279,9 @@ impl StarbyteApp {
     /// Horizontal cover strip for the eight latest played ROMs; hiding it
     /// frees all its vertical space without affecting the library or saves.
     fn draw_recent_games_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        if self.worker_shortcut_smoke.is_some() {
+            self.worker_shell_paints.recent += 1;
+        }
         let recent = self.config.library.recent_roms.clone();
         egui::ScrollArea::horizontal()
             .id_salt("starbyte_recent_game_covers")
@@ -4088,6 +4298,9 @@ impl StarbyteApp {
                     }
 
                     for path in recent {
+                        if self.worker_shortcut_smoke.is_some() {
+                            self.worker_shell_paints.recent_cards += 1;
+                        }
                         let index = self.library_snapshot.entries.iter().position(|entry| {
                             entry.local.as_ref().is_some_and(|local| {
                                 local.rom_path == path
@@ -5092,6 +5305,9 @@ impl StarbyteApp {
     }
 
     fn draw_library_browser(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        if self.worker_shortcut_smoke.is_some() {
+            self.worker_shell_paints.library += 1;
+        }
         let previous_query = self.search_query.clone();
         ui.horizontal(|ui| {
             if self.session_snapshot().has_rom && ui.button("Return to Game (Esc / F9)").clicked() {

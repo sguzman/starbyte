@@ -284,6 +284,9 @@ fn apply_command<Machine>(
 pub struct EmulatorScheduler<Machine: Send + 'static, Frame: Send + 'static> {
     commands: Sender<Command<Machine>>,
     frames: Arc<FrameMailbox<Frame>>,
+    /// Published by the exclusive clock thread, never guessed from egui
+    /// focus or stale FPS samples on the presentation thread.
+    clock_running: Arc<AtomicBool>,
     gui_heartbeat: Arc<GuiHeartbeat>,
     pending_posts: Arc<AtomicUsize>,
     join: Option<JoinHandle<Machine>>,
@@ -327,6 +330,8 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
         let (sender, receiver) = mpsc::channel();
         let frames = Arc::new(FrameMailbox::default());
         let publication = Arc::clone(&frames);
+        let clock_running = Arc::new(AtomicBool::new(false));
+        let worker_running = Arc::clone(&clock_running);
         let gui_heartbeat = Arc::new(GuiHeartbeat::new());
         let worker_heartbeat = Arc::clone(&gui_heartbeat);
         let pending_posts = Arc::new(AtomicUsize::new(0));
@@ -338,6 +343,7 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
                     machine,
                     receiver,
                     publication,
+                    worker_running,
                     worker_heartbeat,
                     worker_pending_posts,
                     base_interval,
@@ -349,6 +355,7 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
         Ok(Self {
             commands: sender,
             frames,
+            clock_running,
             gui_heartbeat,
             pending_posts,
             join: Some(join),
@@ -468,6 +475,13 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
         self.frames.worker_frame_stats()
     }
 
+    /// Actual effective emulation clock state after manual play, focus,
+    /// background policy and compositor heartbeat have been processed.
+    /// No synchronous transaction, UI callback or emulator borrow needed.
+    pub fn is_emulating(&self) -> bool {
+        !self.is_worker_finished() && self.clock_running.load(Ordering::Acquire)
+    }
+
     /// Shut down and return the owned machine so the UI can flush its SRAM
     /// and dispose resources in their normal order.
     pub fn shutdown(mut self) -> thread::Result<Machine> {
@@ -499,10 +513,20 @@ fn finish_on_worker<Machine>(
     machine
 }
 
+/// Reset the published running flag even if a frame producer panics.
+struct ClockRunningGuard(Arc<AtomicBool>);
+
+impl Drop for ClockRunningGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
 fn run_owned_clock<Machine, Frame>(
     mut machine: Machine,
     commands: Receiver<Command<Machine>>,
     frames: Arc<FrameMailbox<Frame>>,
+    clock_running: Arc<AtomicBool>,
     gui_heartbeat: Arc<GuiHeartbeat>,
     pending_posts: Arc<AtomicUsize>,
     base_interval: Duration,
@@ -510,6 +534,7 @@ fn run_owned_clock<Machine, Frame>(
     on_pause: &mut impl FnMut(&mut Machine),
     on_shutdown: &mut impl FnMut(&mut Machine),
 ) -> Machine {
+    let _clock_running_guard = ClockRunningGuard(Arc::clone(&clock_running));
     let mut policy = ClockPolicy::default();
     let mut was_running = false;
     let mut active_speed = policy.speed_percent;
@@ -529,6 +554,7 @@ fn run_owned_clock<Machine, Frame>(
         }
         let running = policy.playing
             && (!policy.pause_when_unfocused || (policy.focused && gui_heartbeat.is_recent()));
+        clock_running.store(running, Ordering::Release);
         if was_running && !running {
             on_pause(&mut machine);
             // A deliberate pause is not a gameplay hitch, and restarting
@@ -679,6 +705,42 @@ mod tests {
             "background-allowed emulation did not resume independently of redraws"
         );
         assert!(worker.shutdown().unwrap() >= resumed);
+    }
+
+    #[test]
+    fn effective_clock_status_tracks_focus_and_manual_pause_without_gui_guessing() {
+        let worker = EmulatorScheduler::spawn(0_u64, Duration::from_millis(4), |machine| {
+            *machine += 1;
+            Ok(*machine)
+        })
+        .unwrap();
+        assert!(!worker.is_emulating());
+        worker.gui_heartbeat();
+        worker.set_playing(true);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !worker.is_emulating() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(worker.is_emulating(), "worker did not report active gameplay");
+        worker.set_focused(false);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while worker.is_emulating() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!worker.is_emulating(), "focus pause was not published");
+        worker.set_pause_when_unfocused(false);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !worker.is_emulating() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(worker.is_emulating(), "background-allowed clock should run");
+        worker.set_playing(false);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while worker.is_emulating() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!worker.is_emulating(), "manual pause was not published");
+        worker.shutdown().unwrap();
     }
 
     #[test]

@@ -194,6 +194,24 @@ struct Args {
         hide = true
     )]
     exit_after_full_worker_replacement: bool,
+
+    /// CI only: exercise the full original library's F5, F8, F9 and Escape
+    /// handlers using synthetic egui keyboard events on native Weston.
+    #[arg(
+        long,
+        requires_all = ["demo", "native_worker_preview"],
+        conflicts_with_all = [
+            "exit_after_frames",
+            "exit_after_full_worker_saves",
+            "exit_after_full_worker_no_redraw",
+            "exit_after_full_worker_focus_pause",
+            "exit_after_full_worker_panic",
+            "exit_after_full_worker_sram",
+            "exit_after_full_worker_replacement"
+        ],
+        hide = true
+    )]
+    exit_after_full_worker_shortcuts: bool,
 }
 
 fn main() -> Result<()> {
@@ -334,6 +352,7 @@ fn main() -> Result<()> {
                 args.exit_after_full_worker_panic,
                 args.exit_after_full_worker_sram,
                 args.exit_after_full_worker_replacement,
+                args.exit_after_full_worker_shortcuts,
                 log_lines.clone(),
             )
             .map_err(|error| std::io::Error::other(error.to_string()))?;
@@ -617,6 +636,14 @@ mod speaker_cli_tests {
         ])
         .unwrap();
         assert!(replacement_check.exit_after_full_worker_replacement);
+        let shortcut_check = Args::try_parse_from([
+            "starbyte-egui",
+            "--demo",
+            "--native-worker-preview",
+            "--exit-after-full-worker-shortcuts",
+        ])
+        .unwrap();
+        assert!(shortcut_check.exit_after_full_worker_shortcuts);
         assert!(
             Args::try_parse_from(["starbyte-egui", "--demo", "--exit-after-full-worker-saves"])
                 .is_err()

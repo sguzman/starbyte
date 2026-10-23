@@ -6358,7 +6358,9 @@ impl eframe::App for StarbyteApp {
                                     screenshot_written: false,
                                     stepped_frame: None,
                                 });
-                            return;
+                            // Continue through the normal worker-backed UI
+                            // repaint scheduler; returning here would strand
+                            // the asynchronous receipts on virtual Wayland.
                         }
                         if Instant::now() >= deadline {
                             println!(

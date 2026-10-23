@@ -81,6 +81,17 @@ impl SoundSessionMode {
     }
 }
 
+/// Read-only joypad and cheat-interception counters published to user
+/// interfaces; never requires borrowing the mutable SNES bus or the
+/// emulation worker's machine from the GUI.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SessionInputDiagnostics {
+    pub host_bits: u16,
+    pub latched_bits: u16,
+    pub reading: bool,
+    pub rom_cheat_read_hits: u64,
+}
+
 /// Small, frontend-neutral menu/control state. It avoids exposing a
 /// borrowed Emulator to a renderer and can be published by a single-owner
 /// emulation worker without taking a UI-thread mutex.
@@ -420,6 +431,20 @@ impl FrontendSession {
         self.active_cheat_patches.clear();
         self.active_rom_patches.clear();
         self.emulator.set_rom_read_patches(&[]);
+    }
+
+    /// Copy the SNES joypad hardware readout for an input diagnostics
+    /// overlay. Call from the machine owner; the renderer consumes only the
+    /// resulting primitive fields.
+    #[must_use]
+    pub fn input_diagnostics(&self) -> SessionInputDiagnostics {
+        let (host_bits, latched_bits, reading) = self.emulator.joypad_status();
+        SessionInputDiagnostics {
+            host_bits,
+            latched_bits,
+            reading,
+            rom_cheat_read_hits: self.rom_cheat_read_hits(),
+        }
     }
 
     /// Number of ROM reads observed using the current Game Genie patches.
@@ -1298,5 +1323,10 @@ mod session_controls_snapshot_tests {
         assert_eq!(summary.state_slots, [false; 3]);
         assert_eq!(summary.sound_mode, SoundSessionMode::Compatibility);
         assert_eq!(summary.rom_cheat_read_hits, 0);
+        let input = session.input_diagnostics();
+        assert_eq!(input.host_bits, 0);
+        assert_eq!(input.latched_bits, 0);
+        assert!(!input.reading);
+        assert_eq!(input.rom_cheat_read_hits, 0);
     }
 }

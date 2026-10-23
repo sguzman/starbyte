@@ -1,8 +1,37 @@
 # Emulation scheduler migration
 
-**Status: in progress. Commit [`729aab9`](https://github.com/sguzman/starbyte/commit/729aab95024fb79a138a9cb4d1f93fb81bf0c43d) passed [CI run 39990152770](https://github.com/sguzman/starbyte/actions/runs/39990152770): Linux, Windows, lint/Clippy and native Weston original-window worker playback, save/restore, screenshot, paused single-step and a two-second no-egui-callback interval (121 SNES frames). Full default-app ownership transfer and physical Hyprland/audio validation remain outstanding.**
+**Status: in progress. Commit [`28fb308`](https://github.com/sguzman/starbyte/commit/28fb308244a0a5f0b89923b2d934ef7d95038ba7) passed [CI run 39992289325](https://github.com/sguzman/starbyte/actions/runs/39992289325): Linux, Windows, lint/Clippy, native Weston original-window worker playback, save/restore, screenshot, 60 contiguous paused frame steps, and a compositor-independent no-egui-callback interval. Full default-app ownership transfer and physical Hyprland/audio validation remain outstanding.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
+
+## Verified 60-step and save-generation checkpoint — 2026-10-23
+
+Commit [`93d3720`](https://github.com/sguzman/starbyte/commit/93d3720b4abbb4d6720e5ef381dc66e0fff9d152)
+passed all jobs in [CI 39991451457](https://github.com/sguzman/starbyte/actions/runs/39991451457).
+The original library-window Weston acceptance advanced **60 contiguous, worker-owned,
+paused steps**, checking each successive frame number and the restored still
+texture before reporting
+`STARBYTE_FULL_LIBRARY_SAVE_SMOKE_OK frame=82 slot=1 quick=true screenshot=true step_frames=60`.
+The independent no-egui-callback test separately advanced 122 frames in two
+seconds. This is native virtual-Wayland evidence, not physical Hyprland validation.
+
+Commit [`28fb308`](https://github.com/sguzman/starbyte/commit/28fb308244a0a5f0b89923b2d934ef7d95038ba7)
+also passed Linux, Windows and lint in
+[CI 39992289325](https://github.com/sguzman/starbyte/actions/runs/39992289325).
+A save/restore receipt is now tagged with the **last successfully installed**
+worker cartridge generation, not merely its ROM path. An acknowledgement from
+an older cartridge or older sound/save namespace cannot repaint a newer worker
+session, even when the path is the same. A failed replacement retains the active
+generation, so receipts for the surviving original cartridge remain valid.
+The generation guard has focused unit coverage and the full suite plus native
+Weston passes; a deliberately interleaved same-ROM replacement/saving
+**native race test is not yet available**.
+
+The established player remains the default; the complete-window worker path
+is still opt-in. The existing roadmap source counts remain A 7/8 (88%),
+B 15/18 (83%), P 18/20 (90%), C 8/16 (50%) and D 11/15 (73%). Neither
+virtual Wayland acceptance nor 60-frame stepping establishes real device
+audio, physical Hyprland focus changes, or default-runtime cutover.
 
 ## Verified original-library worker parity checkpoint — 2026-10-23
 

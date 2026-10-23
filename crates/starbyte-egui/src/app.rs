@@ -1604,7 +1604,8 @@ impl StarbyteApp {
                             error_reported, ..
                         }) => *error_reported = true,
                         Some(WorkerReplacementSmoke::AwaitSupersededInstall {
-                            newer_error_reported, ..
+                            newer_error_reported,
+                            ..
                         }) => *newer_error_reported = true,
                         _ => {}
                     }
@@ -6587,6 +6588,12 @@ impl eframe::App for StarbyteApp {
                             let installed_job = self.next_job_id;
                             self.next_job_id += 1;
                             self.latest_rom_job_id = Some(installed_job);
+                            self.jobs.push(JobRecord {
+                                id: installed_job,
+                                label: "Load Game".to_owned(),
+                                state: "queued",
+                                detail: "Queued".to_owned(),
+                            });
                             let started_at = worker.engine.completed_frames();
                             self.queue_full_worker_launch(
                                 installed_job,
@@ -6601,6 +6608,12 @@ impl eframe::App for StarbyteApp {
                             let newer_job = self.next_job_id;
                             self.next_job_id += 1;
                             self.latest_rom_job_id = Some(newer_job);
+                            self.jobs.push(JobRecord {
+                                id: newer_job,
+                                label: "Load Game".to_owned(),
+                                state: "queued",
+                                detail: "Queued".to_owned(),
+                            });
                             let missing = self
                                 .cache_root
                                 .join(format!("absent-worker-superseded-{newer_job}.sfc"));

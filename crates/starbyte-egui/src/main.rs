@@ -291,11 +291,45 @@ fn run_scheduler_smoke(assets: AssetConfig, rom: PathBuf) -> Result<()> {
         "quick-load restored frame {} instead of saved frame {saved}",
         restored.status.frame
     );
+    // A bad replacement ROM must not eject the currently loaded game or
+    // alter its save namespace. Check both failure acknowledgment and state.
+    let before_failed_load = worker.read_status().map_err(anyhow::Error::msg)?;
+    let invalid_rom = rom.with_extension("intentionally-missing-for-smoke.sfc");
+    anyhow::ensure!(
+        !invalid_rom.exists(),
+        "scheduler test fixture unexpectedly exists: {}",
+        invalid_rom.display()
+    );
+    let failed_load = worker
+        .queue_load_game_with_frame(
+            invalid_rom,
+            starbyte_frontend::SoundSessionMode::Persistent,
+        )
+        .map_err(anyhow::Error::msg)?;
+    let result = failed_load
+        .recv_timeout(Duration::from_secs(5))
+        .map_err(|error| anyhow::anyhow!("missing ROM load response: {error}"))?;
+    anyhow::ensure!(result.is_err(), "invalid cartridge unexpectedly loaded");
+    let after_failed_load = worker.read_status().map_err(anyhow::Error::msg)?;
+    anyhow::ensure!(
+        after_failed_load.has_rom
+            && after_failed_load.frame == before_failed_load.frame
+            && after_failed_load.rom_path == before_failed_load.rom_path,
+        "failed ROM load changed the active cartridge or its frame"
+    );
+
     let rgba = restored
         .rgba
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("restored still image was not published"))?;
-    let screenshot = rom.with_extension("scheduler-smoke.png");
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let screenshot = std::env::temp_dir().join(format!(
+        "starbyte-scheduler-smoke-{}-{timestamp}.png",
+        std::process::id()
+    ));
     crate::app::write_png_screenshot(
         &screenshot,
         rgba,

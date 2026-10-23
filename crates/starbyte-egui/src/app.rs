@@ -1562,7 +1562,11 @@ impl StarbyteApp {
                         self.loaded_game_id = indexed_game_id_for_loaded_rom(
                             &self.library_snapshot.entries,
                             loaded_path.as_path(),
-                            self.config.library.recent_roms.first().map(PathBuf::as_path),
+                            self.config
+                                .library
+                                .recent_roms
+                                .first()
+                                .map(PathBuf::as_path),
                         );
                     }
                     self.update_snapshot_cheat_flags();

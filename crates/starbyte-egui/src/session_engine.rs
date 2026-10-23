@@ -1016,7 +1016,9 @@ mod tests {
         };
         let mut owner = OwnedSession::create(assets.clone()).unwrap();
         owner.set_audio(false, true, 0.0);
-        owner.load_rom(&rom_path, SoundSessionMode::Persistent).unwrap();
+        owner
+            .load_rom(&rom_path, SoundSessionMode::Persistent)
+            .unwrap();
         let (worker, _, _) = owner.spawn_with_ports().unwrap();
         let applied = worker
             .queue_update_cheats(vec![CheatEntry {
@@ -1057,7 +1059,10 @@ mod tests {
                     .ok_or_else(|| "test cartridge has no writable battery SRAM".to_owned())
             })
             .unwrap();
-        assert!(!save_path.exists(), "test must exercise shutdown's first SRAM flush");
+        assert!(
+            !save_path.exists(),
+            "test must exercise shutdown's first SRAM flush"
+        );
         let returned = worker.shutdown().unwrap();
         assert!(returned.shutdown_finalized);
         assert_eq!(std::fs::read(&save_path).unwrap()[0], 0x5A);

@@ -713,9 +713,18 @@ enum WorkerSaveSmokeStage {
 enum WorkerFocusPauseSmoke {
     WaitingForGame,
     WaitingForPause,
-    Gap { deadline: Instant, at_start: u64 },
-    Resuming { at_start: u64, paused_frames: u64 },
-    ManualPauseWaiting { paused_frames: u64, resumed_frames: u64 },
+    Gap {
+        deadline: Instant,
+        at_start: u64,
+    },
+    Resuming {
+        at_start: u64,
+        paused_frames: u64,
+    },
+    ManualPauseWaiting {
+        paused_frames: u64,
+        resumed_frames: u64,
+    },
     ManualGap {
         deadline: Instant,
         at_start: u64,

@@ -1719,12 +1719,9 @@ impl StarbyteApp {
                 );
                 self.frame_performance
                     .record_texture_upload(uploaded.elapsed());
-                let pcm = &self.session.frame_audio_samples();
-                self.last_audio_pairs = pcm.len() / 2;
-                self.last_audio_nonzero_pairs = pcm
-                    .chunks_exact(2)
-                    .filter(|pair| pair[0] != 0 || pair[1] != 0)
-                    .count();
+                let pcm = self.session.audio_frame_metrics();
+                self.last_audio_pairs = pcm.stereo_pairs;
+                self.last_audio_nonzero_pairs = pcm.nonzero_pairs;
                 self.audio_nonzero_pairs_total = self
                     .audio_nonzero_pairs_total
                     .saturating_add(self.last_audio_nonzero_pairs as u64);

@@ -8,7 +8,7 @@ use std::{
     path::PathBuf,
     sync::mpsc::{self, Receiver, TryRecvError},
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::Result;
@@ -1048,7 +1048,10 @@ impl eframe::App for ThreadedPreviewApp {
                 ctx.request_repaint_after(deadline - now);
                 return;
             }
-            let advanced = self.engine.completed_frames().saturating_sub(earlier_frames);
+            let advanced = self
+                .engine
+                .completed_frames()
+                .saturating_sub(earlier_frames);
             if advanced >= 45 {
                 println!("STARBYTE_NO_REPAINT_SMOKE_OK advanced_frames={advanced}");
             } else {

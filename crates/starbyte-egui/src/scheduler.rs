@@ -9,9 +9,9 @@
 use std::{
     collections::VecDeque,
     sync::{
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError},
-        Arc, Mutex,
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -55,9 +55,11 @@ impl WorkerRateWindow {
     }
 
     fn prune(&mut self, now: Instant) {
-        while self.completed.front().is_some_and(|first| {
-            now.saturating_duration_since(*first) > Duration::from_secs(2)
-        }) {
+        while self
+            .completed
+            .front()
+            .is_some_and(|first| now.saturating_duration_since(*first) > Duration::from_secs(2))
+        {
             self.completed.pop_front();
         }
     }
@@ -67,9 +69,8 @@ impl WorkerRateWindow {
         let fps = match (self.completed.front(), self.completed.back()) {
             (Some(first), Some(last)) if self.completed.len() > 1 => {
                 let elapsed = last.saturating_duration_since(*first);
-                (elapsed >= Duration::from_millis(250)).then(|| {
-                    (self.completed.len() - 1) as f32 / elapsed.as_secs_f32()
-                })
+                (elapsed >= Duration::from_millis(250))
+                    .then(|| (self.completed.len() - 1) as f32 / elapsed.as_secs_f32())
             }
             _ => None,
         };
@@ -117,8 +118,7 @@ impl GuiHeartbeat {
 
     fn is_recent_at(&self, now_ms: u64) -> bool {
         !self.enabled.load(Ordering::Acquire)
-            || now_ms.saturating_sub(self.last_ms.load(Ordering::Acquire))
-                <= Self::STALE_AFTER_MS
+            || now_ms.saturating_sub(self.last_ms.load(Ordering::Acquire)) <= Self::STALE_AFTER_MS
     }
 }
 
@@ -145,7 +145,10 @@ impl<Frame> Default for FrameMailbox<Frame> {
 
 impl<Frame> FrameMailbox<Frame> {
     fn push(&self, frame: Frame) {
-        let mut slot = self.latest.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut slot = self
+            .latest
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         if slot.replace(frame).is_some() {
             self.replaced.fetch_add(1, Ordering::Relaxed);
         }
@@ -180,13 +183,19 @@ impl<Frame> FrameMailbox<Frame> {
     }
 
     fn suspend_timing_window(&self) {
-        let mut rate = self.rate.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut rate = self
+            .rate
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         rate.completed.clear();
         rate.last_gap_ms = 0.0;
     }
 
     fn record_error(&self, error: String) {
-        let mut slot = self.fault.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut slot = self
+            .fault
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         *slot = Some(error);
     }
 
@@ -373,10 +382,7 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
 
     /// One-way state/input updates must never block a menu or gamepad read.
     /// The worker applies each update before its next frame.
-    pub fn post(
-        &self,
-        action: impl FnOnce(&mut Machine) + Send + 'static,
-    ) -> Result<(), String> {
+    pub fn post(&self, action: impl FnOnce(&mut Machine) + Send + 'static) -> Result<(), String> {
         self.commands
             .send(Command::Post(Box::new(action)))
             .map_err(|_| "emulation worker is not running".to_owned())
@@ -499,8 +505,7 @@ fn run_owned_clock<Machine, Frame>(
             }
         }
         let running = policy.playing
-            && (!policy.pause_when_unfocused
-                || (policy.focused && gui_heartbeat.is_recent()));
+            && (!policy.pause_when_unfocused || (policy.focused && gui_heartbeat.is_recent()));
         if was_running && !running {
             on_pause(&mut machine);
             // A deliberate pause is not a gameplay hitch, and restarting
@@ -516,7 +521,9 @@ fn run_owned_clock<Machine, Frame>(
                         return finish_on_worker(machine, on_shutdown);
                     }
                 }
-                Err(RecvTimeoutError::Disconnected) => return finish_on_worker(machine, on_shutdown),
+                Err(RecvTimeoutError::Disconnected) => {
+                    return finish_on_worker(machine, on_shutdown);
+                }
                 Err(RecvTimeoutError::Timeout) => {}
             }
             continue;
@@ -545,7 +552,9 @@ fn run_owned_clock<Machine, Frame>(
                         return finish_on_worker(machine, on_shutdown);
                     }
                 }
-                Err(RecvTimeoutError::Disconnected) => return finish_on_worker(machine, on_shutdown),
+                Err(RecvTimeoutError::Disconnected) => {
+                    return finish_on_worker(machine, on_shutdown);
+                }
                 Err(RecvTimeoutError::Timeout) => {}
             }
             continue;
@@ -583,7 +592,10 @@ mod tests {
         assert!(policy.should_run());
         assert_eq!(policy.interval(NTSC_FRAME_INTERVAL), NTSC_FRAME_INTERVAL);
         policy.speed_percent = 200;
-        assert_eq!(policy.interval(Duration::from_millis(20)), Duration::from_millis(10));
+        assert_eq!(
+            policy.interval(Duration::from_millis(20)),
+            Duration::from_millis(10)
+        );
         policy.playing = false;
         assert!(!policy.should_run());
     }
@@ -603,13 +615,15 @@ mod tests {
             focused: true,
             ..Default::default()
         };
-        assert!(!(!policy.pause_when_unfocused
-            || (policy.focused
-                && beat.is_recent_at(last + GuiHeartbeat::STALE_AFTER_MS + 1))));
+        assert!(
+            !(!policy.pause_when_unfocused
+                || (policy.focused && beat.is_recent_at(last + GuiHeartbeat::STALE_AFTER_MS + 1)))
+        );
         policy.pause_when_unfocused = false;
-        assert!(!policy.pause_when_unfocused
-            || (policy.focused
-                && beat.is_recent_at(last + GuiHeartbeat::STALE_AFTER_MS + 1)));
+        assert!(
+            !policy.pause_when_unfocused
+                || (policy.focused && beat.is_recent_at(last + GuiHeartbeat::STALE_AFTER_MS + 1))
+        );
     }
 
     #[test]
@@ -626,14 +640,10 @@ mod tests {
 
     #[test]
     fn worker_advances_without_any_ui_repaint() {
-        let worker = EmulatorScheduler::spawn(
-            0_u64,
-            Duration::from_millis(2),
-            |machine| {
-                *machine += 1;
-                Ok(*machine)
-            },
-        )
+        let worker = EmulatorScheduler::spawn(0_u64, Duration::from_millis(2), |machine| {
+            *machine += 1;
+            Ok(*machine)
+        })
         .unwrap();
         worker.set_playing(true);
         std::thread::sleep(Duration::from_millis(45));
@@ -646,9 +656,15 @@ mod tests {
 
     #[test]
     fn pause_callback_runs_only_on_actual_suspend_transitions() {
-        struct Counts { ticks: u32, pauses: u32 }
+        struct Counts {
+            ticks: u32,
+            pauses: u32,
+        }
         let worker = EmulatorScheduler::spawn_with_pause_hook(
-            Counts { ticks: 0, pauses: 0 },
+            Counts {
+                ticks: 0,
+                pauses: 0,
+            },
             Duration::from_millis(2),
             |machine| {
                 machine.ticks += 1;
@@ -681,12 +697,9 @@ mod tests {
 
     #[test]
     fn worker_transactions_and_async_input_are_ordered() {
-        let worker = EmulatorScheduler::spawn(
-            0_i32,
-            Duration::from_millis(2),
-            |machine| Ok(*machine),
-        )
-        .unwrap();
+        let worker =
+            EmulatorScheduler::spawn(0_i32, Duration::from_millis(2), |machine| Ok(*machine))
+                .unwrap();
         worker.post(|machine| *machine = 21).unwrap();
         worker.post(|machine| *machine *= 2).unwrap();
         assert_eq!(worker.transact(|machine| Ok(*machine)).unwrap(), 42);
@@ -695,20 +708,21 @@ mod tests {
 
     #[test]
     fn deferred_transactions_execute_in_order_without_gui_waiting() {
-        let worker = EmulatorScheduler::spawn(
-            0_i32,
-            Duration::from_millis(2),
-            |machine| Ok(*machine),
-        )
-        .unwrap();
-        let a = worker.submit_transaction(|machine| {
-            *machine = 10;
-            Ok(*machine)
-        }).unwrap();
-        let b = worker.submit_transaction(|machine| {
-            *machine += 7;
-            Ok(*machine)
-        }).unwrap();
+        let worker =
+            EmulatorScheduler::spawn(0_i32, Duration::from_millis(2), |machine| Ok(*machine))
+                .unwrap();
+        let a = worker
+            .submit_transaction(|machine| {
+                *machine = 10;
+                Ok(*machine)
+            })
+            .unwrap();
+        let b = worker
+            .submit_transaction(|machine| {
+                *machine += 7;
+                Ok(*machine)
+            })
+            .unwrap();
         assert_eq!(a.recv_timeout(Duration::from_secs(1)).unwrap().unwrap(), 10);
         assert_eq!(b.recv_timeout(Duration::from_secs(1)).unwrap().unwrap(), 17);
         assert_eq!(worker.shutdown().unwrap(), 17);
@@ -719,9 +733,7 @@ mod tests {
         let worker = EmulatorScheduler::spawn(
             0_u8,
             Duration::from_millis(2),
-            |_machine| -> Result<u8, String> {
-                panic!("synthetic fatal worker panic")
-            },
+            |_machine| -> Result<u8, String> { panic!("synthetic fatal worker panic") },
         )
         .unwrap();
         worker.set_playing(true);
@@ -754,14 +766,10 @@ mod tests {
 
     #[test]
     fn pending_command_burst_does_not_starve_emulation_ticks() {
-        let worker = EmulatorScheduler::spawn(
-            0_u64,
-            Duration::from_millis(1),
-            |machine| {
-                *machine += 1;
-                Ok(*machine)
-            },
-        )
+        let worker = EmulatorScheduler::spawn(0_u64, Duration::from_millis(1), |machine| {
+            *machine += 1;
+            Ok(*machine)
+        })
         .unwrap();
         worker.set_playing(true);
         for _ in 0..5_000 {
@@ -790,40 +798,41 @@ mod tests {
             |_| Ok(()),
             |_| {},
             |machine| {
-                machine.shutdown_thread = std::thread::current()
-                    .name()
-                    .map(str::to_owned);
+                machine.shutdown_thread = std::thread::current().name().map(str::to_owned);
             },
         )
         .unwrap();
         let returned = worker.shutdown().unwrap();
-        assert_eq!(returned.shutdown_thread.as_deref(), Some("starbyte-emulation"));
+        assert_eq!(
+            returned.shutdown_thread.as_deref(),
+            Some("starbyte-emulation")
+        );
     }
 
     #[test]
     fn worker_commands_are_serialized_with_frames() {
-        let worker = EmulatorScheduler::spawn(
-            0_u64,
-            Duration::from_millis(5),
-            |machine| {
-                *machine += 1;
-                Ok(*machine)
-            },
-        )
+        let worker = EmulatorScheduler::spawn(0_u64, Duration::from_millis(5), |machine| {
+            *machine += 1;
+            Ok(*machine)
+        })
         .unwrap();
-        worker.invoke(|machine| {
-            *machine = 40;
-            Ok(())
-        }).unwrap();
+        worker
+            .invoke(|machine| {
+                *machine = 40;
+                Ok(())
+            })
+            .unwrap();
         worker.set_playing(true);
         std::thread::sleep(Duration::from_millis(15));
         worker.set_playing(false);
-        worker.invoke(|machine| {
-            if *machine < 40 {
-                return Err("counter went backwards".to_owned());
-            }
-            Ok(())
-        }).unwrap();
+        worker
+            .invoke(|machine| {
+                if *machine < 40 {
+                    return Err("counter went backwards".to_owned());
+                }
+                Ok(())
+            })
+            .unwrap();
         assert!(worker.shutdown().unwrap() >= 40);
     }
 }

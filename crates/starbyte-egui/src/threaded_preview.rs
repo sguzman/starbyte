@@ -228,12 +228,16 @@ impl ThreadedPreviewApp {
         // Direct files and ZIPs share the library's dedicated preparation
         // lane. Reuse indexed cheats for an already-scanned cartridge.
         let matching = self.library_snapshot.as_ref().and_then(|snapshot| {
-            snapshot.entries.iter().find(|entry| {
-                entry.local.as_ref().is_some_and(|local| {
-                    local.rom_path == path
-                        || local.extracted_cache_path.as_deref() == Some(path.as_path())
+            snapshot
+                .entries
+                .iter()
+                .find(|entry| {
+                    entry.local.as_ref().is_some_and(|local| {
+                        local.rom_path == path
+                            || local.extracted_cache_path.as_deref() == Some(path.as_path())
+                    })
                 })
-            }).cloned()
+                .cloned()
         });
         self.queue_rom_preparation(
             WorkerCommandKind::MaterializePath {
@@ -654,14 +658,8 @@ mod pitch_mode_tests {
         };
         let mut config = RuntimeConfig::default();
         config.audio.enabled = false;
-        let mut app = ThreadedPreviewApp::new(
-            assets,
-            &config,
-            Some(rom.clone()),
-            None,
-            true,
-            false,
-        ).unwrap();
+        let mut app =
+            ThreadedPreviewApp::new(assets, &config, Some(rom.clone()), None, true, false).unwrap();
         // Constructor never borrowed an emulator to load the cartridge and
         // never stepped a frame on the window thread.
         assert!(!app.controls.session.has_rom);

@@ -1,6 +1,6 @@
 # Emulation scheduler migration
 
-**Status: in progress. Worker and native Weston checks passed on code commit `d0254a7`; full application owner transfer and physical Hyprland tests remain outstanding.**
+**Status: in progress. Linux/Windows CI, worker scheduling, native Weston gameplay and no-ROM threaded-library checks passed on code commit `adddfa9` (run 39955310386). Full application owner transfer and physical Hyprland tests remain outstanding.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
 
@@ -45,7 +45,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [ ] 📊 Move current emulation telemetry (FPS, frame gaps, overlays) to worker-produced truth.
 - [ ] 🎚️ Preserve every current audio speed/pitch control and its per-mode behavior through the handoff.
 
-## Milestone P: opt-in threaded preview parity — 16/18 source tasks (89%)
+## Milestone P: opt-in threaded preview parity — 18/20 source tasks (90%)
 
 - [x] 🖼️ Display coalesced worker frames using egui textures without advancing the emulator from UI redraws.
 - [x] 🎮 Reuse configured twelve-button keyboard bindings and support several gamepads with analog D-pad emulation.
@@ -62,6 +62,8 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [x] 🎮 Show worker-produced hardware input and cheat-interception diagnostics.
 - [x] ⏩ Use Tab for temporary configured fast-forward speed, with transition-only audio/scheduler updates.
 - [x] 🛡️ Release stale gamepad holds on lost compositor focus and expose a worker-owned clear-cheats action.
+- [x] 📚 Start the opt-in preview with no cartridge, browse installed games from the real asynchronous library index, and launch each selected ROM/ZIP plus matching cheats on the sole emulation owner.
+- [x] 🔎 Search the installed library while rendering only visible rows; disable save/pause controls until a cartridge is installed.
 - [ ] 🎼 Verify actual background audio quality and speaker/device recovery on Hyprland.
 - [ ] 🧪 Verify preview menus, gamepads, screenshots and save slots natively on Hyprland.
 - [x] ✅ Confirm format, compile, Clippy and native Weston preview smoke at code commit `d0254a7`.
@@ -89,7 +91,7 @@ complete Starbyte library application.
 - [ ] 🧹 Complete full-application orderly shutdown handoff: stop clock, flush SRAM, clear audio and join exactly once (worker finalizer implemented and covered, not yet installed in normal StarbyteApp).
 - [ ] 🚀 Make the worker the default runtime only after passing acceptance gates.
 
-## Milestone D: validation — 7/11 checkpoints (64%; code commit `d0254a7` CI green)
+## Milestone D: validation — 9/13 checkpoints (69%; code commit `adddfa9` CI green on Linux and Windows)
 
 - [x] 🧪 Add a display-server-free, real built-in ROM smoke path (`--demo --scheduler-smoke`) to CI.
 - [x] 🖥️ Add an opt-in `--threaded-preview` native egui shell and Weston smoke that requires a rendered texture.
@@ -98,6 +100,8 @@ complete Starbyte library application.
 - [x] 🔗 Add a compositor-free integration test from an installed library entry through ROM materialization, exclusive worker launch, unfocused gameplay frames and a worker-owned quick save.
 - [x] ✅ Confirm Linux CI format/Clippy and Linux+Windows tests pass on `d0254a7`.
 - [x] 🟩 Confirm the headless scheduler smoke and both native Weston smokes complete on `d0254a7`.
+- [x] 🎮 Test the opt-in library selection coordinator from installed entry through asynchronous ROM preparation, owned-session launch, still-frame upload and compositor-independent frame progress (Linux test run on `adddfa9`).
+- [x] 🪟 Add and pass a dedicated native Weston smoke for `--threaded-preview --exit-after-library-scan` without a startup ROM, with a real indexed built-in SNES demo file (Linux CI run 39955310386).
 - [ ] 🪟 Run Wayland window visible/focused and confirm accurate ~60.1 emulated FPS.
 - [ ] 🌌 Switch to another Hyprland workspace; confirm continued emulation and sound when allowed.
 - [ ] 💤 Repeat with background pause checked; verify true stop, no catch-up burst and clean resume.
@@ -250,3 +254,36 @@ background scheduler smoke and native Weston legacy + threaded-preview checks.
 This verifies the new worker-side integrations and existing opt-in native
 preview under CI, but does **not** establish real Hyprland focus/background
 audio behavior or worker-backed execution in the full `StarbyteApp`.
+
+## 2026-10-23 opt-in library bridge
+
+The threaded preview can now boot without a cartridge (`--threaded-preview`),
+scan the same configured installed-library sources as Starbyte's regular UI
+using `AppWorker`, display a filtered, virtualized list, and pass a selected
+entry's typed ROM/cheat launch request directly to the exclusive emulation
+worker. Normal `StarbyteApp` still owns its own `FrontendSession`: this
+feature exercises a working library-to-worker boundary but does **not**
+fulfill Milestone C's main-UI handoff. The `--exit-after-library-scan` flag
+is reserved for bounded native Wayland CI acceptance, and is not a normal
+player option. Native Hyprland scheduling, audio quality, and complete GUI
+feature parity remain mandatory before default-runtime migration.
+
+## Latest worker-owned preview startup change
+
+Commit [`407f30f`](https://github.com/sguzman/starbyte/commit/407f30f637929309683e2a31bcde4b94ff87596f)
+now queues preview startup `--rom` and direct File → Open ROM requests
+through the dedicated ROM preparation worker, including ZIP handling, before
+submitting the typed launch to the emulation owner. The native UI constructor
+no longer synchronously installs a cartridge or loads its SRAM. This also adds
+two regression tests for startup and direct-file preparation. **These new
+source changes are pending their own CI result**; the verified expanded CI
+checkpoint below applies specifically to the preceding `adddfa9` SHA.
+
+## Verified expanded CI checkpoint (2026-10-23)
+
+[Run 39955310386](https://github.com/sguzman/starbyte/actions/runs/39955310386)
+for `adddfa9` passed format, Clippy, Linux/Windows tests and benchmark
+compilation, independent-scheduler smoke, legacy and threaded-preview native
+Weston smokes, and the no-startup-cartridge indexed-library Weston smoke.
+This does **not** prove physical Hyprland off-workspace playback, speaker
+quality or full original library-GUI parity/default readiness.

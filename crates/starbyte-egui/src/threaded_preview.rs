@@ -59,6 +59,7 @@ pub struct ThreadedPreviewApp {
     speed_percent: u16,
     active_speed_percent: u16,
     fast_forward_percent: u16,
+    fast_forward_active: bool,
     pitch_mode: AudioPitchMode,
     pitch_percent: u16,
     audio_enabled: bool,
@@ -124,6 +125,7 @@ impl ThreadedPreviewApp {
             speed_percent,
             active_speed_percent: speed_percent,
             fast_forward_percent: config.video.fast_forward_speed_percent.clamp(100, 400),
+            fast_forward_active: false,
             pitch_mode: config.audio.pitch_mode,
             pitch_percent: config.audio.pitch_percent,
             audio_enabled: config.audio.enabled,
@@ -390,6 +392,7 @@ impl eframe::App for ThreadedPreviewApp {
         let fast_forwarding = focused
             && !ctx.wants_keyboard_input()
             && ctx.input(|input| input.key_down(egui::Key::Tab));
+        self.fast_forward_active = fast_forwarding;
         let target_speed = if fast_forwarding {
             self.fast_forward_percent
         } else {
@@ -597,8 +600,7 @@ impl eframe::App for ThreadedPreviewApp {
                         {
                             // Preserve held Tab fast-forward if the user
                             // adjusts the normal speed from the menu.
-                            let active = self.active_speed_percent;
-                            if active != self.fast_forward_percent {
+                            if !self.fast_forward_active {
                                 self.apply_playback(speed, false);
                             }
                             ui.close();

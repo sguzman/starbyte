@@ -5831,6 +5831,9 @@ mod playback_tests {
 
     #[test]
     fn worker_playback_tracks_pitch_changes_without_speed_changes() {
+        use super::{audio_pitch_factor, worker_playback_update_needed};
+        use starbyte_core::manifest::AudioPitchMode;
+
         assert!(worker_playback_update_needed(None, (100, 1.0)));
         assert!(!worker_playback_update_needed(Some((100, 1.0)), (100, 1.0)));
         assert!(worker_playback_update_needed(Some((100, 1.0)), (100, 1.25)));

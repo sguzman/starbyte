@@ -1271,8 +1271,12 @@ impl StarbyteApp {
                 Err(error) => {
                     self.update_job(pending.job_id, "Load Game", "failed", &error);
                     self.status_line = format!("Could not install ROM: {error}");
-                    // The existing cartridge, its saves and its worker
-                    // clock remain untouched when replacement fails.
+                    // Failed installation leaves the previous cartridge
+                    // active. A library refresh might have deferred its
+                    // cheat changes while the replacement was pending.
+                    // Reapply them to the surviving owner, never to a
+                    // cartridge that failed to install.
+                    self.sync_loaded_game_cheats();
                 }
             }
         }

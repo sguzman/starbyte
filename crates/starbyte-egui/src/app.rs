@@ -5506,6 +5506,68 @@ mod session_view_bridge_tests {
     }
 
     #[test]
+    fn same_rom_sound_mode_replacement_keeps_old_save_receipt_out_of_new_view() {
+        let dir = tempfile::tempdir().unwrap();
+        let rom = dir.path().join("same-rom-new-session.sfc");
+        std::fs::write(&rom, starbyte_core::testing::demo::demo_rom_bytes()).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(dir.path().join("saves")),
+            state_dir: Some(dir.path().join("states")),
+            cache_dir: Some(dir.path().join("cache")),
+            config_path: None,
+        };
+        let mut owner = OwnedSession::create(assets).unwrap();
+        owner.set_audio(false, true, 0.0);
+        let (worker, _, _) = owner.spawn_with_ports().unwrap();
+        let first = worker
+            .queue_launch_with_state(SessionLaunchRequest {
+                rom_path: rom.clone(),
+                sound_mode: SoundSessionMode::Persistent,
+                cheats: Vec::new(),
+            })
+            .unwrap()
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.controls.sound_mode, SoundSessionMode::Persistent);
+
+        // The exclusive owner serializes the old session's quick save
+        // before the same ROM is reinstalled with a different namespace.
+        // Both snapshots have the SAME path; path-only UI filtering fails.
+        let old_save = worker
+            .queue_save_action_with_frame(SessionSaveAction::QuickSave)
+            .unwrap();
+        let new_launch = worker
+            .queue_launch_with_state(SessionLaunchRequest {
+                rom_path: rom.clone(),
+                sound_mode: SoundSessionMode::Compatibility,
+                cheats: Vec::new(),
+            })
+            .unwrap();
+        let old_receipt = old_save
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        let replacement = new_launch
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            old_receipt.controls.session.rom_path,
+            replacement.controls.session.rom_path
+        );
+        assert_eq!(old_receipt.controls.sound_mode, SoundSessionMode::Persistent);
+        assert_eq!(
+            replacement.controls.sound_mode,
+            SoundSessionMode::Compatibility
+        );
+        assert!(!worker_save_receipt_is_current(Some(1), Some(2)));
+        assert!(worker_save_receipt_is_current(Some(2), Some(2)));
+        worker.shutdown().unwrap();
+    }
+
+    #[test]
     fn full_library_read_only_views_can_consume_worker_state_without_owner_borrow() {
         let dir = tempfile::tempdir().unwrap();
         let rom = dir.path().join("full-ui-session-view.sfc");

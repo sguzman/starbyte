@@ -368,8 +368,8 @@ mod routing_tests {
     use crate::session_engine::OwnedSession;
     use starbyte_core::manifest::{AssetConfig, RuntimeConfig};
     use starbyte_frontend::{
-        CheatEntry, InstalledStatus, LibraryEntry, LibraryFilter, LocalRomInfo,
-        LocalRomSourceKind, SessionSaveAction, SoundSessionMode,
+        CheatEntry, InstalledStatus, LibraryEntry, LibraryFilter, LocalRomInfo, LocalRomSourceKind,
+        SessionSaveAction, SoundSessionMode,
     };
     use std::{
         path::PathBuf,
@@ -470,14 +470,16 @@ mod routing_tests {
             replies.first(),
             Some(WorkerEvent::JobSuperseded { job_id: 1, .. })
         ));
-        assert!(replies.iter().any(|event| matches!(
-            event,
-            WorkerEvent::DirectRomReady { job_id: 2, .. }
-        )));
-        assert!(!replies.iter().any(|event| matches!(
-            event,
-            WorkerEvent::DirectRomReady { job_id: 1, .. }
-        )));
+        assert!(
+            replies
+                .iter()
+                .any(|event| matches!(event, WorkerEvent::DirectRomReady { job_id: 2, .. }))
+        );
+        assert!(
+            !replies
+                .iter()
+                .any(|event| matches!(event, WorkerEvent::DirectRomReady { job_id: 1, .. }))
+        );
     }
 
     #[test]
@@ -528,12 +530,13 @@ mod routing_tests {
         });
         let deadline = Instant::now() + Duration::from_secs(5);
         let request = loop {
-            assert!(Instant::now() < deadline, "library worker did not prepare a cartridge");
+            assert!(
+                Instant::now() < deadline,
+                "library worker did not prepare a cartridge"
+            );
             match library.try_recv() {
                 Some(WorkerEvent::RomReady {
-                    job_id: 1,
-                    request,
-                    ..
+                    job_id: 1, request, ..
                 }) => break request,
                 Some(WorkerEvent::JobFailed { error, .. }) => panic!("library error: {error}"),
                 _ => std::thread::sleep(Duration::from_millis(10)),
@@ -555,7 +558,10 @@ mod routing_tests {
         assert!(response.controls.session.has_rom);
         assert!(!response.controls.has_quick_save);
         assert_eq!(response.controls.sound_mode, SoundSessionMode::Persistent);
-        assert_eq!(response.frame.status.rom_path.as_deref(), Some(rom.as_path()));
+        assert_eq!(
+            response.frame.status.rom_path.as_deref(),
+            Some(rom.as_path())
+        );
         assert!(response.frame.rgba.is_some());
 
         engine.set_pause_when_unfocused(false);
@@ -565,7 +571,10 @@ mod routing_tests {
         while engine.completed_frames() < 5 && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(engine.completed_frames() >= 5, "background clock did not advance");
+        assert!(
+            engine.completed_frames() >= 5,
+            "background clock did not advance"
+        );
         engine.set_playing(false);
         engine.invoke(|_| Ok(())).unwrap();
         let save = engine

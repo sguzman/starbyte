@@ -89,12 +89,13 @@ complete Starbyte library application.
 - [ ] 🧹 Complete full-application orderly shutdown handoff: stop clock, flush SRAM, clear audio and join exactly once (worker finalizer implemented and covered, not yet installed in normal StarbyteApp).
 - [ ] 🚀 Make the worker the default runtime only after passing acceptance gates.
 
-## Milestone D: validation — 4/10 test paths authored (40%; latest commit not yet verified)
+## Milestone D: validation — 5/11 test paths authored (45%; latest commit not yet verified)
 
 - [x] 🧪 Add a display-server-free, real built-in ROM smoke path (`--demo --scheduler-smoke`) to CI.
 - [x] 🖥️ Add an opt-in `--threaded-preview` native egui shell and Weston smoke that requires a rendered texture.
 - [x] 🧪 Add a `cargo test` built-in demo ROM integration test for background frames, hidden-window copy suppression and reappearance, neutral controls, screenshot capture and quick-save state.
 - [x] 🎬 Add direct/worker launch-request tests for failed ROM preservation, restored save-mode namespaces and memory quick-save invalidation after a successful ROM replacement.
+- [x] 🔗 Add a compositor-free integration test from an installed library entry through ROM materialization, exclusive worker launch, unfocused gameplay frames and a worker-owned quick save.
 - [ ] ✅ Confirm Linux CI format/Clippy and Linux+Windows tests pass.
 - [ ] 🟩 Confirm the scheduler smoke actually completes on the exact commit.
 - [ ] 🪟 Run Wayland window visible/focused and confirm accurate ~60.1 emulated FPS.
@@ -220,3 +221,23 @@ state as a fixed background-pause regression.
 - `starbyte-frontend::SessionInputDiagnostics`, `SessionSoundDiagnostics`, `SessionAudioFrameMetrics`, and `SessionScreenshot`: neutral hardware/audio readouts and owned RGBA capture shared by the established UI and the worker.
 - `starbyte-frontend::SessionSaveAction`: one typed save/load/SRAM action dispatcher consumed synchronously by the current application and asynchronously by the worker. A built-in ROM test asserts compatibility and sound-mode disk slot isolation.
 - `.github/workflows/ci.yml`: headless worker (including memory quick-save roundtrip) and Weston threaded-preview smoke tasks authored; completion not yet verified.
+
+## 2026-10-23 continuation — asynchronous normal-app ROM preparation
+
+The established library UI now dispatches direct ROM/ZIP preparation through
+its dedicated ROM worker, instead of extracting ZIP archives in egui callbacks.
+Prepared `SessionLaunchRequest` values preserve the selected game's
+cheats and persistent sound/save mode, and are applied only after a successful
+worker reply. Outdated selection replies/errors cannot replace the newest
+selected game; queued superseded ROM jobs are skipped before ZIP extraction.
+The legacy `StarbyteApp` still owns and advances `FrontendSession` after
+materialization. This is **not** the complete ownership handoff.
+
+Worker-only blackout/CPU/PPU diagnostics now observe `FrontendSession` on the
+emulation thread, including when Wayland does not repaint. Worker shutdown
+finalizes SRAM and releases the audio output on that owning thread instead
+of flushing SRAM a second time when the returned owner is dropped on the UI
+thread. The headless library-to-worker integration test exercises the full
+materialization, cartridge launch, background clock and quick-save command
+chain using the built-in copyright-free demo. All new runtime and test changes
+must still pass current CI before acceptance is claimed.

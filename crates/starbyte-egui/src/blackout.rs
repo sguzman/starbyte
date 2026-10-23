@@ -32,12 +32,7 @@ pub struct BlackScreenMonitor {
 
 impl BlackScreenMonitor {
     /// Sample framebuffer/CPU status after a successfully completed frame.
-    pub fn observe(
-        &mut self,
-        session: &FrontendSession,
-        audio_pairs: usize,
-        nonzero_pairs: usize,
-    ) {
+    pub fn observe(&mut self, session: &FrontendSession, audio_pairs: usize, nonzero_pairs: usize) {
         // The legacy diagnostic boundary is isolated here, rather than
         // exposing Emulator to the rest of the frontend UI. The threaded
         // path will eventually run this monitor inside the sole owner.

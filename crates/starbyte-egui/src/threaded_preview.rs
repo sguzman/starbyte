@@ -566,15 +566,22 @@ mod pitch_mode_tests {
         while Instant::now() < deadline {
             app.poll_library_events();
             app.poll_operations(&ctx);
-            if app.controls.session.has_rom && app.loaded_rom_path.as_deref() == Some(rom.as_path()) {
+            if app.controls.session.has_rom && app.loaded_rom_path.as_deref() == Some(rom.as_path())
+            {
                 break;
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(app.controls.session.has_rom, "indexed selection was not launched");
+        assert!(
+            app.controls.session.has_rom,
+            "indexed selection was not launched"
+        );
         assert_eq!(app.loaded_rom_path.as_deref(), Some(rom.as_path()));
         assert!(app.playing);
-        assert!(app.display.texture().is_some(), "worker still frame was not uploaded");
+        assert!(
+            app.display.texture().is_some(),
+            "worker still frame was not uploaded"
+        );
         // No egui repaint calls: the independent worker remains authoritative.
         let deadline = Instant::now() + Duration::from_secs(3);
         while app.engine.completed_frames() < 3 && Instant::now() < deadline {

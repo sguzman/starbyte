@@ -700,6 +700,16 @@ enum WorkerSaveSmokeStage {
     AwaitStep,
 }
 
+/// CI-only native original-window background-pause lifecycle. The two
+/// seconds in Gap deliberately contain no egui update callbacks.
+#[derive(Debug, Clone, Copy)]
+enum WorkerFocusPauseSmoke {
+    WaitingForGame,
+    WaitingForPause,
+    Gap { deadline: Instant, at_start: u64 },
+    Resuming { at_start: u64, paused_frames: u64 },
+}
+
 struct FullLibraryPendingLaunch {
     job_id: u64,
     original_path: PathBuf,
@@ -725,6 +735,7 @@ pub struct StarbyteApp {
     worker_save_smoke_previous_step_frame: Option<u64>,
     worker_no_redraw_smoke: bool,
     worker_no_redraw_gap: Option<(Instant, u64)>,
+    worker_focus_pause_smoke: Option<WorkerFocusPauseSmoke>,
     audio_output: Option<AudioOutput>,
     speaker_probe: SpeakerProbeState,
     /// Session mute defaults from persisted startup preference, then follows
@@ -827,6 +838,7 @@ impl StarbyteApp {
         use_worker_preview: bool,
         worker_save_smoke: bool,
         worker_no_redraw_smoke: bool,
+        worker_focus_pause_smoke: bool,
         logs: SharedLogBuffer,
     ) -> Result<Self> {
         // Headless Weston has no keyboard focus until a compositor explicitly
@@ -834,7 +846,13 @@ impl StarbyteApp {
         // execution test: disabling focus pause in this *opt-in test session*
         // avoids waiting forever for a focus event that never arrives. Normal
         // launches retain their persisted background-pause preference.
-        if exit_after_frames.is_some() || worker_save_smoke || worker_no_redraw_smoke {
+        if exit_after_frames.is_some()
+            || worker_save_smoke
+            || worker_no_redraw_smoke
+            || worker_focus_pause_smoke
+        {
+            // The pause smoke begins with playable frames before it toggles
+            // the real scheduler policy; Weston may have no keyboard focus.
             config.ui.pause_when_unfocused = false;
         }
         if let Some(prefer_dark_mode) = prefer_dark_mode_override {
@@ -953,6 +971,8 @@ impl StarbyteApp {
             worker_save_smoke_previous_step_frame: None,
             worker_no_redraw_smoke,
             worker_no_redraw_gap: None,
+            worker_focus_pause_smoke: worker_focus_pause_smoke
+                .then_some(WorkerFocusPauseSmoke::WaitingForGame),
             audio_output: None,
             speaker_probe: SpeakerProbeState::Idle,
             audio_muted,
@@ -5059,6 +5079,36 @@ impl eframe::App for StarbyteApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(WorkerFocusPauseSmoke::Gap { deadline, at_start }) =
+            self.worker_focus_pause_smoke
+        {
+            let now = Instant::now();
+            if now < deadline {
+                // Deliberately skip all paint callbacks and owner commands.
+                ctx.request_repaint_after(deadline - now);
+                return;
+            }
+            let Some(worker) = &self.full_worker else {
+                println!("STARBYTE_FULL_LIBRARY_FOCUS_PAUSE_FAILED missing_worker");
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                return;
+            };
+            let paused_frames = worker.engine.completed_frames().saturating_sub(at_start);
+            if paused_frames > 1 || worker.engine.is_emulating() {
+                println!(
+                    "STARBYTE_FULL_LIBRARY_FOCUS_PAUSE_FAILED advanced_while_paused={paused_frames}"
+                );
+                self.worker_focus_pause_smoke = None;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                return;
+            }
+            self.worker_focus_pause_smoke = Some(WorkerFocusPauseSmoke::Resuming {
+                at_start: worker.engine.completed_frames(),
+                paused_frames,
+            });
+            // The ordinary worker input/focus update below will restore
+            // focus with the same background-pause policy still enabled.
+        }
         if let Some((deadline, at_start)) = self.worker_no_redraw_gap {
             let now = Instant::now();
             if now < deadline {
@@ -5269,7 +5319,21 @@ impl eframe::App for StarbyteApp {
         // as the established application, but UI callbacks only publish
         // input and consume frames. No emulated frame runs on the GUI thread.
         if self.full_worker.is_some() {
-            let focused = ctx.input(|input| input.focused);
+            if matches!(
+                self.worker_focus_pause_smoke,
+                Some(WorkerFocusPauseSmoke::WaitingForGame)
+            ) && self.session_snapshot().frame >= 15
+                && self.framebuffer_texture.is_some()
+            {
+                self.worker_focus_pause_smoke =
+                    Some(WorkerFocusPauseSmoke::WaitingForPause);
+            }
+            let focused = match self.worker_focus_pause_smoke {
+                Some(WorkerFocusPauseSmoke::WaitingForPause)
+                | Some(WorkerFocusPauseSmoke::Gap { .. }) => false,
+                Some(WorkerFocusPauseSmoke::Resuming { .. }) => true,
+                _ => ctx.input(|input| input.focused),
+            };
             let sample = self.effective_controller_sample(ctx);
             let speed = self.effective_speed_percent(ctx);
             if let Some(worker) = &mut self.full_worker {
@@ -5282,7 +5346,13 @@ impl eframe::App for StarbyteApp {
                     worker.engine.set_focused(focused);
                     worker.last_focus = Some(focused);
                 }
-                let pause_policy = self.config.ui.pause_when_unfocused;
+                let pause_policy = self.config.ui.pause_when_unfocused
+                    || matches!(
+                        self.worker_focus_pause_smoke,
+                        Some(WorkerFocusPauseSmoke::WaitingForPause)
+                            | Some(WorkerFocusPauseSmoke::Gap { .. })
+                            | Some(WorkerFocusPauseSmoke::Resuming { .. })
+                    );
                 if worker.last_pause_when_unfocused != Some(pause_policy) {
                     worker.engine.set_pause_when_unfocused(pause_policy);
                     worker.last_pause_when_unfocused = Some(pause_policy);
@@ -5304,6 +5374,35 @@ impl eframe::App for StarbyteApp {
                 }
             }
             self.last_effective_speed_percent = speed;
+            if let Some(worker) = &self.full_worker {
+                match self.worker_focus_pause_smoke {
+                    Some(WorkerFocusPauseSmoke::WaitingForPause)
+                        if !worker.engine.is_emulating() =>
+                    {
+                        self.worker_focus_pause_smoke = Some(WorkerFocusPauseSmoke::Gap {
+                            deadline: Instant::now() + Duration::from_secs(2),
+                            at_start: worker.engine.completed_frames(),
+                        });
+                        ctx.request_repaint_after(Duration::from_secs(2));
+                        return;
+                    }
+                    Some(WorkerFocusPauseSmoke::Resuming {
+                        at_start,
+                        paused_frames,
+                    }) if worker.engine.is_emulating()
+                        && worker.engine.completed_frames() >= at_start + 10 =>
+                    {
+                        println!(
+                            "STARBYTE_FULL_LIBRARY_FOCUS_PAUSE_SMOKE_OK paused_frames={paused_frames} resumed_frames={}",
+                            worker.engine.completed_frames() - at_start
+                        );
+                        self.worker_focus_pause_smoke = None;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        return;
+                    }
+                    _ => {}
+                }
+            }
             if self.is_playing {
                 self.pending_step_frames = 0;
             } else if focused || !self.config.ui.pause_when_unfocused {

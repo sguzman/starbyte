@@ -696,6 +696,7 @@ enum WorkerSaveSmokeStage {
     AwaitSlotSave,
     AwaitSlotLoad,
     AwaitScreenshot,
+    AwaitStep,
 }
 
 struct FullLibraryPendingLaunch {
@@ -715,6 +716,7 @@ pub struct StarbyteApp {
     worker_save_smoke_stage: Option<WorkerSaveSmokeStage>,
     worker_save_smoke_receipt: Option<(SessionSaveAction, Result<(), String>)>,
     worker_save_smoke_screenshot: Option<Result<PathBuf, String>>,
+    worker_save_smoke_step_receipt: Option<Result<u64, String>>,
     worker_no_redraw_smoke: bool,
     worker_no_redraw_gap: Option<(Instant, u64)>,
     audio_output: Option<AudioOutput>,
@@ -939,6 +941,7 @@ impl StarbyteApp {
             worker_save_smoke_stage: worker_save_smoke.then_some(WorkerSaveSmokeStage::WaitForGame),
             worker_save_smoke_receipt: None,
             worker_save_smoke_screenshot: None,
+            worker_save_smoke_step_receipt: None,
             worker_no_redraw_smoke,
             worker_no_redraw_gap: None,
             audio_output: None,
@@ -1329,6 +1332,10 @@ impl StarbyteApp {
                 .as_ref()
                 .is_some_and(|worker| worker.pending_launches.is_empty())
         {
+            if self.worker_save_smoke_stage == Some(WorkerSaveSmokeStage::AwaitStep) {
+                self.worker_save_smoke_step_receipt =
+                    Some(result.as_ref().map(|frame| frame.status.frame).map_err(Clone::clone));
+            }
             match result {
                 Ok(frame) => {
                     self.session_view.accept_worker_frame(&frame);
@@ -1462,10 +1469,12 @@ impl StarbyteApp {
             };
             match outcome {
                 Ok(path) if path.is_file() => {
-                    println!(
-                        "STARBYTE_FULL_LIBRARY_SAVE_SMOKE_OK frame={} slot=1 quick=true screenshot=true",
-                        self.session_snapshot().frame
-                    );
+                    // Native acceptance also exercises the complete window's
+                    // formerly synchronous frame-step control while paused.
+                    self.is_playing = false;
+                    self.pending_step_frames = 1;
+                    self.worker_save_smoke_stage = Some(WorkerSaveSmokeStage::AwaitStep);
+                    return;
                 }
                 Ok(path) => println!(
                     "STARBYTE_FULL_LIBRARY_SAVE_SMOKE_FAILED missing_screenshot={}",
@@ -1473,6 +1482,33 @@ impl StarbyteApp {
                 ),
                 Err(error) => {
                     println!("STARBYTE_FULL_LIBRARY_SAVE_SMOKE_FAILED screenshot={error}");
+                }
+            }
+            self.worker_save_smoke_stage = None;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+        if stage == WorkerSaveSmokeStage::AwaitStep {
+            let Some(outcome) = self.worker_save_smoke_step_receipt.take() else {
+                return;
+            };
+            match outcome {
+                Ok(frame)
+                    if self.pending_step_frames == 0
+                        && self.session_snapshot().frame == frame
+                        && self.framebuffer_texture.is_some()
+                        && !self.is_playing =>
+                {
+                    println!(
+                        "STARBYTE_FULL_LIBRARY_SAVE_SMOKE_OK frame={frame} slot=1 quick=true screenshot=true step=true"
+                    );
+                }
+                Ok(frame) => println!(
+                    "STARBYTE_FULL_LIBRARY_SAVE_SMOKE_FAILED step_state={frame} remaining={}",
+                    self.pending_step_frames
+                ),
+                Err(error) => {
+                    println!("STARBYTE_FULL_LIBRARY_SAVE_SMOKE_FAILED step={error}");
                 }
             }
             self.worker_save_smoke_stage = None;
@@ -1488,7 +1524,7 @@ impl StarbyteApp {
             WorkerSaveSmokeStage::AwaitQuickLoad => SessionSaveAction::QuickLoad,
             WorkerSaveSmokeStage::AwaitSlotSave => SessionSaveAction::SaveSlot(1),
             WorkerSaveSmokeStage::AwaitSlotLoad => SessionSaveAction::LoadSlot(1),
-            WorkerSaveSmokeStage::AwaitScreenshot => return,
+            WorkerSaveSmokeStage::AwaitScreenshot | WorkerSaveSmokeStage::AwaitStep => return,
         };
         if action != expected || outcome.is_err() {
             println!("STARBYTE_FULL_LIBRARY_SAVE_SMOKE_FAILED action={action:?} error={outcome:?}");
@@ -1537,7 +1573,7 @@ impl StarbyteApp {
                 self.save_screenshot();
                 self.worker_save_smoke_stage = Some(WorkerSaveSmokeStage::AwaitScreenshot);
             }
-            WorkerSaveSmokeStage::AwaitScreenshot => {}
+            WorkerSaveSmokeStage::AwaitScreenshot | WorkerSaveSmokeStage::AwaitStep => {}
         }
     }
 

@@ -1,8 +1,16 @@
 # Emulation scheduler migration
 
-**Status: in progress. Commit [`432b221`](https://github.com/sguzman/starbyte/commit/432b2219ac9c89dc82c9183b2f2ef7c31b8a66d8) passed [CI run 40015689046](https://github.com/sguzman/starbyte/actions/runs/40015689046): Linux, Windows, formatting/Clippy and original-window native Weston keyboard shortcut and sound-mode save-slot parity, alongside previous worker acceptance. Tracked source progress is 65/77 (84%), with full-GUI migration 13/16 (81%). Production-default handoff, physical Hyprland and audible-device quality remain unverified.**
+**Status: in progress. Commit [`8db8c3c`](https://github.com/sguzman/starbyte/commit/8db8c3ce2672e193c6321476250c58d787de92dd) passed [CI run 40021782967](https://github.com/sguzman/starbyte/actions/runs/40021782967): Linux, Windows, formatting/Clippy and original-window native Weston integration. Verified source progress is 67/77 (87%): A 7/8, B 16/18, P 18/20, C 15/16, D 11/15. The complete original library worker is still opt-in; production-default cutover, physical Hyprland and audible-device quality remain unverified.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
+
+## Latest native receipt-race test — awaiting CI
+
+The new opt-in original-window extension at [`c74ed82`](https://github.com/sguzman/starbyte/commit/c74ed8282caa50ef01e43bbaa9e0cc58149e6e39) issues an asynchronous screenshot capture and a paused one-frame step, then attempts a second invalid ROM installation before processing their receipts. A failing installation must not invalidate either receipt belonging to the surviving cartridge, including the PNG writer completion and actual uploaded still texture. The corresponding [CI gate](https://github.com/sguzman/starbyte/commit/24bd74ea110c2d009eddd6aa4d96a3c73acf6531) requires `STARBYTE_FULL_LIBRARY_RECEIPT_RACE_SMOKE_OK` alongside the existing replacement regression. **Implementation is committed but not yet accepted; task percentages remain 67/77.**
+
+## Verified original-window shell and owner shutdown — 2026-10-23
+
+Commit [`cd8c3f5`](https://github.com/sguzman/starbyte/commit/cd8c3f54dd5c1b7c988f7a5253a4bef9554498c6) passed [CI 40021161371](https://github.com/sguzman/starbyte/actions/runs/40021161371) with native original-window View/status toggle, recent-cover texture, and library rendering acceptance. The original application's `Drop` also consumes and joins the exclusive worker exactly once; [`d15fcf4`](https://github.com/sguzman/starbyte/commit/d15fcf49937143f98f4b6679c565f196e82eb25f) passed [CI 40016711374](https://github.com/sguzman/starbyte/actions/runs/40016711374) with SRAM reopen and `STARBYTE_FULL_LIBRARY_OWNER_SHUTDOWN_SMOKE_OK finalized=true audio_released=true`. These close two opt-in shell tasks but **not** production default cutover.
 
 ## Verified original-window shortcut and save namespace parity — 2026-10-23
 
@@ -422,7 +430,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 not a separate repository, not the default UI, and not a substitute for the
 complete Starbyte library application.
 
-## Milestone C: native GUI migration — 13/16 source tasks (81%; production-default worker cutover still pending)
+## Milestone C: native GUI migration — 15/16 source tasks (94%; production-default worker cutover still pending)
 
 - [x] 🧱 Introduce frontend-neutral SessionControlsSnapshot and migrate the existing disk-slot menu to it; worker can serialize the same summary.
 - [x] 🎮 Migrate the existing input overlay to frontend-neutral SessionInputDiagnostics that the worker can also publish.
@@ -435,10 +443,10 @@ complete Starbyte library application.
 - [x] 🎬 Route game-launch success/error replies through the emulation worker, with native full-window Weston failure/survivor acceptance (CI 40013247831).
 - [x] ⌨️ Send controller inputs without losing key-down/up edges; preserve F5/F8/F9/Escape. Native original-window key-event smoke and actual SNES joypad press/release regression passed (CI 40015689046, 40002095002).
 - [x] 🪟 Display the latest completed RGBA texture without blocking the worker (opt-in full library, Weston catch-up after a two-second callback gap, CI 40009459833).
-- [ ] 🏠 Keep the full library, menus, recent covers and View status-bar toggles intact.
+- [x] 🏠 Keep the full library, menus, recent covers and View status-bar toggles intact (opt-in original-window Weston acceptance, CI 40021161371).
 - [x] ⏸️ Keep manual Pause, automatic focus pause, background-allowed gameplay and their resumes independent (original full-library Weston, CI 40011629443).
 - [x] 💾 Preserve original disk-slot, SRAM and sound-mode namespaces. Native original-window persistent/compatibility slot switch, disk/quick save/restore and battery SRAM restart tests passed (CI 40015689046, 40000854342).
-- [ ] 🧹 Complete full-application orderly shutdown handoff: stop clock, flush SRAM, clear audio and join exactly once (worker finalizer implemented and covered, not yet installed in normal StarbyteApp).
+- [x] 🧹 Complete the opt-in original-window worker shutdown handoff: stop clock, flush SRAM, clear audio and join exactly once (CI 40016711374; production-default cutover remains separately gated).
 - [ ] 🚀 Make the worker the default runtime only after passing acceptance gates.
 
 ## Milestone D: validation — 11/15 checkpoints (73%; Linux no-redraw acceptance passed on `135cf2e`, complete run verification pending)
@@ -459,10 +467,12 @@ complete Starbyte library application.
 - [ ] 💤 Repeat with background pause checked; verify true stop, no catch-up burst and clean resume.
 - [ ] 🛡️ Confirm manual Pause, gamepad, cheats, screenshot, quick/disk saves and SRAM across restarts.
 
-**Implementation note:** These source milestones measure API and preview
-coverage, not demonstrated full-app readiness. Native StarbyteApp still owns
-`FrontendSession` and renders emulated frames synchronously. The remaining
-eight full-UI cutover tasks are blocking, not cosmetic. The workspace declares
+**Implementation note:** These source milestones measure tested opt-in ownership,
+not demonstrated production readiness. The original complete StarbyteApp can
+execute on the independent owner behind `--native-worker-preview`, but its
+normal/default runtime still retains the synchronous `FrontendSession`.
+The remaining ten tasks across milestones A/B/P/C/D include physical Hyprland,
+audio, residual ownership/telemetry and deliberate default cutover. The workspace declares
 Rust 1.85; newly introduced post-1.85 let-chain expressions were rewritten,
 but a real MSRV build has not been performed in this environment.
 

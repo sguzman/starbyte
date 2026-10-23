@@ -156,7 +156,7 @@ impl RenderPort {
     }
 }
 
-fn controller_from_bits(bits: u16) -> ControllerState {
+pub(crate) fn controller_from_bits(bits: u16) -> ControllerState {
     ControllerState {
         b: bits & 0x8000 != 0,
         y: bits & 0x4000 != 0,

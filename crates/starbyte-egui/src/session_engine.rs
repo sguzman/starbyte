@@ -198,6 +198,14 @@ pub struct PublishedGameFrame {
     pub input_diagnostics: SessionInputDiagnostics,
 }
 
+/// A serialized save acknowledgement with an optional restored still image.
+/// Normal saves avoid copying a framebuffer; quick/disk loads return the new
+/// picture so a manually paused game can update without another SNES frame.
+pub struct WorkerSaveResponse {
+    pub outcome: SessionSaveOutcome,
+    pub restored_frame: Option<PublishedGameFrame>,
+}
+
 /// Exclusive, thread-owned game state. All save mutations stay serialized
 /// with emulated frames, including when a compositor hides the entire window.
 pub struct OwnedSession {
@@ -363,6 +371,36 @@ impl OwnedSession {
 
     pub fn set_cheats(&mut self, cheats: &[CheatEntry]) -> usize {
         self.session.set_active_cheats(cheats)
+    }
+
+    fn process_save_action(
+        &mut self,
+        action: SessionSaveAction,
+        capture_restored_frame: bool,
+    ) -> Result<WorkerSaveResponse, String> {
+        let outcome = self
+            .session
+            .apply_save_action(action)
+            .map_err(|error| error.to_string())?;
+        let restoring = matches!(
+            action,
+            SessionSaveAction::QuickLoad | SessionSaveAction::LoadSlot(_)
+        );
+        if restoring {
+            // A restored APU belongs to a different timeline. Clear the
+            // old PCM before acknowledging, not after the UI repaints.
+            if let Some(audio) = &self.audio {
+                audio.clear();
+            }
+        }
+        Ok(WorkerSaveResponse {
+            outcome,
+            restored_frame: if restoring && capture_restored_frame {
+                Some(self.capture_frame())
+            } else {
+                None
+            },
+        })
     }
 
     pub fn quick_save(&mut self) -> anyhow::Result<()> {
@@ -608,27 +646,27 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
 
     /// The same save-command surface used by the existing StarbyteApp,
     /// serialized against worker frames and acknowledged asynchronously.
+    /// A UI that does not display restored video can use the smaller receipt.
     pub fn queue_save_action(
         &self,
         action: SessionSaveAction,
     ) -> Result<Receiver<Result<SessionSaveOutcome, String>>, String> {
         self.submit_transaction(move |engine| {
-            let outcome = engine
-                .session
-                .apply_save_action(action)
-                .map_err(|error| error.to_string())?;
-            if matches!(
-                action,
-                SessionSaveAction::QuickLoad | SessionSaveAction::LoadSlot(_)
-            ) {
-                // Loading memory rewinds the APU too. Discard any PCM queued
-                // from the pre-restore timeline before gameplay resumes.
-                if let Some(audio) = &engine.audio {
-                    audio.clear();
-                }
-            }
-            Ok(outcome)
+            engine
+                .process_save_action(action, false)
+                .map(|reply| reply.outcome)
         })
+    }
+
+    /// A single completion path for quick/durable saves and restores.
+    /// Restores include the framebuffer captured *after* the save state is
+    /// applied, even when the worker clock is manually paused. This lets
+    /// the full library GUI eventually use one asynchronous command API.
+    pub fn queue_save_action_with_frame(
+        &self,
+        action: SessionSaveAction,
+    ) -> Result<Receiver<Result<WorkerSaveResponse, String>>, String> {
+        self.submit_transaction(move |engine| engine.process_save_action(action, true))
     }
 
     pub fn quick_save_game(&self) -> Result<(), String> {
@@ -865,8 +903,33 @@ mod tests {
             image.rgba.len(),
             image.width as usize * image.height as usize * 4
         );
-        worker.quick_save_game().unwrap();
+        // Use the same serialized action + optional picture receipt that
+        // the library GUI will consume. Paused restores must show a complete
+        // frame, while saves must not allocate a redundant framebuffer.
+        let saved = worker
+            .queue_save_action_with_frame(SessionSaveAction::QuickSave)
+            .unwrap()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(saved.outcome, SessionSaveOutcome::Completed));
+        assert!(saved.restored_frame.is_none());
         assert!(worker.read_controls().unwrap().has_quick_save);
+        let restored = worker
+            .queue_save_action_with_frame(SessionSaveAction::QuickLoad)
+            .unwrap()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(restored.outcome, SessionSaveOutcome::Completed));
+        let still = restored.restored_frame.expect("paused restore should capture video");
+        assert!(still.status.has_rom);
+        assert_eq!(
+            still.rgba.as_ref().unwrap().len(),
+            still.status.framebuffer_width as usize
+                * still.status.framebuffer_height as usize
+                * 4
+        );
         let reply = worker.queue_clear_cheats().unwrap();
         reply.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
         assert_eq!(worker.read_controls().unwrap().rom_cheat_read_hits, 0);

@@ -17,7 +17,7 @@ use starbyte_core::{
     input::ControllerState,
     manifest::{AssetConfig, AudioPitchMode, InputDeviceMode, RuntimeConfig, UiSettings},
 };
-use starbyte_frontend::{SessionScreenshot, SoundSessionMode};
+use starbyte_frontend::{SessionSaveAction, SessionScreenshot, SoundSessionMode};
 
 use crate::{
     app::{
@@ -27,7 +27,7 @@ use crate::{
     preview_gamepads::{PreviewGamepads, merge_sources},
     scheduler::EmulatorScheduler,
     scheduler_video::WorkerDisplay,
-    session_engine::{InputPort, OwnedSession, PublishedGameFrame, RenderPort},
+    session_engine::{InputPort, OwnedSession, PublishedGameFrame, RenderPort, WorkerSaveResponse},
 };
 
 fn pitch_for(mode: AudioPitchMode, custom_percent: u16, speed: u16) -> f32 {
@@ -39,10 +39,9 @@ fn pitch_for(mode: AudioPitchMode, custom_percent: u16, speed: u16) -> f32 {
 }
 
 enum PendingOperation {
-    Save(Receiver<Result<(), String>>),
+    Save(Receiver<Result<WorkerSaveResponse, String>>),
     SpeakerCheck(Receiver<Result<(), String>>),
     ClearCheats(Receiver<Result<(), String>>),
-    Restore(Receiver<Result<PublishedGameFrame, String>>),
     Screenshot(Receiver<Result<SessionScreenshot, String>>),
     PngWrite(Receiver<Result<PathBuf, String>>),
     LoadRom {
@@ -163,19 +162,9 @@ impl ThreadedPreviewApp {
         }
     }
 
-    fn queue_save(&mut self, result: Result<Receiver<Result<(), String>>, String>) {
-        match result {
+    fn queue_save(&mut self, action: SessionSaveAction) {
+        match self.engine.queue_save_action_with_frame(action) {
             Ok(reply) => self.pending.push(PendingOperation::Save(reply)),
-            Err(error) => self.last_error = Some(error),
-        }
-    }
-
-    fn queue_restore(
-        &mut self,
-        result: Result<Receiver<Result<PublishedGameFrame, String>>, String>,
-    ) {
-        match result {
-            Ok(reply) => self.pending.push(PendingOperation::Restore(reply)),
             Err(error) => self.last_error = Some(error),
         }
     }
@@ -293,7 +282,15 @@ impl ThreadedPreviewApp {
                     }
                 },
                 PendingOperation::Save(reply) => match reply.try_recv() {
-                    Ok(Ok(())) => self.last_error = None,
+                    Ok(Ok(response)) => {
+                        if let Some(frame) = response.restored_frame {
+                            // Discard any framebuffer from before this
+                            // restore, including while manually paused.
+                            let _ = self.engine.take_latest_frame();
+                            self.display.import_frame(ctx, frame);
+                        }
+                        self.last_error = None;
+                    }
                     Ok(Err(error)) => self.last_error = Some(error),
                     Err(TryRecvError::Empty) => {
                         still_pending.push(PendingOperation::Save(reply));
@@ -328,22 +325,6 @@ impl ThreadedPreviewApp {
                     }
                     Err(TryRecvError::Disconnected) => {
                         self.last_error = Some("Screenshot writer stopped".to_owned());
-                    }
-                },
-                PendingOperation::Restore(reply) => match reply.try_recv() {
-                    Ok(Ok(frame)) => {
-                        // Never paint stale video queued before the restored
-                        // frame, even when loading during a manual pause.
-                        let _ = self.engine.take_latest_frame();
-                        self.display.import_frame(ctx, frame);
-                        self.last_error = None;
-                    }
-                    Ok(Err(error)) => self.last_error = Some(error),
-                    Err(TryRecvError::Empty) => {
-                        still_pending.push(PendingOperation::Restore(reply));
-                    }
-                    Err(TryRecvError::Disconnected) => {
-                        self.last_error = Some("Load worker stopped unexpectedly".to_owned());
                     }
                 },
             }
@@ -476,13 +457,11 @@ impl eframe::App for ThreadedPreviewApp {
                         ui.close();
                     }
                     if ui.button("Quick Save (F5)").clicked() {
-                        let job = self.engine.queue_quick_save();
-                        self.queue_save(job);
+                        self.queue_save(SessionSaveAction::QuickSave);
                         ui.close();
                     }
                     if ui.button("Quick Load (F8)").clicked() {
-                        let job = self.engine.queue_quick_load_with_frame();
-                        self.queue_restore(job);
+                        self.queue_save(SessionSaveAction::QuickLoad);
                         ui.close();
                     }
                     if ui.button("Screenshot (F12)").clicked() {
@@ -504,13 +483,11 @@ impl eframe::App for ThreadedPreviewApp {
                     ui.menu_button("Disk save slots", |ui| {
                         for slot in 1..=3_u8 {
                             if ui.button(format!("Save slot {slot}")).clicked() {
-                                let job = self.engine.queue_save_slot(slot);
-                                self.queue_save(job);
+                                self.queue_save(SessionSaveAction::SaveSlot(slot));
                                 ui.close();
                             }
                             if ui.button(format!("Load slot {slot}")).clicked() {
-                                let job = self.engine.queue_load_slot_with_frame(slot);
-                                self.queue_restore(job);
+                                self.queue_save(SessionSaveAction::LoadSlot(slot));
                                 ui.close();
                             }
                         }
@@ -637,12 +614,10 @@ impl eframe::App for ThreadedPreviewApp {
             });
         });
         if focused && ctx.input(|input| input.key_pressed(egui::Key::F5)) {
-            let job = self.engine.queue_quick_save();
-            self.queue_save(job);
+            self.queue_save(SessionSaveAction::QuickSave);
         }
         if focused && ctx.input(|input| input.key_pressed(egui::Key::F8)) {
-            let job = self.engine.queue_quick_load_with_frame();
-            self.queue_restore(job);
+            self.queue_save(SessionSaveAction::QuickLoad);
         }
 
         if focused && ctx.input(|input| input.key_pressed(egui::Key::F12)) {

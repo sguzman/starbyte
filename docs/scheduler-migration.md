@@ -1,8 +1,17 @@
 # Emulation scheduler migration
 
-**Status: in progress. Commit [`f4e6369`](https://github.com/sguzman/starbyte/commit/f4e63699d75dd2c0f7090dd3a14f79830176f188) passed [CI run 40032643086](https://github.com/sguzman/starbyte/actions/runs/40032643086): Linux, Windows, formatting/Clippy and original-window native Weston integration. Verified source progress is 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. The complete original library worker is still opt-in; production-default cutover, physical Hyprland and audible-device quality remain unverified.**
+**Status: in progress. Commit [`3817af9`](https://github.com/sguzman/starbyte/commit/3817af966f3f4a3d5b970a594078e04a52f0458f) passed [CI run 40034370165](https://github.com/sguzman/starbyte/actions/runs/40034370165): Linux, Windows, formatting/Clippy and original-window native Weston integration. Verified source progress is 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. The complete original library worker is still opt-in; production-default cutover, physical Hyprland and audible-device quality remain unverified.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
+
+## Verified native single-owner gate and failed-replacement step accounting — 2026-10-23
+
+[`3817af9`](https://github.com/sguzman/starbyte/commit/3817af966f3f4a3d5b970a594078e04a52f0458f) passed [CI 40034370165](https://github.com/sguzman/starbyte/actions/runs/40034370165), all three jobs: Linux tests and native original-window Weston, Windows tests/benchmark compile, and formatting/Clippy.
+
+- The actual opt-in original eframe window checks that it has **no shadow legacy session** after a worker-owned video frame has been uploaded, and the CI gate requires `STARBYTE_FULL_LIBRARY_SINGLE_OWNER_SMOKE_OK legacy_session_absent=true worker_frame=30`.
+- Queuing a new ROM installation no longer clears a previously queued manual single-step on the surviving cartridge. Only an **accepted installation** resets that step count; failed replacements preserve it until the owner delivers a valid paused-frame receipt.
+- The native failed-ROM replacement regression now verifies the pending count remained **1 immediately after queuing the invalid replacement**, and fell to **0 upon receiving and uploading the old cartridge's stepped still**. Weston logged `STARBYTE_FULL_LIBRARY_RECEIPT_RACE_SMOKE_OK retained_rom=true screenshot_written=true step_uploaded=true pending_step_cleared=true`.
+- These are acceptance-strengthening checks, **not newly completed roadmap tasks**: B stays 18/18 and the overall verified count stays 69/77 (90%). The worker remains opt-in, and physical Hyprland/device acceptance remains open.
 
 ## Verified single-session ownership in original window — 2026-10-23
 
@@ -491,8 +500,8 @@ complete Starbyte library application.
 not demonstrated production readiness. The original complete StarbyteApp can
 execute on the independent owner behind `--native-worker-preview`, but its
 normal/default runtime still retains the synchronous `FrontendSession`.
-The remaining ten tasks across milestones A/B/P/C/D include physical Hyprland,
-audio, residual ownership/telemetry and deliberate default cutover. The workspace declares
+The remaining eight tasks across milestones A/P/C/D include physical Hyprland,
+audible audio/device quality, native input/save verification and deliberate default cutover. The workspace declares
 Rust 1.85; newly introduced post-1.85 let-chain expressions were rewritten,
 but a real MSRV build has not been performed in this environment.
 

@@ -38,6 +38,21 @@ use crate::{
     worker::{AppWorker, WorkerCommand, WorkerCommandKind, WorkerEvent},
 };
 
+/// Keep library presentation bounded even with thousands of ROMs.
+fn indexed_installed_matches(snapshot: &LibrarySnapshot, query: &str) -> Vec<usize> {
+    let needle = query.trim().to_lowercase();
+    snapshot
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| {
+            entry.installed_status == InstalledStatus::Installed
+                && (needle.is_empty() || entry.display_title.to_lowercase().contains(&needle))
+        })
+        .map(|(index, _)| index)
+        .collect()
+}
+
 fn pitch_for(mode: AudioPitchMode, custom_percent: u16, speed: u16) -> f32 {
     match mode {
         AudioPitchMode::Preserve => 1.0,
@@ -595,6 +610,33 @@ mod pitch_mode_tests {
     }
 
     #[test]
+    fn large_library_search_only_draws_installed_matching_rows() {
+        let sample = |name: &str, installed_status| LibraryEntry {
+            game_id: name.to_owned(),
+            display_title: name.to_owned(),
+            installed_status,
+            local: None,
+            metadata: None,
+            cover: None,
+            cheats: Vec::new(),
+        };
+        let snapshot = LibrarySnapshot {
+            entries: vec![
+                sample("Super Mario World", InstalledStatus::Installed),
+                sample("F-Zero", InstalledStatus::Installed),
+                sample("Mario Paint", InstalledStatus::Missing),
+            ],
+            filter: LibraryFilter::default(),
+            total_count: 3,
+            installed_count: 2,
+            missing_count: 1,
+        };
+        assert_eq!(indexed_installed_matches(&snapshot, ""), vec![0, 1]);
+        assert_eq!(indexed_installed_matches(&snapshot, "mArIo"), vec![0]);
+        assert!(indexed_installed_matches(&snapshot, "mario paint").is_empty());
+    }
+
+    #[test]
     fn custom_pitch_is_independent_of_fast_forward_speed() {
         assert_eq!(pitch_for(AudioPitchMode::Custom, 80, 100), 0.8);
         assert_eq!(pitch_for(AudioPitchMode::Custom, 80, 400), 0.8);
@@ -967,18 +1009,26 @@ impl eframe::App for ThreadedPreviewApp {
                     if let Some(snapshot) = &self.library_snapshot {
                         ui.label(format!("{} installed games", snapshot.installed_count));
                         ui.separator();
-                        let query = self.library_query.trim().to_lowercase();
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            for entry in &snapshot.entries {
-                                if entry.installed_status == InstalledStatus::Installed
-                                    && (query.is_empty()
-                                        || entry.display_title.to_lowercase().contains(&query))
-                                    && ui.button(&entry.display_title).clicked()
-                                {
-                                    selected = Some(entry.clone());
+                        let matches = indexed_installed_matches(snapshot, &self.library_query);
+                        egui::ScrollArea::vertical().show_rows(
+                            ui,
+                            28.0,
+                            matches.len(),
+                            |ui, visible_rows| {
+                                for row in visible_rows {
+                                    let entry = &snapshot.entries[matches[row]];
+                                    if ui
+                                        .add_sized(
+                                            [ui.available_width(), 24.0],
+                                            egui::Button::new(&entry.display_title),
+                                        )
+                                        .clicked()
+                                    {
+                                        selected = Some(entry.clone());
+                                    }
                                 }
-                            }
-                        });
+                            },
+                        );
                     } else {
                         ui.label("Scanning local library...");
                     }

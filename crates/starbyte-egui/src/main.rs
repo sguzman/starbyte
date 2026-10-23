@@ -517,9 +517,7 @@ mod speaker_cli_tests {
         .unwrap();
         assert!(validate_frame_exit_args(&bounded).is_ok());
         assert!(bounded.exit_after_library_scan);
-        assert!(
-            Args::try_parse_from(["starbyte-egui", "--exit-after-library-scan"]).is_err()
-        );
+        assert!(Args::try_parse_from(["starbyte-egui", "--exit-after-library-scan"]).is_err());
         assert!(
             Args::try_parse_from([
                 "starbyte-egui",

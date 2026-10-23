@@ -15,7 +15,7 @@ use std::{
 
 use starbyte_core::{input::ControllerState, manifest::AssetConfig};
 use starbyte_frontend::{
-    CheatEntry, FrontendSession, SessionSnapshot, SoundSessionMode,
+    CheatEntry, FrontendSession, SessionControlsSnapshot, SessionSnapshot, SoundSessionMode,
 };
 
 use crate::{
@@ -555,6 +555,10 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
         &self,
     ) -> Result<Receiver<Result<PublishedGameFrame, String>>, String> {
         self.submit_transaction(|engine| Ok(engine.capture_frame()))
+    }
+
+    pub fn read_controls(&self) -> Result<SessionControlsSnapshot, String> {
+        self.transact(|engine| Ok(engine.session.controls_snapshot()))
     }
 
     pub fn read_status(&self) -> Result<SessionSnapshot, String> {

@@ -1018,6 +1018,28 @@ impl StarbyteApp {
                         self.status_line = error.to_string();
                     }
                 },
+                WorkerEvent::DirectRomReady {
+                    job_id,
+                    original_path,
+                    game_id,
+                    request,
+                } => {
+                    let detail = format!("Loaded {}", original_path.display());
+                    match self.complete_local_rom(
+                        &original_path,
+                        game_id,
+                        &request,
+                        ctx,
+                    ) {
+                        Ok(()) => {
+                            self.update_job(job_id, "Open ROM", "done", &detail);
+                        }
+                        Err(error) => {
+                            self.update_job(job_id, "Open ROM", "failed", &error);
+                            self.status_line = error;
+                        }
+                    }
+                }
                 WorkerEvent::JobFailed {
                     job_id,
                     label,
@@ -1781,27 +1803,9 @@ impl StarbyteApp {
         self.persist_config();
     }
 
-    fn open_local_rom(&mut self, path: &Path, ctx: &egui::Context) {
-        let resolved = if path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"))
-        {
-            LibraryService::new(self.config.clone(), self.assets.clone())
-                .and_then(|service| service.materialize_single_rom_zip(path))
-        } else {
-            Ok(path.to_path_buf())
-        };
-        let resolved = match resolved {
-            Ok(resolved) => resolved,
-            Err(error) => {
-                self.status_line = format!("Could not open ROM archive: {error}");
-                return;
-            }
-        };
-        // Resolve the corresponding library entry before installing the
-        // cartridge. The shared launch request atomically applies its cheats
-        // and sound/save namespace before the first game frame.
+    fn open_local_rom(&mut self, path: &Path, _ctx: &egui::Context) {
+        // File/ZIP resolution belongs to the dedicated ROM queue. Do not
+        // block Wayland repaint callbacks on archive extraction or scanning.
         let matching = self
             .library_snapshot
             .entries
@@ -1809,71 +1813,78 @@ impl StarbyteApp {
             .find(|entry| {
                 entry.local.as_ref().is_some_and(|local| {
                     local.rom_path.as_path() == path
-                        || local.extracted_cache_path.as_deref() == Some(resolved.as_path())
+                        || local.extracted_cache_path.as_deref() == Some(path)
                 })
             })
             .cloned();
-        let request = SessionLaunchRequest {
-            rom_path: resolved.clone(),
-            sound_mode: SoundSessionMode::Persistent,
-            cheats: matching
-                .as_ref()
-                .map_or_else(Vec::new, |entry| entry.cheats.clone()),
-        };
+        self.queue_job(WorkerCommandKind::MaterializePath {
+            path: path.to_path_buf(),
+            matching,
+        });
+    }
+
+    /// Install the already prepared cartridge. This is still executed by
+    /// the legacy UI backend; the new emulation owner can consume the same
+    /// typed request without redoing ZIP I/O or cheat selection.
+    fn complete_local_rom(
+        &mut self,
+        original_path: &Path,
+        game_id: Option<String>,
+        request: &SessionLaunchRequest,
+        ctx: &egui::Context,
+    ) -> Result<(), String> {
         self.clear_audio();
         self.audio_output = None;
-        match self.session.launch_game(&request) {
-            Ok(_) => {
-                self.loaded_game_id = matching.as_ref().map(|entry| entry.game_id.clone());
-                self.remember_recent_rom(path);
-                if self.loaded_game_id.is_none() {
-                    // Directly opened ZIPs and ROMs must become library games
-                    // before local Cheatarium codes can be matched to them.
-                    if let Some(parent) = path.parent()
-                        && !self.config.library.rom_dirs.contains(&parent.to_path_buf())
-                    {
-                        self.config.library.rom_dirs.push(parent.to_path_buf());
-                        self.persist_config();
-                    }
-                    self.queue_job(WorkerCommandKind::RefreshSnapshot);
-                    if self
-                        .config
-                        .cheats
-                        .cheatarium_snes_index()
-                        .is_some_and(|index| index.is_file())
-                    {
-                        self.queue_job(WorkerCommandKind::RefreshCheats {
-                            target: LibraryTarget {
-                                installed_only: true,
-                                ..LibraryTarget::default()
-                            },
-                        });
-                    }
-                }
-                if let Err(error) = self.session.run_frame_with_timeout(GUI_FRAME_TIMEOUT) {
-                    self.record_playback_error(&error.to_string());
-                    self.play_view = true;
-                    self.refresh_framebuffer(ctx);
-                    return;
-                }
-                self.playback_error = None;
-                self.refresh_framebuffer(ctx);
-                self.is_playing = true;
-                self.play_view = true;
-                self.pending_step_frames = 0;
-                self.frame_performance = FramePerformance::default();
-                self.frame_rate.reset();
-                self.frame_clock.reset(Instant::now());
-                self.last_audio_pairs = 0;
-                self.last_audio_nonzero_pairs = 0;
-                self.audio_nonzero_pairs_total = 0;
-                self.last_sram_flush = Instant::now();
-                self.status_line = format!("Loaded {}", path.display());
+        self.session
+            .launch_game(request)
+            .map_err(|error| format!("Could not load ROM: {error}"))?;
+        self.loaded_game_id = game_id;
+        self.remember_recent_rom(original_path);
+        if self.loaded_game_id.is_none() {
+            // A directly opened ROM may not be indexed yet. The follow-up
+            // library scan and cheat association remain asynchronous.
+            if let Some(parent) = original_path.parent()
+                && !self.config.library.rom_dirs.contains(&parent.to_path_buf())
+            {
+                self.config.library.rom_dirs.push(parent.to_path_buf());
+                self.persist_config();
             }
-            Err(error) => {
-                self.status_line = format!("Could not load ROM: {error}");
+            self.queue_job(WorkerCommandKind::RefreshSnapshot);
+            if self
+                .config
+                .cheats
+                .cheatarium_snes_index()
+                .is_some_and(|index| index.is_file())
+            {
+                self.queue_job(WorkerCommandKind::RefreshCheats {
+                    target: LibraryTarget {
+                        installed_only: true,
+                        ..LibraryTarget::default()
+                    },
+                });
             }
         }
+        if let Err(error) = self.session.run_frame_with_timeout(GUI_FRAME_TIMEOUT) {
+            let message = error.to_string();
+            self.record_playback_error(&message);
+            self.play_view = true;
+            self.refresh_framebuffer(ctx);
+            return Err(message);
+        }
+        self.playback_error = None;
+        self.refresh_framebuffer(ctx);
+        self.is_playing = true;
+        self.play_view = true;
+        self.pending_step_frames = 0;
+        self.frame_performance = FramePerformance::default();
+        self.frame_rate.reset();
+        self.frame_clock.reset(Instant::now());
+        self.last_audio_pairs = 0;
+        self.last_audio_nonzero_pairs = 0;
+        self.audio_nonzero_pairs_total = 0;
+        self.last_sram_flush = Instant::now();
+        self.status_line = format!("Loaded {}", original_path.display());
+        Ok(())
     }
 
     fn queue_load_entry(&mut self, entry: &LibraryEntry) {

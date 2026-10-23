@@ -20,6 +20,10 @@ pub enum WorkerCommandKind {
     RefreshCheats { target: LibraryTarget },
     RefreshAll,
     MaterializeRom { entry: LibraryEntry },
+    MaterializePath {
+        path: PathBuf,
+        matching: Option<LibraryEntry>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +49,12 @@ pub enum WorkerEvent {
     RomReady {
         job_id: u64,
         entry: LibraryEntry,
+        request: SessionLaunchRequest,
+    },
+    DirectRomReady {
+        job_id: u64,
+        original_path: PathBuf,
+        game_id: Option<String>,
         request: SessionLaunchRequest,
     },
     JobFailed {
@@ -88,7 +98,10 @@ impl AppWorker {
     pub fn submit(&self, command: WorkerCommand) {
         // Separate background queues keep gameplay loading responsive while
         // Libretro artwork or other network refreshes are in progress.
-        let tx = if matches!(command.kind, WorkerCommandKind::MaterializeRom { .. }) {
+        let tx = if matches!(
+            command.kind,
+            WorkerCommandKind::MaterializeRom { .. } | WorkerCommandKind::MaterializePath { .. }
+        ) {
             &self.rom_tx
         } else {
             &self.command_tx
@@ -238,6 +251,26 @@ fn handle_command(
                 request,
             }
         }
+        WorkerCommandKind::MaterializePath { path, matching } => {
+            // ZIP extraction may involve substantial disk work. Keep it on
+            // the dedicated ROM lane, never in eframe::App::update.
+            let resolved = if path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"))
+            {
+                service.materialize_single_rom_zip(&path)?
+            } else {
+                path.clone()
+            };
+            let request = direct_launch_request(matching.as_ref(), resolved);
+            WorkerEvent::DirectRomReady {
+                job_id,
+                original_path: path,
+                game_id: matching.map(|entry| entry.game_id),
+                request,
+            }
+        }
     };
 
     let _ = event_tx.send(event);
@@ -255,6 +288,20 @@ fn build_launch_request(entry: &LibraryEntry, rom_path: PathBuf) -> SessionLaunc
     }
 }
 
+/// Directly opened files use the same transaction shape as library entries.
+/// Preserve the selected entry's cheats, if already indexed, and never
+/// inherit cheats or sound/save policy from the previously running ROM.
+fn direct_launch_request(
+    matching: Option<&LibraryEntry>,
+    resolved: PathBuf,
+) -> SessionLaunchRequest {
+    SessionLaunchRequest {
+        rom_path: resolved,
+        sound_mode: SoundSessionMode::Persistent,
+        cheats: matching.map_or_else(Vec::new, |entry| entry.cheats.clone()),
+    }
+}
+
 fn label_for_kind(kind: &WorkerCommandKind) -> &'static str {
     match kind {
         WorkerCommandKind::RefreshSnapshot => "Scan Library",
@@ -264,6 +311,7 @@ fn label_for_kind(kind: &WorkerCommandKind) -> &'static str {
         WorkerCommandKind::RefreshCheats { .. } => "Refresh Cheats",
         WorkerCommandKind::RefreshAll => "Refresh All",
         WorkerCommandKind::MaterializeRom { .. } => "Load Game",
+        WorkerCommandKind::MaterializePath { .. } => "Open ROM",
     }
 }
 
@@ -271,12 +319,15 @@ fn label_for_kind(kind: &WorkerCommandKind) -> &'static str {
 /// network metadata and box-art work.
 #[cfg(test)]
 mod routing_tests {
-    use super::{AppWorker, WorkerCommand, WorkerCommandKind, build_launch_request};
-    use starbyte_core::manifest::RuntimeConfig;
+    use super::{
+        AppWorker, WorkerCommand, WorkerCommandKind, WorkerEvent, build_launch_request,
+        direct_launch_request, handle_command,
+    };
+    use starbyte_core::manifest::{AssetConfig, RuntimeConfig};
     use starbyte_frontend::{
         CheatEntry, InstalledStatus, LibraryEntry, LibraryFilter, SoundSessionMode,
     };
-    use std::sync::mpsc;
+    use std::{path::PathBuf, sync::mpsc};
 
     #[test]
     fn prepared_rom_launch_binds_selected_cheats_and_sound_namespace() {
@@ -304,6 +355,45 @@ mod routing_tests {
         assert_eq!(request.sound_mode, SoundSessionMode::Persistent);
         assert_eq!(request.cheats.len(), 1);
         assert_eq!(request.cheats[0].id, "selected-cheat");
+    }
+
+    #[test]
+    fn direct_file_open_prepares_worker_event_without_advancing_emulation() {
+        let (events, receiver) = mpsc::channel();
+        let rom = PathBuf::from("prepared-game.sfc");
+        let command = WorkerCommand {
+            job_id: 17,
+            config: RuntimeConfig::default(),
+            filter: LibraryFilter::default(),
+            kind: WorkerCommandKind::MaterializePath {
+                path: rom.clone(),
+                matching: None,
+            },
+        };
+        handle_command(command, &AssetConfig::default(), &events, "Open ROM").unwrap();
+        match receiver.recv().unwrap() {
+            WorkerEvent::DirectRomReady {
+                job_id,
+                original_path,
+                game_id,
+                request,
+            } => {
+                assert_eq!(job_id, 17);
+                assert_eq!(original_path, rom);
+                assert_eq!(request.rom_path, rom);
+                assert_eq!(game_id, None);
+                assert!(request.cheats.is_empty());
+                assert_eq!(request.sound_mode, SoundSessionMode::Persistent);
+            }
+            other => panic!("unexpected ROM event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn direct_file_launch_does_not_inherit_another_games_cheats() {
+        let request = direct_launch_request(None, PathBuf::from("new-game.sfc"));
+        assert!(request.cheats.is_empty());
+        assert_eq!(request.sound_mode, SoundSessionMode::Persistent);
     }
 
     #[test]

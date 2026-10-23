@@ -4561,7 +4561,29 @@ impl StarbyteApp {
                 }
             }
         });
-        if self.frame_performance.samples > 0 {
+        if let Some(worker) = &self.full_worker {
+            let rate = worker.engine.frame_stats();
+            let fps = rate
+                .fps
+                .map_or_else(|| "--".to_owned(), |value| format!("{value:.1}"));
+            ui.label(format!(
+                "Worker FPS: {fps} / {:.1}; 40ms+ gaps: {}; last {:.1} ms",
+                speed_target_fps(self.last_effective_speed_percent),
+                rate.hitches_40ms,
+                rate.last_gap_ms,
+            ));
+            ui.label(format!(
+                "Last worker emulation CPU: {:.2} ms; coalesced video frames: {}",
+                self.worker_cpu.as_secs_f32() * 1_000.0,
+                worker.engine.skipped_video_frames(),
+            ));
+            ui.label(format!(
+                "Audio drops: {} producer, {} mixer; empty sink: {}",
+                self.worker_audio.producer_dropped_frames,
+                self.worker_audio.worker_dropped_frames,
+                self.worker_audio.sink_empty_on_pcm,
+            ));
+        } else if self.frame_performance.samples > 0 {
             let fps = self
                 .frame_rate
                 .fps(Instant::now())

@@ -195,6 +195,7 @@ pub struct OwnedSession {
     input: InputPort,
     render: RenderPort,
     last_sram_flush: Instant,
+    next_audio_retry: Instant,
 }
 
 impl OwnedSession {
@@ -214,6 +215,7 @@ impl OwnedSession {
             input: InputPort::default(),
             render: RenderPort::default(),
             last_sram_flush: Instant::now(),
+            next_audio_retry: Instant::now(),
         }
     }
 
@@ -392,10 +394,20 @@ impl OwnedSession {
             .count();
 
         if self.sound_enabled && !self.muted && self.volume > 0.0 {
-            if self.audio.is_none() && nonzero_pairs > 0 {
+            if self.audio.is_none()
+                && nonzero_pairs > 0
+                && Instant::now() >= self.next_audio_retry
+            {
                 match AudioOutput::start() {
                     Ok(output) => self.audio = Some(output),
-                    Err(error) => tracing::warn!("emulation worker could not start audio: {error}"),
+                    Err(error) => {
+                        // Missing/failed output devices must not trigger a
+                        // fresh audio-thread spawn and warning at 60 Hz.
+                        self.next_audio_retry = Instant::now() + Duration::from_secs(5);
+                        tracing::warn!(
+                            "emulation worker could not start audio (retry in 5s): {error}"
+                        );
+                    }
                 }
             }
             if let Some(audio) = &self.audio {

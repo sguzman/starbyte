@@ -178,6 +178,7 @@ jobs:
             }
           cat "$RUNNER_TEMP/starbyte-full-sram.log"
           grep -F "STARBYTE_FULL_LIBRARY_SRAM_SMOKE_OK persisted_byte=5A" "$RUNNER_TEMP/starbyte-full-sram.log"
+          grep -F "STARBYTE_FULL_LIBRARY_OWNER_SHUTDOWN_SMOKE_OK finalized=true audio_released=true" "$RUNNER_TEMP/starbyte-full-sram.log"
           # A broken replacement request must report its error while keeping
           # the previous installed cartridge, generation and clock alive in
           # the original full-library window, not only in a worker unit test.

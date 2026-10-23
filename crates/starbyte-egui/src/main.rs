@@ -17,6 +17,7 @@ mod scheduler_video;
 #[allow(dead_code)]
 mod session_engine;
 mod threaded_preview;
+mod video_upload;
 mod worker;
 
 use std::{env, path::PathBuf};

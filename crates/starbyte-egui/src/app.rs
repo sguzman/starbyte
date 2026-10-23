@@ -1459,8 +1459,10 @@ impl StarbyteApp {
         }
         if let Some(worker) = &self.full_worker {
             let frame_error = worker.engine.take_error();
-            let unexpected_exit =
-                should_report_worker_exit(worker.engine.is_worker_finished(), self.worker_exit_reported);
+            let unexpected_exit = should_report_worker_exit(
+                worker.engine.is_worker_finished(),
+                self.worker_exit_reported,
+            );
             if unexpected_exit {
                 self.worker_exit_reported = true;
             }

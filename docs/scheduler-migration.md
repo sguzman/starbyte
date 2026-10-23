@@ -79,10 +79,11 @@ complete Starbyte library application.
 - [ ] 🧹 Shut down cleanly: stop clock, flush SRAM, clear audio and join exactly once.
 - [ ] 🚀 Make the worker the default runtime only after passing acceptance gates.
 
-## Milestone D: validation — 2/8 test paths authored (25%), not yet verified
+## Milestone D: validation — 3/9 test paths authored (33%), not yet verified
 
 - [x] 🧪 Add a display-server-free, real built-in ROM smoke path (`--demo --scheduler-smoke`) to CI.
 - [x] 🖥️ Add an opt-in `--threaded-preview` native egui shell and Weston smoke that requires a rendered texture.
+- [x] 🧪 Add a `cargo test` built-in demo ROM integration test for background frames, neutral controls, screenshot capture and quick-save state.
 - [ ] ✅ Confirm Linux CI format/Clippy and Linux+Windows tests pass.
 - [ ] 🟩 Confirm the scheduler smoke actually completes on the exact commit.
 - [ ] 🪟 Run Wayland window visible/focused and confirm accurate ~60.1 emulated FPS.
@@ -129,9 +130,9 @@ state as a fixed background-pause regression.
 
 - `scheduler.rs`: dedicated clock, mailbox, command and transaction tests.
 - `session_engine.rs`: worker-owned SNES session, audio, input port, periodic SRAM
-  flush and framebuffer copying controlled by renderer-update heartbeats.
+  flush and framebuffer copying controlled by renderer-update heartbeats; built-in demo integration tests run without a compositor.
 - `scheduler_video.rs`: renderer-only texture and telemetry adapter (not yet attached to the live GUI).
-- `main.rs`: explicit headless worker smoke (including a memory quick-save/restore roundtrip) and opt-in native-preview routes, no production default switch.
+- `main.rs`: explicit headless worker smoke (including a memory quick-save/restore roundtrip, failed ROM load preservation and temporary PNG validation) and opt-in native-preview routes, no production default switch.
 - `threaded_preview.rs`: opt-in worker-powered egui player with configured twelve-button keyboard/gamepad input, independent FPS, audio controls and speaker check, live clock policies, status visibility, asynchronous save/load, ROM replacement, disk slots and F12 screenshots.
 - `preview_gamepads.rs`: multi-controller button and analog-axis input aggregation, independent of SNES frame pacing.
 - `starbyte-frontend::SessionControlsSnapshot`: common typed summary of ROM, mode, quick-save, durable slots, and cheat-read diagnostics; adopted by the legacy slot menu as a low-risk UI migration seam.

@@ -868,6 +868,32 @@ mod tests {
         let reply = worker.queue_clear_cheats().unwrap();
         reply.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
         assert_eq!(worker.read_controls().unwrap().rom_cheat_read_hits, 0);
+
+        // A launch request couples cartridge, sound mode and cheat list in
+        // one worker-owned operation; reloading resets the old quick save.
+        let reloaded = worker
+            .queue_launch_with_frame(SessionLaunchRequest {
+                rom_path: rom.clone(),
+                sound_mode: SoundSessionMode::Persistent,
+                cheats: Vec::new(),
+            })
+            .unwrap()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap();
+        assert!(reloaded.status.has_rom);
+        assert!(!worker.read_controls().unwrap().has_quick_save);
+        let missing = dir.path().join("not-a-cartridge.sfc");
+        let failed = worker
+            .queue_launch_with_frame(SessionLaunchRequest {
+                rom_path: missing,
+                sound_mode: SoundSessionMode::Persistent,
+                cheats: Vec::new(),
+            })
+            .unwrap()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+        assert!(failed.is_err());
         assert_eq!(worker.shutdown().unwrap().snapshot().rom_path, Some(rom));
     }
 

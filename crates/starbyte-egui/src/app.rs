@@ -1581,17 +1581,12 @@ impl StarbyteApp {
             }
         }
         if isolated {
-            if let Some(upload) = self.session.emulator().isolated_apu_upload() {
-                ui.label(format!(
-                    "Sound program uploaded: {} bytes",
-                    upload.bytes_written()
-                ));
+            let sound = self.session.sound_diagnostics();
+            if let Some(uploaded) = sound.uploaded_program {
+                ui.label(uploaded);
             }
-            if let Some(status) = self.session.emulator().isolated_apu_spc700_status() {
-                ui.label(format!(
-                    "SPC700: {} instructions, PC ${:04X}, {:?}",
-                    status.instructions, status.pc, status.halt_state
-                ));
+            if let Some(status) = sound.spc700_status {
+                ui.label(status);
             } else {
                 ui.label("SPC700: waiting for the game's sound-program handoff");
             }

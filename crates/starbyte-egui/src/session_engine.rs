@@ -305,6 +305,12 @@ impl OwnedSession {
         )
     }
 
+    /// Read only after the owning scheduler has shut down and joined.
+    /// This does not claim an external audio device was physically audible.
+    pub fn finalization_state(&self) -> (bool, bool) {
+        (self.shutdown_finalized, self.audio.is_none())
+    }
+
     fn finalize_on_worker(&mut self) {
         self.clear_game_audio();
         // Drop the Rodio output on the owning thread too; joining an audio

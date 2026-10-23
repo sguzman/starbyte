@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions, Vec2};
-use starbyte_frontend::SessionSnapshot;
+use starbyte_frontend::{SessionInputDiagnostics, SessionSnapshot};
 
 use crate::{
     scheduler::EmulatorScheduler,
@@ -20,6 +20,7 @@ pub struct WorkerDisplay {
     stereo_pairs: usize,
     nonzero_pairs: usize,
     audio: WorkerAudioDiagnostics,
+    input: SessionInputDiagnostics,
 }
 
 impl WorkerDisplay {
@@ -62,6 +63,7 @@ impl WorkerDisplay {
         self.stereo_pairs = frame.stereo_pairs;
         self.nonzero_pairs = frame.nonzero_pairs;
         self.audio = frame.audio_diagnostics;
+        self.input = frame.input_diagnostics;
         self.status = Some(frame.status);
     }
 
@@ -83,6 +85,10 @@ impl WorkerDisplay {
 
     pub fn audio_diagnostics(&self) -> WorkerAudioDiagnostics {
         self.audio
+    }
+
+    pub fn input_diagnostics(&self) -> SessionInputDiagnostics {
+        self.input
     }
 
     /// Presentation is pure UI work: it never blocks the emulator or asks
@@ -134,6 +140,7 @@ mod tests {
                 stereo_pairs: 532,
                 nonzero_pairs: 200,
                 audio_diagnostics: WorkerAudioDiagnostics::default(),
+                input_diagnostics: SessionInputDiagnostics::default(),
             },
         );
         assert_eq!(display.status().unwrap().frame, 42);

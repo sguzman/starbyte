@@ -1171,7 +1171,9 @@ impl StarbyteApp {
             }
         }
 
-        let has_loaded_rom = session.as_ref().is_some_and(|legacy| legacy.snapshot().has_rom);
+        let has_loaded_rom = session
+            .as_ref()
+            .is_some_and(|legacy| legacy.snapshot().has_rom);
         let start_playing = has_loaded_rom && startup_error.is_none();
         let worker = AppWorker::spawn(assets.clone());
         let gilrs = Gilrs::new().ok();
@@ -2537,7 +2539,10 @@ impl StarbyteApp {
                     Ok(_) => {
                         self.loaded_game_id = Some(entry.game_id.clone());
                         self.remember_recent_rom(&request.rom_path);
-                        if let Err(error) = self.legacy_session_mut().run_frame_with_timeout(GUI_FRAME_TIMEOUT) {
+                        if let Err(error) = self
+                            .legacy_session_mut()
+                            .run_frame_with_timeout(GUI_FRAME_TIMEOUT)
+                        {
                             let error = error.to_string();
                             self.record_playback_error(&error);
                             self.play_view = true;
@@ -3070,7 +3075,11 @@ impl StarbyteApp {
             self.confirm_experimental_audio = false;
             return;
         }
-        let Some(path) = self.legacy_session().loaded_rom_path().map(Path::to_path_buf) else {
+        let Some(path) = self
+            .legacy_session()
+            .loaded_rom_path()
+            .map(Path::to_path_buf)
+        else {
             self.status_line = "Load a game before testing experimental audio.".to_owned();
             return;
         };
@@ -3085,11 +3094,13 @@ impl StarbyteApp {
         // Discard the old worker's device/submission counters. A sound test
         // must report *this session's* PCM delivery, not a prior ROM's.
         self.audio_output = None;
-        let result = self.legacy_session_mut().launch_game(&SessionLaunchRequest {
-            rom_path: path,
-            sound_mode: mode,
-            cheats: old_cheats.unwrap_or_default(),
-        });
+        let result = self
+            .legacy_session_mut()
+            .launch_game(&SessionLaunchRequest {
+                rom_path: path,
+                sound_mode: mode,
+                cheats: old_cheats.unwrap_or_default(),
+            });
         match result {
             Ok(_) => {
                 self.playback_error = None;
@@ -3484,7 +3495,10 @@ impl StarbyteApp {
         self.queued_keyboard_presses.clear();
         self.queued_gamepad_presses.clear();
         let started = Instant::now();
-        match self.legacy_session_mut().run_frame_with_timeout(GUI_FRAME_TIMEOUT) {
+        match self
+            .legacy_session_mut()
+            .run_frame_with_timeout(GUI_FRAME_TIMEOUT)
+        {
             Ok(()) => {
                 self.frame_performance.record(started.elapsed());
                 if self.exit_after_frames.is_some() {
@@ -3595,7 +3609,8 @@ impl StarbyteApp {
     ) -> Result<(), String> {
         self.clear_audio();
         self.audio_output = None;
-        self.legacy_session_mut().launch_game(request)
+        self.legacy_session_mut()
+            .launch_game(request)
             .map_err(|error| format!("Could not load ROM: {error}"))?;
         self.loaded_game_id = game_id;
         self.remember_recent_rom(original_path);
@@ -3623,7 +3638,10 @@ impl StarbyteApp {
                 });
             }
         }
-        if let Err(error) = self.legacy_session_mut().run_frame_with_timeout(GUI_FRAME_TIMEOUT) {
+        if let Err(error) = self
+            .legacy_session_mut()
+            .run_frame_with_timeout(GUI_FRAME_TIMEOUT)
+        {
             let message = error.to_string();
             self.record_playback_error(&message);
             self.play_view = true;
@@ -5114,7 +5132,10 @@ impl StarbyteApp {
             self.queue_full_worker_save(SessionSaveAction::QuickSave);
             return;
         }
-        match self.legacy_session_mut().apply_save_action(SessionSaveAction::QuickSave) {
+        match self
+            .legacy_session_mut()
+            .apply_save_action(SessionSaveAction::QuickSave)
+        {
             Ok(_) => self.status_line = "Quick save stored for this session (F5).".to_owned(),
             Err(error) => self.status_line = error.to_string(),
         }
@@ -5125,7 +5146,10 @@ impl StarbyteApp {
             self.queue_full_worker_save(SessionSaveAction::QuickLoad);
             return;
         }
-        match self.legacy_session_mut().apply_save_action(SessionSaveAction::QuickLoad) {
+        match self
+            .legacy_session_mut()
+            .apply_save_action(SessionSaveAction::QuickLoad)
+        {
             Ok(_) => {
                 self.clear_audio();
                 self.refresh_framebuffer(ctx);
@@ -5172,10 +5196,11 @@ impl StarbyteApp {
     }
 
     fn save_screenshot(&mut self) {
+        // Read the immutable session view before borrowing the worker's
+        // outstanding commands mutably; no legacy emulator access is needed.
+        let has_rom = self.session_snapshot().has_rom;
         if let Some(worker) = &mut self.full_worker {
-            if !self.session_snapshot().has_rom
-                || !worker.pending_launches.is_empty()
-            {
+            if !has_rom || !worker.pending_launches.is_empty() {
                 self.status_line = "Wait for a cartridge before taking a screenshot.".to_owned();
                 return;
             }

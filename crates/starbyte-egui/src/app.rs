@@ -6743,6 +6743,18 @@ impl eframe::App for StarbyteApp {
                 && self.framebuffer_texture.is_some()
             {
                 self.exit_after_frames = None;
+                // Acceptance is measured in the original eframe window,
+                // after an actual worker-owned frame reached the texture.
+                // A hidden second legacy emulator is an ownership violation.
+                if self.session.is_some() || self.full_worker.is_none() {
+                    println!("STARBYTE_FULL_LIBRARY_SINGLE_OWNER_SMOKE_FAILED shadow_legacy_session=true");
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                }
+                println!(
+                    "STARBYTE_FULL_LIBRARY_SINGLE_OWNER_SMOKE_OK legacy_session_absent=true worker_frame={}",
+                    self.session_snapshot().frame
+                );
                 println!(
                     "STARBYTE_FULL_LIBRARY_WORKER_SMOKE_OK frame={}",
                     self.session_snapshot().frame

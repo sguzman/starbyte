@@ -34,8 +34,8 @@ use starbyte_core::{
 use starbyte_frontend::{
     CheatEntry, FrontendSession, InstalledStatus, LibraryEntry, LibraryFilter, LibraryService,
     LibrarySnapshot, LibraryTarget, SessionControlsSnapshot, SessionInputDiagnostics,
-    SessionLaunchRequest, SessionSaveAction, SessionScreenshot, SessionSnapshot,
-    SessionSoundDiagnostics, SoundSessionMode,
+    SessionLaunchRequest, SessionSaveAction, SessionSaveOutcome, SessionScreenshot,
+    SessionSnapshot, SessionSoundDiagnostics, SoundSessionMode,
 };
 
 // NTSC SNES video: 341 dots/scanline × 262 lines × 4 master clocks/dot

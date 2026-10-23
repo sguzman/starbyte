@@ -57,6 +57,8 @@ pub struct ThreadedPreviewApp {
     pause_when_unfocused: bool,
     integer_scale: bool,
     speed_percent: u16,
+    active_speed_percent: u16,
+    fast_forward_percent: u16,
     pitch_mode: AudioPitchMode,
     pitch_percent: u16,
     audio_enabled: bool,
@@ -120,6 +122,8 @@ impl ThreadedPreviewApp {
             pause_when_unfocused,
             integer_scale: config.video.integer_scale,
             speed_percent,
+            active_speed_percent: speed_percent,
+            fast_forward_percent: config.video.fast_forward_speed_percent.clamp(100, 400),
             pitch_mode: config.audio.pitch_mode,
             pitch_percent: config.audio.pitch_percent,
             audio_enabled: config.audio.enabled,
@@ -137,6 +141,20 @@ impl ThreadedPreviewApp {
             status_note: None,
             pending: Vec::new(),
         })
+    }
+
+    /// Tab fast-forward is a temporary worker-clock rate, independent of
+    /// the ordinary speed menu. Only transitions enqueue speed commands:
+    /// holding Tab must not continually flush the audio queue at 60 Hz.
+    fn apply_playback(&mut self, speed: u16, force_audio_update: bool) {
+        if self.active_speed_percent == speed && !force_audio_update {
+            return;
+        }
+        self.active_speed_percent = speed;
+        let pitch = pitch_for(self.pitch_mode, self.pitch_percent, speed);
+        if let Err(error) = self.engine.configure_playback_speed(speed, pitch) {
+            self.last_error = Some(error);
+        }
     }
 
     fn queue_save(&mut self, result: Result<Receiver<Result<(), String>>, String>) {
@@ -348,6 +366,13 @@ mod pitch_mode_tests {
     use super::*;
 
     #[test]
+    fn custom_pitch_is_independent_of_fast_forward_speed() {
+        assert_eq!(pitch_for(AudioPitchMode::Custom, 80, 100), 0.8);
+        assert_eq!(pitch_for(AudioPitchMode::Custom, 80, 400), 0.8);
+        assert_eq!(pitch_for(AudioPitchMode::FollowSpeed, 80, 400), 4.0);
+    }
+
+    #[test]
     fn follow_speed_changes_pitch_without_changing_custom_mode() {
         assert_eq!(pitch_for(AudioPitchMode::Preserve, 150, 300), 1.0);
         assert_eq!(pitch_for(AudioPitchMode::FollowSpeed, 150, 300), 3.0);
@@ -362,6 +387,15 @@ impl eframe::App for ThreadedPreviewApp {
         // background pause disabled, emulation continues regardless.
         self.engine.gui_heartbeat();
         let focused = ctx.input(|input| input.focused);
+        let fast_forwarding = focused
+            && !ctx.wants_keyboard_input()
+            && ctx.input(|input| input.key_down(egui::Key::Tab));
+        let target_speed = if fast_forwarding {
+            self.fast_forward_percent
+        } else {
+            self.speed_percent
+        };
+        self.apply_playback(target_speed, false);
         if focused != self.focused {
             self.focused = focused;
             self.engine.set_focused(focused);
@@ -548,17 +582,7 @@ impl eframe::App for ThreadedPreviewApp {
                             .changed();
                     }
                     if pitch_changed {
-                        let pitch = pitch_for(
-                            self.pitch_mode,
-                            self.pitch_percent,
-                            self.speed_percent,
-                        );
-                        if let Err(error) = self.engine.configure_playback_speed(
-                            self.speed_percent,
-                            pitch,
-                        ) {
-                            self.last_error = Some(error);
-                        }
+                        self.apply_playback(self.active_speed_percent, true);
                     }
                 });
                 ui.menu_button("Speed", |ui| {
@@ -571,15 +595,11 @@ impl eframe::App for ThreadedPreviewApp {
                             )
                             .changed()
                         {
-                            let pitch = pitch_for(
-                                self.pitch_mode,
-                                self.pitch_percent,
-                                speed,
-                            );
-                            if let Err(error) =
-                                self.engine.configure_playback_speed(speed, pitch)
-                            {
-                                self.last_error = Some(error);
+                            // Preserve held Tab fast-forward if the user
+                            // adjusts the normal speed from the menu.
+                            let active = self.active_speed_percent;
+                            if active != self.fast_forward_percent {
+                                self.apply_playback(speed, false);
                             }
                             ui.close();
                         }
@@ -657,7 +677,7 @@ impl eframe::App for ThreadedPreviewApp {
                         if let Some(fps) = rate.fps {
                             ui.label(format!(
                                 "Worker FPS {fps:.1} / {:.1}",
-                                60.0985 * f32::from(self.speed_percent) / 100.0
+                                60.0985 * f32::from(self.active_speed_percent) / 100.0
                             ));
                         } else {
                             ui.label("Worker FPS: measuring");

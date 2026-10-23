@@ -5875,7 +5875,10 @@ mod session_view_bridge_tests {
             .unwrap()
             .unwrap();
         assert_eq!(legacy.controls.sound_mode, SoundSessionMode::Compatibility);
-        assert!(!legacy.controls.state_slots[0], "sound slots must not leak into legacy mode");
+        assert!(
+            !legacy.controls.state_slots[0],
+            "sound slots must not leak into legacy mode"
+        );
         let legacy_slot = worker
             .queue_save_action_with_frame(SessionSaveAction::SaveSlot(1))
             .unwrap()

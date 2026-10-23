@@ -607,6 +607,21 @@ impl OwnedSession {
         }
     }
 
+    /// Advance once while manually paused. Keep the DSP emulation active,
+    /// but never queue this diagnostic frame's PCM for speaker playback.
+    /// Return full still video even if the window was temporarily hidden.
+    pub fn step_frame(&mut self) -> Result<PublishedGameFrame, String> {
+        let audio_enabled = self.sound_enabled;
+        self.sound_enabled = false;
+        let stepped = self.advance();
+        self.sound_enabled = audio_enabled;
+        let mut frame = stepped?;
+        if frame.rgba.is_none() {
+            frame.rgba = Some(self.session.framebuffer_rgba().to_vec());
+        }
+        Ok(frame)
+    }
+
     /// Produce one game frame entirely on the scheduler thread. The Rodio
     /// queue is already bounded and independent of egui. Never enqueue PCM
     /// for the renderer to replay later after a hidden-window interval.
@@ -881,6 +896,14 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
         self.submit_transaction(|engine| engine.capture_screenshot())
     }
 
+    /// Explicit frame stepping is serialized on the worker even when normal
+    /// playback is stopped. The GUI can await the resulting still frame.
+    pub fn queue_step_frame(
+        &self,
+    ) -> Result<Receiver<Result<PublishedGameFrame, String>>, String> {
+        self.submit_transaction(|engine| engine.step_frame())
+    }
+
     pub fn read_controls(&self) -> Result<SessionControlsSnapshot, String> {
         self.transact(|engine| Ok(engine.session.controls_snapshot()))
     }
@@ -975,6 +998,36 @@ mod tests {
             r: true,
         };
         assert_eq!(controller_from_bits(all.to_bits()), all);
+    }
+
+    #[test]
+    fn paused_worker_steps_one_frame_without_enqueuing_audio() {
+        let dir = tempfile::tempdir().unwrap();
+        let rom = dir.path().join("step-demo.sfc");
+        std::fs::write(&rom, starbyte_core::testing::demo::demo_rom_bytes()).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(dir.path().join("saves")),
+            state_dir: Some(dir.path().join("states")),
+            cache_dir: Some(dir.path().join("cache")),
+            config_path: None,
+        };
+        let mut owner = OwnedSession::create(assets).unwrap();
+        owner.load_rom(&rom, SoundSessionMode::Persistent).unwrap();
+        let (worker, _, _) = owner.spawn_with_ports().unwrap();
+        let before = worker.read_status().unwrap().frame;
+        let stepped = worker
+            .queue_step_frame()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap();
+        assert_eq!(stepped.status.frame, before + 1);
+        assert!(stepped.rgba.is_some());
+        assert_eq!(stepped.audio_diagnostics.submitted_frames, 0);
+        std::thread::sleep(Duration::from_millis(75));
+        assert_eq!(worker.read_status().unwrap().frame, stepped.status.frame);
+        worker.shutdown().unwrap();
     }
 
     #[test]

@@ -742,7 +742,11 @@ struct FullLibraryWorker {
     /// Capture generation is retained through asynchronous PNG encoding;
     /// a completed older write must not replace the new game's status.
     pending_screenshot_writes: Vec<(Option<u64>, Receiver<Result<PathBuf, String>>)>,
-    pending_speaker_checks: Vec<Receiver<Result<(), String>>>,
+    pending_speaker_checks: Vec<(
+        Option<u64>,
+        Option<u64>,
+        Receiver<Result<(), String>>,
+    )>,
     pending_sound_diagnostics: Option<(
         Option<u64>,
         Receiver<Result<SessionSoundDiagnostics, String>>,
@@ -1467,13 +1471,15 @@ impl StarbyteApp {
         worker.pending_screenshot_writes = writes_pending;
         let mut completed_tones = Vec::new();
         let mut waiting_tones = Vec::new();
-        for reply in std::mem::take(&mut worker.pending_speaker_checks) {
+        for (generation, selection, reply) in std::mem::take(&mut worker.pending_speaker_checks) {
             match reply.try_recv() {
-                Ok(result) => completed_tones.push(result),
-                Err(TryRecvError::Empty) => waiting_tones.push(reply),
-                Err(TryRecvError::Disconnected) => {
-                    completed_tones.push(Err("Audio worker tone channel stopped".to_owned()));
-                }
+                Ok(result) => completed_tones.push((generation, selection, result)),
+                Err(TryRecvError::Empty) => waiting_tones.push((generation, selection, reply)),
+                Err(TryRecvError::Disconnected) => completed_tones.push((
+                    generation,
+                    selection,
+                    Err("Audio worker tone channel stopped".to_owned()),
+                )),
             }
         }
         worker.pending_speaker_checks = waiting_tones;
@@ -1762,7 +1768,20 @@ impl StarbyteApp {
                 Err(error) => self.status_line = format!("Screenshot failed: {error}"),
             }
         }
-        for result in completed_tones {
+        for (generation, selection, result) in completed_tones {
+            // An older speaker-test acknowledgement is not new-ROM feedback.
+            // Keep load and installation status visible after a fresh selection.
+            if !worker_tone_receipt_is_current(
+                generation,
+                self.worker_active_launch_id,
+                selection,
+                self.latest_rom_job_id,
+                self.full_worker
+                    .as_ref()
+                    .is_some_and(|worker| !worker.pending_launches.is_empty()),
+            ) {
+                continue;
+            }
             self.status_line = match result {
                 Ok(()) => "440 Hz worker tone submitted (audibility unverified).".to_owned(),
                 Err(error) => format!("Worker speaker check failed: {error}"),
@@ -3263,7 +3282,11 @@ impl StarbyteApp {
             if let Some(worker) = &mut self.full_worker {
                 match worker.engine.queue_speaker_check() {
                     Ok(reply) => {
-                        worker.pending_speaker_checks.push(reply);
+                        worker.pending_speaker_checks.push((
+                            self.worker_active_launch_id,
+                            self.latest_rom_job_id,
+                            reply,
+                        ));
                         self.status_line = "Testing worker speaker output...".to_owned();
                     }
                     Err(error) => self.status_line = format!("Speaker check failed: {error}"),
@@ -8846,6 +8869,20 @@ fn worker_save_receipt_is_current(
     received_generation.is_some() && received_generation == active_generation
 }
 
+/// Test tones can run before a cartridge is selected, so unlike screenshot
+/// receipts a pair of None generations is valid. However an intervening ROM
+/// request or a pending installation must not let an old acknowledgement
+/// overwrite the latest selection's status.
+fn worker_tone_receipt_is_current(
+    generation: Option<u64>,
+    active_generation: Option<u64>,
+    selection: Option<u64>,
+    latest_selection: Option<u64>,
+    installation_pending: bool,
+) -> bool {
+    !installation_pending && generation == active_generation && selection == latest_selection
+}
+
 fn indexed_game_id_for_loaded_rom(
     entries: &[LibraryEntry],
     loaded_path: &Path,
@@ -9076,7 +9113,7 @@ fn is_superseded_rom_load(latest: Option<u64>, event_job: u64) -> bool {
 
 #[cfg(test)]
 mod rom_request_order_tests {
-    use super::{is_rom_job, is_superseded_rom_load};
+    use super::{is_rom_job, is_superseded_rom_load, worker_tone_receipt_is_current};
 
     #[test]
     fn newer_rom_selection_supersedes_success_and_error_from_older_load() {
@@ -9087,6 +9124,23 @@ mod rom_request_order_tests {
         assert!(is_rom_job("Open ROM"));
         assert!(!is_rom_job("Refresh Cheats"));
         assert!(!is_rom_job("Scan Library"));
+    }
+
+    #[test]
+    fn delayed_speaker_test_cannot_replace_newer_rom_selection_status() {
+        assert!(worker_tone_receipt_is_current(None, None, None, None, false));
+        assert!(worker_tone_receipt_is_current(
+            Some(4), Some(4), Some(9), Some(9), false
+        ));
+        assert!(!worker_tone_receipt_is_current(
+            Some(4), Some(5), Some(9), Some(9), false
+        ));
+        assert!(!worker_tone_receipt_is_current(
+            Some(4), Some(4), Some(9), Some(10), false
+        ));
+        assert!(!worker_tone_receipt_is_current(
+            Some(4), Some(4), Some(9), Some(9), true
+        ));
     }
 }
 

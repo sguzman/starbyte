@@ -19,7 +19,7 @@ use starbyte_frontend::{
 };
 
 use crate::{
-    audio::AudioOutput,
+    audio::{AudioDeviceStatus, AudioOutput},
     scheduler::{EmulatorScheduler, NTSC_FRAME_INTERVAL},
 };
 
@@ -173,6 +173,19 @@ pub(crate) fn controller_from_bits(bits: u16) -> ControllerState {
     }
 }
 
+/// Hardware-mixer diagnostic measured by the audio worker. Generated PCM
+/// is not proof of audible playback; a nonzero submitted frame count confirms
+/// actual delivery to Rodio's sink, not the physical speaker.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WorkerAudioDiagnostics {
+    pub device_status: Option<AudioDeviceStatus>,
+    pub submitted_frames: u64,
+    pub submitted_nonzero_frames: u64,
+    pub producer_dropped_frames: u64,
+    pub worker_dropped_frames: u64,
+    pub sink_empty_on_pcm: u64,
+}
+
 /// A snapshot for the renderer; video frames coalesce when the UI is hidden.
 pub struct PublishedGameFrame {
     pub status: SessionSnapshot,
@@ -180,6 +193,7 @@ pub struct PublishedGameFrame {
     pub last_frame_cpu: Duration,
     pub stereo_pairs: usize,
     pub nonzero_pairs: usize,
+    pub audio_diagnostics: WorkerAudioDiagnostics,
 }
 
 /// Exclusive, thread-owned game state. All save mutations stay serialized
@@ -346,6 +360,19 @@ impl OwnedSession {
     pub fn snapshot(&self) -> SessionSnapshot {
         self.session.snapshot()
     }
+    pub fn audio_diagnostics(&self) -> WorkerAudioDiagnostics {
+        let Some(output) = self.audio.as_ref() else {
+            return WorkerAudioDiagnostics::default();
+        };
+        WorkerAudioDiagnostics {
+            device_status: Some(output.device_status()),
+            submitted_frames: output.submitted_frames(),
+            submitted_nonzero_frames: output.submitted_nonzero_frames(),
+            producer_dropped_frames: output.producer_dropped_frames(),
+            worker_dropped_frames: output.worker_dropped_frames(),
+            sink_empty_on_pcm: output.sink_empty_on_pcm(),
+        }
+    }
 
     /// Snapshot the current emulated framebuffer without advancing a frame.
     /// Needed after quick/disk state loads while the user is paused: the UI
@@ -364,6 +391,7 @@ impl OwnedSession {
             last_frame_cpu: Duration::ZERO,
             stereo_pairs,
             nonzero_pairs,
+            audio_diagnostics: self.audio_diagnostics(),
         }
     }
 
@@ -427,6 +455,7 @@ impl OwnedSession {
             last_frame_cpu: started.elapsed(),
             stereo_pairs,
             nonzero_pairs,
+            audio_diagnostics: self.audio_diagnostics(),
         })
     }
 }

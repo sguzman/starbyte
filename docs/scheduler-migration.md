@@ -1,8 +1,39 @@
 # Emulation scheduler migration
 
-**Status: in progress. Commit [`c981f64`](https://github.com/sguzman/starbyte/commit/c981f6416696724a63513675ca47964454e6f582) passed [CI run 40009459833](https://github.com/sguzman/starbyte/actions/runs/40009459833): Linux, Windows, lint/Clippy and native Weston, including post-no-redraw original-window texture catch-up (121 worker frames during the gap, frame 134 uploaded afterward). Tracked source progress is now 60/77 (78%), with full-GUI migration 9/16 (56%); default-app ownership transfer and physical Hyprland/audio validation remain outstanding.**
+**Status: in progress. Commit [`51e729b`](https://github.com/sguzman/starbyte/commit/51e729bc106fea64c34cfb01040f5afa798bf80f) passed [CI run 40011629443](https://github.com/sguzman/starbyte/actions/runs/40011629443): Linux, Windows, format/Clippy, native full-library Weston focus/manual-pause continuity, and worker speed/pitch/mute/volume control-path regressions. Tracked source progress is 62/77 (81%), with full-GUI migration 10/16 (63%). Production-default handoff, physical Hyprland and audible-device quality remain unverified.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
+
+## Verified manual-pause independence and audio-policy handoff — 2026-10-23
+
+Commit [`51e729b`](https://github.com/sguzman/starbyte/commit/51e729bc106fea64c34cfb01040f5afa798bf80f)
+passed [CI 40011629443](https://github.com/sguzman/starbyte/actions/runs/40011629443)
+with **Linux, Windows, formatting and Clippy all green**, including the
+original full-library native Weston smoke.
+
+The full-window focus acceptance now tests a complete sequence: automatic
+focus pause, automatic focus resume, **deliberate manual Pause followed by a
+second focus loss/restoration**, and an explicit manual Play. It checks that
+manual Pause cannot be overridden by regaining focus. The native result was
+`STARBYTE_FULL_LIBRARY_FOCUS_PAUSE_SMOKE_OK paused_frames=0 resumed_frames=11 manual_paused_frames=0 manual_resumed_frames=11`.
+This closes Milestone C's independent manual/background pause-state task in
+the opt-in original-window worker path; **C advances to 10/16 (63%)**.
+
+A separate integration regression submits worker-owned playback speed and
+pitch changes (preserved pitch, speed-following pitch and custom pitch at
+constant speed) through the actual scheduler/owner command queue, along
+with mute and volume updates, in each of the compatibility, persistent and
+isolated sound/save modes. It verifies the exclusive owner receives the
+expected values and does not lose its selected sound-mode namespace.
+Together with the existing original-app pitch-selection mapping and
+pitch-only-change regression, this closes Milestone B's **control-path
+speed/pitch handoff** task: **B advances to 16/18 (89%)**.
+
+Neither check proves audible device fidelity or physical Hyprland behavior;
+the worker-backed complete library remains opt-in. Current evidence-backed
+source total is **62/77 (81%)**: A 7/8 (88%), B 16/18 (89%), P 18/20
+(90%), C 10/16 (63%), D 11/15 (73%). Production-default cutover is not
+complete.
 
 ## Verified complete-window video catch-up after compositor callback gap — 2026-10-23
 
@@ -279,7 +310,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [x] 🧪 Confirm format, Clippy and full workspace tests on code commit `d0254a7` (CI run 39951239026).
 - [ ] 🖥️ Verify worker scheduling while Hyprland is off-workspace or occluded.
 
-## Milestone B: thread-owned frontend session — 15/18 source tasks (83%)
+## Milestone B: thread-owned frontend session — 16/18 source tasks (89%)
 
 - [x] 🧠 Define `OwnedSession` wrapping `FrontendSession` in `session_engine.rs`.
 - [x] 🎵 Produce PCM on the worker and enqueue it to the existing bounded Rodio worker.
@@ -298,7 +329,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [x] 📬 Process command bursts in bounded batches; surface fatal worker exits and queue cheat/save commands without stalling UI frames.
 - [ ] 🔄 Replace all live `StarbyteApp.session` access with worker commands and snapshots.
 - [ ] 📊 Move current emulation telemetry (FPS, frame gaps, overlays) to worker-produced truth.
-- [ ] 🎚️ Preserve every current audio speed/pitch control and its per-mode behavior through the handoff.
+- [x] 🎚️ Preserve current speed/pitch/mute/volume control semantics across sound modes through the opt-in original-app worker handoff (worker command test and pitch-mode mapping, CI 40011629443; physical audibility separately gated).
 
 ## Milestone P: opt-in threaded preview parity — 18/20 source tasks (90%)
 
@@ -327,7 +358,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 not a separate repository, not the default UI, and not a substitute for the
 complete Starbyte library application.
 
-## Milestone C: native GUI migration — 9/16 source tasks (56%; default worker integration still 0%)
+## Milestone C: native GUI migration — 10/16 source tasks (63%; default worker integration still 0%)
 
 - [x] 🧱 Introduce frontend-neutral SessionControlsSnapshot and migrate the existing disk-slot menu to it; worker can serialize the same summary.
 - [x] 🎮 Migrate the existing input overlay to frontend-neutral SessionInputDiagnostics that the worker can also publish.
@@ -341,7 +372,7 @@ complete Starbyte library application.
 - [ ] ⌨️ Send controller inputs without losing key-down/up edges; preserve F5/F8/F9/Escape.
 - [x] 🪟 Display the latest completed RGBA texture without blocking the worker (opt-in full library, Weston catch-up after a two-second callback gap, CI 40009459833).
 - [ ] 🏠 Keep the full library, menus, recent covers and View status-bar toggles intact.
-- [ ] ⏸️ Make manually paused / automatically paused / background-allowed states independent.
+- [x] ⏸️ Keep manual Pause, automatic focus pause, background-allowed gameplay and their resumes independent (original full-library Weston, CI 40011629443).
 - [ ] 💾 Preserve original disk-slot, SRAM and sound-mode namespaces.
 - [ ] 🧹 Complete full-application orderly shutdown handoff: stop clock, flush SRAM, clear audio and join exactly once (worker finalizer implemented and covered, not yet installed in normal StarbyteApp).
 - [ ] 🚀 Make the worker the default runtime only after passing acceptance gates.

@@ -6644,23 +6644,23 @@ impl eframe::App for StarbyteApp {
                                 });
                             // Continue the ordinary egui repaint scheduler:
                             // the asynchronous launch receipts arrive later.
-                        }
-                        if Instant::now() >= deadline {
+                        } else if Instant::now() >= deadline {
                             println!(
                                 "STARBYTE_FULL_LIBRARY_RECEIPT_RACE_SMOKE_FAILED receipt={error_reported} retained={retained} screenshot={screenshot_written} step_uploaded={step_uploaded}"
                             );
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             return;
+                        } else {
+                            self.worker_replacement_smoke =
+                                Some(WorkerReplacementSmoke::AwaitReceiptRace {
+                                    previous_rom,
+                                    previous_owner,
+                                    deadline,
+                                    error_reported,
+                                    screenshot_written,
+                                    stepped_frame,
+                                });
                         }
-                        self.worker_replacement_smoke =
-                            Some(WorkerReplacementSmoke::AwaitReceiptRace {
-                                previous_rom,
-                                previous_owner,
-                                deadline,
-                                error_reported,
-                                screenshot_written,
-                                stepped_frame,
-                            });
                     }
                     WorkerReplacementSmoke::AwaitSupersededInstall {
                         installed_job,

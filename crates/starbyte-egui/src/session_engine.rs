@@ -186,6 +186,7 @@ pub struct WorkerAudioDiagnostics {
     pub producer_dropped_frames: u64,
     pub worker_dropped_frames: u64,
     pub sink_empty_on_pcm: u64,
+    pub test_tones_submitted: u64,
 }
 
 /// Read-only latest menu facts. The worker updates this only on explicit
@@ -575,6 +576,7 @@ impl OwnedSession {
             producer_dropped_frames: output.producer_dropped_frames(),
             worker_dropped_frames: output.worker_dropped_frames(),
             sink_empty_on_pcm: output.sink_empty_on_pcm(),
+            test_tones_submitted: output.test_tones_submitted(),
         }
     }
 
@@ -1198,6 +1200,17 @@ mod tests {
     fn detached_session_has_no_game_until_loaded() {
         let engine = OwnedSession::create(AssetConfig::default()).unwrap();
         assert!(!engine.snapshot().has_rom);
+    }
+
+    #[test]
+    fn muted_worker_speaker_check_rejects_test_tone_without_opening_device() {
+        let mut owner = OwnedSession::create(AssetConfig::default()).unwrap();
+        owner.set_audio(true, true, 0.5);
+        let worker = owner.spawn().unwrap();
+        let response = worker.queue_speaker_check().unwrap();
+        assert!(response.recv_timeout(Duration::from_secs(3)).unwrap().is_err());
+        assert_eq!(worker.frame_stats().fps, None);
+        worker.shutdown().unwrap();
     }
 
     #[test]

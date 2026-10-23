@@ -674,6 +674,7 @@ struct FullLibraryWorker {
     )>,
     pending_screenshots: Vec<(Option<u64>, Receiver<Result<SessionScreenshot, String>>)>,
     pending_screenshot_writes: Vec<Receiver<Result<PathBuf, String>>>,
+    pending_speaker_checks: Vec<Receiver<Result<(), String>>>,
     last_focus: Option<bool>,
     last_playing: Option<bool>,
     last_pause_when_unfocused: Option<bool>,
@@ -1026,6 +1027,7 @@ impl StarbyteApp {
                 pending_saves: Vec::new(),
                 pending_screenshots: Vec::new(),
                 pending_screenshot_writes: Vec::new(),
+                pending_speaker_checks: Vec::new(),
                 last_focus: None,
                 last_playing: None,
                 last_pause_when_unfocused: None,
@@ -1149,6 +1151,18 @@ impl StarbyteApp {
             }
         }
         worker.pending_screenshot_writes = writes_pending;
+        let mut completed_tones = Vec::new();
+        let mut waiting_tones = Vec::new();
+        for reply in std::mem::take(&mut worker.pending_speaker_checks) {
+            match reply.try_recv() {
+                Ok(result) => completed_tones.push(result),
+                Err(TryRecvError::Empty) => waiting_tones.push(reply),
+                Err(TryRecvError::Disconnected) => {
+                    completed_tones.push(Err("Audio worker tone channel stopped".to_owned()));
+                }
+            }
+        }
+        worker.pending_speaker_checks = waiting_tones;
         // Never show an obsolete picture while another cartridge is
         // installing. Completed launch replies are applied first.
         let frame = if worker.pending_launches.is_empty()
@@ -1302,6 +1316,12 @@ impl StarbyteApp {
                 }
                 Err(error) => self.status_line = format!("Screenshot failed: {error}"),
             }
+        }
+        for result in completed_tones {
+            self.status_line = match result {
+                Ok(()) => "440 Hz worker tone submitted (audibility unverified).".to_owned(),
+                Err(error) => format!("Worker speaker check failed: {error}"),
+            };
         }
         for result in screenshot_writes {
             if self.worker_save_smoke_stage == Some(WorkerSaveSmokeStage::AwaitScreenshot) {
@@ -2235,45 +2255,71 @@ impl StarbyteApp {
             )
             .clicked()
         {
-            if self.audio_output.is_none() {
-                match AudioOutput::start() {
-                    Ok(output) => {
-                        self.audio_output = Some(output);
-                        self.sync_audio_volume();
+            if let Some(worker) = &mut self.full_worker {
+                match worker.engine.queue_speaker_check() {
+                    Ok(reply) => {
+                        worker.pending_speaker_checks.push(reply);
+                        self.status_line = "Testing worker speaker output...".to_owned();
                     }
-                    Err(error) => {
-                        self.status_line = format!("Could not start audio worker: {error}");
+                    Err(error) => self.status_line = format!("Speaker check failed: {error}"),
+                }
+            } else {
+                if self.audio_output.is_none() {
+                    match AudioOutput::start() {
+                        Ok(output) => {
+                            self.audio_output = Some(output);
+                            self.sync_audio_volume();
+                        }
+                        Err(error) => {
+                            self.status_line = format!("Could not start audio worker: {error}");
+                        }
                     }
                 }
-            }
-            if let Some(output) = &self.audio_output {
-                self.status_line = if output.enqueue_live_test_tone() {
-                    "440 Hz live-worker tone queued. Listen for a short beep.".to_owned()
-                } else {
-                    "Live-worker audio queue busy; tone not submitted. Try once more.".to_owned()
-                };
+                if let Some(output) = &self.audio_output {
+                    self.status_line = if output.enqueue_live_test_tone() {
+                        "440 Hz live-worker tone queued. Listen for a short beep.".to_owned()
+                    } else {
+                        "Live-worker audio queue busy; tone not submitted. Try once more.".to_owned()
+                    };
+                }
             }
         }
         ui.label(format!(
             "Live-worker test tones submitted to mixer: {} (hearing is still unverified)",
-            self.audio_output
-                .as_ref()
-                .map_or(0, AudioOutput::test_tones_submitted)
+            if self.full_worker.is_some() {
+                self.worker_audio.test_tones_submitted
+            } else {
+                self.audio_output
+                    .as_ref()
+                    .map_or(0, AudioOutput::test_tones_submitted)
+            }
         ));
         ui.label(format!(
             "Game PCM losses: {} full-queue drops, {} stale/expired worker drops",
-            self.audio_output
-                .as_ref()
-                .map_or(0, AudioOutput::producer_dropped_frames),
-            self.audio_output
-                .as_ref()
-                .map_or(0, AudioOutput::worker_dropped_frames),
+            if self.full_worker.is_some() {
+                self.worker_audio.producer_dropped_frames
+            } else {
+                self.audio_output
+                    .as_ref()
+                    .map_or(0, AudioOutput::producer_dropped_frames)
+            },
+            if self.full_worker.is_some() {
+                self.worker_audio.worker_dropped_frames
+            } else {
+                self.audio_output
+                    .as_ref()
+                    .map_or(0, AudioOutput::worker_dropped_frames)
+            },
         ));
         ui.label(format!(
             "Mixer empty before next game PCM: {} (possible playback gaps, not speaker proof)",
-            self.audio_output
-                .as_ref()
-                .map_or(0, AudioOutput::sink_empty_on_pcm),
+            if self.full_worker.is_some() {
+                self.worker_audio.sink_empty_on_pcm
+            } else {
+                self.audio_output
+                    .as_ref()
+                    .map_or(0, AudioOutput::sink_empty_on_pcm)
+            },
         ));
         ui.separator();
         ui.label("Independent OS speaker check (separate stream):");
@@ -4797,7 +4843,9 @@ impl eframe::App for StarbyteApp {
             if completed >= 45 {
                 println!("STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_OK advanced_frames={completed}");
             } else {
-                println!("STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_FAILED advanced_frames={completed}");
+                println!(
+                    "STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_FAILED advanced_frames={completed}"
+                );
             }
             self.worker_no_redraw_gap = None;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);

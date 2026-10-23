@@ -5398,19 +5398,21 @@ impl eframe::App for StarbyteApp {
                         && self.playback_error.is_some()
                         && !self.is_playing
                     {
-                        println!("STARBYTE_FULL_LIBRARY_WORKER_EXIT_SMOKE_OK playback_stopped=true");
+                        println!(
+                            "STARBYTE_FULL_LIBRARY_WORKER_EXIT_SMOKE_OK playback_stopped=true"
+                        );
                         self.worker_panic_smoke = false;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         return;
                     }
-                } else if self.session_snapshot().frame >= 15
-                    && self.framebuffer_texture.is_some()
+                } else if self.session_snapshot().frame >= 15 && self.framebuffer_texture.is_some()
                 {
                     self.worker_panic_sent = true;
                     if let Some(worker) = &self.full_worker {
-                        if let Err(error) = worker.engine.post(|_| {
-                            panic!("synthetic native worker-exit acceptance fault")
-                        }) {
+                        if let Err(error) = worker
+                            .engine
+                            .post(|_| panic!("synthetic native worker-exit acceptance fault"))
+                        {
                             println!("STARBYTE_FULL_LIBRARY_WORKER_EXIT_SMOKE_FAILED {error}");
                             self.worker_panic_smoke = false;
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);

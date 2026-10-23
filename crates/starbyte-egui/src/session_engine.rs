@@ -16,7 +16,8 @@ use std::{
 use starbyte_core::{input::ControllerState, manifest::AssetConfig};
 use starbyte_frontend::{
     CheatEntry, FrontendSession, SessionControlsSnapshot, SessionInputDiagnostics,
-    SessionScreenshot, SessionSnapshot, SessionSoundDiagnostics, SoundSessionMode,
+    SessionSaveAction, SessionSaveOutcome, SessionScreenshot, SessionSnapshot,
+    SessionSoundDiagnostics, SoundSessionMode,
 };
 
 use crate::{
@@ -567,6 +568,19 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
         self.submit_transaction(|engine| {
             engine.session.clear_active_cheats();
             Ok(())
+        })
+    }
+
+    /// The same save-command surface used by the existing StarbyteApp,
+    /// serialized against worker frames and acknowledged asynchronously.
+    pub fn queue_save_action(
+        &self,
+        action: SessionSaveAction,
+    ) -> Result<Receiver<Result<SessionSaveOutcome, String>>, String> {
+        self.submit_transaction(move |engine| {
+            engine.session
+                .apply_save_action(action)
+                .map_err(|error| error.to_string())
         })
     }
 

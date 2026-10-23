@@ -422,6 +422,12 @@ fn audio_pitch_factor(mode: AudioPitchMode, percent: u16, speed: u16) -> f32 {
     }
 }
 
+/// A pitch-only adjustment must reach the audio owner even when the SNES
+/// frame cadence is unchanged. Keep the last successfully queued pairing.
+fn worker_playback_update_needed(last: Option<(u16, f32)>, requested: (u16, f32)) -> bool {
+    last != Some(requested)
+}
+
 fn tab_fast_forward_active(
     window_focused: bool,
     text_focused: bool,
@@ -678,6 +684,7 @@ struct FullLibraryWorker {
     last_focus: Option<bool>,
     last_playing: Option<bool>,
     last_pause_when_unfocused: Option<bool>,
+    last_playback: Option<(u16, f32)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1031,6 +1038,7 @@ impl StarbyteApp {
                 last_focus: None,
                 last_playing: None,
                 last_pause_when_unfocused: None,
+                last_playback: None,
             });
             if let Some(path) = startup_rom {
                 app.open_local_rom(&path, &cc.egui_ctx);
@@ -5073,14 +5081,15 @@ impl eframe::App for StarbyteApp {
                     worker.engine.set_playing(self.is_playing);
                     worker.last_playing = Some(self.is_playing);
                 }
-                if speed != self.last_effective_speed_percent {
-                    let pitch = audio_pitch_factor(
-                        self.config.audio.pitch_mode,
-                        self.config.audio.pitch_percent,
-                        speed,
-                    );
-                    if let Err(error) = worker.engine.configure_playback_speed(speed, pitch) {
-                        self.status_line = error;
+                let pitch = audio_pitch_factor(
+                    self.config.audio.pitch_mode,
+                    self.config.audio.pitch_percent,
+                    speed,
+                );
+                if worker_playback_update_needed(worker.last_playback, (speed, pitch)) {
+                    match worker.engine.configure_playback_speed(speed, pitch) {
+                        Ok(()) => worker.last_playback = Some((speed, pitch)),
+                        Err(error) => self.status_line = error,
                     }
                 }
             }
@@ -5818,6 +5827,16 @@ mod playback_tests {
         };
         route_fast_forward_tab(&mut unfocused, true, &mut held);
         assert!(!held);
+    }
+
+    #[test]
+    fn worker_playback_tracks_pitch_changes_without_speed_changes() {
+        assert!(worker_playback_update_needed(None, (100, 1.0)));
+        assert!(!worker_playback_update_needed(Some((100, 1.0)), (100, 1.0)));
+        assert!(worker_playback_update_needed(Some((100, 1.0)), (100, 1.25)));
+        assert!(worker_playback_update_needed(Some((100, 1.0)), (200, 1.0)));
+        let custom = audio_pitch_factor(AudioPitchMode::Custom, 125, 100);
+        assert!(worker_playback_update_needed(Some((100, 1.0)), (100, custom)));
     }
 
     #[test]

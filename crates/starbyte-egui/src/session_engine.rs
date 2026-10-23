@@ -236,10 +236,11 @@ impl OwnedSession {
     }
 
     pub fn spawn(self) -> io::Result<EmulatorScheduler<Self, PublishedGameFrame>> {
-        EmulatorScheduler::spawn_with_pause_hook(
+        EmulatorScheduler::spawn_with_hooks(
             self,
             NTSC_FRAME_INTERVAL,
             Self::advance,
+            Self::clear_game_audio,
             Self::clear_game_audio,
         )
     }

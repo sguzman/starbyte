@@ -1,6 +1,6 @@
 # Emulation scheduler migration
 
-**Status: in progress. Opt-in worker/Weston acceptance passed on an earlier commit; latest full-UI refactors are awaiting CI.**
+**Status: in progress. Worker and native Weston checks passed on code commit `d0254a7`; full application owner transfer and physical Hyprland tests remain outstanding.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
 
@@ -13,7 +13,7 @@ again. Disabling `pause_when_unfocused` alone does not create a game clock.
 The correct long-term owner of ROM state, frame timing and save mutations is a
 dedicated emulation thread. The renderer merely consumes completed frames.
 
-## Milestone A: clock and ownership foundation — 6/8 source tasks (75%)
+## Milestone A: clock and ownership foundation — 7/8 source tasks (88%)
 
 - [x] ⏱️ Move deadline pacing into `scheduler.rs` with a dedicated OS thread.
 - [x] 🎮 Give the worker exclusive ownership of a generic machine object.
@@ -21,7 +21,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [x] 💤 Add independent Play, Focus, Background-pause and Speed commands.
 - [x] 🛑 Make a failed emulation frame halt the worker and expose its error.
 - [x] 📦 Bound outstanding asynchronous operations to 128 without blocking the GUI or losing separately ordered policy commands.
-- [ ] 🧪 Confirm format, Clippy and full workspace tests on the exact commit.
+- [x] 🧪 Confirm format, Clippy and full workspace tests on code commit `d0254a7` (CI run 39951239026).
 - [ ] 🖥️ Verify worker scheduling while Hyprland is off-workspace or occluded.
 
 ## Milestone B: thread-owned frontend session — 15/18 source tasks (83%)
@@ -45,7 +45,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [ ] 📊 Move current emulation telemetry (FPS, frame gaps, overlays) to worker-produced truth.
 - [ ] 🎚️ Preserve every current audio speed/pitch control and its per-mode behavior through the handoff.
 
-## Milestone P: opt-in threaded preview parity — 15/18 source tasks (83%)
+## Milestone P: opt-in threaded preview parity — 16/18 source tasks (89%)
 
 - [x] 🖼️ Display coalesced worker frames using egui textures without advancing the emulator from UI redraws.
 - [x] 🎮 Reuse configured twelve-button keyboard bindings and support several gamepads with analog D-pad emulation.
@@ -64,7 +64,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [x] 🛡️ Release stale gamepad holds on lost compositor focus and expose a worker-owned clear-cheats action.
 - [ ] 🎼 Verify actual background audio quality and speaker/device recovery on Hyprland.
 - [ ] 🧪 Verify preview menus, gamepads, screenshots and save slots natively on Hyprland.
-- [ ] ✅ Confirm format, compile, Clippy and tests on the exact preview commit.
+- [x] ✅ Confirm format, compile, Clippy and native Weston preview smoke at code commit `d0254a7`.
 
 **Isolation:** The preview is explicitly selected with `--threaded-preview`. It is
 not a separate repository, not the default UI, and not a substitute for the
@@ -89,15 +89,15 @@ complete Starbyte library application.
 - [ ] 🧹 Complete full-application orderly shutdown handoff: stop clock, flush SRAM, clear audio and join exactly once (worker finalizer implemented and covered, not yet installed in normal StarbyteApp).
 - [ ] 🚀 Make the worker the default runtime only after passing acceptance gates.
 
-## Milestone D: validation — 5/11 test paths authored (45%; latest commit not yet verified)
+## Milestone D: validation — 7/11 checkpoints (64%; code commit `d0254a7` CI green)
 
 - [x] 🧪 Add a display-server-free, real built-in ROM smoke path (`--demo --scheduler-smoke`) to CI.
 - [x] 🖥️ Add an opt-in `--threaded-preview` native egui shell and Weston smoke that requires a rendered texture.
 - [x] 🧪 Add a `cargo test` built-in demo ROM integration test for background frames, hidden-window copy suppression and reappearance, neutral controls, screenshot capture and quick-save state.
 - [x] 🎬 Add direct/worker launch-request tests for failed ROM preservation, restored save-mode namespaces and memory quick-save invalidation after a successful ROM replacement.
 - [x] 🔗 Add a compositor-free integration test from an installed library entry through ROM materialization, exclusive worker launch, unfocused gameplay frames and a worker-owned quick save.
-- [ ] ✅ Confirm Linux CI format/Clippy and Linux+Windows tests pass.
-- [ ] 🟩 Confirm the scheduler smoke actually completes on the exact commit.
+- [x] ✅ Confirm Linux CI format/Clippy and Linux+Windows tests pass on `d0254a7`.
+- [x] 🟩 Confirm the headless scheduler smoke and both native Weston smokes complete on `d0254a7`.
 - [ ] 🪟 Run Wayland window visible/focused and confirm accurate ~60.1 emulated FPS.
 - [ ] 🌌 Switch to another Hyprland workspace; confirm continued emulation and sound when allowed.
 - [ ] 💤 Repeat with background pause checked; verify true stop, no catch-up burst and clean resume.
@@ -220,7 +220,7 @@ state as a fixed background-pause regression.
 - `starbyte-frontend::SessionControlsSnapshot`: common typed summary of ROM, mode, quick-save, durable slots, and cheat-read diagnostics; adopted by the legacy slot menu as a low-risk UI migration seam.
 - `starbyte-frontend::SessionInputDiagnostics`, `SessionSoundDiagnostics`, `SessionAudioFrameMetrics`, and `SessionScreenshot`: neutral hardware/audio readouts and owned RGBA capture shared by the established UI and the worker.
 - `starbyte-frontend::SessionSaveAction`: one typed save/load/SRAM action dispatcher consumed synchronously by the current application and asynchronously by the worker. A built-in ROM test asserts compatibility and sound-mode disk slot isolation.
-- `.github/workflows/ci.yml`: headless worker (including memory quick-save roundtrip) and Weston threaded-preview smoke tasks authored; completion not yet verified.
+- `.github/workflows/ci.yml`: headless worker (including memory quick-save roundtrip) and Weston threaded-preview smoke tasks; all passed on `d0254a7`.
 
 ## 2026-10-23 continuation — asynchronous normal-app ROM preparation
 
@@ -239,5 +239,14 @@ finalizes SRAM and releases the audio output on that owning thread instead
 of flushing SRAM a second time when the returned owner is dropped on the UI
 thread. The headless library-to-worker integration test exercises the full
 materialization, cartridge launch, background clock and quick-save command
-chain using the built-in copyright-free demo. All new runtime and test changes
-must still pass current CI before acceptance is claimed.
+chain using the built-in copyright-free demo. Bounded nonblocking diagnostic
+publication now writes QA reports on a separate I/O thread, dropping reports
+rather than stalling emulation if the two-item queue fills.
+
+**Verified 2026-10-23:** [CI run 39951239026](https://github.com/sguzman/starbyte/actions/runs/39951239026)
+at code commit `d0254a7` passed Rust formatting, Clippy, all Linux and Windows
+workspace tests, benchmark compilation on both platforms, the independent
+background scheduler smoke and native Weston legacy + threaded-preview checks.
+This verifies the new worker-side integrations and existing opt-in native
+preview under CI, but does **not** establish real Hyprland focus/background
+audio behavior or worker-backed execution in the full `StarbyteApp`.

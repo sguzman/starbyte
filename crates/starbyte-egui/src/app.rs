@@ -6090,13 +6090,24 @@ impl eframe::App for StarbyteApp {
                 worker.engine.completed_frames().saturating_sub(at_start)
             });
             self.worker_no_redraw_gap = None;
-            if completed < 45 {
+            // Time the actual compositor callback gap, rather than assuming
+            // its delayed egui wake happened exactly at the deadline.
+            // This measures the independent NTSC worker clock, not repaint
+            // cadence, hardware present timing, or physical speaker output.
+            let wall_time = now.saturating_duration_since(deadline - Duration::from_secs(2));
+            let measured_fps = completed as f64 / wall_time.as_secs_f64().max(f64::EPSILON);
+            if completed < 45 || !(48.0..=72.0).contains(&measured_fps) {
                 println!(
-                    "STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_FAILED advanced_frames={completed}"
+                    "STARBYTE_FULL_LIBRARY_CLOCK_PACING_SMOKE_FAILED advanced_frames={completed} fps={measured_fps:.2} wall_ms={}",
+                    wall_time.as_millis()
                 );
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 return;
             }
+            println!(
+                "STARBYTE_FULL_LIBRARY_CLOCK_PACING_SMOKE_OK advanced_frames={completed} fps={measured_fps:.2} wall_ms={}",
+                wall_time.as_millis()
+            );
             // The old smoke stopped after checking only the emulation clock.
             // Require a post-gap texture upload with a frame number that
             // could not have been published before redraws were suppressed.

@@ -408,12 +408,9 @@ impl OwnedSession {
     /// must display the restored picture immediately, not wait for Play.
     pub fn capture_frame(&self) -> PublishedGameFrame {
         let status = self.session.snapshot();
-        let samples = &self.session.frame_audio_samples();
-        let stereo_pairs = samples.len() / 2;
-        let nonzero_pairs = samples
-            .chunks_exact(2)
-            .filter(|pair| pair[0] != 0 || pair[1] != 0)
-            .count();
+        let metrics = self.session.audio_frame_metrics();
+        let stereo_pairs = metrics.stereo_pairs;
+        let nonzero_pairs = metrics.nonzero_pairs;
         PublishedGameFrame {
             status,
             rgba: Some(self.session.framebuffer_rgba().to_vec()),
@@ -445,11 +442,10 @@ impl OwnedSession {
         }
 
         let status = self.session.snapshot();
-        let samples = &self.session.frame_audio_samples();
-        let stereo_pairs = samples.len() / 2;
-        let nonzero_pairs = samples.chunks_exact(2)
-            .filter(|pair| pair[0] != 0 || pair[1] != 0)
-            .count();
+        let samples = self.session.frame_audio_samples();
+        let metrics = self.session.audio_frame_metrics();
+        let stereo_pairs = metrics.stereo_pairs;
+        let nonzero_pairs = metrics.nonzero_pairs;
 
         if self.sound_enabled && !self.muted && self.volume > 0.0 {
             if self.audio.is_none()

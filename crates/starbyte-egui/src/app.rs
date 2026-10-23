@@ -333,7 +333,6 @@ impl FramePerformance {
     }
 }
 
-
 /// Presentation measurements are UI-side costs, intentionally separate
 /// from the emulation owner's FPS, frame gaps and emulation CPU time.
 #[derive(Debug, Default, Clone, Copy)]
@@ -5277,12 +5276,17 @@ impl StarbyteApp {
                     "paused".to_owned()
                 };
                 let label = format!(
-                    "Worker FPS {fps} / {:.1} | 40ms+ gaps: {} | last gap {:.1} ms\nLast emulation CPU {:.2} ms | video frames coalesced: {}\nAudio producer drops {} | mixer drops {} | empty sink {}",
+                    "Worker FPS {fps} / {:.1} | 40ms+ gaps: {} | last gap {:.1} ms\nLast emulation CPU {:.2} ms | video frames coalesced: {}\nRenderer delivery {:.1} ms (peak {:.1}) | texture submit {:.2} ms (peak {:.2}) | uploads {}\nAudio producer drops {} | mixer drops {} | empty sink {}",
                     speed_target_fps(self.last_effective_speed_percent),
                     rate.hitches_40ms,
                     rate.last_gap_ms,
                     self.worker_cpu.as_secs_f32() * 1_000.0,
                     worker.engine.skipped_video_frames(),
+                    self.worker_presentation.last_delivery_ms,
+                    self.worker_presentation.peak_delivery_ms,
+                    self.worker_presentation.last_upload_cpu_ms,
+                    self.worker_presentation.peak_upload_cpu_ms,
+                    self.worker_presentation.successful_uploads,
                     self.worker_audio.producer_dropped_frames,
                     self.worker_audio.worker_dropped_frames,
                     self.worker_audio.sink_empty_on_pcm,
@@ -5428,6 +5432,14 @@ impl StarbyteApp {
                 "Last worker emulation CPU: {:.2} ms; coalesced video frames: {}",
                 self.worker_cpu.as_secs_f32() * 1_000.0,
                 worker.engine.skipped_video_frames(),
+            ));
+            ui.label(format!(
+                "Renderer: delivery {:.1} ms (peak {:.1}), texture submit {:.2} ms (peak {:.2}); {} successful uploads",
+                self.worker_presentation.last_delivery_ms,
+                self.worker_presentation.peak_delivery_ms,
+                self.worker_presentation.last_upload_cpu_ms,
+                self.worker_presentation.peak_upload_cpu_ms,
+                self.worker_presentation.successful_uploads,
             ));
             ui.label(format!(
                 "Audio drops: {} producer, {} mixer; empty sink: {}",
@@ -6859,6 +6871,89 @@ mod session_view_bridge_tests {
     use super::*;
     use crate::session_engine::OwnedSession;
     use starbyte_frontend::{LocalRomInfo, LocalRomSourceKind};
+
+    #[test]
+    fn worker_renderer_distinguishes_delivery_from_upload_and_rejects_bad_pixels() {
+        let ctx = egui::Context::default();
+        let mut texture = None;
+        let mut last_uploaded = None;
+        let mut metrics = WorkerPresentationMetrics::default();
+        let mut frame = PublishedGameFrame {
+            status: SessionSnapshot {
+                rom_path: None,
+                has_rom: false,
+                frame: 7,
+                apu_steps: 0,
+                audio_sample_count: 0,
+                framebuffer_width: 1,
+                framebuffer_height: 1,
+            },
+            rgba: None,
+            last_frame_cpu: Duration::ZERO,
+            stereo_pairs: 0,
+            nonzero_pairs: 0,
+            audio_diagnostics: WorkerAudioDiagnostics::default(),
+            input_diagnostics: SessionInputDiagnostics::default(),
+            ready_at: Instant::now() - Duration::from_millis(20),
+        };
+        assert!(!upload_worker_frame(
+            &ctx,
+            &mut texture,
+            &frame,
+            &mut last_uploaded,
+            &mut metrics,
+        ));
+        frame.rgba = Some(vec![0, 0, 0]);
+        assert!(!upload_worker_frame(
+            &ctx,
+            &mut texture,
+            &frame,
+            &mut last_uploaded,
+            &mut metrics,
+        ));
+        assert!(texture.is_none());
+        assert_eq!(metrics.successful_uploads, 0);
+        assert_eq!(last_uploaded, None);
+        frame.rgba = Some(vec![0, 120, 255, 255]);
+        assert!(upload_worker_frame(
+            &ctx,
+            &mut texture,
+            &frame,
+            &mut last_uploaded,
+            &mut metrics,
+        ));
+        assert_eq!(metrics.successful_uploads, 1);
+        assert_eq!(last_uploaded, Some(7));
+        assert!(metrics.last_delivery_ms >= 20.0);
+        let first_delay = metrics.last_delivery_ms;
+        frame.status.frame = 8;
+        frame.ready_at = Instant::now() - Duration::from_millis(5);
+        assert!(upload_worker_frame(
+            &ctx,
+            &mut texture,
+            &frame,
+            &mut last_uploaded,
+            &mut metrics,
+        ));
+        assert_eq!(metrics.successful_uploads, 2);
+        assert_eq!(last_uploaded, Some(8));
+        assert!(metrics.last_delivery_ms < first_delay);
+        assert!(metrics.peak_delivery_ms >= first_delay);
+        assert!(metrics.peak_upload_cpu_ms >= metrics.last_upload_cpu_ms);
+        // A malformed newer frame must not falsify texture/frame telemetry.
+        frame.status.frame = 9;
+        frame.rgba = Some(vec![5]);
+        assert!(!upload_worker_frame(
+            &ctx,
+            &mut texture,
+            &frame,
+            &mut last_uploaded,
+            &mut metrics,
+        ));
+        assert_eq!(last_uploaded, Some(8));
+        assert_eq!(metrics.successful_uploads, 2);
+    }
+
 
     #[test]
     fn unexpected_worker_exit_is_reported_once_even_during_manual_pause() {

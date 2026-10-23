@@ -392,6 +392,11 @@ impl eframe::App for ThreadedPreviewApp {
         if let Some(error) = self.engine.take_error() {
             self.last_error = Some(error);
             self.playing = false;
+        } else if self.engine.is_worker_finished() && self.playing {
+            self.last_error = Some(
+                "Emulation worker stopped unexpectedly. Game execution has halted.".to_owned(),
+            );
+            self.playing = false;
         }
         egui::TopBottomPanel::top("worker_preview_menu").show(ctx, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {

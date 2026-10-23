@@ -5125,9 +5125,7 @@ impl StarbyteApp {
             self.queue_full_worker_save(SessionSaveAction::SaveSlot(slot));
             return;
         }
-        match self
-            .session
-            .apply_save_action(SessionSaveAction::SaveSlot(slot))
+        match self.legacy_session_mut().apply_save_action(SessionSaveAction::SaveSlot(slot))
         {
             Ok(_) => self.status_line = format!("Saved game to disk slot {slot}."),
             Err(error) => self.status_line = error.to_string(),
@@ -5139,9 +5137,7 @@ impl StarbyteApp {
             self.queue_full_worker_save(SessionSaveAction::LoadSlot(slot));
             return;
         }
-        match self
-            .session
-            .apply_save_action(SessionSaveAction::LoadSlot(slot))
+        match self.legacy_session_mut().apply_save_action(SessionSaveAction::LoadSlot(slot))
         {
             Ok(_) => {
                 self.clear_audio();
@@ -6793,14 +6789,10 @@ impl eframe::App for StarbyteApp {
             self.exit_after_frames = None;
             let frame = self.session_snapshot().frame;
             let metrics = self.native_smoke_audio;
-            let spc_instructions = self
-                .session
-                .emulator()
+            let spc_instructions = self.legacy_session().emulator()
                 .isolated_apu_spc700_status()
                 .map_or(0, |status| status.instructions);
-            let uploaded_spc_bytes = self
-                .session
-                .emulator()
+            let uploaded_spc_bytes = self.legacy_session().emulator()
                 .isolated_apu_upload()
                 .map_or(0, |upload| upload.bytes_written());
             let audio_worker_spawned = self.audio_output.is_some();
@@ -6988,6 +6980,29 @@ mod session_view_bridge_tests {
         ));
         assert_eq!(last_uploaded, Some(8));
         assert_eq!(metrics.successful_uploads, 2);
+    }
+
+    #[test]
+    fn worker_bridge_uses_published_state_without_any_legacy_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(dir.path().join("saves")),
+            state_dir: Some(dir.path().join("states")),
+            cache_dir: Some(dir.path().join("cache")),
+            config_path: None,
+        };
+        let owner = OwnedSession::create(assets).unwrap();
+        let controls = owner.controls_port();
+        let expected = controls.latest();
+        let mut bridge = SessionViewBridge::default();
+        bridge.attach_worker(controls);
+        assert_eq!(bridge.snapshot(None), expected.session);
+        assert_eq!(bridge.controls(None).session, expected.session);
+        assert_eq!(bridge.input_diagnostics(None).host_bits, 0);
+        assert_eq!(bridge.input_diagnostics(None).latched_bits, 0);
+        // No fallback legacy emulator exists: a worker snapshot remains
+        // sufficient to read all UI-facing session state.
     }
 
     #[test]

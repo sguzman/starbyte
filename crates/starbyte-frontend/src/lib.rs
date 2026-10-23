@@ -514,6 +514,22 @@ impl FrontendSession {
         })
     }
 
+    /// Generated stereo PCM for the most recently emulated SNES frame.
+    /// The slice is borrowed only within its owning thread. A future
+    /// worker-powered UI must consume published counts or a bounded PCM
+    /// stream, never borrow this directly across threads.
+    #[must_use]
+    pub fn frame_audio_samples(&self) -> &[i16] {
+        &self.emulator.audio_samples().samples
+    }
+
+    /// Compact flag used by the status bar. The renderer must not inspect
+    /// the emulator's experimental audio driver directly.
+    #[must_use]
+    pub fn isolated_audio_driver_enabled(&self) -> bool {
+        self.emulator.isolated_apu_driver_probe_enabled()
+    }
+
     /// Borrow framebuffer pixels as RGBA8.
     #[must_use]
     pub fn framebuffer_rgba(&self) -> &[u8] {

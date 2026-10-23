@@ -761,7 +761,6 @@ enum WorkerReplacementSmoke {
 
 /// Native-only synthetic egui key events exercise the original window's
 /// actual F5/F8/F9/Escape handlers, not direct save/navigation calls.
-#[derive(Clone, Copy)]
 #[derive(Clone, Copy, Debug, Default)]
 struct WorkerShellPaintCounts {
     menu: u32,
@@ -774,6 +773,7 @@ struct WorkerShellPaintCounts {
     frame: u32,
 }
 
+#[derive(Clone, Copy)]
 enum WorkerShortcutSmoke {
     WaitingForGame,
     PressSave,

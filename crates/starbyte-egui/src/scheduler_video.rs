@@ -9,7 +9,7 @@ use starbyte_frontend::SessionSnapshot;
 
 use crate::{
     scheduler::EmulatorScheduler,
-    session_engine::{OwnedSession, PublishedGameFrame},
+    session_engine::{OwnedSession, PublishedGameFrame, WorkerAudioDiagnostics},
 };
 
 #[derive(Default)]
@@ -19,6 +19,7 @@ pub struct WorkerDisplay {
     emulation_cpu: Duration,
     stereo_pairs: usize,
     nonzero_pairs: usize,
+    audio: WorkerAudioDiagnostics,
 }
 
 impl WorkerDisplay {
@@ -60,6 +61,7 @@ impl WorkerDisplay {
         self.emulation_cpu = frame.last_frame_cpu;
         self.stereo_pairs = frame.stereo_pairs;
         self.nonzero_pairs = frame.nonzero_pairs;
+        self.audio = frame.audio_diagnostics;
         self.status = Some(frame.status);
     }
 
@@ -77,6 +79,10 @@ impl WorkerDisplay {
 
     pub fn last_audio_pairs(&self) -> (usize, usize) {
         (self.stereo_pairs, self.nonzero_pairs)
+    }
+
+    pub fn audio_diagnostics(&self) -> WorkerAudioDiagnostics {
+        self.audio
     }
 
     /// Presentation is pure UI work: it never blocks the emulator or asks
@@ -127,6 +133,7 @@ mod tests {
                 last_frame_cpu: Duration::from_millis(3),
                 stereo_pairs: 532,
                 nonzero_pairs: 200,
+                audio_diagnostics: WorkerAudioDiagnostics::default(),
             },
         );
         assert_eq!(display.status().unwrap().frame, 42);

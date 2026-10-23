@@ -150,6 +150,27 @@ Outstanding cutover tasks remain blocking. The command-burst test now
 explicitly accepts quota-based backpressure (instead of assuming an
 unbounded queue), and CI formatter corrections have been applied.
 
+## Partial handoff interfaces (2026-10-23)
+
+The independent session owner now exposes a single nonblocking save/restore
+receipt with the authoritative `SessionControlsSnapshot` and a restored
+still framebuffer when applicable. A successful launch can similarly return
+`WorkerLaunchResponse` containing both the new cartridge's menu state and
+a still frame. The opt-in threaded preview uses these APIs, disables
+unavailable quick/disk loads, and refreshes availability from acknowledgements
+without synchronous emulator inspection.
+
+The existing full-library ROM-materialization worker now prepares
+`SessionLaunchRequest` (resolved path, persistent sound/save namespace and
+selected game's cheats) before returning it to `StarbyteApp`. This keeps
+request formation out of the GUI event callback and prepares the same
+request for the emulation owner. **The established `StarbyteApp` still applies
+the request to its UI-owned `FrontendSession`; its frame loop has not
+been moved.** No Milestone C checkbox is claimed for these preparatory
+interfaces, and source percentages remain unchanged until the actual
+worker-owned full application cutover passes acceptance.
+
+
 ## Architectural invariants
 
 1. **One mutable emulator owner.** Only the worker touches `FrontendSession`.

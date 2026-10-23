@@ -643,7 +643,10 @@ impl eframe::App for ThreadedPreviewApp {
         if focused && ctx.input(|input| input.key_pressed(egui::Key::F5)) {
             self.queue_save(SessionSaveAction::QuickSave);
         }
-        if focused && ctx.input(|input| input.key_pressed(egui::Key::F8)) {
+        if focused
+            && self.controls.has_quick_save
+            && ctx.input(|input| input.key_pressed(egui::Key::F8))
+        {
             self.queue_save(SessionSaveAction::QuickLoad);
         }
 

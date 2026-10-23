@@ -273,7 +273,9 @@ fn label_for_kind(kind: &WorkerCommandKind) -> &'static str {
 mod routing_tests {
     use super::{AppWorker, WorkerCommand, WorkerCommandKind, build_launch_request};
     use starbyte_core::manifest::RuntimeConfig;
-    use starbyte_frontend::{CheatEntry, InstalledStatus, LibraryEntry, LibraryFilter, SoundSessionMode};
+    use starbyte_frontend::{
+        CheatEntry, InstalledStatus, LibraryEntry, LibraryFilter, SoundSessionMode,
+    };
     use std::sync::mpsc;
 
     #[test]

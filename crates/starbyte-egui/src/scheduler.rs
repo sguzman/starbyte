@@ -92,7 +92,10 @@ impl GuiHeartbeat {
     fn new() -> Self {
         Self {
             origin: Instant::now(),
-            enabled: AtomicBool::new(false),
+            // The first 500 ms are an initialization grace period. If
+            // Wayland never paints the preview, the default focus-pause
+            // policy must not let its game run indefinitely in the dark.
+            enabled: AtomicBool::new(true),
             last_ms: AtomicU64::new(0),
         }
     }
@@ -554,6 +557,7 @@ mod tests {
     fn compositor_stall_pauses_only_when_pause_policy_is_enabled() {
         let beat = GuiHeartbeat::new();
         assert!(beat.is_recent());
+        assert!(!beat.is_recent_at(GuiHeartbeat::STALE_AFTER_MS + 1));
         beat.pulse();
         let last = beat.last_ms.load(Ordering::Acquire);
         assert!(beat.is_recent_at(last + GuiHeartbeat::STALE_AFTER_MS));

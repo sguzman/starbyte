@@ -1,8 +1,33 @@
 # Emulation scheduler migration
 
-**Status: in progress. Commit [`a0fbdd8`](https://github.com/sguzman/starbyte/commit/a0fbdd8cb10494352d6a782c447f814287d4c37a) passed [CI run 40007158503](https://github.com/sguzman/starbyte/actions/runs/40007158503): Linux, Windows, lint/Clippy and original-window native Weston acceptance, including worker-owned saves, battery SRAM, joypad integration, delayed screenshot receipts and async worker sound-diagnostics coverage. Default-app ownership transfer and physical Hyprland/audio validation remain outstanding.**
+**Status: in progress. Commit [`c981f64`](https://github.com/sguzman/starbyte/commit/c981f6416696724a63513675ca47964454e6f582) passed [CI run 40009459833](https://github.com/sguzman/starbyte/actions/runs/40009459833): Linux, Windows, lint/Clippy and native Weston, including post-no-redraw original-window texture catch-up (121 worker frames during the gap, frame 134 uploaded afterward). Tracked source progress is now 60/77 (78%), with full-GUI migration 9/16 (56%); default-app ownership transfer and physical Hyprland/audio validation remain outstanding.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
+
+## Verified complete-window video catch-up after compositor callback gap — 2026-10-23
+
+Commit [`c981f64`](https://github.com/sguzman/starbyte/commit/c981f6416696724a63513675ca47964454e6f582)
+passed [CI 40009459833](https://github.com/sguzman/starbyte/actions/runs/40009459833):
+Linux, Windows, formatting, Clippy and native Weston all green.
+
+The previous original full-library no-redraw smoke closed immediately after
+confirming emulation progressed with no egui callbacks. It now **returns to
+normal egui processing** and requires a texture upload carrying a frame
+number at least as new as the emulation count observed after the two-second
+gap. The acceptance log reports
+`STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_OK advanced_frames=121 caught_up_frame=134`.
+Only an actual `upload_rgba` updates the recorded texture frame, so this
+cannot be satisfied by a worker frame counter or cached status alone.
+
+This **closes the full-app latest-completed RGBA task** in Milestone C, on
+the current opt-in complete-library path, moving that milestone to **9/16
+(56%)**. Source-task total is now **60/77 (78%)**: A 7/8 (88%), B 15/18
+(83%), P 18/20 (90%), C 9/16 (56%) and D 11/15 (73%).
+
+**Not established:** physical Hyprland off-workspace behavior, audio
+audibility, complete original-menu/input parity, and production-default
+worker ownership. A native virtual-Wayland successful texture upload is
+evidence for publication/catch-up, not for the default migration.
 
 ## Verified original-window async status, sound modes and screenshot ownership — 2026-10-23
 
@@ -302,7 +327,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 not a separate repository, not the default UI, and not a substitute for the
 complete Starbyte library application.
 
-## Milestone C: native GUI migration — 8/16 source tasks (50%; default worker integration still 0%)
+## Milestone C: native GUI migration — 9/16 source tasks (56%; default worker integration still 0%)
 
 - [x] 🧱 Introduce frontend-neutral SessionControlsSnapshot and migrate the existing disk-slot menu to it; worker can serialize the same summary.
 - [x] 🎮 Migrate the existing input overlay to frontend-neutral SessionInputDiagnostics that the worker can also publish.
@@ -314,7 +339,7 @@ complete Starbyte library application.
 - [x] 🎬 Share one typed ROM launch request (resolved path, sound/save mode and matching cheats) across library, direct-file, startup, sound-mode restart and worker APIs, without executing a frame between installation and cheat selection.
 - [ ] 🎬 Route game-launch success/error replies through the emulation worker.
 - [ ] ⌨️ Send controller inputs without losing key-down/up edges; preserve F5/F8/F9/Escape.
-- [ ] 🪟 Display the latest completed RGBA texture without blocking the worker.
+- [x] 🪟 Display the latest completed RGBA texture without blocking the worker (opt-in full library, Weston catch-up after a two-second callback gap, CI 40009459833).
 - [ ] 🏠 Keep the full library, menus, recent covers and View status-bar toggles intact.
 - [ ] ⏸️ Make manually paused / automatically paused / background-allowed states independent.
 - [ ] 💾 Preserve original disk-slot, SRAM and sound-mode namespaces.

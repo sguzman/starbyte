@@ -86,9 +86,12 @@ impl PreviewGamepads {
                             _ => continue,
                         }
                         let next = stick.virtual_dpad();
-                        let old = self.virtual_by_id.insert(event.id, next.clone());
+                        let previous = self
+                            .virtual_by_id
+                            .insert(event.id, next.clone())
+                            .unwrap_or_default();
                         if focused {
-                            for name in next.difference(&old.unwrap_or_default()) {
+                            for name in next.difference(&previous) {
                                 newly_pressed.insert(name.clone());
                             }
                         }

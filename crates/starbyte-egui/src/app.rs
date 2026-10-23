@@ -686,6 +686,7 @@ enum WorkerSaveSmokeStage {
     AwaitQuickLoad,
     AwaitSlotSave,
     AwaitSlotLoad,
+    AwaitScreenshot,
 }
 
 struct FullLibraryPendingLaunch {
@@ -704,6 +705,7 @@ pub struct StarbyteApp {
     full_worker: Option<FullLibraryWorker>,
     worker_save_smoke_stage: Option<WorkerSaveSmokeStage>,
     worker_save_smoke_receipt: Option<(SessionSaveAction, Result<(), String>)>,
+    worker_save_smoke_screenshot: Option<Result<PathBuf, String>>,
     audio_output: Option<AudioOutput>,
     speaker_probe: SpeakerProbeState,
     /// Session mute defaults from persisted startup preference, then follows
@@ -922,6 +924,7 @@ impl StarbyteApp {
             full_worker: None,
             worker_save_smoke_stage: worker_save_smoke.then_some(WorkerSaveSmokeStage::WaitForGame),
             worker_save_smoke_receipt: None,
+            worker_save_smoke_screenshot: None,
             audio_output: None,
             speaker_probe: SpeakerProbeState::Idle,
             audio_muted,
@@ -1263,10 +1266,10 @@ impl StarbyteApp {
                         .duration_since(UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_nanos();
-                    let path = self.assets.screenshot_root().join(format!(
-                        "starbyte-{stamp}-frame-{}.png",
-                        image.frame
-                    ));
+                    let path = self
+                        .assets
+                        .screenshot_root()
+                        .join(format!("starbyte-{stamp}-frame-{}.png", image.frame));
                     match spawn_screenshot_writer(path, image) {
                         Ok(reply) => {
                             if let Some(worker) = &mut self.full_worker {
@@ -1280,6 +1283,9 @@ impl StarbyteApp {
             }
         }
         for result in screenshot_writes {
+            if self.worker_save_smoke_stage == Some(WorkerSaveSmokeStage::AwaitScreenshot) {
+                self.worker_save_smoke_screenshot = Some(result.clone());
+            }
             match result {
                 Ok(path) => {
                     self.status_line = format!("Screenshot saved to {}", path.display());
@@ -1326,6 +1332,29 @@ impl StarbyteApp {
             }
             return;
         }
+        if stage == WorkerSaveSmokeStage::AwaitScreenshot {
+            let Some(outcome) = self.worker_save_smoke_screenshot.take() else {
+                return;
+            };
+            match outcome {
+                Ok(path) if path.is_file() => {
+                    println!(
+                        "STARBYTE_FULL_LIBRARY_SAVE_SMOKE_OK frame={} slot=1 quick=true screenshot=true",
+                        self.session_snapshot().frame
+                    );
+                }
+                Ok(path) => println!(
+                    "STARBYTE_FULL_LIBRARY_SAVE_SMOKE_FAILED missing_screenshot={}",
+                    path.display()
+                ),
+                Err(error) => {
+                    println!("STARBYTE_FULL_LIBRARY_SAVE_SMOKE_FAILED screenshot={error}");
+                }
+            }
+            self.worker_save_smoke_stage = None;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
         let Some((action, outcome)) = self.worker_save_smoke_receipt.take() else {
             return;
         };
@@ -1335,6 +1364,7 @@ impl StarbyteApp {
             WorkerSaveSmokeStage::AwaitQuickLoad => SessionSaveAction::QuickLoad,
             WorkerSaveSmokeStage::AwaitSlotSave => SessionSaveAction::SaveSlot(1),
             WorkerSaveSmokeStage::AwaitSlotLoad => SessionSaveAction::LoadSlot(1),
+            WorkerSaveSmokeStage::AwaitScreenshot => return,
         };
         if action != expected || outcome.is_err() {
             println!("STARBYTE_FULL_LIBRARY_SAVE_SMOKE_FAILED action={action:?} error={outcome:?}");
@@ -1370,21 +1400,20 @@ impl StarbyteApp {
             }
             WorkerSaveSmokeStage::AwaitSlotLoad => {
                 let controls = self.session_controls();
-                if controls.session.has_rom
+                if !(controls.session.has_rom
                     && controls.has_quick_save
                     && controls.state_slots[0]
-                    && self.framebuffer_texture.is_some()
+                    && self.framebuffer_texture.is_some())
                 {
-                    println!(
-                        "STARBYTE_FULL_LIBRARY_SAVE_SMOKE_OK frame={} slot=1 quick=true",
-                        self.session_snapshot().frame
-                    );
-                } else {
                     println!("STARBYTE_FULL_LIBRARY_SAVE_SMOKE_FAILED state_after_restore");
+                    self.worker_save_smoke_stage = None;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
                 }
-                self.worker_save_smoke_stage = None;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                self.save_screenshot();
+                self.worker_save_smoke_stage = Some(WorkerSaveSmokeStage::AwaitScreenshot);
             }
+            WorkerSaveSmokeStage::AwaitScreenshot => {}
         }
     }
 
@@ -4002,7 +4031,9 @@ impl StarbyteApp {
             }
             match worker.engine.queue_screenshot_pixels() {
                 Ok(reply) => {
-                    worker.pending_screenshots.push((self.latest_rom_job_id, reply));
+                    worker
+                        .pending_screenshots
+                        .push((self.latest_rom_job_id, reply));
                     self.status_line = "Capturing screenshot on the emulator worker...".to_owned();
                 }
                 Err(error) => self.status_line = format!("Screenshot failed: {error}"),
@@ -5060,11 +5091,17 @@ mod screenshot_writer_tests {
             rgba: vec![255, 0, 0, 255, 0, 255, 0, 255],
         };
         let receipt = spawn_screenshot_writer(path.clone(), frame).unwrap();
-        let persisted = receipt.recv_timeout(Duration::from_secs(4)).unwrap().unwrap();
+        let persisted = receipt
+            .recv_timeout(Duration::from_secs(4))
+            .unwrap()
+            .unwrap();
         assert_eq!(persisted, path);
         let pixels = image::open(path).unwrap().into_rgba8();
         assert_eq!(pixels.dimensions(), (2, 1));
-        assert_eq!(pixels.as_raw().as_slice(), &[255, 0, 0, 255, 0, 255, 0, 255]);
+        assert_eq!(
+            pixels.as_raw().as_slice(),
+            &[255, 0, 0, 255, 0, 255, 0, 255]
+        );
     }
 }
 
@@ -6650,14 +6687,10 @@ fn spawn_screenshot_writer(
     std::thread::Builder::new()
         .name("starbyte-screenshot-writer".to_owned())
         .spawn(move || {
-            let result = write_png_screenshot(
-                &path,
-                &screenshot.rgba,
-                screenshot.width,
-                screenshot.height,
-            )
-            .map(|_| path)
-            .map_err(|error| error.to_string());
+            let result =
+                write_png_screenshot(&path, &screenshot.rgba, screenshot.width, screenshot.height)
+                    .map(|_| path)
+                    .map_err(|error| error.to_string());
             let _ = sender.send(result);
         })
         .map_err(|error| error.to_string())?;

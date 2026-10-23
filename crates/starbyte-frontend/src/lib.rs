@@ -138,6 +138,24 @@ pub struct SessionInputDiagnostics {
     pub rom_cheat_read_hits: u64,
 }
 
+/// Save operations shared between synchronous legacy UI and serialized
+/// worker ownership. The command itself carries no emulator reference or
+/// filesystem path from an untrusted game title.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionSaveAction {
+    QuickSave,
+    QuickLoad,
+    SaveSlot(u8),
+    LoadSlot(u8),
+    FlushSram,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionSaveOutcome {
+    Completed,
+    SavedTo(PathBuf),
+}
+
 /// Small, frontend-neutral menu/control state. It avoids exposing a
 /// borrowed Emulator to a renderer and can be published by a single-owner
 /// emulation worker without taking a UI-thread mutex.
@@ -317,6 +335,36 @@ impl FrontendSession {
             self.run_frame()?;
         }
         Ok(())
+    }
+
+    /// Dispatch a menu/save operation through one frontend-neutral API.
+    /// The caller controls thread ownership: synchronous in the legacy
+    /// player or serialized in the independent emulation worker.
+    pub fn apply_save_action(
+        &mut self,
+        action: SessionSaveAction,
+    ) -> Result<SessionSaveOutcome> {
+        match action {
+            SessionSaveAction::QuickSave => {
+                self.quick_save()?;
+                Ok(SessionSaveOutcome::Completed)
+            }
+            SessionSaveAction::QuickLoad => {
+                self.quick_load()?;
+                Ok(SessionSaveOutcome::Completed)
+            }
+            SessionSaveAction::SaveSlot(slot) => {
+                Ok(SessionSaveOutcome::SavedTo(self.save_state_slot(slot)?))
+            }
+            SessionSaveAction::LoadSlot(slot) => {
+                self.load_state_slot(slot)?;
+                Ok(SessionSaveOutcome::Completed)
+            }
+            SessionSaveAction::FlushSram => {
+                self.flush_save_ram()?;
+                Ok(SessionSaveOutcome::Completed)
+            }
+        }
     }
 
     /// Save a memory-only quick slot for the loaded ROM.
@@ -1414,6 +1462,32 @@ mod tests {
         session.run_frame().unwrap();
 
         assert_eq!(session.host_read_u8(0x7E0010), 0xAA);
+    }
+}
+
+#[cfg(test)]
+mod session_save_command_tests {
+    use super::{FrontendSession, SessionSaveAction, SessionSaveOutcome};
+    use starbyte_core::manifest::AssetConfig;
+
+    #[test]
+    fn save_actions_preserve_unloaded_session_errors() {
+        let mut session = FrontendSession::new(AssetConfig::default()).unwrap();
+        assert!(session.apply_save_action(SessionSaveAction::QuickSave).is_err());
+        assert!(session.apply_save_action(SessionSaveAction::QuickLoad).is_err());
+        assert!(session.apply_save_action(SessionSaveAction::SaveSlot(1)).is_err());
+        assert!(session.apply_save_action(SessionSaveAction::LoadSlot(1)).is_err());
+        assert_eq!(
+            session.apply_save_action(SessionSaveAction::FlushSram).unwrap(),
+            SessionSaveOutcome::Completed
+        );
+    }
+
+    #[test]
+    fn invalid_slot_ids_remain_rejected_by_existing_path_validation() {
+        let mut session = FrontendSession::new(AssetConfig::default()).unwrap();
+        assert!(session.apply_save_action(SessionSaveAction::SaveSlot(0)).is_err());
+        assert!(session.apply_save_action(SessionSaveAction::LoadSlot(4)).is_err());
     }
 }
 

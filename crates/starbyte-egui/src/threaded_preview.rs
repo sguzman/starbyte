@@ -21,7 +21,7 @@ use starbyte_frontend::{SessionScreenshot, SoundSessionMode};
 
 use crate::{
     app::{input_actions, parse_egui_key, set_controller_flag, write_png_screenshot},
-    preview_gamepads::{merge_sources, PreviewGamepads},
+    preview_gamepads::{PreviewGamepads, merge_sources},
     scheduler::EmulatorScheduler,
     scheduler_video::WorkerDisplay,
     session_engine::{InputPort, OwnedSession, PublishedGameFrame, RenderPort},
@@ -178,7 +178,11 @@ impl ThreadedPreviewApp {
     }
 
     fn queue_rom_load(&mut self, path: PathBuf) {
-        if self.pending.iter().any(|operation| matches!(operation, PendingOperation::LoadRom { .. })) {
+        if self
+            .pending
+            .iter()
+            .any(|operation| matches!(operation, PendingOperation::LoadRom { .. }))
+        {
             self.last_error = Some("Wait for the current ROM load to finish.".to_owned());
             return;
         }
@@ -214,10 +218,9 @@ impl ThreadedPreviewApp {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let path = self.screenshot_root.join(format!(
-            "starbyte-{timestamp}-frame-{}.png",
-            capture.frame
-        ));
+        let path = self
+            .screenshot_root
+            .join(format!("starbyte-{timestamp}-frame-{}.png", capture.frame));
         let (reply, result) = mpsc::channel();
         thread::Builder::new()
             .name("starbyte-screenshot".to_owned())
@@ -242,10 +245,8 @@ impl ThreadedPreviewApp {
                         let _ = self.engine.take_latest_frame();
                         self.display.import_frame(ctx, frame);
                         self.loaded_rom_path = path;
-                        self.status_note = Some(format!(
-                            "Loaded {}",
-                            self.loaded_rom_path.display()
-                        ));
+                        self.status_note =
+                            Some(format!("Loaded {}", self.loaded_rom_path.display()));
                         self.last_error = None;
                     }
                     Ok(Err(error)) => {
@@ -275,9 +276,8 @@ impl ThreadedPreviewApp {
                 },
                 PendingOperation::SpeakerCheck(reply) => match reply.try_recv() {
                     Ok(Ok(())) => {
-                        self.status_note = Some(
-                            "Speaker check submitted to the game audio sink".to_owned(),
-                        );
+                        self.status_note =
+                            Some("Speaker check submitted to the game audio sink".to_owned());
                         self.last_error = None;
                     }
                     Ok(Err(error)) => self.last_error = Some(error),
@@ -285,7 +285,8 @@ impl ThreadedPreviewApp {
                         still_pending.push(PendingOperation::SpeakerCheck(reply));
                     }
                     Err(TryRecvError::Disconnected) => {
-                        self.last_error = Some("Audio worker stopped before speaker check".to_owned());
+                        self.last_error =
+                            Some("Audio worker stopped before speaker check".to_owned());
                     }
                 },
                 PendingOperation::Save(reply) => match reply.try_recv() {
@@ -315,10 +316,7 @@ impl ThreadedPreviewApp {
                 },
                 PendingOperation::PngWrite(reply) => match reply.try_recv() {
                     Ok(Ok(path)) => {
-                        self.status_note = Some(format!(
-                            "Screenshot saved to {}",
-                            path.display()
-                        ));
+                        self.status_note = Some(format!("Screenshot saved to {}", path.display()));
                         self.last_error = None;
                     }
                     Ok(Err(error)) => self.last_error = Some(error),
@@ -374,7 +372,6 @@ impl ThreadedPreviewApp {
         });
         (held, pressed)
     }
-
 }
 
 #[cfg(test)]
@@ -425,9 +422,9 @@ impl eframe::App for ThreadedPreviewApp {
         // Poll device releases even when the window lacks focus, but only
         // transmit gameplay input while focused. This matches the existing
         // Keyboard / Gamepad / Auto input selection.
-        let gamepad = self.gamepads.poll(
-            focused && self.input_mode != InputDeviceMode::Keyboard,
-        );
+        let gamepad = self
+            .gamepads
+            .poll(focused && self.input_mode != InputDeviceMode::Keyboard);
         if focused {
             let keyboard = if self.input_mode == InputDeviceMode::Gamepad {
                 (ControllerState::default(), ControllerState::default())
@@ -454,10 +451,7 @@ impl eframe::App for ThreadedPreviewApp {
                 ui.menu_button("File", |ui| {
                     if ui.button("Open ROM...").clicked() {
                         if let Some(path) = rfd::FileDialog::new()
-                            .add_filter(
-                                "SNES ROM",
-                                &["sfc", "smc", "swc", "fig"],
-                            )
+                            .add_filter("SNES ROM", &["sfc", "smc", "swc", "fig"])
                             .pick_file()
                         {
                             self.queue_rom_load(path);
@@ -470,7 +464,10 @@ impl eframe::App for ThreadedPreviewApp {
                     }
                 });
                 ui.menu_button("Game", |ui| {
-                    if ui.button(if self.playing { "Pause" } else { "Resume" }).clicked() {
+                    if ui
+                        .button(if self.playing { "Pause" } else { "Resume" })
+                        .clicked()
+                    {
                         self.playing = !self.playing;
                         self.engine.set_playing(self.playing);
                         ui.close();
@@ -521,13 +518,11 @@ impl eframe::App for ThreadedPreviewApp {
                         .checkbox(&mut self.pause_when_unfocused, "Pause in background")
                         .changed()
                     {
-                        self.engine.set_pause_when_unfocused(self.pause_when_unfocused);
+                        self.engine
+                            .set_pause_when_unfocused(self.pause_when_unfocused);
                     }
                     ui.checkbox(&mut self.integer_scale, "Integer scale");
-                    ui.checkbox(
-                        &mut self.show_input_diagnostics,
-                        "Input diagnostics",
-                    );
+                    ui.checkbox(&mut self.show_input_diagnostics, "Input diagnostics");
                     ui.menu_button("Status bar", |ui| {
                         let prefs = &mut self.status_settings;
                         ui.checkbox(&mut prefs.show_status_bar, "Show status bar");
@@ -543,13 +538,12 @@ impl eframe::App for ThreadedPreviewApp {
                 });
                 ui.menu_button("Audio", |ui| {
                     let mut changed = false;
-                    changed |= ui.checkbox(&mut self.audio_enabled, "Sound enabled").changed();
+                    changed |= ui
+                        .checkbox(&mut self.audio_enabled, "Sound enabled")
+                        .changed();
                     changed |= ui.checkbox(&mut self.audio_muted, "Mute").changed();
                     changed |= ui
-                        .add(
-                            egui::Slider::new(&mut self.audio_volume, 0.0..=1.0)
-                                .text("Volume"),
-                        )
+                        .add(egui::Slider::new(&mut self.audio_volume, 0.0..=1.0).text("Volume"))
                         .changed();
                     if changed {
                         if let Err(error) = self.engine.configure_sound(
@@ -562,9 +556,7 @@ impl eframe::App for ThreadedPreviewApp {
                     }
                     if ui
                         .add_enabled(
-                            self.audio_enabled
-                                && !self.audio_muted
-                                && self.audio_volume > 0.0,
+                            self.audio_enabled && !self.audio_muted && self.audio_volume > 0.0,
                             egui::Button::new("Test speakers (440 Hz)"),
                         )
                         .clicked()
@@ -685,10 +677,7 @@ impl eframe::App for ThreadedPreviewApp {
                     egui::Align2::LEFT_TOP,
                     format!(
                         "SNES host {:04X} | latched {:04X} | reading {}\nROM cheat hits {}",
-                        diag.host_bits,
-                        diag.latched_bits,
-                        diag.reading,
-                        diag.rom_cheat_read_hits
+                        diag.host_bits, diag.latched_bits, diag.reading, diag.rom_cheat_read_hits
                     ),
                     egui::TextStyle::Monospace.resolve(ui.style()),
                     Color32::LIGHT_YELLOW,
@@ -726,8 +715,7 @@ impl eframe::App for ThreadedPreviewApp {
                             .unwrap_or("not_attempted");
                         ui.label(format!(
                             "{sound} | device {status} | submitted {} (nonzero {})",
-                            audio.submitted_frames,
-                            audio.submitted_nonzero_frames
+                            audio.submitted_frames, audio.submitted_nonzero_frames
                         ))
                         .on_hover_text(format!(
                             "Producer drops {} | worker drops {} | empty sink {}. \

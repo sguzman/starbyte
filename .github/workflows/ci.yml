@@ -218,6 +218,10 @@ jobs:
           # A failed replacement must not discard the old cartridge's
           # asynchronous screenshot PNG or its paused single-step texture.
           grep -F "STARBYTE_FULL_LIBRARY_RECEIPT_RACE_SMOKE_OK retained_rom=true screenshot_written=true step_uploaded=true pending_step_cleared=true" "$RUNNER_TEMP/starbyte-full-replacement.log"
+          # A superseded launch can still install a cartridge before a
+          # newer invalid request fails. Its success must update the
+          # original window's owner generation and controls, not be lost.
+          grep -F "STARBYTE_FULL_LIBRARY_SUPERSEDED_INSTALL_SMOKE_OK active_owner_synced=true newer_failure_reported=true" "$RUNNER_TEMP/starbyte-full-replacement.log"
           # Press F5, F8, F9 and Escape through the original window's egui
           # key-event pipeline. Verify saves, restore, library navigation,
           # continued worker progress and fresh video after returning.

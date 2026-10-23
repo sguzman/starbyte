@@ -727,6 +727,8 @@ pub struct StarbyteApp {
     /// Generation of the last successfully installed worker cartridge.
     /// A failed replacement leaves this identity unchanged.
     worker_active_launch_id: Option<u64>,
+    /// Prevent reporting an unexpected owner-thread exit on every repaint.
+    worker_exit_reported: bool,
     worker_save_smoke_stage: Option<WorkerSaveSmokeStage>,
     worker_save_smoke_receipt: Option<(SessionSaveAction, Result<(), String>)>,
     worker_save_smoke_screenshot: Option<Result<PathBuf, String>>,
@@ -963,6 +965,7 @@ impl StarbyteApp {
             session_view: SessionViewBridge::default(),
             full_worker: None,
             worker_active_launch_id: None,
+            worker_exit_reported: false,
             worker_save_smoke_stage: worker_save_smoke.then_some(WorkerSaveSmokeStage::WaitForGame),
             worker_save_smoke_receipt: None,
             worker_save_smoke_screenshot: None,
@@ -1455,8 +1458,16 @@ impl StarbyteApp {
             }
         }
         if let Some(worker) = &self.full_worker {
-            if let Some(error) = worker.engine.take_error() {
+            let frame_error = worker.engine.take_error();
+            let unexpected_exit =
+                should_report_worker_exit(worker.engine.is_worker_finished(), self.worker_exit_reported);
+            if unexpected_exit {
+                self.worker_exit_reported = true;
+            }
+            if let Some(error) = frame_error {
                 self.record_playback_error(&error);
+            } else if unexpected_exit {
+                self.record_playback_error("Emulation worker stopped unexpectedly");
             }
         }
     }
@@ -5618,6 +5629,14 @@ mod session_view_bridge_tests {
     use starbyte_frontend::{LocalRomInfo, LocalRomSourceKind};
 
     #[test]
+    fn unexpected_worker_exit_is_reported_once_even_during_manual_pause() {
+        assert!(!should_report_worker_exit(false, false));
+        assert!(should_report_worker_exit(true, false));
+        assert!(!should_report_worker_exit(true, true));
+        // Notice is not conditional on the UI's is_playing flag.
+    }
+
+    #[test]
     fn save_receipts_reject_old_worker_generation_even_for_same_rom_path() {
         assert!(worker_save_receipt_is_current(Some(7), Some(7)));
         assert!(!worker_save_receipt_is_current(Some(7), Some(8)));
@@ -7027,6 +7046,10 @@ fn record_recent_rom(recent: &mut Vec<PathBuf>, path: &Path) {
 /// Reassociate a directly opened or ZIP-extracted game when the asynchronous
 /// library index arrives. Use the active session's ROM identity, regardless
 /// of whether it belongs to the legacy GUI or the independent worker.
+fn should_report_worker_exit(finished: bool, reported: bool) -> bool {
+    finished && !reported
+}
+
 fn worker_save_receipt_is_current(
     received_generation: Option<u64>,
     active_generation: Option<u64>,

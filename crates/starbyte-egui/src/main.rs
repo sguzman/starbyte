@@ -13,9 +13,9 @@ mod scheduler;
 // Session/audio/save ownership bridge; keep current frontend on the proven
 // clock until the UI handoff is complete.
 #[allow(dead_code)]
-mod session_engine;
-#[allow(dead_code)]
 mod scheduler_video;
+#[allow(dead_code)]
+mod session_engine;
 mod threaded_preview;
 mod worker;
 
@@ -136,7 +136,11 @@ fn main() -> Result<()> {
     let prefer_dark_mode_override = args.day_mode.then_some(false);
     if let Some(prefer_dark_mode) = prefer_dark_mode_override {
         config.prefer_dark_mode = prefer_dark_mode;
-        config.ui.theme = if prefer_dark_mode { UiTheme::Dark } else { UiTheme::Light };
+        config.ui.theme = if prefer_dark_mode {
+            UiTheme::Dark
+        } else {
+            UiTheme::Light
+        };
     }
 
     let options = eframe::NativeOptions {
@@ -162,9 +166,8 @@ fn main() -> Result<()> {
         return run_scheduler_smoke(assets, rom.expect("--demo generates a built-in ROM"));
     }
     if args.threaded_preview {
-        let path = rom.ok_or_else(|| {
-            anyhow::anyhow!("--threaded-preview requires --demo or --rom")
-        })?;
+        let path =
+            rom.ok_or_else(|| anyhow::anyhow!("--threaded-preview requires --demo or --rom"))?;
         return eframe::run_native(
             "Starbyte (threaded preview)",
             options,
@@ -216,11 +219,11 @@ fn main() -> Result<()> {
 /// Focus and pause acknowledgements travel on the same serialized queue as
 /// frames; a graphics compositor cannot influence this probe.
 fn run_scheduler_smoke(assets: AssetConfig, rom: PathBuf) -> Result<()> {
+    use crate::session_engine::OwnedSession;
     use std::{
         thread,
         time::{Duration, Instant},
     };
-    use crate::session_engine::OwnedSession;
 
     let mut engine = OwnedSession::create(assets)?;
     engine.load_rom(&rom, starbyte_frontend::SoundSessionMode::Persistent)?;
@@ -242,8 +245,7 @@ fn run_scheduler_smoke(assets: AssetConfig, rom: PathBuf) -> Result<()> {
     );
 
     worker.set_pause_when_unfocused(true);
-    worker.invoke(|_| Ok(()))
-        .map_err(anyhow::Error::msg)?;
+    worker.invoke(|_| Ok(())).map_err(anyhow::Error::msg)?;
     let stopped_at = worker.completed_frames();
     thread::sleep(Duration::from_millis(120));
     anyhow::ensure!(
@@ -252,13 +254,10 @@ fn run_scheduler_smoke(assets: AssetConfig, rom: PathBuf) -> Result<()> {
     );
 
     worker.set_focused(true);
-    worker.invoke(|_| Ok(()))
-        .map_err(anyhow::Error::msg)?;
+    worker.invoke(|_| Ok(())).map_err(anyhow::Error::msg)?;
     let resumed_at = worker.completed_frames();
     let resumed = Instant::now();
-    while worker.completed_frames() <= resumed_at
-        && resumed.elapsed() < Duration::from_secs(3)
-    {
+    while worker.completed_frames() <= resumed_at && resumed.elapsed() < Duration::from_secs(3) {
         thread::sleep(Duration::from_millis(15));
     }
     anyhow::ensure!(
@@ -301,10 +300,7 @@ fn run_scheduler_smoke(assets: AssetConfig, rom: PathBuf) -> Result<()> {
         invalid_rom.display()
     );
     let failed_load = worker
-        .queue_load_game_with_frame(
-            invalid_rom,
-            starbyte_frontend::SoundSessionMode::Persistent,
-        )
+        .queue_load_game_with_frame(invalid_rom, starbyte_frontend::SoundSessionMode::Persistent)
         .map_err(anyhow::Error::msg)?;
     let result = failed_load
         .recv_timeout(Duration::from_secs(5))
@@ -344,7 +340,8 @@ fn run_scheduler_smoke(assets: AssetConfig, rom: PathBuf) -> Result<()> {
     );
     std::fs::remove_file(&screenshot)?;
 
-    let engine = worker.shutdown()
+    let engine = worker
+        .shutdown()
         .map_err(|_| anyhow::anyhow!("emulation scheduler worker panicked"))?;
     anyhow::ensure!(engine.snapshot().has_rom, "worker lost ROM ownership");
     println!(
@@ -509,12 +506,15 @@ mod speaker_cli_tests {
         ])
         .unwrap();
         assert!(validate_frame_exit_args(&demo).is_ok());
-        assert!(Args::try_parse_from([
-            "starbyte-egui",
-            "--demo",
-            "--threaded-preview",
-            "--scheduler-smoke",
-        ]).is_err());
+        assert!(
+            Args::try_parse_from([
+                "starbyte-egui",
+                "--demo",
+                "--threaded-preview",
+                "--scheduler-smoke",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

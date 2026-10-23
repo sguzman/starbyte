@@ -474,6 +474,20 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
     ) -> Result<(), String> {
         self.transact(move |engine| engine.load_rom(&path, mode).map_err(|e| e.to_string()))
     }
+    /// A new cartridge is loaded by the exclusive emulator owner; ROM I/O
+    /// and SRAM flushes must never block the renderer. The acknowledgment
+    /// includes a still frame to replace the previous game's picture even
+    /// when manual Pause is active.
+    pub fn queue_load_game_with_frame(
+        &self,
+        path: std::path::PathBuf,
+        mode: SoundSessionMode,
+    ) -> Result<Receiver<Result<PublishedGameFrame, String>>, String> {
+        self.submit_transaction(move |engine| {
+            engine.load_rom(&path, mode).map_err(|error| error.to_string())?;
+            Ok(engine.capture_frame())
+        })
+    }
 
     pub fn update_cheats(&self, cheats: Vec<CheatEntry>) -> Result<usize, String> {
         self.transact(move |engine| Ok(engine.set_cheats(&cheats)))

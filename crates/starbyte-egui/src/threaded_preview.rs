@@ -227,7 +227,19 @@ impl ThreadedPreviewApp {
         }
     }
 
+    fn can_modify_running_game(&self) -> bool {
+        self.controls.session.has_rom
+            && !self
+                .pending
+                .iter()
+                .any(|op| matches!(op, PendingOperation::LoadRom { .. }))
+    }
+
     fn queue_save(&mut self, action: SessionSaveAction) {
+        if !self.can_modify_running_game() {
+            self.last_error = Some("Cartridge is still loading; save action skipped".to_owned());
+            return;
+        }
         match self.engine.queue_save_action_with_frame(action) {
             Ok(reply) => self.pending.push(PendingOperation::Save(reply)),
             Err(error) => self.last_error = Some(error),
@@ -406,6 +418,9 @@ impl ThreadedPreviewApp {
     }
 
     fn queue_screenshot(&mut self) {
+        if !self.can_modify_running_game() {
+            return;
+        }
         match self.engine.queue_screenshot_pixels() {
             Ok(reply) => self.pending.push(PendingOperation::Screenshot(reply)),
             Err(error) => self.last_error = Some(error),
@@ -882,10 +897,42 @@ mod pitch_mode_tests {
             sound_mode: SoundSessionMode::Persistent,
             cheats: Vec::new(),
         });
-        assert!(app.pending.iter().any(|op| matches!(op, PendingOperation::LoadRom { .. })));
+        assert!(
+            app.pending
+                .iter()
+                .any(|op| matches!(op, PendingOperation::LoadRom { .. }))
+        );
         app.queue_rom_load(next);
         assert!(app.pending_library_rom.is_some());
         assert!(app.last_error.is_none());
+    }
+
+    #[test]
+    fn save_controls_are_suppressed_during_cartridge_installation() {
+        let temp = tempfile::tempdir().unwrap();
+        let rom = temp.path().join("save-guard-demo.sfc");
+        std::fs::write(&rom, starbyte_core::testing::demo::demo_rom_bytes()).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(temp.path().join("saves")),
+            state_dir: Some(temp.path().join("states")),
+            cache_dir: Some(temp.path().join("cache")),
+            config_path: None,
+        };
+        let mut config = RuntimeConfig::default();
+        config.audio.enabled = false;
+        let mut app =
+            ThreadedPreviewApp::new(assets, &config, None, None, true, false, false).unwrap();
+        assert!(!app.can_modify_running_game());
+        app.queue_rom_launch(SessionLaunchRequest {
+            rom_path: rom,
+            sound_mode: SoundSessionMode::Persistent,
+            cheats: Vec::new(),
+        });
+        assert!(!app.can_modify_running_game());
+        app.queue_save(SessionSaveAction::QuickSave);
+        assert!(app.last_error.is_some());
+        assert!(!app.pending.iter().any(|op| matches!(op, PendingOperation::Save(_))));
     }
 
     #[test]
@@ -917,7 +964,9 @@ mod pitch_mode_tests {
         app.queue_rom_launch(request(first));
         app.queue_rom_launch(request(final_rom.clone()));
         assert_eq!(
-            app.pending_next_launch.as_ref().map(|next| next.rom_path.as_path()),
+            app.pending_next_launch
+                .as_ref()
+                .map(|next| next.rom_path.as_path()),
             Some(final_rom.as_path())
         );
         let ctx = egui::Context::default();
@@ -1063,7 +1112,7 @@ impl eframe::App for ThreadedPreviewApp {
                 ui.menu_button("Game", |ui| {
                     if ui
                         .add_enabled(
-                            self.controls.session.has_rom,
+                            self.can_modify_running_game(),
                             egui::Button::new(if self.playing { "Pause" } else { "Resume" }),
                         )
                         .clicked()
@@ -1074,7 +1123,7 @@ impl eframe::App for ThreadedPreviewApp {
                     }
                     if ui
                         .add_enabled(
-                            self.controls.session.has_rom,
+                            self.can_modify_running_game(),
                             egui::Button::new("Quick Save (F5)"),
                         )
                         .clicked()
@@ -1084,7 +1133,7 @@ impl eframe::App for ThreadedPreviewApp {
                     }
                     if ui
                         .add_enabled(
-                            self.controls.has_quick_save,
+                            self.can_modify_running_game() && self.controls.has_quick_save,
                             egui::Button::new("Quick Load (F8)"),
                         )
                         .clicked()
@@ -1094,7 +1143,7 @@ impl eframe::App for ThreadedPreviewApp {
                     }
                     if ui
                         .add_enabled(
-                            self.controls.session.has_rom,
+                            self.can_modify_running_game(),
                             egui::Button::new("Screenshot (F12)"),
                         )
                         .clicked()
@@ -1106,7 +1155,7 @@ impl eframe::App for ThreadedPreviewApp {
                     ui.menu_button("Cheats", |ui| {
                         if ui
                             .add_enabled(
-                                self.controls.session.has_rom,
+                                self.can_modify_running_game(),
                                 egui::Button::new("Disable all runtime cheats"),
                             )
                             .clicked()
@@ -1124,7 +1173,7 @@ impl eframe::App for ThreadedPreviewApp {
                         for slot in 1..=3_u8 {
                             if ui
                                 .add_enabled(
-                                    self.controls.session.has_rom,
+                                    self.can_modify_running_game(),
                                     egui::Button::new(format!("Save slot {slot}")),
                                 )
                                 .clicked()
@@ -1134,7 +1183,8 @@ impl eframe::App for ThreadedPreviewApp {
                             }
                             if ui
                                 .add_enabled(
-                                    self.controls.state_slots[usize::from(slot - 1)],
+                                    self.can_modify_running_game()
+                                        && self.controls.state_slots[usize::from(slot - 1)],
                                     egui::Button::new(format!("Load slot {slot}")),
                                 )
                                 .clicked()
@@ -1278,12 +1328,13 @@ impl eframe::App for ThreadedPreviewApp {
             });
         });
         if focused
-            && self.controls.session.has_rom
+            && self.can_modify_running_game()
             && ctx.input(|input| input.key_pressed(egui::Key::F5))
         {
             self.queue_save(SessionSaveAction::QuickSave);
         }
         if focused
+            && self.can_modify_running_game()
             && self.controls.has_quick_save
             && ctx.input(|input| input.key_pressed(egui::Key::F8))
         {
@@ -1291,12 +1342,21 @@ impl eframe::App for ThreadedPreviewApp {
         }
 
         if focused
-            && self.controls.session.has_rom
+            && self.can_modify_running_game()
             && ctx.input(|input| input.key_pressed(egui::Key::F12))
         {
             self.queue_screenshot();
         }
-        self.display.poll(ctx, &self.engine);
+        // The worker may finish an intermediate cartridge while a newer
+        // request is already queued. Do not paint transient frames before
+        // its launch acknowledgement has been examined.
+        if !self
+            .pending
+            .iter()
+            .any(|op| matches!(op, PendingOperation::LoadRom { .. }))
+        {
+            self.display.poll(ctx, &self.engine);
+        }
         self.poll_operations(ctx);
         // Acceptance requires both worker progress and a real texture upload
         // through the window renderer, not just counting hidden ticks.

@@ -40,6 +40,10 @@ enum PendingOperation {
     Restore(Receiver<Result<PublishedGameFrame, String>>),
     Screenshot(Receiver<Result<PublishedGameFrame, String>>),
     PngWrite(Receiver<Result<PathBuf, String>>),
+    LoadRom {
+        path: PathBuf,
+        reply: Receiver<Result<PublishedGameFrame, String>>,
+    },
 }
 
 pub struct ThreadedPreviewApp {
@@ -64,6 +68,7 @@ pub struct ThreadedPreviewApp {
     exit_after_frames: Option<u64>,
     last_error: Option<String>,
     screenshot_root: PathBuf,
+    loaded_rom_path: PathBuf,
     status_note: Option<String>,
     pending: Vec<PendingOperation>,
 }
@@ -125,6 +130,7 @@ impl ThreadedPreviewApp {
             exit_after_frames,
             last_error: None,
             screenshot_root,
+            loaded_rom_path: rom_path,
             status_note: None,
             pending: Vec::new(),
         })
@@ -143,6 +149,25 @@ impl ThreadedPreviewApp {
     ) {
         match result {
             Ok(reply) => self.pending.push(PendingOperation::Restore(reply)),
+            Err(error) => self.last_error = Some(error),
+        }
+    }
+
+    fn queue_rom_load(&mut self, path: PathBuf) {
+        if self.pending.iter().any(|operation| matches!(operation, PendingOperation::LoadRom { .. })) {
+            self.last_error = Some("Wait for the current ROM load to finish.".to_owned());
+            return;
+        }
+        match self
+            .engine
+            .queue_load_game_with_frame(path.clone(), SoundSessionMode::Persistent)
+        {
+            Ok(reply) => {
+                self.input.clear();
+                self.status_note = Some(format!("Loading {}...", path.display()));
+                self.last_error = None;
+                self.pending.push(PendingOperation::LoadRom { path, reply });
+            }
             Err(error) => self.last_error = Some(error),
         }
     }
@@ -186,6 +211,31 @@ impl ThreadedPreviewApp {
         let mut still_pending = Vec::new();
         for operation in std::mem::take(&mut self.pending) {
             match operation {
+                PendingOperation::LoadRom { path, reply } => match reply.try_recv() {
+                    Ok(Ok(frame)) => {
+                        // A previous ROM's queued framebuffer must not be
+                        // drawn after successful cartridge replacement.
+                        let _ = self.engine.take_latest_frame();
+                        self.display.import_frame(ctx, frame);
+                        self.loaded_rom_path = path;
+                        self.status_note = Some(format!(
+                            "Loaded {}",
+                            self.loaded_rom_path.display()
+                        ));
+                        self.last_error = None;
+                    }
+                    Ok(Err(error)) => {
+                        self.last_error = Some(format!("ROM load failed: {error}"));
+                        self.status_note = None;
+                    }
+                    Err(TryRecvError::Empty) => {
+                        still_pending.push(PendingOperation::LoadRom { path, reply });
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        self.last_error = Some("ROM loader worker stopped".to_owned());
+                        self.status_note = None;
+                    }
+                },
                 PendingOperation::Save(reply) => match reply.try_recv() {
                     Ok(Ok(())) => self.last_error = None,
                     Ok(Err(error)) => self.last_error = Some(error),
@@ -325,6 +375,24 @@ impl eframe::App for ThreadedPreviewApp {
         }
         egui::TopBottomPanel::top("worker_preview_menu").show(ctx, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    if ui.button("Open ROM...").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter(
+                                "SNES ROM",
+                                &["sfc", "smc", "swc", "fig"],
+                            )
+                            .pick_file()
+                        {
+                            self.queue_rom_load(path);
+                        }
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button("Quit").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
                 ui.menu_button("Game", |ui| {
                     if ui.button(if self.playing { "Pause" } else { "Resume" }).clicked() {
                         self.playing = !self.playing;
@@ -473,6 +541,12 @@ impl eframe::App for ThreadedPreviewApp {
                     }
                 });
                 ui.label("Threaded preview (not the normal Starbyte library)");
+                ui.small(
+                    self.loaded_rom_path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| self.loaded_rom_path.display().to_string()),
+                );
             });
         });
         if focused && ctx.input(|input| input.key_pressed(egui::Key::F5)) {

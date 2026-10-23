@@ -592,6 +592,9 @@ pub struct StarbyteApp {
     /// frame must not erase evidence that real samples were generated.
     audio_nonzero_pairs_total: u64,
     worker: AppWorker,
+    /// Newest requested ROM job wins. Older materialization replies must
+    /// never replace a newer selection or its save/cheat namespace.
+    latest_rom_job_id: Option<u64>,
     library_snapshot: LibrarySnapshot,
     framebuffer_texture: Option<TextureHandle>,
     blackout_monitor: BlackScreenMonitor,
@@ -795,6 +798,7 @@ impl StarbyteApp {
             last_audio_nonzero_pairs: 0,
             audio_nonzero_pairs_total: 0,
             worker,
+            latest_rom_job_id: None,
             library_snapshot: cached_snapshot.unwrap_or_else(empty_snapshot),
             framebuffer_texture: None,
             blackout_monitor: BlackScreenMonitor::default(),
@@ -920,6 +924,12 @@ impl StarbyteApp {
     fn queue_job(&mut self, kind: WorkerCommandKind) {
         let job_id = self.next_job_id;
         self.next_job_id += 1;
+        if matches!(
+            &kind,
+            WorkerCommandKind::MaterializeRom { .. } | WorkerCommandKind::MaterializePath { .. }
+        ) {
+            self.latest_rom_job_id = Some(job_id);
+        }
         let label = job_label(&kind).to_owned();
         self.jobs.push(JobRecord {
             id: job_id,
@@ -940,6 +950,12 @@ impl StarbyteApp {
         while let Some(event) = self.worker.try_recv() {
             match event {
                 WorkerEvent::JobStarted { job_id, label } => {
+                    if is_rom_job(&label)
+                        && is_superseded_rom_load(self.latest_rom_job_id, job_id)
+                    {
+                        self.update_job(job_id, &label, "superseded", "Newer ROM selected");
+                        continue;
+                    }
                     self.update_job(job_id, &label, "running", "Running");
                     self.status_line = format!("{label} in progress...");
                 }
@@ -986,6 +1002,11 @@ impl StarbyteApp {
                     entry,
                     request,
                 } => match {
+                    if is_superseded_rom_load(self.latest_rom_job_id, job_id) {
+                        self.update_job(job_id, "Load Game", "superseded", "Newer ROM selected");
+                        continue;
+                    }
+
                     self.clear_audio();
                     self.session.launch_game(&request)
                 } {
@@ -1024,6 +1045,10 @@ impl StarbyteApp {
                     game_id,
                     request,
                 } => {
+                    if is_superseded_rom_load(self.latest_rom_job_id, job_id) {
+                        self.update_job(job_id, "Open ROM", "superseded", "Newer ROM selected");
+                        continue;
+                    }
                     let detail = format!("Loaded {}", original_path.display());
                     match self.complete_local_rom(
                         &original_path,
@@ -1045,6 +1070,12 @@ impl StarbyteApp {
                     label,
                     error,
                 } => {
+                    if is_rom_job(&label)
+                        && is_superseded_rom_load(self.latest_rom_job_id, job_id)
+                    {
+                        self.update_job(job_id, &label, "superseded", "Newer ROM selected");
+                        continue;
+                    }
                     self.update_job(job_id, &label, "failed", &error);
                     self.status_line = error;
                 }
@@ -5655,6 +5686,33 @@ fn resolve_cache_root(config: &RuntimeConfig, assets: &AssetConfig) -> PathBuf {
         .clone()
         .or_else(|| assets.cache_dir.clone())
         .unwrap_or_else(|| assets.cache_root())
+}
+
+/// Both the indexed library and direct-file loaders share the dedicated
+/// ROM lane. Only events from the latest user selection may install a
+/// cartridge or overwrite the current game's status/error message.
+fn is_rom_job(label: &str) -> bool {
+    matches!(label, "Load Game" | "Open ROM")
+}
+
+fn is_superseded_rom_load(latest: Option<u64>, event_job: u64) -> bool {
+    latest.is_some_and(|job| job != event_job)
+}
+
+#[cfg(test)]
+mod rom_request_order_tests {
+    use super::{is_rom_job, is_superseded_rom_load};
+
+    #[test]
+    fn newer_rom_selection_supersedes_success_and_error_from_older_load() {
+        assert!(!is_superseded_rom_load(None, 1));
+        assert!(!is_superseded_rom_load(Some(9), 9));
+        assert!(is_superseded_rom_load(Some(9), 8));
+        assert!(is_rom_job("Load Game"));
+        assert!(is_rom_job("Open ROM"));
+        assert!(!is_rom_job("Refresh Cheats"));
+        assert!(!is_rom_job("Scan Library"));
+    }
 }
 
 fn job_label(kind: &WorkerCommandKind) -> &'static str {

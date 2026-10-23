@@ -16,7 +16,7 @@ use std::{
 use starbyte_core::{input::ControllerState, manifest::AssetConfig};
 use starbyte_frontend::{
     CheatEntry, FrontendSession, SessionControlsSnapshot, SessionInputDiagnostics,
-    SessionSaveAction, SessionSaveOutcome, SessionScreenshot, SessionSnapshot,
+    SessionLaunchRequest, SessionSaveAction, SessionSaveOutcome, SessionScreenshot, SessionSnapshot,
     SessionSoundDiagnostics, SoundSessionMode,
 };
 
@@ -349,6 +349,18 @@ impl OwnedSession {
         }
     }
 
+    /// One serialized launch with its matching cheats and save namespace.
+    /// No game frame can execute between ROM installation and cheat setup.
+    pub fn launch_game(&mut self, request: &SessionLaunchRequest) -> anyhow::Result<()> {
+        self.input.clear();
+        if let Some(output) = &self.audio {
+            output.clear();
+        }
+        self.session.launch_game(request)?;
+        self.last_sram_flush = Instant::now();
+        Ok(())
+    }
+
     pub fn set_cheats(&mut self, cheats: &[CheatEntry]) -> usize {
         self.session.set_active_cheats(cheats)
     }
@@ -555,10 +567,19 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
         path: std::path::PathBuf,
         mode: SoundSessionMode,
     ) -> Result<Receiver<Result<PublishedGameFrame, String>>, String> {
+        self.queue_launch_with_frame(SessionLaunchRequest {
+            rom_path: path,
+            sound_mode: mode,
+            cheats: Vec::new(),
+        })
+    }
+
+    pub fn queue_launch_with_frame(
+        &self,
+        request: SessionLaunchRequest,
+    ) -> Result<Receiver<Result<PublishedGameFrame, String>>, String> {
         self.submit_transaction(move |engine| {
-            engine
-                .load_rom(&path, mode)
-                .map_err(|error| error.to_string())?;
+            engine.launch_game(&request).map_err(|error| error.to_string())?;
             Ok(engine.capture_frame())
         })
     }

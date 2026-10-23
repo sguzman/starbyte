@@ -1,8 +1,28 @@
 # Emulation scheduler migration
 
-**Status: in progress. Commit [`66d7147`](https://github.com/sguzman/starbyte/commit/66d71471b7b7a1faf268ff8c75fd4205bab7e08c) passed [CI run 40000854342](https://github.com/sguzman/starbyte/actions/runs/40000854342): Linux, Windows, lint/Clippy, original-window Weston playback/save/restore/60-frame stepping, focus pause/resume, worker-failure handling, and battery-backed SRAM persistence across actual GUI shutdown. Default-app ownership transfer and physical Hyprland/audio validation remain outstanding.**
+**Status: in progress. Commit [`f7114d9`](https://github.com/sguzman/starbyte/commit/f7114d9032356594e6250aab9a38d3ab1b42ed36) passed [CI run 40002095002](https://github.com/sguzman/starbyte/actions/runs/40002095002): Linux, Windows, lint/Clippy, native Weston worker GUI acceptance, battery-backed SRAM on actual GUI shutdown, and end-to-end SNES joypad press/release via the worker InputPort. Default-app ownership transfer and physical Hyprland/audio validation remain outstanding.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
+
+## Verified worker input through SNES auto joypad — 2026-10-23
+
+Commit [`f7114d9`](https://github.com/sguzman/starbyte/commit/f7114d9032356594e6250aab9a38d3ab1b42ed36)
+passed [CI 40002095002](https://github.com/sguzman/starbyte/actions/runs/40002095002):
+Linux, Windows and lint/Clippy green, including the native Weston GUI suite.
+
+A new integration regression writes a copyright-free cartridge that enables
+the SNES automatic joypad polling register (`$4200`). With emulation and its
+input port owned by a separate worker thread, it submits Start+Right,
+executes frames through the asynchronous one-frame worker command, then
+checks **both host and actual emulated latched joypad bits**. It then submits
+a released state and verifies both registers clear after subsequent frames.
+This proves input reaches the actual virtual SNES hardware, rather than
+only updating an egui diagnostic overlay or testing a bitset in isolation.
+
+It does **not** verify the user's physical Wooting/gamepad hardware or
+Hyprland focus behavior, and the default GUI has not switched owners.
+Source counts remain A 7/8 (88%), B 15/18 (83%), P 18/20 (90%), C 8/16
+(50%) and D 11/15 (73%).
 
 ## Verified battery-backed SRAM across original GUI shutdown — 2026-10-23
 

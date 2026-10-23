@@ -215,7 +215,7 @@ jobs:
               exit 1
             }
           cat "$RUNNER_TEMP/starbyte-full-modes.log"
-          grep -F "STARBYTE_FULL_LIBRARY_MODE_SMOKE_OK persistent_slot=true compatibility_slot=true isolated_namespaces=true" "$RUNNER_TEMP/starbyte-full-modes.log"
+          grep -F "STARBYTE_FULL_LIBRARY_MODE_SMOKE_OK persistent_slot=true compatibility_slot=true separate_slots=true" "$RUNNER_TEMP/starbyte-full-modes.log"
           # This acceptance shell consumes worker frames through egui while
           # executing game frames from a separate OS thread.
           timeout 90s target/debug/starbyte-egui --demo --threaded-preview --preview-background --exit-after-frames 30 \

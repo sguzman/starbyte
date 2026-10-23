@@ -731,11 +731,15 @@ impl StarbyteApp {
         let mut startup_error = None;
         let mut native_smoke_audio = NativeSmokeAudioMetrics::default();
         if let Some(path) = rom_path {
-            if experimental_sound_driver {
-                session.load_rom_with_isolated_audio_probe(&path)?;
-            } else {
-                load_rom_with_default_sound(&mut session, &path)?;
-            }
+            session.launch_game(&SessionLaunchRequest {
+                rom_path: path.clone(),
+                sound_mode: if experimental_sound_driver {
+                    SoundSessionMode::Isolated
+                } else {
+                    SoundSessionMode::Persistent
+                },
+                cheats: Vec::new(),
+            })?;
             record_recent_rom(&mut config.library.recent_roms, path.as_path());
             match session.run_frame_with_timeout(GUI_FRAME_TIMEOUT) {
                 Ok(()) => {

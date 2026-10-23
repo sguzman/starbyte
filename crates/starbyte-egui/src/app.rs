@@ -2343,7 +2343,8 @@ impl StarbyteApp {
                 let started = std::thread::Builder::new()
                     .name("starbyte-speaker-probe".to_owned())
                     .spawn(move || {
-                        let result = AudioOutput::test_speakers().map_err(|error| error.to_string());
+                        let result =
+                            AudioOutput::test_speakers().map_err(|error| error.to_string());
                         let _ = sender.send(result);
                     });
                 match started {

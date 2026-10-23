@@ -674,6 +674,14 @@ impl StarbyteApp {
         exit_after_frames: Option<u64>,
         logs: SharedLogBuffer,
     ) -> Result<Self> {
+        // Headless Weston has no keyboard focus until a compositor explicitly
+        // assigns it. The bounded native demo smoke is an intentional
+        // execution test: disabling focus pause in this *opt-in test session*
+        // avoids waiting forever for a focus event that never arrives. Normal
+        // launches retain their persisted background-pause preference.
+        if exit_after_frames.is_some() {
+            config.ui.pause_when_unfocused = false;
+        }
         if let Some(prefer_dark_mode) = prefer_dark_mode_override {
             config.prefer_dark_mode = prefer_dark_mode;
             config.ui.theme = if prefer_dark_mode {

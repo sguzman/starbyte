@@ -6,7 +6,7 @@
 use std::{
     io,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering},
         mpsc::Receiver,
     },
@@ -188,6 +188,32 @@ pub struct WorkerAudioDiagnostics {
     pub sink_empty_on_pcm: u64,
 }
 
+/// Read-only latest menu facts. The worker updates this only on explicit
+/// state mutations; UI redraws never touch the emulator or disk save slots.
+#[derive(Clone)]
+pub struct ControlsPort {
+    state: Arc<Mutex<SessionControlsSnapshot>>,
+}
+
+impl ControlsPort {
+    fn new(initial: SessionControlsSnapshot) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(initial)),
+        }
+    }
+
+    fn publish(&self, next: SessionControlsSnapshot) {
+        *self.state.lock().unwrap_or_else(|poison| poison.into_inner()) = next;
+    }
+
+    pub fn latest(&self) -> SessionControlsSnapshot {
+        self.state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+    }
+}
+
 /// A snapshot for the renderer; video frames coalesce when the UI is hidden.
 pub struct PublishedGameFrame {
     pub status: SessionSnapshot,
@@ -229,6 +255,7 @@ pub struct OwnedSession {
     pitch_factor: f32,
     input: InputPort,
     render: RenderPort,
+    controls_port: ControlsPort,
     last_sram_flush: Instant,
     next_audio_retry: Instant,
     /// True only after the shutdown hook has finished on the emulation
@@ -242,6 +269,7 @@ impl OwnedSession {
     }
 
     pub fn from_session(session: FrontendSession) -> Self {
+        let controls_port = ControlsPort::new(session.controls_snapshot());
         Self {
             session,
             blackout_monitor: BlackScreenMonitor::default(),
@@ -253,6 +281,7 @@ impl OwnedSession {
             pitch_factor: 1.0,
             input: InputPort::default(),
             render: RenderPort::default(),
+            controls_port,
             last_sram_flush: Instant::now(),
             next_audio_retry: Instant::now(),
             shutdown_finalized: false,
@@ -317,6 +346,18 @@ impl OwnedSession {
 
     pub fn set_render_visible(&self, visible: bool) {
         self.render.set_visible(visible);
+    }
+
+    /// Clone before handing the session to the worker. The receiver is
+    /// valid while the owner is running, including with no GUI redraws.
+    pub fn controls_port(&self) -> ControlsPort {
+        self.controls_port.clone()
+    }
+
+    fn publish_controls(&self) -> SessionControlsSnapshot {
+        let controls = self.session.controls_snapshot();
+        self.controls_port.publish(controls.clone());
+        controls
     }
 
     /// Held-controller updates routed through typed commands cannot infer
@@ -384,6 +425,7 @@ impl OwnedSession {
         };
         if result.is_ok() {
             self.blackout_monitor = BlackScreenMonitor::default();
+            self.publish_controls();
         }
         result
     }
@@ -398,11 +440,14 @@ impl OwnedSession {
         self.session.launch_game(request)?;
         self.blackout_monitor = BlackScreenMonitor::default();
         self.last_sram_flush = Instant::now();
+        self.publish_controls();
         Ok(())
     }
 
     pub fn set_cheats(&mut self, cheats: &[CheatEntry]) -> usize {
-        self.session.set_active_cheats(cheats)
+        let applied = self.session.set_active_cheats(cheats);
+        self.publish_controls();
+        applied
     }
 
     fn process_launch(
@@ -412,7 +457,7 @@ impl OwnedSession {
         self.launch_game(request)
             .map_err(|error| error.to_string())?;
         Ok(WorkerLaunchResponse {
-            controls: self.session.controls_snapshot(),
+            controls: self.controls_port.latest(),
             frame: self.capture_frame(),
         })
     }
@@ -439,7 +484,7 @@ impl OwnedSession {
         }
         Ok(WorkerSaveResponse {
             outcome,
-            controls: self.session.controls_snapshot(),
+            controls: self.publish_controls(),
             restored_frame: if restoring && capture_restored_frame {
                 Some(self.capture_frame())
             } else {
@@ -449,25 +494,34 @@ impl OwnedSession {
     }
 
     pub fn quick_save(&mut self) -> anyhow::Result<()> {
-        self.session
+        let result = self
+            .session
             .apply_save_action(SessionSaveAction::QuickSave)
-            .map(|_| ())
+            .map(|_| ());
+        if result.is_ok() {
+            self.publish_controls();
+        }
+        result
     }
 
     pub fn quick_load(&mut self) -> anyhow::Result<()> {
         if let Some(audio) = &self.audio {
             audio.clear();
         }
-        self.session
+        let result = self
+            .session
             .apply_save_action(SessionSaveAction::QuickLoad)
-            .map(|_| ())
+            .map(|_| ());
+        if result.is_ok() {
+            self.publish_controls();
+        }
+        result
     }
 
     pub fn save_slot(&mut self, slot: u8) -> anyhow::Result<std::path::PathBuf> {
-        match self
-            .session
-            .apply_save_action(SessionSaveAction::SaveSlot(slot))?
-        {
+        let outcome = self.session.apply_save_action(SessionSaveAction::SaveSlot(slot))?;
+        self.publish_controls();
+        match outcome {
             SessionSaveOutcome::SavedTo(path) => Ok(path),
             SessionSaveOutcome::Completed => {
                 anyhow::bail!("disk save returned no slot path")
@@ -479,9 +533,14 @@ impl OwnedSession {
         if let Some(audio) = &self.audio {
             audio.clear();
         }
-        self.session
+        let result = self
+            .session
             .apply_save_action(SessionSaveAction::LoadSlot(slot))
-            .map(|_| ())
+            .map(|_| ());
+        if result.is_ok() {
+            self.publish_controls();
+        }
+        result
     }
 
     pub fn flush_sram(&mut self) -> anyhow::Result<()> {
@@ -495,6 +554,9 @@ impl OwnedSession {
     }
 
     pub fn controls_snapshot(&self) -> SessionControlsSnapshot {
+        // This explicit owner-side query stays live for diagnostics. The
+        // separately published port intentionally freezes menu facts until
+        // a state-changing command, avoiding 60 Hz save-slot disk checks.
         self.session.controls_snapshot()
     }
     pub fn audio_diagnostics(&self) -> WorkerAudioDiagnostics {
@@ -706,6 +768,7 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
     pub fn queue_clear_cheats(&self) -> Result<Receiver<Result<(), String>>, String> {
         self.submit_transaction(|engine| {
             engine.session.clear_active_cheats();
+            engine.publish_controls();
             Ok(())
         })
     }
@@ -1057,6 +1120,59 @@ mod tests {
         assert_eq!(returned_owner.snapshot().rom_path, Some(rom));
         assert!(returned_owner.shutdown_finalized);
         assert!(returned_owner.audio.is_none());
+    }
+
+    #[test]
+    fn published_controls_follow_mutations_without_ui_thread_transactions() {
+        let dir = tempfile::tempdir().unwrap();
+        let rom = dir.path().join("controls-port-demo.sfc");
+        std::fs::write(&rom, starbyte_core::testing::demo::demo_rom_bytes()).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(dir.path().join("saves")),
+            state_dir: Some(dir.path().join("states")),
+            cache_dir: Some(dir.path().join("cache")),
+            config_path: None,
+        };
+        let owner = OwnedSession::create(assets).unwrap();
+        let published = owner.controls_port();
+        assert!(!published.latest().session.has_rom);
+        let (worker, _, _) = owner.spawn_with_ports().unwrap();
+        let launch = worker
+            .queue_launch_with_state(SessionLaunchRequest {
+                rom_path: rom.clone(),
+                sound_mode: SoundSessionMode::Persistent,
+                cheats: Vec::new(),
+            })
+            .unwrap()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap();
+        assert_eq!(published.latest().session.rom_path, Some(rom.clone()));
+        assert_eq!(published.latest().session.rom_path, launch.controls.session.rom_path);
+        assert!(!published.latest().has_quick_save);
+        let saved = worker
+            .queue_save_action_with_frame(SessionSaveAction::QuickSave)
+            .unwrap()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap();
+        assert!(saved.controls.has_quick_save);
+        assert!(published.latest().has_quick_save);
+        let missing = dir.path().join("missing.sfc");
+        let failure = worker
+            .queue_launch_with_state(SessionLaunchRequest {
+                rom_path: missing,
+                sound_mode: SoundSessionMode::Persistent,
+                cheats: Vec::new(),
+            })
+            .unwrap()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+        assert!(failure.is_err());
+        assert_eq!(published.latest().session.rom_path, Some(rom));
+        assert!(published.latest().has_quick_save);
+        worker.shutdown().unwrap();
     }
 
     #[test]

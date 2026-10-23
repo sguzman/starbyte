@@ -715,6 +715,26 @@ enum WorkerFocusPauseSmoke {
     WaitingForPause,
     Gap { deadline: Instant, at_start: u64 },
     Resuming { at_start: u64, paused_frames: u64 },
+    ManualPauseWaiting { paused_frames: u64, resumed_frames: u64 },
+    ManualGap {
+        deadline: Instant,
+        at_start: u64,
+        paused_frames: u64,
+        resumed_frames: u64,
+    },
+    ManualFocusRestored {
+        deadline: Instant,
+        at_start: u64,
+        paused_frames: u64,
+        resumed_frames: u64,
+        manual_paused_frames: u64,
+    },
+    ManualResuming {
+        at_start: u64,
+        paused_frames: u64,
+        resumed_frames: u64,
+        manual_paused_frames: u64,
+    },
 }
 
 struct FullLibraryPendingLaunch {
@@ -5218,6 +5238,40 @@ impl eframe::App for StarbyteApp {
             // The ordinary worker input/focus update below will restore
             // focus with the same background-pause policy still enabled.
         }
+        if let Some(WorkerFocusPauseSmoke::ManualGap {
+            deadline,
+            at_start,
+            paused_frames,
+            resumed_frames,
+        }) = self.worker_focus_pause_smoke
+        {
+            let now = Instant::now();
+            if now < deadline {
+                ctx.request_repaint_after(deadline - now);
+                return;
+            }
+            let Some(worker) = &self.full_worker else {
+                println!("STARBYTE_FULL_LIBRARY_FOCUS_PAUSE_FAILED manual_missing_worker");
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                return;
+            };
+            let manual_paused_frames = worker.engine.completed_frames().saturating_sub(at_start);
+            if manual_paused_frames > 1 || worker.engine.is_emulating() {
+                println!(
+                    "STARBYTE_FULL_LIBRARY_FOCUS_PAUSE_FAILED manual_pause_advanced={manual_paused_frames}"
+                );
+                self.worker_focus_pause_smoke = None;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                return;
+            }
+            self.worker_focus_pause_smoke = Some(WorkerFocusPauseSmoke::ManualFocusRestored {
+                deadline: now + Duration::from_millis(200),
+                at_start: worker.engine.completed_frames(),
+                paused_frames,
+                resumed_frames,
+                manual_paused_frames,
+            });
+        }
         if let Some((deadline, at_start)) = self.worker_no_redraw_gap {
             let now = Instant::now();
             if now < deadline {
@@ -5468,8 +5522,12 @@ impl eframe::App for StarbyteApp {
             }
             let focused = match self.worker_focus_pause_smoke {
                 Some(WorkerFocusPauseSmoke::WaitingForPause)
-                | Some(WorkerFocusPauseSmoke::Gap { .. }) => false,
-                Some(WorkerFocusPauseSmoke::Resuming { .. }) => true,
+                | Some(WorkerFocusPauseSmoke::Gap { .. })
+                | Some(WorkerFocusPauseSmoke::ManualPauseWaiting { .. })
+                | Some(WorkerFocusPauseSmoke::ManualGap { .. }) => false,
+                Some(WorkerFocusPauseSmoke::Resuming { .. })
+                | Some(WorkerFocusPauseSmoke::ManualFocusRestored { .. })
+                | Some(WorkerFocusPauseSmoke::ManualResuming { .. }) => true,
                 _ => ctx.input(|input| input.focused),
             };
             let sample = self.effective_controller_sample(ctx);
@@ -5490,6 +5548,10 @@ impl eframe::App for StarbyteApp {
                         Some(WorkerFocusPauseSmoke::WaitingForPause)
                             | Some(WorkerFocusPauseSmoke::Gap { .. })
                             | Some(WorkerFocusPauseSmoke::Resuming { .. })
+                            | Some(WorkerFocusPauseSmoke::ManualPauseWaiting { .. })
+                            | Some(WorkerFocusPauseSmoke::ManualGap { .. })
+                            | Some(WorkerFocusPauseSmoke::ManualFocusRestored { .. })
+                            | Some(WorkerFocusPauseSmoke::ManualResuming { .. })
                     );
                 if worker.last_pause_when_unfocused != Some(pause_policy) {
                     worker.engine.set_pause_when_unfocused(pause_policy);
@@ -5611,8 +5673,63 @@ impl eframe::App for StarbyteApp {
                     }) if worker.engine.is_emulating()
                         && worker.engine.completed_frames() >= at_start + 10 =>
                     {
+                        // Now test manual Pause. Focus must not override it
+                        // when the window subsequently leaves and returns.
+                        self.is_playing = false;
+                        self.worker_focus_pause_smoke =
+                            Some(WorkerFocusPauseSmoke::ManualPauseWaiting {
+                                paused_frames,
+                                resumed_frames: worker.engine.completed_frames() - at_start,
+                            });
+                    }
+                    Some(WorkerFocusPauseSmoke::ManualPauseWaiting {
+                        paused_frames,
+                        resumed_frames,
+                    }) if !worker.engine.is_emulating() => {
+                        self.worker_focus_pause_smoke = Some(WorkerFocusPauseSmoke::ManualGap {
+                            deadline: Instant::now() + Duration::from_secs(1),
+                            at_start: worker.engine.completed_frames(),
+                            paused_frames,
+                            resumed_frames,
+                        });
+                        ctx.request_repaint_after(Duration::from_secs(1));
+                        return;
+                    }
+                    Some(WorkerFocusPauseSmoke::ManualFocusRestored {
+                        deadline,
+                        at_start,
+                        paused_frames,
+                        resumed_frames,
+                        manual_paused_frames,
+                    }) if Instant::now() >= deadline => {
+                        let slipped = worker.engine.completed_frames().saturating_sub(at_start);
+                        if slipped > 1 || worker.engine.is_emulating() || self.is_playing {
+                            println!(
+                                "STARBYTE_FULL_LIBRARY_FOCUS_PAUSE_FAILED manual_focus_resume={slipped}"
+                            );
+                            self.worker_focus_pause_smoke = None;
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            return;
+                        }
+                        self.is_playing = true;
+                        self.worker_focus_pause_smoke =
+                            Some(WorkerFocusPauseSmoke::ManualResuming {
+                                at_start: worker.engine.completed_frames(),
+                                paused_frames,
+                                resumed_frames,
+                                manual_paused_frames,
+                            });
+                    }
+                    Some(WorkerFocusPauseSmoke::ManualResuming {
+                        at_start,
+                        paused_frames,
+                        resumed_frames,
+                        manual_paused_frames,
+                    }) if worker.engine.is_emulating()
+                        && worker.engine.completed_frames() >= at_start + 10 =>
+                    {
                         println!(
-                            "STARBYTE_FULL_LIBRARY_FOCUS_PAUSE_SMOKE_OK paused_frames={paused_frames} resumed_frames={}",
+                            "STARBYTE_FULL_LIBRARY_FOCUS_PAUSE_SMOKE_OK paused_frames={paused_frames} resumed_frames={resumed_frames} manual_paused_frames={manual_paused_frames} manual_resumed_frames={}",
                             worker.engine.completed_frames() - at_start
                         );
                         self.worker_focus_pause_smoke = None;

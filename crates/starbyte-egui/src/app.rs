@@ -1394,16 +1394,13 @@ impl StarbyteApp {
         // Discard the old worker's device/submission counters. A sound test
         // must report *this session's* PCM delivery, not a prior ROM's.
         self.audio_output = None;
-        let result = match mode {
-            SoundSessionMode::Compatibility => self.session.load_rom(&path),
-            SoundSessionMode::Isolated => self.session.load_rom_with_isolated_audio_probe(&path),
-            SoundSessionMode::Persistent => self.session.load_rom_with_persistent_audio(&path),
-        };
+        let result = self.session.launch_game(&SessionLaunchRequest {
+            rom_path: path,
+            sound_mode: mode,
+            cheats: old_cheats.unwrap_or_default(),
+        });
         match result {
-            Ok(()) => {
-                if let Some(cheats) = old_cheats {
-                    self.session.set_active_cheats(&cheats);
-                }
+            Ok(_) => {
                 self.playback_error = None;
                 self.frame_clock.reset(Instant::now());
                 self.frame_performance = FramePerformance::default();

@@ -37,6 +37,7 @@ fn pitch_for(mode: AudioPitchMode, custom_percent: u16, speed: u16) -> f32 {
 
 enum PendingOperation {
     Save(Receiver<Result<(), String>>),
+    SpeakerCheck(Receiver<Result<(), String>>),
     Restore(Receiver<Result<PublishedGameFrame, String>>),
     Screenshot(Receiver<Result<PublishedGameFrame, String>>),
     PngWrite(Receiver<Result<PathBuf, String>>),
@@ -234,6 +235,21 @@ impl ThreadedPreviewApp {
                     Err(TryRecvError::Disconnected) => {
                         self.last_error = Some("ROM loader worker stopped".to_owned());
                         self.status_note = None;
+                    }
+                },
+                PendingOperation::SpeakerCheck(reply) => match reply.try_recv() {
+                    Ok(Ok(())) => {
+                        self.status_note = Some(
+                            "Speaker check submitted to the game audio sink".to_owned(),
+                        );
+                        self.last_error = None;
+                    }
+                    Ok(Err(error)) => self.last_error = Some(error),
+                    Err(TryRecvError::Empty) => {
+                        still_pending.push(PendingOperation::SpeakerCheck(reply));
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        self.last_error = Some("Audio worker stopped before speaker check".to_owned());
                     }
                 },
                 PendingOperation::Save(reply) => match reply.try_recv() {
@@ -468,6 +484,22 @@ impl eframe::App for ThreadedPreviewApp {
                         )
                     {
                         self.last_error = Some(error);
+                    }
+                    if ui
+                        .add_enabled(
+                            self.audio_enabled
+                                && !self.audio_muted
+                                && self.audio_volume > 0.0,
+                            egui::Button::new("Test speakers (440 Hz)"),
+                        )
+                        .clicked()
+                    {
+                        match self.engine.queue_speaker_check() {
+                            Ok(reply) => {
+                                self.pending.push(PendingOperation::SpeakerCheck(reply));
+                            }
+                            Err(error) => self.last_error = Some(error),
+                        }
                     }
                     ui.separator();
                     ui.label("Pitch");

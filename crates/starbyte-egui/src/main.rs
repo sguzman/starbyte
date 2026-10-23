@@ -5,6 +5,8 @@ mod audio;
 mod blackout;
 mod logging;
 mod pitch;
+#[allow(dead_code)]
+mod preview_gamepads;
 // Worker-clock foundation; GUI session handoff is a separate gated milestone.
 #[allow(dead_code)]
 mod scheduler;

@@ -1,6 +1,6 @@
 # Emulation scheduler migration
 
-**Status: in progress (source changes only; no successful CI/native acceptance verified).**
+**Status: in progress. Opt-in worker/Weston acceptance passed on an earlier commit; latest full-UI refactors are awaiting CI.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
 
@@ -70,7 +70,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 not a separate repository, not the default UI, and not a substitute for the
 complete Starbyte library application.
 
-## Milestone C: native GUI migration — 7/15 source tasks (47%; default worker integration still 0%)
+## Milestone C: native GUI migration — 8/16 source tasks (50%; default worker integration still 0%)
 
 - [x] 🧱 Introduce frontend-neutral SessionControlsSnapshot and migrate the existing disk-slot menu to it; worker can serialize the same summary.
 - [x] 🎮 Migrate the existing input overlay to frontend-neutral SessionInputDiagnostics that the worker can also publish.
@@ -79,6 +79,7 @@ complete Starbyte library application.
 - [x] 🛡️ Isolate deep blackout-monitor emulator inspection behind the FrontendSession boundary for later migration into worker ownership.
 - [x] 💾 Route the established F5/F8 and durable-slot actions through frontend-neutral SessionSaveAction; the worker uses the same action dispatcher for quick save/load, durable slots and SRAM.
 - [x] 🖼️ Share validated nearest-filtered RGBA texture uploads between the legacy player and threaded preview, without adding an intermediate copy to the legacy loop.
+- [x] 🎬 Share one typed ROM launch request (resolved path, sound/save mode and matching cheats) across library, direct-file, startup, sound-mode restart and worker APIs, without executing a frame between installation and cheat selection.
 - [ ] 🎬 Route game-launch success/error replies through the emulation worker.
 - [ ] ⌨️ Send controller inputs without losing key-down/up edges; preserve F5/F8/F9/Escape.
 - [ ] 🪟 Display the latest completed RGBA texture without blocking the worker.
@@ -88,11 +89,12 @@ complete Starbyte library application.
 - [ ] 🧹 Complete full-application orderly shutdown handoff: stop clock, flush SRAM, clear audio and join exactly once (worker finalizer implemented and covered, not yet installed in normal StarbyteApp).
 - [ ] 🚀 Make the worker the default runtime only after passing acceptance gates.
 
-## Milestone D: validation — 3/9 test paths authored (33%), not yet verified
+## Milestone D: validation — 4/10 test paths authored (40%; latest commit not yet verified)
 
 - [x] 🧪 Add a display-server-free, real built-in ROM smoke path (`--demo --scheduler-smoke`) to CI.
 - [x] 🖥️ Add an opt-in `--threaded-preview` native egui shell and Weston smoke that requires a rendered texture.
 - [x] 🧪 Add a `cargo test` built-in demo ROM integration test for background frames, hidden-window copy suppression and reappearance, neutral controls, screenshot capture and quick-save state.
+- [x] 🎬 Add direct/worker launch-request tests for failed ROM preservation, restored save-mode namespaces and memory quick-save invalidation after a successful ROM replacement.
 - [ ] ✅ Confirm Linux CI format/Clippy and Linux+Windows tests pass.
 - [ ] 🟩 Confirm the scheduler smoke actually completes on the exact commit.
 - [ ] 🪟 Run Wayland window visible/focused and confirm accurate ~60.1 emulated FPS.
@@ -138,6 +140,15 @@ The dedicated worker also now has a real lost-heartbeat test:
 default focus pause must suspend frames when Wayland stops repainting,
 while disabling focus pause must continue frames without any UI update.
 Full Hyprland native performance and speaker audibility remain untested.
+
+**Latest source note:** The normal application's `WorkerEvent::RomReady`,
+file/ZIP open, sound-mode restart and startup ROM flows now use the same
+`SessionLaunchRequest` type as `OwnedSession::queue_launch_with_frame`.
+This reduces divergence in cheat timing and save namespaces but **does not**
+move the legacy app's frame clock or `FrontendSession` to another thread.
+Outstanding cutover tasks remain blocking. The command-burst test now
+explicitly accepts quota-based backpressure (instead of assuming an
+unbounded queue), and CI formatter corrections have been applied.
 
 ## Architectural invariants
 

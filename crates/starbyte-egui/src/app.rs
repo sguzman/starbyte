@@ -28,7 +28,8 @@ use starbyte_core::{
 };
 use starbyte_frontend::{
     CheatEntry, FrontendSession, InstalledStatus, LibraryEntry, LibraryFilter, LibraryService,
-    LibrarySnapshot, LibraryTarget, SessionLaunchRequest, SessionSaveAction, SoundSessionMode,
+    LibrarySnapshot, LibraryTarget, SessionControlsSnapshot, SessionInputDiagnostics,
+    SessionLaunchRequest, SessionSaveAction, SessionSnapshot, SoundSessionMode,
 };
 
 // NTSC SNES video: 341 dots/scanline × 262 lines × 4 master clocks/dot
@@ -1098,6 +1099,21 @@ impl StarbyteApp {
         }
     }
 
+    /// UI-facing session data gateway. Keep the legacy source here until
+    /// the full native library is switched to worker-published snapshots.
+    /// Menus and status bars should not read the emulator owner directly.
+    fn session_snapshot(&self) -> SessionSnapshot {
+        self.session.snapshot()
+    }
+
+    fn session_controls(&self) -> SessionControlsSnapshot {
+        self.session.controls_snapshot()
+    }
+
+    fn session_input_diagnostics(&self) -> SessionInputDiagnostics {
+        self.session.input_diagnostics()
+    }
+
     fn selected_entry(&self) -> Option<LibraryEntry> {
         let selected = self.selected_game_id.as_deref()?;
         self.library_snapshot
@@ -1141,7 +1157,7 @@ impl StarbyteApp {
     }
 
     fn refresh_framebuffer(&mut self, ctx: &egui::Context) {
-        let snapshot = self.session.snapshot();
+        let snapshot = self.session_snapshot();
         let uploaded = upload_rgba(
             ctx,
             &mut self.framebuffer_texture,
@@ -1209,7 +1225,7 @@ impl StarbyteApp {
             ctx,
             &self.config.input.keyboard_bindings,
             keyboard_enabled
-                && self.session.snapshot().has_rom
+                && self.session_snapshot().has_rom
                 && (self.is_playing || self.pending_step_frames > 0),
         );
     }
@@ -1664,7 +1680,7 @@ impl StarbyteApp {
                     self.restart_game_with_audio_mode(SoundSessionMode::Compatibility, ui.ctx());
                 }
             }
-            SoundSessionMode::Compatibility if self.session.snapshot().has_rom => {
+            SoundSessionMode::Compatibility if self.session_snapshot().has_rom => {
                 if !self.confirm_experimental_audio {
                     if ui.button("Try experimental game audio...").clicked() {
                         self.confirm_experimental_audio = true;
@@ -1760,7 +1776,7 @@ impl StarbyteApp {
                 self.frame_performance.record(started.elapsed());
                 if self.exit_after_frames.is_some() {
                     self.native_smoke_audio.record(
-                        self.session.snapshot().frame,
+                        self.session_snapshot().frame,
                         &self.session.frame_audio_samples(),
                     );
                 }
@@ -2238,7 +2254,7 @@ impl StarbyteApp {
     }
 
     fn toggle_play_pause(&mut self) {
-        if !self.session.snapshot().has_rom {
+        if !self.session_snapshot().has_rom {
             return;
         }
         self.is_playing = !self.is_playing;
@@ -2293,7 +2309,7 @@ impl StarbyteApp {
             });
 
             let game_menu = ui.menu_button("Game", |ui| {
-                let has_rom = self.session.snapshot().has_rom;
+                let has_rom = self.session_snapshot().has_rom;
                 if ui
                     .add_enabled(
                         has_rom,
@@ -2621,7 +2637,7 @@ impl StarbyteApp {
                 }
                 any = true;
             };
-            if self.play_view && self.session.snapshot().has_rom {
+            if self.play_view && self.session_snapshot().has_rom {
                 if prefs.status_fps {
                     separator(ui);
                     let fps = if !self.is_playing {
@@ -2660,7 +2676,7 @@ impl StarbyteApp {
                     );
                 }
                 if prefs.status_frame || prefs.status_apu_steps || prefs.status_audio_samples {
-                    let snapshot = self.session.snapshot();
+                    let snapshot = self.session_snapshot();
                     if prefs.status_frame {
                         separator(ui);
                         ui.label(RichText::new(format!("Frame {}", snapshot.frame)).monospace());
@@ -3378,7 +3394,7 @@ impl StarbyteApp {
     fn draw_persistent_slots(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         // This same neutral snapshot can later arrive over the worker's
         // command channel. No GUI borrow of Emulator is needed for this menu.
-        let controls = self.session.controls_snapshot();
+        let controls = self.session_controls();
         match controls.sound_mode {
             SoundSessionMode::Compatibility => {
                 ui.label("Compatibility slots (your existing game states)");
@@ -3437,7 +3453,7 @@ impl StarbyteApp {
         }
         if self.show_input_overlay {
             let focused = ui.ctx().input(|input| input.focused);
-            let diagnostics = self.session.input_diagnostics();
+            let diagnostics = self.session_input_diagnostics();
             let host = diagnostics.host_bits;
             let latched = diagnostics.latched_bits;
             let busy = diagnostics.reading;
@@ -3507,7 +3523,7 @@ impl StarbyteApp {
 
     fn draw_session_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.heading("Session");
-        let snapshot = self.session.snapshot();
+        let snapshot = self.session_snapshot();
         if snapshot.has_rom && !self.play_view {
             if ui
                 .add_sized(
@@ -3618,7 +3634,7 @@ impl StarbyteApp {
     fn draw_library_browser(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let previous_query = self.search_query.clone();
         ui.horizontal(|ui| {
-            if self.session.snapshot().has_rom && ui.button("Return to Game (Esc / F9)").clicked() {
+            if self.session_snapshot().has_rom && ui.button("Return to Game (Esc / F9)").clicked() {
                 self.play_view = true;
                 ctx.request_repaint();
             }
@@ -3990,7 +4006,7 @@ impl eframe::App for StarbyteApp {
         // navigates toolbar buttons rather than functioning as fast-forward.
         let active = self.play_view
             && self.is_playing
-            && self.session.snapshot().has_rom
+            && self.session_snapshot().has_rom
             && self.pending_keyboard_bind.is_none()
             && self.pending_gamepad_bind.is_none()
             && !ctx.wants_keyboard_input();
@@ -4050,7 +4066,7 @@ impl eframe::App for StarbyteApp {
                 self.persist_config();
             }
             if ctx.input(|input| input.key_pressed(egui::Key::F5))
-                && self.session.snapshot().has_rom
+                && self.session_snapshot().has_rom
             {
                 self.quick_save();
             }
@@ -4059,12 +4075,12 @@ impl eframe::App for StarbyteApp {
                 self.quick_load(ctx);
             }
             if ctx.input(|input| input.key_pressed(egui::Key::F12))
-                && self.session.snapshot().has_rom
+                && self.session_snapshot().has_rom
             {
                 self.save_screenshot();
             }
             if ctx.input(|input| input.key_pressed(egui::Key::F9))
-                && self.session.snapshot().has_rom
+                && self.session_snapshot().has_rom
             {
                 self.play_view = !self.play_view;
             }
@@ -4072,7 +4088,7 @@ impl eframe::App for StarbyteApp {
             // the next returns to the already-loaded game. Never reload ROM
             // or alter manual pause / save state on this navigation.
             if ctx.input(|input| input.key_pressed(egui::Key::Escape))
-                && self.session.snapshot().has_rom
+                && self.session_snapshot().has_rom
             {
                 self.play_view = !self.play_view;
             }
@@ -4197,7 +4213,7 @@ impl eframe::App for StarbyteApp {
 
         let window_focused = ctx.input(|input| input.focused);
         let pause_for_background = self.config.ui.pause_when_unfocused && !window_focused;
-        if pause_for_background && self.is_playing && self.session.snapshot().has_rom {
+        if pause_for_background && self.is_playing && self.session_snapshot().has_rom {
             if !self.background_suspended {
                 self.background_suspended = true;
                 self.clear_audio();
@@ -4213,7 +4229,7 @@ impl eframe::App for StarbyteApp {
 
         if gameplay_should_tick(
             self.is_playing,
-            self.session.snapshot().has_rom,
+            self.session_snapshot().has_rom,
             window_focused,
             self.config.ui.pause_when_unfocused,
         ) {
@@ -4254,12 +4270,12 @@ impl eframe::App for StarbyteApp {
                 );
             }
         } else if self.pending_step_frames > 0
-            && self.session.snapshot().has_rom
+            && self.session_snapshot().has_rom
             && !pause_for_background
         {
-            let previous_frame = self.session.snapshot().frame;
+            let previous_frame = self.session_snapshot().frame;
             self.run_frame(ctx, false);
-            if self.session.snapshot().frame > previous_frame {
+            if self.session_snapshot().frame > previous_frame {
                 self.pending_step_frames -= 1;
             } else {
                 self.pending_step_frames = 0;
@@ -4272,10 +4288,10 @@ impl eframe::App for StarbyteApp {
         }
 
         if let Some(limit) = self.exit_after_frames
-            && self.session.snapshot().frame >= limit
+            && self.session_snapshot().frame >= limit
         {
             self.exit_after_frames = None;
-            let frame = self.session.snapshot().frame;
+            let frame = self.session_snapshot().frame;
             let metrics = self.native_smoke_audio;
             let spc_instructions = self
                 .session
@@ -4314,7 +4330,7 @@ impl eframe::App for StarbyteApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
 
-        if self.session.snapshot().has_rom
+        if self.session_snapshot().has_rom
             && self.last_sram_flush.elapsed() >= Duration::from_secs(30)
         {
             self.last_sram_flush = Instant::now();

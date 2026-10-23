@@ -803,7 +803,10 @@ mod pitch_mode_tests {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(app.last_error.is_some(), "missing ROM error was not delivered");
+        assert!(
+            app.last_error.is_some(),
+            "missing ROM error was not delivered"
+        );
         assert_eq!(app.loaded_rom_path.as_deref(), Some(good.as_path()));
         assert!(app.playing);
         assert!(app.controls.session.has_rom);

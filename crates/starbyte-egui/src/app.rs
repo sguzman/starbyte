@@ -1576,7 +1576,7 @@ impl StarbyteApp {
             }
         }
         if let Some((generation, result)) = completed_step
-            && generation == self.latest_rom_job_id
+            && worker_save_receipt_is_current(generation, self.worker_active_launch_id)
             && !self.is_playing
             && self
                 .full_worker
@@ -1619,7 +1619,10 @@ impl StarbyteApp {
             }
         }
         for (generation, result) in captured {
-            if generation != self.latest_rom_job_id {
+            // A failed newer ROM request must not invalidate screenshots of
+            // the surviving installed cartridge. Fence on successful owner
+            // installation, never merely on the latest requested job.
+            if !worker_screenshot_receipt_is_current(generation, self.worker_active_launch_id) {
                 continue;
             }
             match result {
@@ -1664,7 +1667,7 @@ impl StarbyteApp {
             // The PNG may have been written successfully even when its game
             // is no longer selected. Do not overwrite newer launch/status
             // feedback with a delayed completion from that old cartridge.
-            if !worker_screenshot_receipt_is_current(generation, self.latest_rom_job_id) {
+            if !worker_screenshot_receipt_is_current(generation, self.worker_active_launch_id) {
                 continue;
             }
             if self.worker_save_smoke_stage == Some(WorkerSaveSmokeStage::AwaitScreenshot) {
@@ -1728,7 +1731,7 @@ impl StarbyteApp {
             return;
         }
         match worker.engine.queue_step_frame() {
-            Ok(reply) => worker.pending_step = Some((self.latest_rom_job_id, reply)),
+            Ok(reply) => worker.pending_step = Some((self.worker_active_launch_id, reply)),
             Err(error) => {
                 self.pending_step_frames = 0;
                 self.status_line = format!("Could not step game: {error}");
@@ -5060,7 +5063,7 @@ impl StarbyteApp {
                 Ok(reply) => {
                     worker
                         .pending_screenshots
-                        .push((self.latest_rom_job_id, reply));
+                        .push((self.worker_active_launch_id, reply));
                     self.status_line = "Capturing screenshot on the emulator worker...".to_owned();
                 }
                 Err(error) => self.status_line = format!("Screenshot failed: {error}"),
@@ -6713,6 +6716,15 @@ mod session_view_bridge_tests {
         assert!(!worker_screenshot_receipt_is_current(Some(4), Some(5)));
         assert!(!worker_screenshot_receipt_is_current(None, None));
         assert!(!worker_screenshot_receipt_is_current(None, Some(5)));
+        // Failed replacements update latest-request ID but do not change
+        // the owner or invalidate legitimate stills from its cartridge.
+        let active_generation = Some(4);
+        let failed_requested_generation = Some(5);
+        assert!(worker_screenshot_receipt_is_current(Some(4), active_generation));
+        assert!(!worker_screenshot_receipt_is_current(
+            Some(4),
+            failed_requested_generation,
+        ));
     }
 
     #[test]
@@ -6787,6 +6799,62 @@ mod session_view_bridge_tests {
         );
         assert!(!worker_save_receipt_is_current(Some(1), Some(2)));
         assert!(worker_save_receipt_is_current(Some(2), Some(2)));
+        worker.shutdown().unwrap();
+    }
+
+    #[test]
+    fn failed_replacement_preserves_prior_worker_capture_and_manual_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let rom = dir.path().join("surviving-capture.sfc");
+        std::fs::write(&rom, starbyte_core::testing::demo::demo_rom_bytes()).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(dir.path().join("saves")),
+            state_dir: Some(dir.path().join("states")),
+            cache_dir: Some(dir.path().join("cache")),
+            config_path: None,
+        };
+        let mut owner = OwnedSession::create(assets).unwrap();
+        owner.set_audio(false, true, 0.0);
+        let (worker, _, _) = owner.spawn_with_ports().unwrap();
+        worker
+            .queue_launch_with_state(SessionLaunchRequest {
+                rom_path: rom.clone(),
+                sound_mode: SoundSessionMode::Persistent,
+                cheats: Vec::new(),
+            })
+            .unwrap()
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        let screenshot = worker.queue_screenshot_pixels().unwrap();
+        let manual_step = worker.queue_step_frame().unwrap();
+        let failed = worker
+            .queue_launch_with_state(SessionLaunchRequest {
+                rom_path: dir.path().join("deliberately-missing.sfc"),
+                sound_mode: SoundSessionMode::Compatibility,
+                cheats: Vec::new(),
+            })
+            .unwrap();
+        let pixels = screenshot
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        let step = manual_step
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        assert!(failed.recv_timeout(Duration::from_secs(10)).unwrap().is_err());
+        assert_eq!(step.status.rom_path, Some(rom.clone()));
+        assert!(worker_screenshot_receipt_is_current(Some(1), Some(1)));
+        assert!(worker_save_receipt_is_current(Some(1), Some(1)));
+        let persisted = spawn_screenshot_writer(dir.path().join("surviving.png"), pixels)
+            .unwrap()
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        assert!(persisted.is_file());
+        assert_eq!(worker.read_status().unwrap().rom_path, Some(rom));
         worker.shutdown().unwrap();
     }
 
@@ -8226,9 +8294,9 @@ fn should_report_worker_exit(finished: bool, reported: bool) -> bool {
 
 fn worker_screenshot_receipt_is_current(
     received_generation: Option<u64>,
-    requested_generation: Option<u64>,
+    active_generation: Option<u64>,
 ) -> bool {
-    received_generation.is_some() && received_generation == requested_generation
+    received_generation.is_some() && received_generation == active_generation
 }
 
 fn worker_save_receipt_is_current(

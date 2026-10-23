@@ -742,11 +742,7 @@ struct FullLibraryWorker {
     /// Capture generation is retained through asynchronous PNG encoding;
     /// a completed older write must not replace the new game's status.
     pending_screenshot_writes: Vec<(Option<u64>, Receiver<Result<PathBuf, String>>)>,
-    pending_speaker_checks: Vec<(
-        Option<u64>,
-        Option<u64>,
-        Receiver<Result<(), String>>,
-    )>,
+    pending_speaker_checks: Vec<(Option<u64>, Option<u64>, Receiver<Result<(), String>>)>,
     pending_sound_diagnostics: Option<(
         Option<u64>,
         Receiver<Result<SessionSoundDiagnostics, String>>,
@@ -9128,18 +9124,36 @@ mod rom_request_order_tests {
 
     #[test]
     fn delayed_speaker_test_cannot_replace_newer_rom_selection_status() {
-        assert!(worker_tone_receipt_is_current(None, None, None, None, false));
         assert!(worker_tone_receipt_is_current(
-            Some(4), Some(4), Some(9), Some(9), false
+            None, None, None, None, false
+        ));
+        assert!(worker_tone_receipt_is_current(
+            Some(4),
+            Some(4),
+            Some(9),
+            Some(9),
+            false
         ));
         assert!(!worker_tone_receipt_is_current(
-            Some(4), Some(5), Some(9), Some(9), false
+            Some(4),
+            Some(5),
+            Some(9),
+            Some(9),
+            false
         ));
         assert!(!worker_tone_receipt_is_current(
-            Some(4), Some(4), Some(9), Some(10), false
+            Some(4),
+            Some(4),
+            Some(9),
+            Some(10),
+            false
         ));
         assert!(!worker_tone_receipt_is_current(
-            Some(4), Some(4), Some(9), Some(9), true
+            Some(4),
+            Some(4),
+            Some(9),
+            Some(9),
+            true
         ));
     }
 }

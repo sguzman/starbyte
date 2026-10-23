@@ -6909,8 +6909,14 @@ impl Drop for StarbyteApp {
                 }
                 Err(_) => warn!("emulation worker thread panicked during shutdown"),
             }
-        } else if let Err(error) = self.legacy_session_mut().flush_save_ram() {
-            warn!("could not persist cartridge SRAM on exit: {error}");
+        } else if let Some(legacy) = self.session.as_mut() {
+            // Worker startup can fail after the opt-in original window has
+            // been constructed but before the owner thread is installed.
+            // That state has no legacy session to flush, and must not panic
+            // while the original startup error is being returned.
+            if let Err(error) = legacy.flush_save_ram() {
+                warn!("could not persist cartridge SRAM on exit: {error}");
+            }
         }
     }
 }

@@ -7,6 +7,7 @@ use std::{
 use starbyte_core::manifest::{AssetConfig, RuntimeConfig};
 use starbyte_frontend::{
     LibraryEntry, LibraryFilter, LibraryService, LibrarySnapshot, LibraryTarget,
+    SessionLaunchRequest, SoundSessionMode,
 };
 use tracing::{error, info};
 
@@ -44,7 +45,7 @@ pub enum WorkerEvent {
     RomReady {
         job_id: u64,
         entry: LibraryEntry,
-        rom_path: PathBuf,
+        request: SessionLaunchRequest,
     },
     JobFailed {
         job_id: u64,
@@ -230,16 +231,28 @@ fn handle_command(
                 anyhow::bail!("Selected game is not installed locally.");
             };
             let rom_path = service.materialize_rom(local)?;
+            let request = build_launch_request(&entry, rom_path);
             WorkerEvent::RomReady {
                 job_id,
                 entry,
-                rom_path,
+                request,
             }
         }
     };
 
     let _ = event_tx.send(event);
     Ok(())
+}
+
+/// Prepare the complete cartridge transaction on the library side, where
+/// the selected entry and matching cheats are still available. The emulation
+/// owner can consume this request without inferring a game's prior settings.
+fn build_launch_request(entry: &LibraryEntry, rom_path: PathBuf) -> SessionLaunchRequest {
+    SessionLaunchRequest {
+        rom_path,
+        sound_mode: SoundSessionMode::Persistent,
+        cheats: entry.cheats.clone(),
+    }
 }
 
 fn label_for_kind(kind: &WorkerCommandKind) -> &'static str {
@@ -258,10 +271,38 @@ fn label_for_kind(kind: &WorkerCommandKind) -> &'static str {
 /// network metadata and box-art work.
 #[cfg(test)]
 mod routing_tests {
-    use super::{AppWorker, WorkerCommand, WorkerCommandKind};
+    use super::{AppWorker, WorkerCommand, WorkerCommandKind, build_launch_request};
     use starbyte_core::manifest::RuntimeConfig;
-    use starbyte_frontend::{InstalledStatus, LibraryEntry, LibraryFilter};
+    use starbyte_frontend::{CheatEntry, InstalledStatus, LibraryEntry, LibraryFilter, SoundSessionMode};
     use std::sync::mpsc;
+
+    #[test]
+    fn prepared_rom_launch_binds_selected_cheats_and_sound_namespace() {
+        let path = std::path::PathBuf::from("resolved-game.sfc");
+        let cheat = CheatEntry {
+            id: "selected-cheat".to_owned(),
+            game_id: "sample".to_owned(),
+            name: "Selected patch".to_owned(),
+            code: "7E0000:01".to_owned(),
+            source: "local".to_owned(),
+            kind: "raw".to_owned(),
+            enabled: true,
+        };
+        let entry = LibraryEntry {
+            game_id: "sample".to_owned(),
+            display_title: "Sample".to_owned(),
+            installed_status: InstalledStatus::Installed,
+            local: None,
+            metadata: None,
+            cover: None,
+            cheats: vec![cheat],
+        };
+        let request = build_launch_request(&entry, path.clone());
+        assert_eq!(request.rom_path, path);
+        assert_eq!(request.sound_mode, SoundSessionMode::Persistent);
+        assert_eq!(request.cheats.len(), 1);
+        assert_eq!(request.cheats[0].id, "selected-cheat");
+    }
 
     #[test]
     fn game_launch_bypasses_blocked_artwork_queue() {

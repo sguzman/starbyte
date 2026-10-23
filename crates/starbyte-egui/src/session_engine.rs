@@ -957,13 +957,13 @@ mod tests {
             .unwrap();
         assert!(matches!(restored.outcome, SessionSaveOutcome::Completed));
         assert!(restored.controls.has_quick_save);
-        let still = restored.restored_frame.expect("paused restore should capture video");
+        let still = restored
+            .restored_frame
+            .expect("paused restore should capture video");
         assert!(still.status.has_rom);
         assert_eq!(
             still.rgba.as_ref().unwrap().len(),
-            still.status.framebuffer_width as usize
-                * still.status.framebuffer_height as usize
-                * 4
+            still.status.framebuffer_width as usize * still.status.framebuffer_height as usize * 4
         );
         let durable = worker
             .queue_save_action_with_frame(SessionSaveAction::SaveSlot(1))

@@ -984,18 +984,14 @@ impl StarbyteApp {
                 WorkerEvent::RomReady {
                     job_id,
                     entry,
-                    rom_path,
+                    request,
                 } => match {
                     self.clear_audio();
-                    self.session.launch_game(&SessionLaunchRequest {
-                        rom_path: rom_path.clone(),
-                        sound_mode: SoundSessionMode::Persistent,
-                        cheats: entry.cheats.clone(),
-                    })
+                    self.session.launch_game(&request)
                 } {
                     Ok(_) => {
                         self.loaded_game_id = Some(entry.game_id.clone());
-                        self.remember_recent_rom(&rom_path);
+                        self.remember_recent_rom(&request.rom_path);
                         if let Err(error) = self.session.run_frame_with_timeout(GUI_FRAME_TIMEOUT) {
                             let error = error.to_string();
                             self.record_playback_error(&error);
@@ -1013,7 +1009,7 @@ impl StarbyteApp {
                         self.frame_rate.reset();
                         self.pending_step_frames = 0;
                         self.last_sram_flush = Instant::now();
-                        let detail = format!("Loaded {}", rom_path.display());
+                        let detail = format!("Loaded {}", request.rom_path.display());
                         self.update_job(job_id, "Load Game", "done", &detail);
                         self.status_line = detail;
                     }

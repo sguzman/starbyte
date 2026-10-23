@@ -115,6 +115,9 @@ jobs:
             }
           cat "$RUNNER_TEMP/starbyte-full-worker.log"
           grep -F "STARBYTE_FULL_LIBRARY_WORKER_SMOKE_OK frame=" "$RUNNER_TEMP/starbyte-full-worker.log"
+          # A real original eframe paint must be backed by exactly one
+          # emulator owner. Worker preview must have no shadow legacy session.
+          grep -F "STARBYTE_FULL_LIBRARY_SINGLE_OWNER_SMOKE_OK legacy_session_absent=true worker_frame=" "$RUNNER_TEMP/starbyte-full-worker.log"
           # Exercise the original window's worker-owned quick save, quick
           # restore, durable-slot save and durable-slot restore on real Weston.
           timeout 90s target/debug/starbyte-egui --demo --native-worker-preview --exit-after-full-worker-saves \

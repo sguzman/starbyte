@@ -402,10 +402,12 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
                 (pending < MAX_PENDING_POSTS).then_some(pending + 1)
             })
             .map_err(|_| "emulation worker operation queue is full".to_owned())?;
-        self.commands.send(Command::Post(Box::new(action))).map_err(|_| {
-            self.pending_posts.fetch_sub(1, Ordering::AcqRel);
-            "emulation worker is not running".to_owned()
-        })
+        self.commands
+            .send(Command::Post(Box::new(action)))
+            .map_err(|_| {
+                self.pending_posts.fetch_sub(1, Ordering::AcqRel);
+                "emulation worker is not running".to_owned()
+            })
     }
 
     /// Queue a user-initiated operation without blocking the egui event
@@ -819,12 +821,9 @@ mod tests {
 
     #[test]
     fn asynchronous_actions_are_bounded_without_blocking_gui() {
-        let worker = EmulatorScheduler::spawn(
-            0_u64,
-            Duration::from_millis(2),
-            |machine| Ok(*machine),
-        )
-        .unwrap();
+        let worker =
+            EmulatorScheduler::spawn(0_u64, Duration::from_millis(2), |machine| Ok(*machine))
+                .unwrap();
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
         worker

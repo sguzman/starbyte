@@ -326,3 +326,38 @@ reported `STARBYTE_NO_REPAINT_SMOKE_OK advanced_frames=121`. That is
 evidence for compositor-callback-independent game progression in virtual
 Wayland, **not** proof of physical Hyprland focus transitions or speaker
 output. The default legacy application is unchanged.
+
+## 2026-10-23 full-library worker integration (opt-in)
+
+The **existing complete** `StarbyteApp` library shell now has a hidden
+`--native-worker-preview` integration path. Unlike the smaller
+`--threaded-preview`, it retains the original library, covers, menus, cheat
+browser, recent games and status controls. Its own `FullLibraryWorker`
+owns `OwnedSession`, accepts prepared typed launch requests, publishes
+coalesced RGBA frames and menu snapshots, and handles worker input on the
+independent clock. The original synchronous `FrontendSession` remains
+present but does not execute game frames in that opt-in mode.
+
+The native Weston test `STARBYTE_FULL_LIBRARY_WORKER_SMOKE_OK` reached 31
+frames on [run 39981233316](https://github.com/sguzman/starbyte/actions/runs/39981233316).
+That same run completed the original-window save sequence
+`STARBYTE_FULL_LIBRARY_SAVE_SMOKE_OK frame=18 slot=1 quick=true`
+for quick-save, quick-load, persistent disk slot save and disk slot restore.
+Linux and Windows test jobs passed, but that commit's lint failed solely for
+formatting. Its native Weston evidence is valid for the tested code at that
+commit; it is **not** a clean full-pipeline result.
+
+Further opt-in work includes worker-owned cheats, sound mode restart, audio
+volume/mute controls, owner-side PCM diagnostics, a worker sound-check
+receipt, and screenshot pixels captured by the emulator worker then encoded
+to PNG by a separate I/O thread. A separate native Weston test verifies
+PNG creation in the full-library path. CI verification for the newest
+combined code remains tied to its specific commit and must not be inferred
+from earlier passes.
+
+**Acceptance boundary:** default runtime remains the original player.
+These changes do not demonstrate physical Hyprland background audio, every
+menu command, gamepad handling or a complete shutdown/SRAM regression across
+real ROMs. Do not claim the Milestone C default cutover is complete until
+the original full-library worker path and its remaining feature parity are
+validated and the default switch is deliberately made.

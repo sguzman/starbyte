@@ -2331,18 +2331,27 @@ impl StarbyteApp {
             )
             .clicked()
         {
-            let (sender, receiver) = mpsc::channel();
-            let started = std::thread::Builder::new()
-                .name("starbyte-speaker-probe".to_owned())
-                .spawn(move || {
-                    let result = AudioOutput::test_speakers().map_err(|error| error.to_string());
-                    let _ = sender.send(result);
-                });
-            self.speaker_probe = match started {
-                Ok(_) => SpeakerProbeState::Running(receiver),
-                Err(error) => SpeakerProbeState::Finished(Err(format!(
-                    "Could not start speaker test: {error}"
-                ))),
+            self.speaker_probe = if let Some(worker) = &self.full_worker {
+                // In worker mode the test must use the actual audio owner,
+                // not open a second unrelated Rodio output on the UI path.
+                match worker.engine.queue_speaker_check() {
+                    Ok(receiver) => SpeakerProbeState::Running(receiver),
+                    Err(error) => SpeakerProbeState::Finished(Err(error)),
+                }
+            } else {
+                let (sender, receiver) = mpsc::channel();
+                let started = std::thread::Builder::new()
+                    .name("starbyte-speaker-probe".to_owned())
+                    .spawn(move || {
+                        let result = AudioOutput::test_speakers().map_err(|error| error.to_string());
+                        let _ = sender.send(result);
+                    });
+                match started {
+                    Ok(_) => SpeakerProbeState::Running(receiver),
+                    Err(error) => SpeakerProbeState::Finished(Err(format!(
+                        "Could not start speaker test: {error}"
+                    ))),
+                }
             };
         }
         match &self.speaker_probe {
@@ -2357,7 +2366,9 @@ impl StarbyteApp {
                 ui.colored_label(egui::Color32::RED, format!("Speaker test failed: {error}"));
             }
         }
-        if isolated {
+        if isolated && self.full_worker.is_some() {
+            ui.label("SPC700 and PCM details are provided by worker telemetry.");
+        } else if isolated {
             let sound = self.session.sound_diagnostics();
             if let Some(uploaded) = sound.uploaded_program {
                 ui.label(uploaded);

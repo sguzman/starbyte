@@ -6,8 +6,9 @@
 use std::{
     collections::BTreeMap,
     path::PathBuf,
-    sync::mpsc::{Receiver, TryRecvError},
-    time::Duration,
+    sync::mpsc::{self, Receiver, TryRecvError},
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::Result;
@@ -19,7 +20,7 @@ use starbyte_core::{
 use starbyte_frontend::SoundSessionMode;
 
 use crate::{
-    app::{input_actions, parse_egui_key, set_controller_flag},
+    app::{input_actions, parse_egui_key, set_controller_flag, write_png_screenshot},
     preview_gamepads::{merge_sources, PreviewGamepads},
     scheduler::EmulatorScheduler,
     scheduler_video::WorkerDisplay,
@@ -37,6 +38,8 @@ fn pitch_for(mode: AudioPitchMode, custom_percent: u16, speed: u16) -> f32 {
 enum PendingOperation {
     Save(Receiver<Result<(), String>>),
     Restore(Receiver<Result<PublishedGameFrame, String>>),
+    Screenshot(Receiver<Result<PublishedGameFrame, String>>),
+    PngWrite(Receiver<Result<PathBuf, String>>),
 }
 
 pub struct ThreadedPreviewApp {
@@ -56,6 +59,8 @@ pub struct ThreadedPreviewApp {
     input_mode: InputDeviceMode,
     exit_after_frames: Option<u64>,
     last_error: Option<String>,
+    screenshot_root: PathBuf,
+    status_note: Option<String>,
     pending: Vec<PendingOperation>,
 }
 
@@ -67,6 +72,7 @@ impl ThreadedPreviewApp {
         exit_after_frames: Option<u64>,
         preview_background: bool,
     ) -> Result<Self> {
+        let screenshot_root = assets.screenshot_root();
         let mut session = OwnedSession::create(assets)?;
         session.load_rom(&rom_path, SoundSessionMode::Persistent)?;
         session.set_audio(
@@ -110,6 +116,8 @@ impl ThreadedPreviewApp {
             input_mode: config.input.active_device,
             exit_after_frames,
             last_error: None,
+            screenshot_root,
+            status_note: None,
             pending: Vec::new(),
         })
     }
@@ -131,6 +139,41 @@ impl ThreadedPreviewApp {
         }
     }
 
+    fn queue_screenshot(&mut self) {
+        match self.engine.queue_screenshot_frame() {
+            Ok(reply) => self.pending.push(PendingOperation::Screenshot(reply)),
+            Err(error) => self.last_error = Some(error),
+        }
+    }
+
+    fn write_screenshot_async(
+        &mut self,
+        frame: PublishedGameFrame,
+    ) -> Result<Receiver<Result<PathBuf, String>>, String> {
+        let rgba = frame.rgba.ok_or_else(|| "No screenshot pixels available".to_owned())?;
+        let width = frame.status.framebuffer_width;
+        let height = frame.status.framebuffer_height;
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = self.screenshot_root.join(format!(
+            "starbyte-{timestamp}-frame-{}.png",
+            frame.status.frame
+        ));
+        let (reply, result) = mpsc::channel();
+        thread::Builder::new()
+            .name("starbyte-screenshot".to_owned())
+            .spawn(move || {
+                let response = write_png_screenshot(&path, &rgba, width, height)
+                    .map(|()| path)
+                    .map_err(|error| error.to_string());
+                let _ = reply.send(response);
+            })
+            .map_err(|error| error.to_string())?;
+        Ok(result)
+    }
+
     fn poll_operations(&mut self, ctx: &egui::Context) {
         let mut still_pending = Vec::new();
         for operation in std::mem::take(&mut self.pending) {
@@ -143,6 +186,37 @@ impl ThreadedPreviewApp {
                     }
                     Err(TryRecvError::Disconnected) => {
                         self.last_error = Some("Save worker stopped unexpectedly".to_owned());
+                    }
+                },
+                PendingOperation::Screenshot(reply) => match reply.try_recv() {
+                    Ok(Ok(frame)) => match self.write_screenshot_async(frame) {
+                        Ok(io_reply) => {
+                            still_pending.push(PendingOperation::PngWrite(io_reply));
+                        }
+                        Err(error) => self.last_error = Some(error),
+                    },
+                    Ok(Err(error)) => self.last_error = Some(error),
+                    Err(TryRecvError::Empty) => {
+                        still_pending.push(PendingOperation::Screenshot(reply));
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        self.last_error = Some("Screenshot worker stopped".to_owned());
+                    }
+                },
+                PendingOperation::PngWrite(reply) => match reply.try_recv() {
+                    Ok(Ok(path)) => {
+                        self.status_note = Some(format!(
+                            "Screenshot saved to {}",
+                            path.display()
+                        ));
+                        self.last_error = None;
+                    }
+                    Ok(Err(error)) => self.last_error = Some(error),
+                    Err(TryRecvError::Empty) => {
+                        still_pending.push(PendingOperation::PngWrite(reply));
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        self.last_error = Some("Screenshot writer stopped".to_owned());
                     }
                 },
                 PendingOperation::Restore(reply) => match reply.try_recv() {
@@ -247,6 +321,10 @@ impl eframe::App for ThreadedPreviewApp {
                         self.queue_restore(job);
                         ui.close();
                     }
+                    if ui.button("Screenshot (F12)").clicked() {
+                        self.queue_screenshot();
+                        ui.close();
+                    }
                     ui.separator();
                     ui.menu_button("Disk save slots", |ui| {
                         for slot in 1..=3_u8 {
@@ -308,6 +386,9 @@ impl eframe::App for ThreadedPreviewApp {
             self.queue_restore(job);
         }
 
+        if focused && ctx.input(|input| input.key_pressed(egui::Key::F12)) {
+            self.queue_screenshot();
+        }
         self.display.poll(ctx, &self.engine);
         self.poll_operations(ctx);
         // Acceptance requires both worker progress and a real texture upload
@@ -328,6 +409,8 @@ impl eframe::App for ThreadedPreviewApp {
             ui.painter().rect_filled(bounds, 0.0, Color32::BLACK);
             if let Some(error) = &self.last_error {
                 ui.colored_label(Color32::LIGHT_RED, error);
+            } else if let Some(message) = &self.status_note {
+                ui.label(message);
             }
             let available = ui.available_size();
             self.display.draw(ui, available, self.integer_scale);

@@ -125,6 +125,10 @@ impl ThreadedPreviewApp {
 
 impl eframe::App for ThreadedPreviewApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Deliberately independent of frame production: an absent heartbeat
+        // tells the worker that Wayland stopped delivering redraws. With
+        // background pause disabled, emulation continues regardless.
+        self.engine.gui_heartbeat();
         let focused = ctx.input(|input| input.focused);
         if focused != self.focused {
             self.focused = focused;

@@ -1465,15 +1465,16 @@ impl StarbyteApp {
                     self.last_audio_pairs = reply.frame.stereo_pairs;
                     self.last_audio_nonzero_pairs = reply.frame.nonzero_pairs;
                     if let Some(rgba) = &reply.frame.rgba {
-                        upload_rgba(
+                        if upload_rgba(
                             ctx,
                             &mut self.framebuffer_texture,
                             "starbyte-framebuffer",
                             reply.frame.status.framebuffer_width,
                             reply.frame.status.framebuffer_height,
                             rgba,
-                        );
-                        self.last_worker_texture_frame = Some(reply.frame.status.frame);
+                        ) {
+                            self.last_worker_texture_frame = Some(reply.frame.status.frame);
+                        }
                     }
                     self.worker_active_launch_id = Some(pending.job_id);
                     self.worker_sound_diagnostics = None;
@@ -1546,15 +1547,16 @@ impl StarbyteApp {
                         self.last_audio_pairs = restored.stereo_pairs;
                         self.last_audio_nonzero_pairs = restored.nonzero_pairs;
                         if let Some(rgba) = &restored.rgba {
-                            upload_rgba(
+                            if upload_rgba(
                                 ctx,
                                 &mut self.framebuffer_texture,
                                 "starbyte-framebuffer",
                                 restored.status.framebuffer_width,
                                 restored.status.framebuffer_height,
                                 rgba,
-                            );
-                            self.last_worker_texture_frame = Some(restored.status.frame);
+                            ) {
+                                self.last_worker_texture_frame = Some(restored.status.frame);
+                            }
                         }
                     }
                     self.status_line = match action {
@@ -1580,15 +1582,16 @@ impl StarbyteApp {
                 self.last_audio_pairs = frame.stereo_pairs;
                 self.last_audio_nonzero_pairs = frame.nonzero_pairs;
                 if let Some(rgba) = &frame.rgba {
-                    upload_rgba(
+                    if upload_rgba(
                         ctx,
                         &mut self.framebuffer_texture,
                         "starbyte-framebuffer",
                         frame.status.framebuffer_width,
                         frame.status.framebuffer_height,
                         rgba,
-                    );
-                    self.last_worker_texture_frame = Some(frame.status.frame);
+                    ) {
+                        self.last_worker_texture_frame = Some(frame.status.frame);
+                    }
                 }
             }
         }
@@ -1624,15 +1627,16 @@ impl StarbyteApp {
                     self.last_audio_pairs = frame.stereo_pairs;
                     self.last_audio_nonzero_pairs = frame.nonzero_pairs;
                     if let Some(rgba) = &frame.rgba {
-                        upload_rgba(
+                        if upload_rgba(
                             ctx,
                             &mut self.framebuffer_texture,
                             "starbyte-framebuffer",
                             frame.status.framebuffer_width,
                             frame.status.framebuffer_height,
                             rgba,
-                        );
-                        self.last_worker_texture_frame = Some(frame.status.frame);
+                        ) {
+                            self.last_worker_texture_frame = Some(frame.status.frame);
+                        }
                     }
                     self.pending_step_frames = self.pending_step_frames.saturating_sub(1);
                     self.status_line = format!("Stepped to frame {}.", frame.status.frame);

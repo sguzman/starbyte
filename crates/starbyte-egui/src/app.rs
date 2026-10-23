@@ -28,7 +28,7 @@ use starbyte_core::{
 };
 use starbyte_frontend::{
     CheatEntry, FrontendSession, InstalledStatus, LibraryEntry, LibraryFilter, LibraryService,
-    LibrarySnapshot, LibraryTarget, SessionSaveAction, SoundSessionMode,
+    LibrarySnapshot, LibraryTarget, SessionLaunchRequest, SessionSaveAction, SoundSessionMode,
 };
 
 // NTSC SNES video: 341 dots/scanline × 262 lines × 4 master clocks/dot
@@ -983,11 +983,14 @@ impl StarbyteApp {
                     rom_path,
                 } => match {
                     self.clear_audio();
-                    load_rom_with_default_sound(&mut self.session, &rom_path)
+                    self.session.launch_game(&SessionLaunchRequest {
+                        rom_path: rom_path.clone(),
+                        sound_mode: SoundSessionMode::Persistent,
+                        cheats: entry.cheats.clone(),
+                    })
                 } {
-                    Ok(()) => {
+                    Ok(_) => {
                         self.loaded_game_id = Some(entry.game_id.clone());
-                        let _ = self.session.set_active_cheats(&entry.cheats);
                         self.remember_recent_rom(&rom_path);
                         if let Err(error) = self.session.run_frame_with_timeout(GUI_FRAME_TIMEOUT) {
                             let error = error.to_string();

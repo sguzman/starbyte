@@ -35,6 +35,22 @@ impl Stick {
     }
 }
 
+#[derive(Default, Clone, Copy)]
+struct ControllerAxes {
+    left: Stick,
+    dpad: Stick,
+}
+
+impl ControllerAxes {
+    fn virtual_dpad(self) -> BTreeSet<String> {
+        self.left
+            .virtual_dpad()
+            .union(&self.dpad.virtual_dpad())
+            .cloned()
+            .collect()
+    }
+}
+
 /// Multiple gamepads are supported; pressed edges survive a short tap between
 /// two egui update callbacks. Buttons are combined without picking an
 /// arbitrary first controller.
@@ -42,7 +58,7 @@ pub struct PreviewGamepads {
     gilrs: Option<Gilrs>,
     held_by_id: HashMap<GamepadId, BTreeSet<String>>,
     virtual_by_id: HashMap<GamepadId, BTreeSet<String>>,
-    sticks_by_id: HashMap<GamepadId, Stick>,
+    sticks_by_id: HashMap<GamepadId, ControllerAxes>,
     bindings: BTreeMap<String, String>,
 }
 
@@ -79,13 +95,15 @@ impl PreviewGamepads {
                             .remove(&format!("{button:?}"));
                     }
                     EventType::AxisChanged(axis, value, _) => {
-                        let stick = self.sticks_by_id.entry(event.id).or_default();
+                        let axes = self.sticks_by_id.entry(event.id).or_default();
                         match axis {
-                            Axis::LeftStickX | Axis::DPadX => stick.x = value,
-                            Axis::LeftStickY | Axis::DPadY => stick.y = value,
+                            Axis::LeftStickX => axes.left.x = value,
+                            Axis::LeftStickY => axes.left.y = value,
+                            Axis::DPadX => axes.dpad.x = value,
+                            Axis::DPadY => axes.dpad.y = value,
                             _ => continue,
                         }
-                        let next = stick.virtual_dpad();
+                        let next = axes.virtual_dpad();
                         let previous = self
                             .virtual_by_id
                             .insert(event.id, next.clone())
@@ -150,6 +168,17 @@ mod tests {
         let down_left = Stick { x: -0.9, y: -0.9 }.virtual_dpad();
         assert!(down_left.contains("DPadLeft"));
         assert!(down_left.contains("DPadDown"));
+    }
+
+    #[test]
+    fn left_stick_and_dpad_axes_do_not_overwrite_each_other() {
+        let axes = ControllerAxes {
+            left: Stick { x: -0.95, y: 0.0 },
+            dpad: Stick { x: 0.0, y: 0.91 },
+        };
+        let active = axes.virtual_dpad();
+        assert!(active.contains("DPadLeft"));
+        assert!(active.contains("DPadUp"));
     }
 
     #[test]

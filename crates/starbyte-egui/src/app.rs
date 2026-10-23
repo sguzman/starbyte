@@ -6361,22 +6361,22 @@ impl eframe::App for StarbyteApp {
                             // Continue through the normal worker-backed UI
                             // repaint scheduler; returning here would strand
                             // the asynchronous receipts on virtual Wayland.
-                        }
-                        if Instant::now() >= deadline {
+                        } else if Instant::now() >= deadline {
                             println!(
                                 "STARBYTE_FULL_LIBRARY_REPLACEMENT_SMOKE_FAILED receipt={error_reported} retained={old_cartridge_retained} advanced={advanced}"
                             );
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             return;
+                        } else {
+                            self.worker_replacement_smoke =
+                                Some(WorkerReplacementSmoke::AwaitFailure {
+                                    previous_rom,
+                                    previous_owner,
+                                    started_at,
+                                    deadline,
+                                    error_reported,
+                                });
                         }
-                        self.worker_replacement_smoke =
-                            Some(WorkerReplacementSmoke::AwaitFailure {
-                                previous_rom,
-                                previous_owner,
-                                started_at,
-                                deadline,
-                                error_reported,
-                            });
                     }
                     WorkerReplacementSmoke::AwaitReceiptRace {
                         previous_rom,

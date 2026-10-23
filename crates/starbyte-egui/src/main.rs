@@ -120,6 +120,12 @@ struct Args {
         conflicts_with_all = ["exit_after_frames", "exit_after_library_scan", "exit_after_library_play"]
     )]
     exit_after_repaint_gap: bool,
+
+    /// Internal integration preview: preserve the complete original
+    /// library window but use the independent worker for SNES execution.
+    /// Deliberately hidden until all native controls are validated.
+    #[arg(long, hide = true, conflicts_with_all = ["threaded_preview", "scheduler_smoke", "speaker_test"])]
+    native_worker_preview: bool,
 }
 
 fn main() -> Result<()> {
@@ -244,6 +250,7 @@ fn main() -> Result<()> {
                 args.experimental_sound_driver,
                 prefer_dark_mode_override,
                 args.exit_after_frames,
+                args.native_worker_preview,
                 log_lines.clone(),
             )
             .map_err(|error| std::io::Error::other(error.to_string()))?;
@@ -455,6 +462,12 @@ mod speaker_cli_tests {
 
         let normal = Args::try_parse_from(["starbyte-egui"]).unwrap();
         assert!(!normal.speaker_test);
+        assert!(!normal.native_worker_preview);
+        let integration = Args::try_parse_from([
+            "starbyte-egui", "--demo", "--native-worker-preview",
+            "--exit-after-frames", "30"
+        ]).unwrap();
+        assert!(validate_frame_exit_args(&integration).is_ok());
     }
 
     #[test]

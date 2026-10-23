@@ -102,6 +102,19 @@ jobs:
             }
           cat "$RUNNER_TEMP/starbyte-wayland-smoke.log"
           grep -F "STARBYTE_NATIVE_SMOKE_OK frame=" "$RUNNER_TEMP/starbyte-wayland-smoke.log"
+          # The *original* full-library egui shell can optionally consume
+          # independently produced SNES frames. This remains opt-in until
+          # every existing menu/save/audio action completes its handoff.
+          timeout 90s target/debug/starbyte-egui --demo --native-worker-preview --exit-after-frames 30 \
+            --config "$RUNNER_TEMP/starbyte-full-worker-config.toml" \
+            --cache-dir "$RUNNER_TEMP/starbyte-full-worker-cache" \
+            > "$RUNNER_TEMP/starbyte-full-worker.log" 2>&1 || {
+              cat "$RUNNER_TEMP/weston.log"
+              cat "$RUNNER_TEMP/starbyte-full-worker.log"
+              exit 1
+            }
+          cat "$RUNNER_TEMP/starbyte-full-worker.log"
+          grep -F "STARBYTE_FULL_LIBRARY_WORKER_SMOKE_OK frame=" "$RUNNER_TEMP/starbyte-full-worker.log"
           # This acceptance shell consumes worker frames through egui while
           # executing game frames from a separate OS thread.
           timeout 90s target/debug/starbyte-egui --demo --threaded-preview --preview-background --exit-after-frames 30 \

@@ -16,13 +16,14 @@ use crate::{
     audio::{AudioDeviceStatus, AudioOutput},
     blackout::BlackScreenMonitor,
     logging::SharedLogBuffer,
-    session_engine::ControlsPort,
+    scheduler::EmulatorScheduler,
+    session_engine::{
+        ControlsPort, InputPort, OwnedSession, PublishedGameFrame, RenderPort,
+        WorkerLaunchResponse,
+    },
     video_upload::upload_rgba,
     worker::{AppWorker, WorkerCommand, WorkerCommandKind, WorkerEvent},
 };
-
-#[cfg(test)]
-use crate::session_engine::PublishedGameFrame;
 
 use starbyte_core::{
     input::ControllerState,
@@ -646,7 +647,6 @@ impl SessionViewBridge {
             .unwrap_or_else(|| legacy.input_diagnostics())
     }
 
-    #[cfg(test)]
     fn attach_worker(&mut self, controls: ControlsPort) {
         let initial = controls.latest();
         self.worker_frame = Some(initial.session.clone());
@@ -654,11 +654,27 @@ impl SessionViewBridge {
         self.worker_input = Some(SessionInputDiagnostics::default());
     }
 
-    #[cfg(test)]
     fn accept_worker_frame(&mut self, frame: &PublishedGameFrame) {
         self.worker_frame = Some(frame.status.clone());
         self.worker_input = Some(frame.input_diagnostics);
     }
+}
+
+/// Development-only ownership path for the existing complete library shell.
+/// Never constructed by default; all ordinary installations keep the proven
+/// session. The emulation owner and its command replies stay off the UI thread.
+struct FullLibraryWorker {
+    engine: EmulatorScheduler<OwnedSession, PublishedGameFrame>,
+    input: InputPort,
+    render: RenderPort,
+    pending_launches: Vec<FullLibraryPendingLaunch>,
+}
+
+struct FullLibraryPendingLaunch {
+    job_id: u64,
+    original_path: PathBuf,
+    game_id: Option<String>,
+    response: Receiver<Result<WorkerLaunchResponse, String>>,
 }
 
 pub struct StarbyteApp {
@@ -667,6 +683,7 @@ pub struct StarbyteApp {
     cache_root: PathBuf,
     session: FrontendSession,
     session_view: SessionViewBridge,
+    full_worker: Option<FullLibraryWorker>,
     audio_output: Option<AudioOutput>,
     speaker_probe: SpeakerProbeState,
     /// Session mute defaults from persisted startup preference, then follows
@@ -764,6 +781,7 @@ impl StarbyteApp {
         experimental_sound_driver: bool,
         prefer_dark_mode_override: Option<bool>,
         exit_after_frames: Option<u64>,
+        use_worker_preview: bool,
         logs: SharedLogBuffer,
     ) -> Result<Self> {
         // Headless Weston has no keyboard focus until a compositor explicitly
@@ -817,11 +835,12 @@ impl StarbyteApp {
             "initialized gui app state"
         );
 
+        let startup_rom = rom_path.clone();
         let mut session = FrontendSession::new(assets.clone())?;
         let mut status_line = "Waiting for library scan...".to_owned();
         let mut startup_error = None;
         let mut native_smoke_audio = NativeSmokeAudioMetrics::default();
-        if let Some(path) = rom_path {
+        if let Some(path) = rom_path.filter(|_| !use_worker_preview) {
             session.launch_game(&SessionLaunchRequest {
                 rom_path: path.clone(),
                 sound_mode: if experimental_sound_driver {
@@ -879,6 +898,7 @@ impl StarbyteApp {
             cache_root,
             session,
             session_view: SessionViewBridge::default(),
+            full_worker: None,
             audio_output: None,
             speaker_probe: SpeakerProbeState::Idle,
             audio_muted,
@@ -923,7 +943,7 @@ impl StarbyteApp {
             pending_keyboard_bind: None,
             pending_gamepad_bind: None,
             is_playing: start_playing,
-            play_view: has_loaded_rom,
+            play_view: has_loaded_rom || (use_worker_preview && startup_rom.is_some()),
             frame_clock: FrameClock::new(Instant::now()),
             last_effective_speed_percent: initial_speed,
             tab_fast_forward_held: false,
@@ -943,6 +963,35 @@ impl StarbyteApp {
             alt_menu_tap_armed: false,
             background_suspended: false,
         };
+        if use_worker_preview {
+            let mut owner = OwnedSession::create(app.assets.clone())?;
+            owner.set_audio(
+                app.config.audio.enabled,
+                app.audio_muted,
+                app.config.audio.volume,
+            );
+            owner.set_speed(
+                initial_speed,
+                audio_pitch_factor(
+                    app.config.audio.pitch_mode,
+                    app.config.audio.pitch_percent,
+                    initial_speed,
+                ),
+            );
+            let published = owner.controls_port();
+            let (engine, input, render) = owner.spawn_with_ports()?;
+            engine.set_pause_when_unfocused(app.config.ui.pause_when_unfocused);
+            app.session_view.attach_worker(published);
+            app.full_worker = Some(FullLibraryWorker {
+                engine,
+                input,
+                render,
+                pending_launches: Vec::new(),
+            });
+            if let Some(path) = startup_rom {
+                app.open_local_rom(&path, &cc.egui_ctx);
+            }
+        }
         app.persist_config();
         if app.config.advanced.refresh_on_startup {
             app.queue_job(WorkerCommandKind::RefreshMetadata);
@@ -968,6 +1017,133 @@ impl StarbyteApp {
             });
         }
         Ok(app)
+    }
+
+    /// A ROM preparation reply becomes a worker-owner launch; the normal
+    /// library and cover panels remain in this original Starbyte window.
+    fn queue_full_worker_launch(
+        &mut self,
+        job_id: u64,
+        original_path: PathBuf,
+        game_id: Option<String>,
+        request: SessionLaunchRequest,
+    ) {
+        let Some(worker) = &mut self.full_worker else {
+            return;
+        };
+        match worker.engine.queue_launch_with_state(request) {
+            Ok(response) => {
+                worker.pending_launches.push(FullLibraryPendingLaunch {
+                    job_id,
+                    original_path,
+                    game_id,
+                    response,
+                });
+                self.play_view = true;
+                self.status_line = "Installing game on emulation worker...".to_owned();
+            }
+            Err(error) => {
+                self.update_job(job_id, "Load Game", "failed", &error);
+                self.status_line = error;
+            }
+        }
+    }
+
+    fn poll_full_worker(&mut self, ctx: &egui::Context) {
+        let Some(worker) = &mut self.full_worker else {
+            return;
+        };
+        worker.engine.gui_heartbeat();
+        worker.render.set_visible(self.play_view);
+        let mut completed = Vec::new();
+        let mut waiting = Vec::new();
+        for pending in std::mem::take(&mut worker.pending_launches) {
+            match pending.response.try_recv() {
+                Ok(result) => completed.push((pending, result)),
+                Err(TryRecvError::Empty) => waiting.push(pending),
+                Err(TryRecvError::Disconnected) => completed.push((
+                    pending,
+                    Err("Emulation worker closed its launch response".to_owned()),
+                )),
+            }
+        }
+        worker.pending_launches = waiting;
+        // Never show an obsolete picture while another cartridge is
+        // installing. Completed launch replies are applied first.
+        let frame = if worker.pending_launches.is_empty() && completed.is_empty() {
+            worker.engine.take_latest_frame()
+        } else {
+            None
+        };
+        for (pending, result) in completed {
+            if is_superseded_rom_load(self.latest_rom_job_id, pending.job_id) {
+                self.update_job(pending.job_id, "Load Game", "superseded", "Newer ROM selected");
+                continue;
+            }
+            match result {
+                Ok(reply) => {
+                    self.session_view.accept_worker_frame(&reply.frame);
+                    if let Some(rgba) = &reply.frame.rgba {
+                        upload_rgba(
+                            ctx,
+                            &mut self.framebuffer_texture,
+                            "starbyte-framebuffer",
+                            reply.frame.status.framebuffer_width,
+                            reply.frame.status.framebuffer_height,
+                            rgba,
+                        );
+                    }
+                    self.loaded_game_id = pending.game_id;
+                    self.remember_recent_rom(&pending.original_path);
+                    self.playback_error = None;
+                    self.is_playing = true;
+                    self.play_view = true;
+                    self.pending_step_frames = 0;
+                    self.frame_performance = FramePerformance::default();
+                    self.frame_rate.reset();
+                    self.status_line = format!("Loaded {}", pending.original_path.display());
+                    self.update_job(
+                        pending.job_id,
+                        "Load Game",
+                        "done",
+                        "Installed on emulation worker",
+                    );
+                    if let Some(worker) = &self.full_worker {
+                        worker.engine.set_playing(true);
+                    }
+                }
+                Err(error) => {
+                    self.update_job(pending.job_id, "Load Game", "failed", &error);
+                    self.status_line = format!("Could not install ROM: {error}");
+                    // The existing cartridge, its saves and its worker
+                    // clock remain untouched when replacement fails.
+                }
+            }
+        }
+        if self
+            .full_worker
+            .as_ref()
+            .is_some_and(|worker| worker.pending_launches.is_empty())
+        {
+            if let Some(frame) = frame {
+                self.session_view.accept_worker_frame(&frame);
+                if let Some(rgba) = &frame.rgba {
+                    upload_rgba(
+                        ctx,
+                        &mut self.framebuffer_texture,
+                        "starbyte-framebuffer",
+                        frame.status.framebuffer_width,
+                        frame.status.framebuffer_height,
+                        rgba,
+                    );
+                }
+            }
+        }
+        if let Some(worker) = &self.full_worker {
+            if let Some(error) = worker.engine.take_error() {
+                self.record_playback_error(&error);
+            }
+        }
     }
 
     fn current_filter(&self) -> LibraryFilter {
@@ -1094,7 +1270,15 @@ impl StarbyteApp {
                         self.update_job(job_id, "Load Game", "superseded", "Newer ROM selected");
                         continue;
                     }
-
+                    if self.full_worker.is_some() {
+                        self.queue_full_worker_launch(
+                            job_id,
+                            request.rom_path.clone(),
+                            Some(entry.game_id.clone()),
+                            request.clone(),
+                        );
+                        continue;
+                    }
                     self.clear_audio();
                     self.session.launch_game(&request)
                 } {
@@ -1135,6 +1319,10 @@ impl StarbyteApp {
                 } => {
                     if is_superseded_rom_load(self.latest_rom_job_id, job_id) {
                         self.update_job(job_id, "Open ROM", "superseded", "Newer ROM selected");
+                        continue;
+                    }
+                    if self.full_worker.is_some() {
+                        self.queue_full_worker_launch(job_id, original_path, game_id, request);
                         continue;
                     }
                     let detail = format!("Loaded {}", original_path.display());
@@ -4133,6 +4321,7 @@ impl eframe::App for StarbyteApp {
         self.capture_keyboard_binding(ctx);
         self.poll_gamepad_events(ctx.input(|input| input.focused));
         self.poll_worker_events(ctx);
+        self.poll_full_worker(ctx);
         if self.speaker_probe.poll() {
             if let SpeakerProbeState::Finished(Err(error)) = &self.speaker_probe {
                 warn!("speaker test failed: {error}");
@@ -4310,6 +4499,53 @@ impl eframe::App for StarbyteApp {
             self.queued_gamepad_presses.clear();
         }
 
+        // Native full-library worker experiment: same complete menus/cards
+        // as the established application, but UI callbacks only publish
+        // input and consume frames. No emulated frame runs on the GUI thread.
+        if self.full_worker.is_some() {
+            let focused = ctx.input(|input| input.focused);
+            let sample = self.effective_controller_sample(ctx);
+            let speed = self.effective_speed_percent(ctx);
+            if let Some(worker) = &self.full_worker {
+                if focused {
+                    worker.input.submit(sample.held, sample.pressed);
+                } else {
+                    worker.input.clear();
+                }
+                worker.engine.set_focused(focused);
+                worker
+                    .engine
+                    .set_pause_when_unfocused(self.config.ui.pause_when_unfocused);
+                worker.engine.set_playing(self.is_playing);
+                if speed != self.last_effective_speed_percent {
+                    let pitch = audio_pitch_factor(
+                        self.config.audio.pitch_mode,
+                        self.config.audio.pitch_percent,
+                        speed,
+                    );
+                    if let Err(error) = worker.engine.configure_playback_speed(speed, pitch) {
+                        self.status_line = error;
+                    }
+                }
+            }
+            self.last_effective_speed_percent = speed;
+            self.queued_keyboard_presses.clear();
+            self.queued_gamepad_presses.clear();
+            if let Some(limit) = self.exit_after_frames
+                && self.session_snapshot().frame >= limit
+                && self.framebuffer_texture.is_some()
+            {
+                self.exit_after_frames = None;
+                println!(
+                    "STARBYTE_FULL_LIBRARY_WORKER_SMOKE_OK frame={}",
+                    self.session_snapshot().frame
+                );
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            ctx.request_repaint_after(Duration::from_millis(16));
+            return;
+        }
+
         let window_focused = ctx.input(|input| input.focused);
         let pause_for_background = self.config.ui.pause_when_unfocused && !window_focused;
         if pause_for_background && self.is_playing && self.session_snapshot().has_rom {
@@ -4442,7 +4678,11 @@ impl eframe::App for StarbyteApp {
 
 impl Drop for StarbyteApp {
     fn drop(&mut self) {
-        if let Err(error) = self.session.flush_save_ram() {
+        if let Some(worker) = self.full_worker.take() {
+            if let Err(error) = worker.engine.shutdown() {
+                warn!("could not shut down emulation owner cleanly: {error}");
+            }
+        } else if let Err(error) = self.session.flush_save_ram() {
             warn!("could not persist cartridge SRAM on exit: {error}");
         }
     }

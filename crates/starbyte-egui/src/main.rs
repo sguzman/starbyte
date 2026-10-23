@@ -146,6 +146,21 @@ struct Args {
         hide = true
     )]
     exit_after_full_worker_focus_pause: bool,
+
+    /// CI only: prove the original full library reports an unexpected
+    /// emulation-owner panic instead of silently freezing the last frame.
+    #[arg(
+        long,
+        requires_all = ["demo", "native_worker_preview"],
+        conflicts_with_all = [
+            "exit_after_frames",
+            "exit_after_full_worker_saves",
+            "exit_after_full_worker_no_redraw",
+            "exit_after_full_worker_focus_pause"
+        ],
+        hide = true
+    )]
+    exit_after_full_worker_panic: bool,
 }
 
 fn main() -> Result<()> {
@@ -274,6 +289,7 @@ fn main() -> Result<()> {
                 args.exit_after_full_worker_saves,
                 args.exit_after_full_worker_no_redraw,
                 args.exit_after_full_worker_focus_pause,
+                args.exit_after_full_worker_panic,
                 log_lines.clone(),
             )
             .map_err(|error| std::io::Error::other(error.to_string()))?;
@@ -519,6 +535,14 @@ mod speaker_cli_tests {
         ])
         .unwrap();
         assert!(focus_pause.exit_after_full_worker_focus_pause);
+        let panic_check = Args::try_parse_from([
+            "starbyte-egui",
+            "--demo",
+            "--native-worker-preview",
+            "--exit-after-full-worker-panic",
+        ])
+        .unwrap();
+        assert!(panic_check.exit_after_full_worker_panic);
         assert!(
             Args::try_parse_from(["starbyte-egui", "--demo", "--exit-after-full-worker-saves"])
                 .is_err()

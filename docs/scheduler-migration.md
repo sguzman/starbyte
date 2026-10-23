@@ -1,8 +1,40 @@
 # Emulation scheduler migration
 
-**Status: in progress. Commit [`08c5802`](https://github.com/sguzman/starbyte/commit/08c5802ee644b54e6327292212fb607e9615675a) passed [CI run 39994543237](https://github.com/sguzman/starbyte/actions/runs/39994543237): Linux, Windows, lint/Clippy, benchmark compilation, native Weston original-window worker playback, save/restore, screenshot, 60 contiguous paused frame steps and a compositor-independent no-egui-callback interval. Full default-app ownership transfer and physical Hyprland/audio validation remain outstanding.**
+**Status: in progress. Commit [`88da6d7`](https://github.com/sguzman/starbyte/commit/88da6d7b4f542392ae670e346da39db6dac8af2a) passed [CI run 39997413540](https://github.com/sguzman/starbyte/actions/runs/39997413540): Linux, Windows, lint/Clippy, full-window Weston playback/saves/60-step acceptance, and complementary two-second no-egui-callback background-run versus focus-pause/resume checks. Full default-app ownership transfer and physical Hyprland/audio validation remain outstanding.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
+
+## Verified native focus pause and background continuation — 2026-10-23
+
+Commit [`88da6d7`](https://github.com/sguzman/starbyte/commit/88da6d7b4f542392ae670e346da39db6dac8af2a)
+passed [CI run 39997413540](https://github.com/sguzman/starbyte/actions/runs/39997413540):
+all three Linux, Windows and lint/Clippy jobs succeeded, including
+the complete native Weston GUI smoke suite.
+
+The scheduler publishes an atomic **effective running** flag from its sole
+emulation-clock thread, after applying manual Play, focus state, background
+pause preference and the GUI heartbeat policy. The publication resets even
+when that worker unwinds from a panic. The original full-library window's
+status bar, game overlay and Session diagnostics now read that effective
+state rather than inferring it from UI frame cadence or stale FPS windows.
+
+The newly added **original full-window** Weston focus-pause smoke starts
+gameplay, applies the real worker focus-pause policy, confirms that the
+owner is stopped, then deliberately withholds **every egui callback for two
+seconds**. It resumes the owner through the same focus policy and demands
+new game frames. The log records:
+
+- `STARBYTE_FULL_LIBRARY_FOCUS_PAUSE_SMOKE_OK paused_frames=0 resumed_frames=11`
+- `STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_OK advanced_frames=121` in the separate background-allowed case
+
+The focused scheduler unit regression additionally checks the effective
+running flag across manual pause, focus loss and missing UI heartbeats. This
+is **virtual Wayland/Weston evidence**, not physical Hyprland off-workspace
+testing, and no claim about speaker audibility or device recovery follows
+from it. All existing source-task counts remain A 7/8 (88%), B 15/18 (83%),
+P 18/20 (90%), C 8/16 (50%) and D 11/15 (73%). The established synchronous
+player remains the default; worker ownership in the complete library GUI
+is still opt-in.
 
 ## Latest full-library worker integration — 2026-10-23
 

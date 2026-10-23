@@ -32,7 +32,7 @@ use starbyte_core::{
     },
 };
 use starbyte_frontend::{
-    CheatEntry, FrontendSession, InstalledStatus, LibraryEntry, LibraryFilter, LibraryService,
+    CheatEntry, CoverAsset, FrontendSession, InstalledStatus, LibraryEntry, LibraryFilter, LibraryService,
     LibrarySnapshot, LibraryTarget, SessionControlsSnapshot, SessionInputDiagnostics,
     SessionLaunchRequest, SessionSaveAction, SessionSaveOutcome, SessionScreenshot,
     SessionSnapshot, SessionSoundDiagnostics, SoundSessionMode,
@@ -767,6 +767,7 @@ struct WorkerShellPaintCounts {
     status: u32,
     recent: u32,
     recent_cards: u32,
+    recent_covers: u32,
     library: u32,
     fps: u32,
     sound: u32,
@@ -789,6 +790,9 @@ enum WorkerShortcutSmoke {
     AwaitStatusFiltered {
         deadline: Instant,
         before: WorkerShellPaintCounts,
+    },
+    AwaitCoverIndexed {
+        deadline: Instant,
     },
     AwaitLibraryShown {
         deadline: Instant,
@@ -1863,6 +1867,37 @@ impl StarbyteApp {
         }
     }
 
+    /// Original synthetic cached artwork exercises the actual image decoder
+    /// and recent-cover texture path in native virtual Wayland acceptance.
+    fn install_native_shell_cover(&mut self) -> Result<bool> {
+        let Some(path) = self.session_snapshot().rom_path else {
+            return Ok(false);
+        };
+        let Some(entry) = self.library_snapshot.entries.iter_mut().find(|entry| {
+            entry.local.as_ref().is_some_and(|local| {
+                local.rom_path == path
+                    || local.extracted_cache_path.as_deref() == Some(path.as_path())
+            })
+        }) else {
+            return Ok(false);
+        };
+        let cover_path = self.cache_root.join("native-shell-acceptance-cover.png");
+        write_png_screenshot(
+            &cover_path,
+            &[240, 110, 40, 255, 30, 130, 210, 255, 80, 220, 130, 255, 15, 35, 70, 255],
+            2,
+            2,
+        )?;
+        entry.cover = Some(CoverAsset {
+            game_id: entry.game_id.clone(),
+            cache_path: cover_path,
+            source_url: "synthetic-native-test".to_owned(),
+            fetched_at_unix: 0,
+        });
+        self.failed_cover_ids.remove(&entry.game_id);
+        Ok(true)
+    }
+
     fn advance_full_worker_shortcut_smoke(&mut self, ctx: &egui::Context) {
         let Some(stage) = self.worker_shortcut_smoke else {
             return;
@@ -1993,17 +2028,8 @@ impl StarbyteApp {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         return;
                     }
-                    self.play_view = false;
-                    self.config.ui.show_menu_bar = true;
-                    self.config.ui.show_recent_games_bar = true;
-                    self.config.ui.show_status_bar = true;
-                    WorkerShortcutSmoke::AwaitLibraryShown {
-                        deadline: Instant::now() + Duration::from_secs(8),
-                        started_at: self
-                            .full_worker
-                            .as_ref()
-                            .map_or(0, |worker| worker.engine.completed_frames()),
-                        before: now,
+                    WorkerShortcutSmoke::AwaitCoverIndexed {
+                        deadline: Instant::now() + Duration::from_secs(12),
                     }
                 } else if Instant::now() >= deadline {
                     println!("STARBYTE_FULL_LIBRARY_SHELL_SMOKE_FAILED filtered_status_timeout");
@@ -2012,6 +2038,37 @@ impl StarbyteApp {
                     return;
                 } else {
                     stage
+                }
+            }
+            WorkerShortcutSmoke::AwaitCoverIndexed { deadline } => {
+                match self.install_native_shell_cover() {
+                    Ok(true) => {
+                        self.play_view = false;
+                        self.config.ui.show_menu_bar = true;
+                        self.config.ui.show_recent_games_bar = true;
+                        self.config.ui.show_status_bar = true;
+                        WorkerShortcutSmoke::AwaitLibraryShown {
+                            deadline: Instant::now() + Duration::from_secs(8),
+                            started_at: self
+                                .full_worker
+                                .as_ref()
+                                .map_or(0, |worker| worker.engine.completed_frames()),
+                            before: self.worker_shell_paints,
+                        }
+                    }
+                    Ok(false) if Instant::now() < deadline => stage,
+                    Ok(false) => {
+                        println!("STARBYTE_FULL_LIBRARY_SHELL_SMOKE_FAILED missing_indexed_demo");
+                        self.worker_shortcut_smoke = None;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        return;
+                    }
+                    Err(error) => {
+                        println!("STARBYTE_FULL_LIBRARY_SHELL_SMOKE_FAILED cover_fixture={error}");
+                        self.worker_shortcut_smoke = None;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        return;
+                    }
                 }
             }
             WorkerShortcutSmoke::AwaitLibraryShown {
@@ -2027,6 +2084,7 @@ impl StarbyteApp {
                     && now.status > before.status
                     && now.recent > before.recent
                     && now.recent_cards > before.recent_cards
+                    && now.recent_covers > before.recent_covers
                     && now.library > before.library
                     && recent_matches
                     && self
@@ -2092,13 +2150,14 @@ impl StarbyteApp {
                     && now.status > before.status
                     && now.recent > before.recent
                     && now.recent_cards > before.recent_cards
+                    && now.recent_covers > before.recent_covers
                     && now.library > before.library
                     && self
                         .full_worker
                         .as_ref()
                         .is_some_and(|worker| worker.engine.completed_frames() >= started_at + 3)
                 {
-                    println!("STARBYTE_FULL_LIBRARY_SHELL_SMOKE_OK menu=true recent_cards=true library=true status_metrics=true view_toggles=true");
+                    println!("STARBYTE_FULL_LIBRARY_SHELL_SMOKE_OK menu=true recent_cards=true cover_texture=true library=true status_metrics=true view_toggles=true");
                     self.worker_shortcut_smoke = None;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     return;
@@ -4329,6 +4388,9 @@ impl StarbyteApp {
                         let cover = game_id.as_deref().and_then(|id| {
                             self.ensure_cover_texture_path(ctx, id, cover_path.as_deref())
                         });
+                        if cover.is_some() && self.worker_shortcut_smoke.is_some() {
+                            self.worker_shell_paints.recent_covers += 1;
+                        }
                         // Constrain both min and max card width. An ordinary
                         // vertical_centered UI inherits the entire horizontal
                         // scroll area width and spreads each game far apart.

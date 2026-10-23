@@ -27,7 +27,7 @@ use starbyte_core::{
 };
 use starbyte_frontend::{
     CheatEntry, FrontendSession, InstalledStatus, LibraryEntry, LibraryFilter, LibraryService,
-    LibrarySnapshot, LibraryTarget, SoundSessionMode,
+    LibrarySnapshot, LibraryTarget, SessionSaveAction, SoundSessionMode,
 };
 
 // NTSC SNES video: 341 dots/scanline × 262 lines × 4 master clocks/dot
@@ -3257,15 +3257,15 @@ impl StarbyteApp {
     }
 
     fn quick_save(&mut self) {
-        match self.session.quick_save() {
-            Ok(()) => self.status_line = "Quick save stored for this session (F5).".to_owned(),
+        match self.session.apply_save_action(SessionSaveAction::QuickSave) {
+            Ok(_) => self.status_line = "Quick save stored for this session (F5).".to_owned(),
             Err(error) => self.status_line = error.to_string(),
         }
     }
 
     fn quick_load(&mut self, ctx: &egui::Context) {
-        match self.session.quick_load() {
-            Ok(()) => {
+        match self.session.apply_save_action(SessionSaveAction::QuickLoad) {
+            Ok(_) => {
                 self.clear_audio();
                 self.refresh_framebuffer(ctx);
                 self.frame_clock.reset(Instant::now());
@@ -3277,15 +3277,21 @@ impl StarbyteApp {
     }
 
     fn save_persistent_slot(&mut self, slot: u8) {
-        match self.session.save_state_slot(slot) {
+        match self
+            .session
+            .apply_save_action(SessionSaveAction::SaveSlot(slot))
+        {
             Ok(_) => self.status_line = format!("Saved game to disk slot {slot}."),
             Err(error) => self.status_line = error.to_string(),
         }
     }
 
     fn load_persistent_slot(&mut self, slot: u8, ctx: &egui::Context) {
-        match self.session.load_state_slot(slot) {
-            Ok(()) => {
+        match self
+            .session
+            .apply_save_action(SessionSaveAction::LoadSlot(slot))
+        {
+            Ok(_) => {
                 self.clear_audio();
                 self.refresh_framebuffer(ctx);
                 self.frame_clock.reset(Instant::now());

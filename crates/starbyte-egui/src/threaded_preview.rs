@@ -106,6 +106,8 @@ pub struct ThreadedPreviewApp {
     loaded_rom_path: Option<PathBuf>,
     status_note: Option<String>,
     pending: Vec<PendingOperation>,
+    /// Newest requested launch while the owner is installing a cartridge.
+    pending_next_launch: Option<SessionLaunchRequest>,
     library_assets: AssetConfig,
     library_config: RuntimeConfig,
     library_worker: Option<AppWorker>,
@@ -191,6 +193,7 @@ impl ThreadedPreviewApp {
             loaded_rom_path: None,
             status_note: None,
             pending: Vec::new(),
+            pending_next_launch: None,
             library_assets: assets,
             library_config: config.clone(),
             library_worker: None,
@@ -261,9 +264,15 @@ impl ThreadedPreviewApp {
             .iter()
             .any(|operation| matches!(operation, PendingOperation::LoadRom { .. }))
         {
-            self.last_error = Some("Wait for the current ROM load to finish.".to_owned());
+            self.status_note = Some(format!(
+                "Queued newer cartridge: {}",
+                request.rom_path.display()
+            ));
+            self.last_error = None;
+            self.pending_next_launch = Some(request);
             return;
         }
+        self.pending_next_launch = None;
         let path = request.rom_path.clone();
         match self.engine.queue_launch_with_state(request) {
             Ok(reply) => {
@@ -437,31 +446,39 @@ impl ThreadedPreviewApp {
 
     fn poll_operations(&mut self, ctx: &egui::Context) {
         let mut still_pending = Vec::new();
+        let mut launch_finished = false;
         for operation in std::mem::take(&mut self.pending) {
             match operation {
                 PendingOperation::LoadRom { path, reply } => match reply.try_recv() {
                     Ok(Ok(response)) => {
-                        // A previous ROM's queued framebuffer must not be
-                        // drawn after successful cartridge replacement.
+                        launch_finished = true;
                         let _ = self.engine.take_latest_frame();
-                        self.controls = response.controls;
-                        self.display.import_frame(ctx, response.frame);
-                        self.loaded_rom_path = Some(path.clone());
-                        self.engine.set_playing(true);
-                        self.playing = true;
-                        self.status_note = Some(format!("Loaded {}", path.display()));
-                        self.last_error = None;
+                        if self.pending_next_launch.is_none() {
+                            self.controls = response.controls;
+                            self.display.import_frame(ctx, response.frame);
+                            self.loaded_rom_path = Some(path.clone());
+                            self.engine.set_playing(true);
+                            self.playing = true;
+                            self.status_note = Some(format!("Loaded {}", path.display()));
+                            self.last_error = None;
+                        }
                     }
                     Ok(Err(error)) => {
-                        self.last_error = Some(format!("ROM load failed: {error}"));
-                        self.status_note = None;
+                        launch_finished = true;
+                        if self.pending_next_launch.is_none() {
+                            self.last_error = Some(format!("ROM load failed: {error}"));
+                            self.status_note = None;
+                        }
                     }
                     Err(TryRecvError::Empty) => {
                         still_pending.push(PendingOperation::LoadRom { path, reply });
                     }
                     Err(TryRecvError::Disconnected) => {
-                        self.last_error = Some("ROM loader worker stopped".to_owned());
-                        self.status_note = None;
+                        launch_finished = true;
+                        if self.pending_next_launch.is_none() {
+                            self.last_error = Some("ROM loader worker stopped".to_owned());
+                            self.status_note = None;
+                        }
                     }
                 },
                 PendingOperation::ClearCheats(reply) => match reply.try_recv() {
@@ -545,6 +562,11 @@ impl ThreadedPreviewApp {
             }
         }
         self.pending = still_pending;
+        if launch_finished {
+            if let Some(request) = self.pending_next_launch.take() {
+                self.queue_rom_launch(request);
+            }
+        }
     }
 
     fn keyboard(&self, ctx: &egui::Context) -> (ControllerState, ControllerState) {
@@ -839,6 +861,53 @@ mod pitch_mode_tests {
         assert_eq!(app.loaded_rom_path.as_deref(), Some(good.as_path()));
         assert!(app.playing);
         assert!(app.controls.session.has_rom);
+    }
+
+    #[test]
+    fn rapid_cartridge_install_replaces_intermediate_result() {
+        use std::time::Instant;
+
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("intermediate.sfc");
+        let final_rom = temp.path().join("final.sfc");
+        let demo = starbyte_core::testing::demo::demo_rom_bytes();
+        std::fs::write(&first, &demo).unwrap();
+        std::fs::write(&final_rom, &demo).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(temp.path().join("saves")),
+            state_dir: Some(temp.path().join("states")),
+            cache_dir: Some(temp.path().join("cache")),
+            config_path: None,
+        };
+        let mut config = RuntimeConfig::default();
+        config.audio.enabled = false;
+        let mut app =
+            ThreadedPreviewApp::new(assets, &config, None, None, true, false, false).unwrap();
+        let request = |rom_path| SessionLaunchRequest {
+            rom_path,
+            sound_mode: SoundSessionMode::Persistent,
+            cheats: Vec::new(),
+        };
+        app.queue_rom_launch(request(first));
+        app.queue_rom_launch(request(final_rom.clone()));
+        assert_eq!(
+            app.pending_next_launch.as_ref().map(|next| next.rom_path.as_path()),
+            Some(final_rom.as_path())
+        );
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(6);
+        while Instant::now() < deadline {
+            app.poll_operations(&ctx);
+            if app.loaded_rom_path.as_deref() == Some(final_rom.as_path()) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(app.loaded_rom_path.as_deref(), Some(final_rom.as_path()));
+        assert!(app.controls.session.has_rom);
+        assert!(app.pending_next_launch.is_none());
+        assert!(app.display.texture().is_some());
     }
 
     #[test]

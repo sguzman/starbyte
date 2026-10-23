@@ -2700,7 +2700,11 @@ impl StarbyteApp {
             .iter()
             .find(|entry| entry.game_id == game_id)
         {
-            let _ = self.legacy_session_mut().set_active_cheats(&entry.cheats);
+            let _ = self
+                .session
+                .as_mut()
+                .expect("cheat mutation requires legacy session")
+                .set_active_cheats(&entry.cheats);
         } else {
             self.legacy_session_mut().clear_active_cheats();
         }
@@ -2730,7 +2734,10 @@ impl StarbyteApp {
             "starbyte-framebuffer",
             snapshot.framebuffer_width,
             snapshot.framebuffer_height,
-            self.legacy_session().framebuffer_rgba(),
+            self.session
+                .as_ref()
+                .expect("legacy framebuffer upload requires legacy session")
+                .framebuffer_rgba(),
         );
         if !uploaded {
             warn!("skipping invalid RGBA framebuffer from local session");
@@ -3418,7 +3425,11 @@ impl StarbyteApp {
         if output_volume <= 0.0 {
             return;
         }
-        let samples = &self.legacy_session().frame_audio_samples();
+        let samples = self
+            .session
+            .as_ref()
+            .expect("legacy audio output requires legacy session")
+            .frame_audio_samples();
         if samples.is_empty() || samples.len() % 2 != 0 {
             return;
         }
@@ -3466,7 +3477,8 @@ impl StarbyteApp {
     }
 
     fn run_frame(&mut self, ctx: &egui::Context, play_audio: bool) {
-        self.legacy_session_mut().set_controller1(self.effective_controller_state(ctx));
+        let controller = self.effective_controller_state(ctx);
+        self.legacy_session_mut().set_controller1(controller);
         // Consume each short press once; held keys are sampled again from
         // egui when subsequent emulation frames execute.
         self.queued_keyboard_presses.clear();
@@ -3478,13 +3490,18 @@ impl StarbyteApp {
                 if self.exit_after_frames.is_some() {
                     self.native_smoke_audio.record(
                         self.session_snapshot().frame,
-                        &self.legacy_session().frame_audio_samples(),
+                        self.session
+                            .as_ref()
+                            .expect("native legacy smoke requires legacy session")
+                            .frame_audio_samples(),
                     );
                 }
                 let uploaded = Instant::now();
                 self.refresh_framebuffer(ctx);
                 self.blackout_monitor.observe(
-                    self.session.as_ref().expect("legacy frame diagnostics require legacy session"),
+                    self.session
+                        .as_ref()
+                        .expect("legacy frame diagnostics require legacy session"),
                     self.last_audio_pairs,
                     self.last_audio_nonzero_pairs,
                 );
@@ -5125,7 +5142,9 @@ impl StarbyteApp {
             self.queue_full_worker_save(SessionSaveAction::SaveSlot(slot));
             return;
         }
-        match self.legacy_session_mut().apply_save_action(SessionSaveAction::SaveSlot(slot))
+        match self
+            .legacy_session_mut()
+            .apply_save_action(SessionSaveAction::SaveSlot(slot))
         {
             Ok(_) => self.status_line = format!("Saved game to disk slot {slot}."),
             Err(error) => self.status_line = error.to_string(),
@@ -5137,7 +5156,9 @@ impl StarbyteApp {
             self.queue_full_worker_save(SessionSaveAction::LoadSlot(slot));
             return;
         }
-        match self.legacy_session_mut().apply_save_action(SessionSaveAction::LoadSlot(slot))
+        match self
+            .legacy_session_mut()
+            .apply_save_action(SessionSaveAction::LoadSlot(slot))
         {
             Ok(_) => {
                 self.clear_audio();
@@ -6789,10 +6810,14 @@ impl eframe::App for StarbyteApp {
             self.exit_after_frames = None;
             let frame = self.session_snapshot().frame;
             let metrics = self.native_smoke_audio;
-            let spc_instructions = self.legacy_session().emulator()
+            let spc_instructions = self
+                .legacy_session()
+                .emulator()
                 .isolated_apu_spc700_status()
                 .map_or(0, |status| status.instructions);
-            let uploaded_spc_bytes = self.legacy_session().emulator()
+            let uploaded_spc_bytes = self
+                .legacy_session()
+                .emulator()
                 .isolated_apu_upload()
                 .map_or(0, |upload| upload.bytes_written());
             let audio_worker_spawned = self.audio_output.is_some();

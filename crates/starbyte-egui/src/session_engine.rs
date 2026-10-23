@@ -231,6 +231,9 @@ pub struct OwnedSession {
     render: RenderPort,
     last_sram_flush: Instant,
     next_audio_retry: Instant,
+    /// True only after the shutdown hook has finished on the emulation
+    /// thread. Returning the owner to the GUI must not flush SRAM again.
+    shutdown_finalized: bool,
 }
 
 impl OwnedSession {
@@ -252,17 +255,29 @@ impl OwnedSession {
             render: RenderPort::default(),
             last_sram_flush: Instant::now(),
             next_audio_retry: Instant::now(),
+            shutdown_finalized: false,
         }
     }
 
-    pub fn spawn(self) -> io::Result<EmulatorScheduler<Self, PublishedGameFrame>> {
+    pub fn spawn(mut self) -> io::Result<EmulatorScheduler<Self, PublishedGameFrame>> {
+        // An owner returned by shutdown may later be launched again. A
+        // previous finalization must not suppress its new save lifecycle.
+        self.shutdown_finalized = false;
         EmulatorScheduler::spawn_with_hooks(
             self,
             NTSC_FRAME_INTERVAL,
             Self::advance,
             Self::clear_game_audio,
-            Self::clear_game_audio,
+            Self::finalize_on_worker,
         )
+    }
+
+    fn finalize_on_worker(&mut self) {
+        self.clear_game_audio();
+        // Drop the Rodio output on the owning thread too; joining an audio
+        // worker must never happen while the GUI is drawing or closing.
+        self.audio.take();
+        self.shutdown_finalized = true;
     }
 
     fn clear_game_audio(&mut self) {
@@ -595,11 +610,16 @@ impl OwnedSession {
 
 impl Drop for OwnedSession {
     fn drop(&mut self) {
-        if let Err(error) = self.flush_sram() {
-            tracing::warn!("could not flush worker-owned SRAM on shutdown: {error}");
-        }
-        if let Some(audio) = &self.audio {
-            audio.clear();
+        // A normal scheduler shutdown has already flushed SRAM and disposed
+        // of the audio output on the emulation thread. This fallback is only
+        // for an unspawned owner or one dropped without successful shutdown.
+        if !self.shutdown_finalized {
+            if let Err(error) = self.flush_sram() {
+                tracing::warn!("could not flush worker-owned SRAM on shutdown: {error}");
+            }
+            if let Some(audio) = &self.audio {
+                audio.clear();
+            }
         }
     }
 }
@@ -1033,7 +1053,21 @@ mod tests {
             .recv_timeout(Duration::from_secs(3))
             .unwrap();
         assert!(failed.is_err());
-        assert_eq!(worker.shutdown().unwrap().snapshot().rom_path, Some(rom));
+        let returned_owner = worker.shutdown().unwrap();
+        assert_eq!(returned_owner.snapshot().rom_path, Some(rom));
+        assert!(returned_owner.shutdown_finalized);
+        assert!(returned_owner.audio.is_none());
+    }
+
+    #[test]
+    fn scheduler_reuse_reopens_a_new_shutdown_lifecycle() {
+        let owner = OwnedSession::create(AssetConfig::default()).unwrap();
+        let worker = owner.spawn().unwrap();
+        let returned = worker.shutdown().unwrap();
+        assert!(returned.shutdown_finalized);
+        let worker = returned.spawn().unwrap();
+        let returned = worker.shutdown().unwrap();
+        assert!(returned.shutdown_finalized);
     }
 
     #[test]

@@ -19,7 +19,7 @@ use crate::{
     scheduler::EmulatorScheduler,
     session_engine::{
         ControlsPort, InputPort, OwnedSession, PublishedGameFrame, RenderPort,
-        WorkerLaunchResponse, WorkerSaveResponse,
+        WorkerAudioDiagnostics, WorkerLaunchResponse, WorkerSaveResponse,
     },
     video_upload::upload_rgba,
     worker::{AppWorker, WorkerCommand, WorkerCommandKind, WorkerEvent},
@@ -718,6 +718,8 @@ pub struct StarbyteApp {
     /// Cumulative produced PCM signal in the current ROM/session. A quiet
     /// frame must not erase evidence that real samples were generated.
     audio_nonzero_pairs_total: u64,
+    worker_audio: WorkerAudioDiagnostics,
+    worker_cpu: Duration,
     worker: AppWorker,
     /// Newest requested ROM job wins. Older materialization replies must
     /// never replace a newer selection or its save/cheat namespace.
@@ -932,6 +934,8 @@ impl StarbyteApp {
             last_audio_pairs: 0,
             last_audio_nonzero_pairs: 0,
             audio_nonzero_pairs_total: 0,
+            worker_audio: WorkerAudioDiagnostics::default(),
+            worker_cpu: Duration::ZERO,
             worker,
             latest_rom_job_id: None,
             library_snapshot: cached_snapshot.unwrap_or_else(empty_snapshot),
@@ -1163,6 +1167,10 @@ impl StarbyteApp {
             match result {
                 Ok(reply) => {
                     self.session_view.accept_worker_frame(&reply.frame);
+                    self.worker_audio = reply.frame.audio_diagnostics;
+                    self.worker_cpu = reply.frame.last_frame_cpu;
+                    self.last_audio_pairs = reply.frame.stereo_pairs;
+                    self.last_audio_nonzero_pairs = reply.frame.nonzero_pairs;
                     if let Some(rgba) = &reply.frame.rgba {
                         upload_rgba(
                             ctx,
@@ -1215,6 +1223,10 @@ impl StarbyteApp {
                     }
                     if let Some(restored) = saved.restored_frame {
                         self.session_view.accept_worker_frame(&restored);
+                        self.worker_audio = restored.audio_diagnostics;
+                        self.worker_cpu = restored.last_frame_cpu;
+                        self.last_audio_pairs = restored.stereo_pairs;
+                        self.last_audio_nonzero_pairs = restored.nonzero_pairs;
                         if let Some(rgba) = &restored.rgba {
                             upload_rgba(
                                 ctx,
@@ -1244,6 +1256,10 @@ impl StarbyteApp {
         {
             if let Some(frame) = frame {
                 self.session_view.accept_worker_frame(&frame);
+                self.worker_audio = frame.audio_diagnostics;
+                self.worker_cpu = frame.last_frame_cpu;
+                self.last_audio_pairs = frame.stereo_pairs;
+                self.last_audio_nonzero_pairs = frame.nonzero_pairs;
                 if let Some(rgba) = &frame.rgba {
                     upload_rgba(
                         ctx,
@@ -2165,22 +2181,41 @@ impl StarbyteApp {
             }
         }
         let isolated = mode != SoundSessionMode::Compatibility;
-        ui.label(format!(
-            "DSP last frame: {} stereo pairs, {} nonzero; session total nonzero: {}",
-            self.last_audio_pairs, self.last_audio_nonzero_pairs, self.audio_nonzero_pairs_total
-        ));
-        ui.label(format!(
-            "OS audio device: {}; mixer frames submitted: {} (nonzero PCM: {})",
-            self.audio_output
-                .as_ref()
-                .map_or("not attempted", |output| output.device_status().label()),
-            self.audio_output
-                .as_ref()
-                .map_or(0, AudioOutput::submitted_frames),
-            self.audio_output
-                .as_ref()
-                .map_or(0, AudioOutput::submitted_nonzero_frames),
-        ));
+        if self.full_worker.is_some() {
+            ui.label(format!(
+                "Last worker frame: {} stereo pairs, {} nonzero; mixer nonzero frames: {}",
+                self.last_audio_pairs,
+                self.last_audio_nonzero_pairs,
+                self.worker_audio.submitted_nonzero_frames,
+            ));
+            ui.label(format!(
+                "OS audio device: {}; worker mixer submitted: {} (nonzero: {})",
+                self.worker_audio
+                    .device_status
+                    .map_or("not attempted", |status| status.label()),
+                self.worker_audio.submitted_frames,
+                self.worker_audio.submitted_nonzero_frames,
+            ));
+        } else {
+            ui.label(format!(
+                "DSP last frame: {} stereo pairs, {} nonzero; session total nonzero: {}",
+                self.last_audio_pairs,
+                self.last_audio_nonzero_pairs,
+                self.audio_nonzero_pairs_total
+            ));
+            ui.label(format!(
+                "OS audio device: {}; mixer frames submitted: {} (nonzero PCM: {})",
+                self.audio_output
+                    .as_ref()
+                    .map_or("not attempted", |output| output.device_status().label()),
+                self.audio_output
+                    .as_ref()
+                    .map_or(0, AudioOutput::submitted_frames),
+                self.audio_output
+                    .as_ref()
+                    .map_or(0, AudioOutput::submitted_nonzero_frames),
+            ));
+        }
         ui.separator();
         ui.label("Live game-audio output check:");
         if ui
@@ -2985,9 +3020,11 @@ impl StarbyteApp {
                         &mut self.config.ui.pause_when_unfocused,
                         "Pause when Starbyte is in background",
                     )
-                    .on_hover_text(
-                        "Uncheck to continue emulation while the window is unfocused and repaint callbacks are delivered. Hidden or off-workspace Wayland windows may still be suspended by the compositor; fully independent background emulation is not implemented yet.",
-                    )
+                    .on_hover_text(if self.full_worker.is_some() {
+                        "When unchecked, the independent emulator worker continues SNES timing and audio even without egui repaint callbacks. Manual Pause still takes priority."
+                    } else {
+                        "In the legacy player, background execution still depends on egui repaint callbacks. Worker ownership is available separately while migration is validated."
+                    })
                     .changed()
                 {
                     self.persist_config();
@@ -3264,6 +3301,16 @@ impl StarbyteApp {
                         "FPS: paused".to_owned()
                     } else if self.background_suspended {
                         "FPS: paused (background)".to_owned()
+                    } else if let Some(worker) = &self.full_worker {
+                        worker.engine.frame_stats().fps.map_or_else(
+                            || "Worker FPS: measuring".to_owned(),
+                            |value| {
+                                format!(
+                                    "Worker FPS: {value:.1} / {:.1}",
+                                    speed_target_fps(self.last_effective_speed_percent)
+                                )
+                            },
+                        )
                     } else {
                         self.frame_rate.fps(Instant::now()).map_or_else(
                             || "FPS: --".to_owned(),
@@ -3289,11 +3336,23 @@ impl StarbyteApp {
                         self.config.audio.enabled,
                         self.audio_muted,
                         self.config.audio.volume,
-                        self.audio_nonzero_pairs_total,
-                        self.audio_output.as_ref().map(AudioOutput::device_status),
-                        self.audio_output
-                            .as_ref()
-                            .map_or(0, AudioOutput::submitted_nonzero_frames),
+                        if self.full_worker.is_some() {
+                            self.worker_audio.submitted_nonzero_frames
+                        } else {
+                            self.audio_nonzero_pairs_total
+                        },
+                        if self.full_worker.is_some() {
+                            self.worker_audio.device_status
+                        } else {
+                            self.audio_output.as_ref().map(AudioOutput::device_status)
+                        },
+                        if self.full_worker.is_some() {
+                            self.worker_audio.submitted_nonzero_frames
+                        } else {
+                            self.audio_output
+                                .as_ref()
+                                .map_or(0, AudioOutput::submitted_nonzero_frames)
+                        },
                     );
                     ui.label(RichText::new(sound).monospace()).on_hover_text(
                         "Host sound state; PCM delivery does not prove speaker audibility.",
@@ -4155,7 +4214,32 @@ impl StarbyteApp {
                 egui::Color32::LIGHT_YELLOW,
             );
         }
-        if self.show_performance_overlay && self.frame_performance.samples > 0 {
+        if self.show_performance_overlay && self.full_worker.is_some() {
+            if let Some(worker) = &self.full_worker {
+                let rate = worker.engine.frame_stats();
+                let fps = rate
+                    .fps
+                    .map_or_else(|| "--".to_owned(), |fps| format!("{fps:.1}"));
+                let label = format!(
+                    "Worker FPS {fps} / {:.1} | 40ms+ gaps: {} | last gap {:.1} ms\nLast emulation CPU {:.2} ms | video frames coalesced: {}\nAudio producer drops {} | mixer drops {} | empty sink {}",
+                    speed_target_fps(self.last_effective_speed_percent),
+                    rate.hitches_40ms,
+                    rate.last_gap_ms,
+                    self.worker_cpu.as_secs_f32() * 1_000.0,
+                    worker.engine.skipped_video_frames(),
+                    self.worker_audio.producer_dropped_frames,
+                    self.worker_audio.worker_dropped_frames,
+                    self.worker_audio.sink_empty_on_pcm,
+                );
+                ui.painter().text(
+                    rect.left_bottom() + egui::vec2(12.0, -12.0),
+                    egui::Align2::LEFT_BOTTOM,
+                    label,
+                    egui::TextStyle::Monospace.resolve(ui.style()),
+                    egui::Color32::LIGHT_GREEN,
+                );
+            }
+        } else if self.show_performance_overlay && self.frame_performance.samples > 0 {
             let stats = self.frame_performance;
             let fps = self
                 .frame_rate

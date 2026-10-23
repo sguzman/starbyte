@@ -4550,20 +4550,14 @@ impl StarbyteApp {
                 .is_none_or(|worker| worker.pending_launches.is_empty());
         ui.horizontal_wrapped(|ui| {
             if ui
-                .add_enabled(
-                    can_step,
-                    egui::Button::new("Step Frame"),
-                )
+                .add_enabled(can_step, egui::Button::new("Step Frame"))
                 .clicked()
             {
                 self.pending_step_frames = 1;
                 ctx.request_repaint();
             }
             if ui
-                .add_enabled(
-                    can_step,
-                    egui::Button::new("Step 60 Frames"),
-                )
+                .add_enabled(can_step, egui::Button::new("Step 60 Frames"))
                 .clicked()
             {
                 // A sixty-frame synchronous call blocks all Wayland events.
@@ -5557,7 +5551,10 @@ mod session_view_bridge_tests {
             old_receipt.controls.session.rom_path,
             replacement.controls.session.rom_path
         );
-        assert_eq!(old_receipt.controls.sound_mode, SoundSessionMode::Persistent);
+        assert_eq!(
+            old_receipt.controls.sound_mode,
+            SoundSessionMode::Persistent
+        );
         assert_eq!(
             replacement.controls.sound_mode,
             SoundSessionMode::Compatibility

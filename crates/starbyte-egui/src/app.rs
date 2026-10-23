@@ -34,7 +34,7 @@ use starbyte_core::{
 use starbyte_frontend::{
     CheatEntry, FrontendSession, InstalledStatus, LibraryEntry, LibraryFilter, LibraryService,
     LibrarySnapshot, LibraryTarget, SessionControlsSnapshot, SessionInputDiagnostics,
-    SessionLaunchRequest, SessionSaveAction, SessionSnapshot, SoundSessionMode,
+    SessionLaunchRequest, SessionSaveAction, SessionScreenshot, SessionSnapshot, SoundSessionMode,
 };
 
 // NTSC SNES video: 341 dots/scanline × 262 lines × 4 master clocks/dot
@@ -672,6 +672,8 @@ struct FullLibraryWorker {
         SessionSaveAction,
         Receiver<Result<WorkerSaveResponse, String>>,
     )>,
+    pending_screenshots: Vec<(Option<u64>, Receiver<Result<SessionScreenshot, String>>)>,
+    pending_screenshot_writes: Vec<Receiver<Result<PathBuf, String>>>,
     last_focus: Option<bool>,
     last_playing: Option<bool>,
     last_pause_when_unfocused: Option<bool>,
@@ -1010,6 +1012,8 @@ impl StarbyteApp {
                 render,
                 pending_launches: Vec::new(),
                 pending_saves: Vec::new(),
+                pending_screenshots: Vec::new(),
+                pending_screenshot_writes: Vec::new(),
                 last_focus: None,
                 last_playing: None,
                 last_pause_when_unfocused: None,
@@ -1108,6 +1112,31 @@ impl StarbyteApp {
             }
         }
         worker.pending_saves = pending_saves;
+        let mut captured = Vec::new();
+        let mut captures_pending = Vec::new();
+        for (generation, response) in std::mem::take(&mut worker.pending_screenshots) {
+            match response.try_recv() {
+                Ok(result) => captured.push((generation, result)),
+                Err(TryRecvError::Empty) => captures_pending.push((generation, response)),
+                Err(TryRecvError::Disconnected) => captured.push((
+                    generation,
+                    Err("Screenshot capture worker stopped".to_owned()),
+                )),
+            }
+        }
+        worker.pending_screenshots = captures_pending;
+        let mut screenshot_writes = Vec::new();
+        let mut writes_pending = Vec::new();
+        for response in std::mem::take(&mut worker.pending_screenshot_writes) {
+            match response.try_recv() {
+                Ok(result) => screenshot_writes.push(result),
+                Err(TryRecvError::Empty) => writes_pending.push(response),
+                Err(TryRecvError::Disconnected) => {
+                    screenshot_writes.push(Err("Screenshot PNG writer stopped".to_owned()));
+                }
+            }
+        }
+        worker.pending_screenshot_writes = writes_pending;
         // Never show an obsolete picture while another cartridge is
         // installing. Completed launch replies are applied first.
         let frame = if worker.pending_launches.is_empty()
@@ -1171,10 +1200,8 @@ impl StarbyteApp {
         }
         for (action, result) in completed_saves {
             if self.worker_save_smoke_stage.is_some() {
-                self.worker_save_smoke_receipt = Some((
-                    action,
-                    result.as_ref().map(|_| ()).map_err(Clone::clone),
-                ));
+                self.worker_save_smoke_receipt =
+                    Some((action, result.as_ref().map(|_| ()).map_err(Clone::clone)));
             }
             match result {
                 Ok(saved) => {
@@ -1224,6 +1251,40 @@ impl StarbyteApp {
                         rgba,
                     );
                 }
+            }
+        }
+        for (generation, result) in captured {
+            if generation != self.latest_rom_job_id {
+                continue;
+            }
+            match result {
+                Ok(image) => {
+                    let stamp = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos();
+                    let path = self.assets.screenshot_root().join(format!(
+                        "starbyte-{stamp}-frame-{}.png",
+                        image.frame
+                    ));
+                    match spawn_screenshot_writer(path, image) {
+                        Ok(reply) => {
+                            if let Some(worker) = &mut self.full_worker {
+                                worker.pending_screenshot_writes.push(reply);
+                            }
+                        }
+                        Err(error) => self.status_line = format!("Screenshot failed: {error}"),
+                    }
+                }
+                Err(error) => self.status_line = format!("Screenshot failed: {error}"),
+            }
+        }
+        for result in screenshot_writes {
+            match result {
+                Ok(path) => {
+                    self.status_line = format!("Screenshot saved to {}", path.display());
+                }
+                Err(error) => self.status_line = format!("Screenshot failed: {error}"),
             }
         }
         if let Some(worker) = &self.full_worker {
@@ -1276,9 +1337,7 @@ impl StarbyteApp {
             WorkerSaveSmokeStage::AwaitSlotLoad => SessionSaveAction::LoadSlot(1),
         };
         if action != expected || outcome.is_err() {
-            println!(
-                "STARBYTE_FULL_LIBRARY_SAVE_SMOKE_FAILED action={action:?} error={outcome:?}"
-            );
+            println!("STARBYTE_FULL_LIBRARY_SAVE_SMOKE_FAILED action={action:?} error={outcome:?}");
             self.worker_save_smoke_stage = None;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
@@ -3930,6 +3989,26 @@ impl StarbyteApp {
     }
 
     fn save_screenshot(&mut self) {
+        if let Some(worker) = &mut self.full_worker {
+            if !self.session_view.snapshot(&self.session).has_rom
+                || !worker.pending_launches.is_empty()
+            {
+                self.status_line = "Wait for a cartridge before taking a screenshot.".to_owned();
+                return;
+            }
+            if worker.pending_screenshots.len() + worker.pending_screenshot_writes.len() >= 2 {
+                self.status_line = "Finish pending screenshots before taking another.".to_owned();
+                return;
+            }
+            match worker.engine.queue_screenshot_pixels() {
+                Ok(reply) => {
+                    worker.pending_screenshots.push((self.latest_rom_job_id, reply));
+                    self.status_line = "Capturing screenshot on the emulator worker...".to_owned();
+                }
+                Err(error) => self.status_line = format!("Screenshot failed: {error}"),
+            }
+            return;
+        }
         let Some(screenshot) = self.session.capture_screenshot() else {
             self.status_line = "Load a game before taking a screenshot.".to_owned();
             return;
@@ -4963,6 +5042,29 @@ impl Drop for StarbyteApp {
         } else if let Err(error) = self.session.flush_save_ram() {
             warn!("could not persist cartridge SRAM on exit: {error}");
         }
+    }
+}
+
+#[cfg(test)]
+mod screenshot_writer_tests {
+    use super::*;
+
+    #[test]
+    fn png_writer_runs_outside_the_game_clock_and_persists_rgba() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("screenshots").join("worker.png");
+        let frame = SessionScreenshot {
+            frame: 7,
+            width: 2,
+            height: 1,
+            rgba: vec![255, 0, 0, 255, 0, 255, 0, 255],
+        };
+        let receipt = spawn_screenshot_writer(path.clone(), frame).unwrap();
+        let persisted = receipt.recv_timeout(Duration::from_secs(4)).unwrap().unwrap();
+        assert_eq!(persisted, path);
+        let pixels = image::open(path).unwrap().into_rgba8();
+        assert_eq!(pixels.dimensions(), (2, 1));
+        assert_eq!(pixels.as_raw().as_slice(), &[255, 0, 0, 255, 0, 255, 0, 255]);
     }
 }
 
@@ -6538,7 +6640,31 @@ fn fit_game_size(source: Vec2, available: Vec2, integer_scale: bool) -> Vec2 {
     source * scale
 }
 
-pub(crate) fn write_png_screenshot(
+pub(crate) /// Write an owned screenshot on a dedicated I/O thread. The emulator keeps
+/// producing PCM and frames without waiting for PNG compression or disk I/O.
+fn spawn_screenshot_writer(
+    path: PathBuf,
+    screenshot: SessionScreenshot,
+) -> Result<Receiver<Result<PathBuf, String>>, String> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("starbyte-screenshot-writer".to_owned())
+        .spawn(move || {
+            let result = write_png_screenshot(
+                &path,
+                &screenshot.rgba,
+                screenshot.width,
+                screenshot.height,
+            )
+            .map(|_| path)
+            .map_err(|error| error.to_string());
+            let _ = sender.send(result);
+        })
+        .map_err(|error| error.to_string())?;
+    Ok(receiver)
+}
+
+fn write_png_screenshot(
     path: &Path,
     rgba: &[u8],
     width: u32,

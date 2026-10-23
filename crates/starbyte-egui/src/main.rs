@@ -487,12 +487,8 @@ mod speaker_cli_tests {
         .unwrap();
         assert!(save_probe.exit_after_full_worker_saves);
         assert!(
-            Args::try_parse_from([
-                "starbyte-egui",
-                "--demo",
-                "--exit-after-full-worker-saves"
-            ])
-            .is_err()
+            Args::try_parse_from(["starbyte-egui", "--demo", "--exit-after-full-worker-saves"])
+                .is_err()
         );
     }
 

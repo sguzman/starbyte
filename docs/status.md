@@ -1,8 +1,14 @@
 # Starbyte: current state
 
-**Updated:** 2026-10-13. **Project direction:** active development. **Product maturity:** experimental Rust SNES emulator, intended for comfortable Linux/Wayland play rather than cycle-perfect hardware accuracy.
+**Updated:** 2026-10-23. **Project direction:** active development. **Product maturity:** experimental Rust SNES emulator, intended for comfortable Linux/Wayland play rather than cycle-perfect hardware accuracy.
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
+
+## Worker-owned original-window scheduler checkpoint (2026-10-23)
+
+The original Starbyte library window now supports an **opt-in** exclusive emulation worker via `--native-worker-preview`; no redundant synchronous `FrontendSession` exists in that mode. Hosted Linux/Weston, Windows, Clippy and pinned Rust 1.88 CI at [`a35ced5`](https://github.com/sguzman/starbyte/commit/a35ced5ddd05e6f4908967ebe4b322bbf6b42ef6) includes direct owner pacing without egui redraws, cartridge-replacement and save receipt ordering, original-window menus/shortcuts, native virtual compositor checks and stale speaker-test receipt fencing. A pending speaker-test acknowledgement cannot replace status from a newer ROM request or installation. **The code CI must be confirmed green at its exact run before reporting all jobs verified.**
+
+Source checklist: **69/77 accepted (90%)**, with eight separate physical Hyprland, audible-device/gamepad and eventual production-default gates. They are documented in [scheduler-migration.md](scheduler-migration.md), the [machine-readable ledger](scheduler-progress.json), and [native Hyprland acceptance procedure](qa-native-hyprland.md). Virtual Weston does not prove actual off-workspace GPU presentation, speaker audibility or gamepad behavior. The legacy player remains the production default.
 
 ## Selectable playback speed and Tab fast-forward (2026-10-13)
 

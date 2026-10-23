@@ -1,9 +1,15 @@
 # Emulation scheduler migration
 
-**Status: in progress. Commit [`32cc83c`](https://github.com/sguzman/starbyte/commit/32cc83c2909facb54d0378fee52387b7a2bb4a61) passed [CI run 40040187151](https://github.com/sguzman/starbyte/actions/runs/40040187151): Linux, Windows, formatting/Clippy, pinned Rust 1.88 and original-window native Weston integration. Verified source progress is 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. The complete original library worker is still opt-in; production-default cutover, physical Hyprland and audible-device quality remain unverified.**
+**Status: in progress. Code commit [`a35ced5`](https://github.com/sguzman/starbyte/commit/a35ced5ddd05e6f4908967ebe4b322bbf6b42ef6) adds selection/generation fencing for late speaker-test receipts; [CI run 40042065947](https://github.com/sguzman/starbyte/actions/runs/40042065947) provides exact-revision Linux, Windows, formatting/Clippy and pinned Rust 1.88 checks. Verified source progress is 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. The complete original library worker is still opt-in; production-default cutover, physical Hyprland and audible-device quality remain unverified.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 **Machine-readable source checklist:** [scheduler-progress.json](scheduler-progress.json) (77 stable task IDs and checked-status parity tested by Rust CI).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
+
+**Physical acceptance checklist:** [qa-native-hyprland.md](qa-native-hyprland.md). This is an unexecuted procedure, not acceptance evidence; the production default remains legacy.
+
+## Speaker-test acknowledgement ordering — 2026-10-23
+
+The original-window Sound menu sends an asynchronous 440 Hz tone to the shared game audio worker. Previously a slow acknowledgement had no game-generation or ROM-selection identity and could replace newer cartridge-loading feedback on the status line. `a35ced5` records both identities with each pending tone; the GUI displays a completion only while the selected cartridge and latest request still match and no installation is pending. No-game tests remain supported (matching absent generations). A Rust regression covers current, superseded, newer-cartridge and installation-pending cases. This fixes stale user feedback, not physical speaker audibility. It does not close an existing scheduler acceptance task.
 
 ## Verified superseded-install worker/UI reconciliation — 2026-10-23
 

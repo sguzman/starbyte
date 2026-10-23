@@ -105,6 +105,30 @@ eight full-UI cutover tasks are blocking, not cosmetic. The workspace declares
 Rust 1.85; newly introduced post-1.85 let-chain expressions were rewritten,
 but a real MSRV build has not been performed in this environment.
 
+## First confirmed CI evidence (2026-10-23)
+
+The GitHub Actions run [39887087222](https://github.com/sguzman/starbyte/actions/runs/39887087222),
+built from commit `6acc6d8`, compiled the entire workspace and passed the
+Windows Rust tests, Linux Rust test suites, and the display-free
+`--demo --scheduler-smoke`. Its actual test output included
+`STARBYTE_SCHEDULER_SMOKE_OK background_frames=5 paused_at=5
+total_frames=8 restored_frame=8`. This validates the experimental worker
+clock, deliberate pause, resume, memory restore and PNG smoke **on that
+specific commit**, not yet on the current tip of `main`.
+
+That run also identified a failing **legacy** Weston smoke: the headless
+window had no keyboard focus, so its default `pause_when_unfocused=true`
+prevented progress until the 90-second timeout. The explicit bounded
+`--exit-after-frames` test session now disables focus pause without changing
+the default for real players. A newer green CI run is needed to establish the
+fix. The source formatter failures in that run were addressed with exact
+`rustfmt` diffs recovered from the lint logs.
+
+The dedicated worker also now has a real lost-heartbeat test:
+default focus pause must suspend frames when Wayland stops repainting,
+while disabling focus pause must continue frames without any UI update.
+Full Hyprland native performance and speaker audibility remain untested.
+
 ## Architectural invariants
 
 1. **One mutable emulator owner.** Only the worker touches `FrontendSession`.

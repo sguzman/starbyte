@@ -905,9 +905,16 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
     pub fn read_controls(&self) -> Result<SessionControlsSnapshot, String> {
         self.transact(|engine| Ok(engine.session.controls_snapshot()))
     }
-    /// An on-demand diagnostic query, not a 60 Hz per-frame string
-    /// allocation. Menu inspectors can use the same summary as the
-    /// established player without borrowing emulator-private APU state.
+    /// Query the owner's SPC700 state without blocking a GUI repaint.
+    /// The sound panel requests this at a bounded cadence only while open.
+    pub fn queue_sound_diagnostics(
+        &self,
+    ) -> Result<Receiver<Result<SessionSoundDiagnostics, String>>, String> {
+        self.submit_transaction(|engine| Ok(engine.session.sound_diagnostics()))
+    }
+
+    /// Synchronous on-demand query for non-GUI diagnostics/tests; never use
+    /// this method from an egui redraw callback.
     pub fn read_sound_diagnostics(&self) -> Result<SessionSoundDiagnostics, String> {
         self.transact(|engine| Ok(engine.session.sound_diagnostics()))
     }
@@ -996,6 +1003,46 @@ mod tests {
             r: true,
         };
         assert_eq!(controller_from_bits(all.to_bits()), all);
+    }
+
+    #[test]
+    fn worker_sound_diagnostics_are_queried_asynchronously_after_mode_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let rom = dir.path().join("worker-sound-diagnostics.sfc");
+        std::fs::write(&rom, starbyte_core::testing::demo::demo_rom_bytes()).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(dir.path().join("saves")),
+            state_dir: Some(dir.path().join("states")),
+            cache_dir: Some(dir.path().join("cache")),
+            config_path: None,
+        };
+        let mut owner = OwnedSession::create(assets).unwrap();
+        owner.set_audio(false, true, 0.0);
+        let (worker, _, _) = owner.spawn_with_ports().unwrap();
+        for (mode, expected_driver) in [
+            (SoundSessionMode::Persistent, true),
+            (SoundSessionMode::Compatibility, false),
+        ] {
+            worker
+                .queue_launch_with_state(SessionLaunchRequest {
+                    rom_path: rom.clone(),
+                    sound_mode: mode,
+                    cheats: Vec::new(),
+                })
+                .unwrap()
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap()
+                .unwrap();
+            let diagnostics = worker
+                .queue_sound_diagnostics()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(3))
+                .unwrap()
+                .unwrap();
+            assert_eq!(diagnostics.isolated_driver_enabled, expected_driver);
+        }
+        worker.shutdown().unwrap();
     }
 
     #[test]

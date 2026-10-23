@@ -1263,6 +1263,10 @@ impl StarbyteApp {
                         worker.engine.set_playing(true);
                         worker.last_playing = Some(true);
                     }
+                    // Library metadata can refresh while a ROM is loading.
+                    // Apply its most recent enabled-cheat selection *after*
+                    // the new owner has installed the cartridge.
+                    self.sync_loaded_game_cheats();
                 }
                 Err(error) => {
                     self.update_job(pending.job_id, "Load Game", "failed", &error);
@@ -1868,7 +1872,11 @@ impl StarbyteApp {
 
     fn sync_loaded_game_cheats(&mut self) {
         if let Some(worker) = &self.full_worker {
-            if !self.session_snapshot().has_rom {
+            // A late library/cheat refresh must not queue the previous
+            // cartridge's patches behind an in-flight replacement launch.
+            // The launch reply will resynchronize the installed game's
+            // current cheat selection once ownership is established.
+            if !worker.pending_launches.is_empty() || !self.session_snapshot().has_rom {
                 return;
             }
             let cheats = self

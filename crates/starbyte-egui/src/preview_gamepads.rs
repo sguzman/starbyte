@@ -2,7 +2,10 @@
 //! The emulation thread only receives packed SNES button state, never a
 //! Gilrs handle or a blocking device operation.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    time::{Duration, Instant},
+};
 
 use gilrs::{Axis, EventType, GamepadId, Gilrs};
 use starbyte_core::input::ControllerState;
@@ -60,6 +63,7 @@ pub struct PreviewGamepads {
     virtual_by_id: HashMap<GamepadId, BTreeSet<String>>,
     sticks_by_id: HashMap<GamepadId, ControllerAxes>,
     bindings: BTreeMap<String, String>,
+    last_poll: Instant,
 }
 
 impl PreviewGamepads {
@@ -70,15 +74,30 @@ impl PreviewGamepads {
             virtual_by_id: HashMap::new(),
             sticks_by_id: HashMap::new(),
             bindings,
+            last_poll: Instant::now(),
         }
     }
 
+    fn clear_held_controls(&mut self) {
+        self.held_by_id.clear();
+        self.virtual_by_id.clear();
+        self.sticks_by_id.clear();
+    }
+
     pub fn poll(&mut self, focused: bool) -> (ControllerState, ControllerState) {
+        let now = Instant::now();
+        if !focused || now.duration_since(self.last_poll) >= Duration::from_millis(500) {
+            // A compositor may skip egui updates without delivering a blur
+            // event. Treat old held buttons as released on wake or focus
+            // loss, instead of moving the guest continuously.
+            self.clear_held_controls();
+        }
+        self.last_poll = now;
         let mut newly_pressed = BTreeSet::new();
         if let Some(gilrs) = &mut self.gilrs {
             while let Some(event) = gilrs.next_event() {
                 match event.event {
-                    EventType::ButtonPressed(button, _) => {
+                    EventType::ButtonPressed(button, _) if focused => {
                         let name = format!("{button:?}");
                         self.held_by_id
                             .entry(event.id)
@@ -94,7 +113,7 @@ impl PreviewGamepads {
                             .or_default()
                             .remove(&format!("{button:?}"));
                     }
-                    EventType::AxisChanged(axis, value, _) => {
+                    EventType::AxisChanged(axis, value, _) if focused => {
                         let axes = self.sticks_by_id.entry(event.id).or_default();
                         match axis {
                             Axis::LeftStickX => axes.left.x = value,

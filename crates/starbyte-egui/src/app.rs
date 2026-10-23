@@ -1799,25 +1799,32 @@ impl StarbyteApp {
                 return;
             }
         };
+        // Resolve the corresponding library entry before installing the
+        // cartridge. The shared launch request atomically applies its cheats
+        // and sound/save namespace before the first game frame.
+        let matching = self
+            .library_snapshot
+            .entries
+            .iter()
+            .find(|entry| {
+                entry.local.as_ref().is_some_and(|local| {
+                    local.rom_path.as_path() == path
+                        || local.extracted_cache_path.as_deref() == Some(resolved.as_path())
+                })
+            })
+            .cloned();
+        let request = SessionLaunchRequest {
+            rom_path: resolved.clone(),
+            sound_mode: SoundSessionMode::Persistent,
+            cheats: matching
+                .as_ref()
+                .map_or_else(Vec::new, |entry| entry.cheats.clone()),
+        };
         self.clear_audio();
         self.audio_output = None;
-        match load_rom_with_default_sound(&mut self.session, &resolved) {
-            Ok(()) => {
-                let matching = self
-                    .library_snapshot
-                    .entries
-                    .iter()
-                    .find(|entry| {
-                        entry.local.as_ref().is_some_and(|local| {
-                            local.rom_path.as_path() == path
-                                || local.extracted_cache_path.as_deref() == Some(resolved.as_path())
-                        })
-                    })
-                    .cloned();
+        match self.session.launch_game(&request) {
+            Ok(_) => {
                 self.loaded_game_id = matching.as_ref().map(|entry| entry.game_id.clone());
-                if let Some(entry) = matching {
-                    let _ = self.session.set_active_cheats(&entry.cheats);
-                }
                 self.remember_recent_rom(path);
                 if self.loaded_game_id.is_none() {
                     // Directly opened ZIPs and ROMs must become library games

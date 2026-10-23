@@ -333,6 +333,58 @@ impl FramePerformance {
     }
 }
 
+
+/// Presentation measurements are UI-side costs, intentionally separate
+/// from the emulation owner's FPS, frame gaps and emulation CPU time.
+#[derive(Debug, Default, Clone, Copy)]
+struct WorkerPresentationMetrics {
+    successful_uploads: u64,
+    last_delivery_ms: f32,
+    peak_delivery_ms: f32,
+    last_upload_cpu_ms: f32,
+    peak_upload_cpu_ms: f32,
+}
+
+impl WorkerPresentationMetrics {
+    fn record_success(&mut self, ready_at: Instant, started: Instant, finished: Instant) {
+        let delivery = started.saturating_duration_since(ready_at).as_secs_f32() * 1_000.0;
+        let upload = finished.saturating_duration_since(started).as_secs_f32() * 1_000.0;
+        self.successful_uploads = self.successful_uploads.saturating_add(1);
+        self.last_delivery_ms = delivery;
+        self.peak_delivery_ms = self.peak_delivery_ms.max(delivery);
+        self.last_upload_cpu_ms = upload;
+        self.peak_upload_cpu_ms = self.peak_upload_cpu_ms.max(upload);
+    }
+}
+
+/// Frame age is sampled before texture submission; neither age nor upload
+/// CPU time is treated as an emulator stall or GPU presentation latency.
+fn upload_worker_frame(
+    ctx: &egui::Context,
+    texture: &mut Option<TextureHandle>,
+    frame: &PublishedGameFrame,
+    last_uploaded_frame: &mut Option<u64>,
+    presentation: &mut WorkerPresentationMetrics,
+) -> bool {
+    let Some(rgba) = &frame.rgba else {
+        return false;
+    };
+    let started = Instant::now();
+    if !upload_rgba(
+        ctx,
+        texture,
+        "starbyte-framebuffer",
+        frame.status.framebuffer_width,
+        frame.status.framebuffer_height,
+        rgba,
+    ) {
+        return false;
+    }
+    presentation.record_success(frame.ready_at, started, Instant::now());
+    *last_uploaded_frame = Some(frame.status.frame);
+    true
+}
+
 /// Schedule no more than one frame per UI update; never pile up catch-up work.
 #[derive(Debug, Clone, Copy)]
 struct FrameClock {
@@ -882,6 +934,7 @@ pub struct StarbyteApp {
     /// After hidden-window clock acceptance, require a fresh RGBA upload.
     worker_no_redraw_verify: Option<(Instant, u64, u64)>,
     last_worker_texture_frame: Option<u64>,
+    worker_presentation: WorkerPresentationMetrics,
     worker_focus_pause_smoke: Option<WorkerFocusPauseSmoke>,
     worker_panic_smoke: bool,
     worker_panic_sent: bool,
@@ -1145,6 +1198,7 @@ impl StarbyteApp {
             worker_no_redraw_gap: None,
             worker_no_redraw_verify: None,
             last_worker_texture_frame: None,
+            worker_presentation: WorkerPresentationMetrics::default(),
             worker_focus_pause_smoke: worker_focus_pause_smoke
                 .then_some(WorkerFocusPauseSmoke::WaitingForGame),
             worker_panic_smoke,
@@ -1459,23 +1513,19 @@ impl StarbyteApp {
             }
             match result {
                 Ok(reply) => {
+                    self.worker_presentation = WorkerPresentationMetrics::default();
                     self.session_view.accept_worker_frame(&reply.frame);
                     self.worker_audio = reply.frame.audio_diagnostics;
                     self.worker_cpu = reply.frame.last_frame_cpu;
                     self.last_audio_pairs = reply.frame.stereo_pairs;
                     self.last_audio_nonzero_pairs = reply.frame.nonzero_pairs;
-                    if let Some(rgba) = &reply.frame.rgba {
-                        if upload_rgba(
-                            ctx,
-                            &mut self.framebuffer_texture,
-                            "starbyte-framebuffer",
-                            reply.frame.status.framebuffer_width,
-                            reply.frame.status.framebuffer_height,
-                            rgba,
-                        ) {
-                            self.last_worker_texture_frame = Some(reply.frame.status.frame);
-                        }
-                    }
+                    upload_worker_frame(
+                        ctx,
+                        &mut self.framebuffer_texture,
+                        &reply.frame,
+                        &mut self.last_worker_texture_frame,
+                        &mut self.worker_presentation,
+                    );
                     self.worker_active_launch_id = Some(pending.job_id);
                     self.worker_sound_diagnostics = None;
                     self.worker_sound_requested_at = Instant::now() - Duration::from_secs(2);
@@ -1546,18 +1596,13 @@ impl StarbyteApp {
                         self.worker_cpu = restored.last_frame_cpu;
                         self.last_audio_pairs = restored.stereo_pairs;
                         self.last_audio_nonzero_pairs = restored.nonzero_pairs;
-                        if let Some(rgba) = &restored.rgba {
-                            if upload_rgba(
-                                ctx,
-                                &mut self.framebuffer_texture,
-                                "starbyte-framebuffer",
-                                restored.status.framebuffer_width,
-                                restored.status.framebuffer_height,
-                                rgba,
-                            ) {
-                                self.last_worker_texture_frame = Some(restored.status.frame);
-                            }
-                        }
+                        upload_worker_frame(
+                            ctx,
+                            &mut self.framebuffer_texture,
+                            &restored,
+                            &mut self.last_worker_texture_frame,
+                            &mut self.worker_presentation,
+                        );
                     }
                     self.status_line = match action {
                         SessionSaveAction::QuickSave => "Quick save stored (F5).".to_owned(),
@@ -1581,18 +1626,13 @@ impl StarbyteApp {
                 self.worker_cpu = frame.last_frame_cpu;
                 self.last_audio_pairs = frame.stereo_pairs;
                 self.last_audio_nonzero_pairs = frame.nonzero_pairs;
-                if let Some(rgba) = &frame.rgba {
-                    if upload_rgba(
-                        ctx,
-                        &mut self.framebuffer_texture,
-                        "starbyte-framebuffer",
-                        frame.status.framebuffer_width,
-                        frame.status.framebuffer_height,
-                        rgba,
-                    ) {
-                        self.last_worker_texture_frame = Some(frame.status.frame);
-                    }
-                }
+                upload_worker_frame(
+                    ctx,
+                    &mut self.framebuffer_texture,
+                    &frame,
+                    &mut self.last_worker_texture_frame,
+                    &mut self.worker_presentation,
+                );
             }
         }
         if let Some((generation, result)) = completed_step
@@ -1613,29 +1653,23 @@ impl StarbyteApp {
             }
             match result {
                 Ok(frame) => {
-                    if let Some(WorkerReplacementSmoke::AwaitReceiptRace {
-                        stepped_frame, ..
-                    }) = &mut self.worker_replacement_smoke
-                    {
-                        if frame.rgba.is_some() {
-                            *stepped_frame = Some(frame.status.frame);
-                        }
-                    }
                     self.session_view.accept_worker_frame(&frame);
                     self.worker_audio = frame.audio_diagnostics;
                     self.worker_cpu = frame.last_frame_cpu;
                     self.last_audio_pairs = frame.stereo_pairs;
                     self.last_audio_nonzero_pairs = frame.nonzero_pairs;
-                    if let Some(rgba) = &frame.rgba {
-                        if upload_rgba(
-                            ctx,
-                            &mut self.framebuffer_texture,
-                            "starbyte-framebuffer",
-                            frame.status.framebuffer_width,
-                            frame.status.framebuffer_height,
-                            rgba,
-                        ) {
-                            self.last_worker_texture_frame = Some(frame.status.frame);
+                    if upload_worker_frame(
+                        ctx,
+                        &mut self.framebuffer_texture,
+                        &frame,
+                        &mut self.last_worker_texture_frame,
+                        &mut self.worker_presentation,
+                    ) {
+                        if let Some(WorkerReplacementSmoke::AwaitReceiptRace {
+                            stepped_frame, ..
+                        }) = &mut self.worker_replacement_smoke
+                        {
+                            *stepped_frame = Some(frame.status.frame);
                         }
                     }
                     self.pending_step_frames = self.pending_step_frames.saturating_sub(1);

@@ -5277,12 +5277,13 @@ impl StarbyteApp {
                     "paused".to_owned()
                 };
                 let label = format!(
-                    "Worker FPS {fps} / {:.1} | 40ms+ gaps: {} | last gap {:.1} ms\nLast emulation CPU {:.2} ms | video frames coalesced: {}\nRenderer delivery {:.1} ms (peak {:.1}) | texture submit {:.2} ms (peak {:.2}) | uploads {}\nAudio producer drops {} | mixer drops {} | empty sink {}",
+                    "Worker FPS {fps} / {:.1} | 40ms+ gaps: {} | last gap {:.1} ms\nLast emulation CPU {:.2} ms | video frames coalesced: {} | async owner jobs {}\nRenderer delivery {:.1} ms (peak {:.1}) | texture submit {:.2} ms (peak {:.2}) | uploads {}\nAudio producer drops {} | mixer drops {} | empty sink {}",
                     speed_target_fps(self.last_effective_speed_percent),
                     rate.hitches_40ms,
                     rate.last_gap_ms,
                     self.worker_cpu.as_secs_f32() * 1_000.0,
                     worker.engine.skipped_video_frames(),
+                    worker.engine.outstanding_async_operations(),
                     self.worker_presentation.last_delivery_ms,
                     self.worker_presentation.peak_delivery_ms,
                     self.worker_presentation.last_upload_cpu_ms,
@@ -5430,9 +5431,10 @@ impl StarbyteApp {
                 rate.last_gap_ms,
             ));
             ui.label(format!(
-                "Last worker emulation CPU: {:.2} ms; coalesced video frames: {}",
+                "Last worker emulation CPU: {:.2} ms; coalesced video frames: {}; async owner jobs: {}",
                 self.worker_cpu.as_secs_f32() * 1_000.0,
                 worker.engine.skipped_video_frames(),
+                worker.engine.outstanding_async_operations(),
             ));
             ui.label(format!(
                 "Renderer: delivery {:.1} ms (peak {:.1}), texture submit {:.2} ms (peak {:.2}); {} successful uploads",

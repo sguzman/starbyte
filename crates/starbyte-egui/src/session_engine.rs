@@ -898,9 +898,7 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
 
     /// Explicit frame stepping is serialized on the worker even when normal
     /// playback is stopped. The GUI can await the resulting still frame.
-    pub fn queue_step_frame(
-        &self,
-    ) -> Result<Receiver<Result<PublishedGameFrame, String>>, String> {
+    pub fn queue_step_frame(&self) -> Result<Receiver<Result<PublishedGameFrame, String>>, String> {
         self.submit_transaction(|engine| engine.step_frame())
     }
 

@@ -4531,10 +4531,19 @@ impl StarbyteApp {
         ui.collapsing("Disk save slots (1–3)", |ui| {
             self.draw_persistent_slots(ui, ctx);
         });
+        // A pending ROM replacement must not redirect a paused step to
+        // whichever cartridge finishes installing later.
+        let can_step = !self.is_playing
+            && snapshot.has_rom
+            && self.pending_step_frames == 0
+            && self
+                .full_worker
+                .as_ref()
+                .is_none_or(|worker| worker.pending_launches.is_empty());
         ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(
-                    !self.is_playing && snapshot.has_rom && self.pending_step_frames == 0,
+                    can_step,
                     egui::Button::new("Step Frame"),
                 )
                 .clicked()
@@ -4544,7 +4553,7 @@ impl StarbyteApp {
             }
             if ui
                 .add_enabled(
-                    !self.is_playing && snapshot.has_rom && self.pending_step_frames == 0,
+                    can_step,
                     egui::Button::new("Step 60 Frames"),
                 )
                 .clicked()

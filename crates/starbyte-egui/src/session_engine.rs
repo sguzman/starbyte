@@ -16,7 +16,7 @@ use std::{
 use starbyte_core::{input::ControllerState, manifest::AssetConfig};
 use starbyte_frontend::{
     CheatEntry, FrontendSession, SessionControlsSnapshot, SessionInputDiagnostics,
-    SessionScreenshot, SessionSnapshot, SoundSessionMode,
+    SessionScreenshot, SessionSnapshot, SessionSoundDiagnostics, SoundSessionMode,
 };
 
 use crate::{
@@ -638,6 +638,12 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
 
     pub fn read_controls(&self) -> Result<SessionControlsSnapshot, String> {
         self.transact(|engine| Ok(engine.session.controls_snapshot()))
+    }
+    /// An on-demand diagnostic query, not a 60 Hz per-frame string
+    /// allocation. Menu inspectors can use the same summary as the
+    /// established player without borrowing emulator-private APU state.
+    pub fn read_sound_diagnostics(&self) -> Result<SessionSoundDiagnostics, String> {
+        self.transact(|engine| Ok(engine.session.sound_diagnostics()))
     }
 
     pub fn read_status(&self) -> Result<SessionSnapshot, String> {

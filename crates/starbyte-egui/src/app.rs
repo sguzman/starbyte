@@ -681,6 +681,7 @@ struct FullLibraryWorker {
     pending_screenshots: Vec<(Option<u64>, Receiver<Result<SessionScreenshot, String>>)>,
     pending_screenshot_writes: Vec<Receiver<Result<PathBuf, String>>>,
     pending_speaker_checks: Vec<Receiver<Result<(), String>>>,
+    pending_step: Option<(Option<u64>, Receiver<Result<PublishedGameFrame, String>>)>,
     last_focus: Option<bool>,
     last_playing: Option<bool>,
     last_pause_when_unfocused: Option<bool>,
@@ -1033,6 +1034,7 @@ impl StarbyteApp {
                 pending_screenshots: Vec::new(),
                 pending_screenshot_writes: Vec::new(),
                 pending_speaker_checks: Vec::new(),
+                pending_step: None,
                 last_focus: None,
                 last_playing: None,
                 last_pause_when_unfocused: None,
@@ -1078,6 +1080,7 @@ impl StarbyteApp {
         game_id: Option<String>,
         request: SessionLaunchRequest,
     ) {
+        self.pending_step_frames = 0;
         let Some(worker) = &mut self.full_worker else {
             return;
         };
@@ -1169,11 +1172,28 @@ impl StarbyteApp {
             }
         }
         worker.pending_speaker_checks = waiting_tones;
+        let completed_step = if let Some((generation, reply)) = worker.pending_step.take() {
+            match reply.try_recv() {
+                Ok(result) => Some((generation, result)),
+                Err(TryRecvError::Empty) => {
+                    worker.pending_step = Some((generation, reply));
+                    None
+                }
+                Err(TryRecvError::Disconnected) => Some((
+                    generation,
+                    Err("Emulation worker closed the frame-step receipt".to_owned()),
+                )),
+            }
+        } else {
+            None
+        };
         // Never show an obsolete picture while another cartridge is
         // installing. Completed launch replies are applied first.
         let frame = if worker.pending_launches.is_empty()
             && completed.is_empty()
             && completed_saves.is_empty()
+            && completed_step.is_none()
+            && worker.pending_step.is_none()
         {
             worker.engine.take_latest_frame()
         } else {
@@ -1297,6 +1317,40 @@ impl StarbyteApp {
                 }
             }
         }
+        if let Some((generation, result)) = completed_step
+            && generation == self.latest_rom_job_id
+            && !self.is_playing
+            && self
+                .full_worker
+                .as_ref()
+                .is_some_and(|worker| worker.pending_launches.is_empty())
+        {
+            match result {
+                Ok(frame) => {
+                    self.session_view.accept_worker_frame(&frame);
+                    self.worker_audio = frame.audio_diagnostics;
+                    self.worker_cpu = frame.last_frame_cpu;
+                    self.last_audio_pairs = frame.stereo_pairs;
+                    self.last_audio_nonzero_pairs = frame.nonzero_pairs;
+                    if let Some(rgba) = &frame.rgba {
+                        upload_rgba(
+                            ctx,
+                            &mut self.framebuffer_texture,
+                            "starbyte-framebuffer",
+                            frame.status.framebuffer_width,
+                            frame.status.framebuffer_height,
+                            rgba,
+                        );
+                    }
+                    self.pending_step_frames = self.pending_step_frames.saturating_sub(1);
+                    self.status_line = format!("Stepped to frame {}.", frame.status.frame);
+                }
+                Err(error) => {
+                    self.pending_step_frames = 0;
+                    self.status_line = format!("Frame step failed: {error}");
+                }
+            }
+        }
         for (generation, result) in captured {
             if generation != self.latest_rom_job_id {
                 continue;
@@ -1365,6 +1419,25 @@ impl StarbyteApp {
                 self.status_line = "Saving or restoring on the emulator worker...".to_owned();
             }
             Err(error) => self.status_line = error,
+        }
+    }
+
+    fn queue_full_worker_step(&mut self) {
+        if self.pending_step_frames == 0 || self.is_playing || !self.session_snapshot().has_rom {
+            return;
+        }
+        let Some(worker) = &mut self.full_worker else {
+            return;
+        };
+        if worker.pending_step.is_some() || !worker.pending_launches.is_empty() {
+            return;
+        }
+        match worker.engine.queue_step_frame() {
+            Ok(reply) => worker.pending_step = Some((self.latest_rom_job_id, reply)),
+            Err(error) => {
+                self.pending_step_frames = 0;
+                self.status_line = format!("Could not step game: {error}");
+            }
         }
     }
 
@@ -5087,6 +5160,11 @@ impl eframe::App for StarbyteApp {
                 }
             }
             self.last_effective_speed_percent = speed;
+            if self.is_playing {
+                self.pending_step_frames = 0;
+            } else if focused || !self.config.ui.pause_when_unfocused {
+                self.queue_full_worker_step();
+            }
             self.advance_full_worker_save_smoke(ctx);
             if self.worker_no_redraw_smoke
                 && self.session_snapshot().has_rom

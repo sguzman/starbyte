@@ -16,6 +16,7 @@ use crate::{
     audio::{AudioDeviceStatus, AudioOutput},
     blackout::BlackScreenMonitor,
     logging::SharedLogBuffer,
+    video_upload::upload_rgba,
     worker::{AppWorker, WorkerCommand, WorkerCommandKind, WorkerEvent},
 };
 
@@ -1089,19 +1090,16 @@ impl StarbyteApp {
 
     fn refresh_framebuffer(&mut self, ctx: &egui::Context) {
         let snapshot = self.session.snapshot();
-        let image = ColorImage::from_rgba_unmultiplied(
-            [
-                snapshot.framebuffer_width as usize,
-                snapshot.framebuffer_height as usize,
-            ],
+        let uploaded = upload_rgba(
+            ctx,
+            &mut self.framebuffer_texture,
+            "starbyte-framebuffer",
+            snapshot.framebuffer_width,
+            snapshot.framebuffer_height,
             self.session.framebuffer_rgba(),
         );
-
-        if let Some(texture) = &mut self.framebuffer_texture {
-            texture.set(image, TextureOptions::NEAREST);
-        } else {
-            self.framebuffer_texture =
-                Some(ctx.load_texture("starbyte-framebuffer", image, TextureOptions::NEAREST));
+        if !uploaded {
+            warn!("skipping invalid RGBA framebuffer from local session");
         }
     }
 

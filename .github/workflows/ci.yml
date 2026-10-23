@@ -209,7 +209,7 @@ jobs:
           # visibility and individual FPS/sound/frame metrics. The library
           # must keep drawing, recent cards must render, and the worker must
           # continue while the shell panels are hidden and restored.
-          grep -F "STARBYTE_FULL_LIBRARY_SHELL_SMOKE_OK menu=true recent_cards=true library=true status_metrics=true view_toggles=true" "$RUNNER_TEMP/starbyte-full-shortcuts.log"
+          grep -F "STARBYTE_FULL_LIBRARY_SHELL_SMOKE_OK menu=true recent_cards=true cover_texture=true library=true status_metrics=true view_toggles=true" "$RUNNER_TEMP/starbyte-full-shortcuts.log"
           # Original-window sound-mode changes must preserve separate disk
           # slot namespaces and restore the correct persistent slot on return.
           timeout 90s target/debug/starbyte-egui --demo --native-worker-preview --exit-after-full-worker-modes \

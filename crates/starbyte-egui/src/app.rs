@@ -1333,8 +1333,12 @@ impl StarbyteApp {
                 .is_some_and(|worker| worker.pending_launches.is_empty())
         {
             if self.worker_save_smoke_stage == Some(WorkerSaveSmokeStage::AwaitStep) {
-                self.worker_save_smoke_step_receipt =
-                    Some(result.as_ref().map(|frame| frame.status.frame).map_err(Clone::clone));
+                self.worker_save_smoke_step_receipt = Some(
+                    result
+                        .as_ref()
+                        .map(|frame| frame.status.frame)
+                        .map_err(Clone::clone),
+                );
             }
             match result {
                 Ok(frame) => {

@@ -775,6 +775,9 @@ mod tests {
         );
         worker.quick_save_game().unwrap();
         assert!(worker.read_controls().unwrap().has_quick_save);
+        let reply = worker.queue_clear_cheats().unwrap();
+        reply.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
+        assert_eq!(worker.read_controls().unwrap().rom_cheat_read_hits, 0);
         assert_eq!(worker.shutdown().unwrap().snapshot().rom_path, Some(rom));
     }
 

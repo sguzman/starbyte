@@ -1,6 +1,10 @@
 use std::{
     path::PathBuf,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+        mpsc::{self, Receiver, Sender},
+    },
     thread,
 };
 
@@ -68,6 +72,10 @@ pub enum WorkerEvent {
         label: String,
         error: String,
     },
+    JobSuperseded {
+        job_id: u64,
+        label: String,
+    },
 }
 
 #[derive(Debug)]
@@ -75,6 +83,7 @@ pub struct AppWorker {
     command_tx: Sender<WorkerCommand>,
     rom_tx: Sender<WorkerCommand>,
     event_rx: Receiver<WorkerEvent>,
+    latest_rom_requested: Arc<AtomicU64>,
 }
 
 impl AppWorker {
@@ -84,30 +93,38 @@ impl AppWorker {
         let (event_tx, event_rx) = mpsc::channel::<WorkerEvent>();
         let rom_assets = assets.clone();
         let rom_events = event_tx.clone();
+        let latest_rom_requested = Arc::new(AtomicU64::new(0));
+        let rom_latest = Arc::clone(&latest_rom_requested);
         // ROM extraction is local and should not wait for a potentially
         // minutes-long cover-download job on the library/network worker.
         thread::Builder::new()
             .name("starbyte-rom-worker".to_owned())
-            .spawn(move || worker_loop(rom_assets, rom_rx, rom_events))
+            .spawn(move || worker_loop(rom_assets, rom_rx, rom_events, Some(rom_latest)))
             .expect("failed to spawn starbyte ROM worker");
         thread::Builder::new()
             .name("starbyte-library-worker".to_owned())
-            .spawn(move || worker_loop(assets, command_rx, event_tx))
+            .spawn(move || worker_loop(assets, command_rx, event_tx, None))
             .expect("failed to spawn starbyte library worker");
         Self {
             command_tx,
             rom_tx,
             event_rx,
+            latest_rom_requested,
         }
     }
 
     pub fn submit(&self, command: WorkerCommand) {
         // Separate background queues keep gameplay loading responsive while
         // Libretro artwork or other network refreshes are in progress.
-        let tx = if matches!(
-            command.kind,
-            WorkerCommandKind::MaterializeRom { .. } | WorkerCommandKind::MaterializePath { .. }
-        ) {
+        let rom_job = is_rom_kind(&command.kind);
+        if rom_job {
+            // Coalesce queued launch intent before heavy ZIP extraction.
+            // An already-running archive operation is allowed to finish;
+            // its stale result will still be rejected by the GUI.
+            self.latest_rom_requested
+                .store(command.job_id, Ordering::Release);
+        }
+        let tx = if rom_job {
             &self.rom_tx
         } else {
             &self.command_tx
@@ -120,14 +137,33 @@ impl AppWorker {
     }
 }
 
+fn is_rom_kind(kind: &WorkerCommandKind) -> bool {
+    matches!(
+        kind,
+        WorkerCommandKind::MaterializeRom { .. } | WorkerCommandKind::MaterializePath { .. }
+    )
+}
+
 fn worker_loop(
     assets: AssetConfig,
     command_rx: Receiver<WorkerCommand>,
     event_tx: Sender<WorkerEvent>,
+    latest_rom_requested: Option<Arc<AtomicU64>>,
 ) {
     for command in command_rx {
         let label = label_for_kind(&command.kind);
         let job_id = command.job_id;
+        if latest_rom_requested.as_ref().is_some_and(|latest| {
+            is_rom_kind(&command.kind) && latest.load(Ordering::Acquire) != job_id
+        }) {
+            // Skip disk I/O altogether for queued selections superseded by
+            // a later click. Do not touch the currently installed cartridge.
+            let _ = event_tx.send(WorkerEvent::JobSuperseded {
+                job_id,
+                label: label.to_owned(),
+            });
+            continue;
+        }
         info!(job_id = command.job_id, label, "worker job started");
         let _ = event_tx.send(WorkerEvent::JobStarted {
             job_id: command.job_id,
@@ -327,13 +363,20 @@ fn label_for_kind(kind: &WorkerCommandKind) -> &'static str {
 mod routing_tests {
     use super::{
         AppWorker, WorkerCommand, WorkerCommandKind, WorkerEvent, build_launch_request,
-        direct_launch_request, handle_command,
+        direct_launch_request, handle_command, worker_loop,
     };
     use starbyte_core::manifest::{AssetConfig, RuntimeConfig};
     use starbyte_frontend::{
         CheatEntry, InstalledStatus, LibraryEntry, LibraryFilter, SoundSessionMode,
     };
-    use std::{path::PathBuf, sync::mpsc};
+    use std::{
+        path::PathBuf,
+        sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+            mpsc,
+        },
+    };
 
     #[test]
     fn prepared_rom_launch_binds_selected_cheats_and_sound_namespace() {
@@ -403,6 +446,39 @@ mod routing_tests {
     }
 
     #[test]
+    fn queued_older_rom_jobs_are_skipped_before_archive_work() {
+        let (commands, rx) = mpsc::channel();
+        let (events, results) = mpsc::channel();
+        let latest = Arc::new(AtomicU64::new(2));
+        let command = |job_id| WorkerCommand {
+            job_id,
+            config: RuntimeConfig::default(),
+            filter: LibraryFilter::default(),
+            kind: WorkerCommandKind::MaterializePath {
+                path: PathBuf::from(format!("game-{job_id}.sfc")),
+                matching: None,
+            },
+        };
+        commands.send(command(1)).unwrap();
+        commands.send(command(2)).unwrap();
+        drop(commands);
+        worker_loop(AssetConfig::default(), rx, events, Some(latest));
+        let replies: Vec<_> = results.try_iter().collect();
+        assert!(matches!(
+            replies.first(),
+            Some(WorkerEvent::JobSuperseded { job_id: 1, .. })
+        ));
+        assert!(replies.iter().any(|event| matches!(
+            event,
+            WorkerEvent::DirectRomReady { job_id: 2, .. }
+        )));
+        assert!(!replies.iter().any(|event| matches!(
+            event,
+            WorkerEvent::DirectRomReady { job_id: 1, .. }
+        )));
+    }
+
+    #[test]
     fn game_launch_bypasses_blocked_artwork_queue() {
         let (library_tx, library_rx) = mpsc::channel();
         let (rom_tx, rom_rx) = mpsc::channel();
@@ -411,6 +487,7 @@ mod routing_tests {
             command_tx: library_tx,
             rom_tx,
             event_rx: events_rx,
+            latest_rom_requested: Arc::new(AtomicU64::new(0)),
         };
         let config = RuntimeConfig::default();
         let filter = LibraryFilter::default();
@@ -438,5 +515,6 @@ mod routing_tests {
         });
         assert_eq!(library_rx.try_recv().unwrap().job_id, 1);
         assert_eq!(rom_rx.try_recv().unwrap().job_id, 2);
+        assert_eq!(worker.latest_rom_requested.load(Ordering::Acquire), 2);
     }
 }

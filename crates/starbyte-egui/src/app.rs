@@ -1059,6 +1059,9 @@ impl StarbyteApp {
                         }
                     }
                 }
+                WorkerEvent::JobSuperseded { job_id, label } => {
+                    self.update_job(job_id, &label, "superseded", "Newer ROM selected");
+                }
                 WorkerEvent::JobFailed {
                     job_id,
                     label,

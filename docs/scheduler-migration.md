@@ -1,8 +1,39 @@
 # Emulation scheduler migration
 
-**Status: in progress. Native Weston worker playback and a two-second no-egui-callback interval (121 continued SNES frames) passed on commit `135cf2e` (Linux run 39962498642). Full original-app ownership transfer and physical Hyprland/audio validation remain outstanding.**
+**Status: in progress. Commit [`729aab9`](https://github.com/sguzman/starbyte/commit/729aab95024fb79a138a9cb4d1f93fb81bf0c43d) passed [CI run 39990152770](https://github.com/sguzman/starbyte/actions/runs/39990152770): Linux, Windows, lint/Clippy and native Weston original-window worker playback, save/restore, screenshot, paused single-step and a two-second no-egui-callback interval (121 SNES frames). Full default-app ownership transfer and physical Hyprland/audio validation remain outstanding.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
+
+## Verified original-library worker parity checkpoint — 2026-10-23
+
+The full native [CI run 39990152770](https://github.com/sguzman/starbyte/actions/runs/39990152770)
+on source commit [`729aab9`](https://github.com/sguzman/starbyte/commit/729aab95024fb79a138a9cb4d1f93fb81bf0c43d)
+**passed all Linux, Windows and lint jobs**, including the headless scheduler
+and virtual-Wayland (Weston) integration. The original full-library window
+(`--native-worker-preview`) emitted these native acceptance records:
+
+- `STARBYTE_FULL_LIBRARY_WORKER_SMOKE_OK frame=30` — the original game view displayed worker-produced frames.
+- `STARBYTE_FULL_LIBRARY_SAVE_SMOKE_OK frame=23 slot=1 quick=true screenshot=true step=true` — worker-owned quick/disk save+restore, PNG screenshot and a **paused single-frame step** returned still video through the original window.
+- `STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_OK advanced_frames=121` — emulation continued for two seconds without egui callbacks.
+
+The existing `Step Frame` / `Step 60 Frames` commands now submit asynchronous,
+silent frame-step requests to the exclusive worker, one at a time. A unit
+regression asserts a paused worker advances exactly one frame, returns an
+RGBA still and produces no PCM submissions. Another worker-backed regression
+associates installed direct and ZIP-extracted ROMs with library metadata even
+though the opt-in full library window's legacy session is empty. An audio
+control regression guards **pitch-only** changes at constant game speed.
+Intermediate completed-frame mailboxes are drained after a newer explicit
+launch/save/restore/step receipt to avoid repainting obsolete still video.
+
+**Acceptance limits:** the new step native smoke exercises one paused frame;
+it does not yet prove 60-frame sequence completion on physical Hyprland.
+Emulation remains worker-owned only in the opt-in window. Audio audibility,
+physical workspace switching, comprehensive gamepad/cheat/menu parity,
+shutdown persistence under real gameplay, and the default-owner handoff
+remain unverified. **Keep the source task counts unchanged** (A 7/8, B 15/18,
+P 18/20, C 8/16, D 11/15); these additions are incremental evidence, not
+the completion of their remaining acceptance gates.
 
 ## Why a worker, not another repaint timer
 

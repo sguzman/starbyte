@@ -136,6 +136,16 @@ struct Args {
     /// seconds and require the emulator worker to keep executing frames.
     #[arg(long, requires_all = ["demo", "native_worker_preview"], conflicts_with_all = ["exit_after_frames", "exit_after_full_worker_saves"], hide = true)]
     exit_after_full_worker_no_redraw: bool,
+
+    /// CI only: pause the original worker by focus policy, withhold all
+    /// original window updates for two seconds, then require clean resume.
+    #[arg(
+        long,
+        requires_all = ["demo", "native_worker_preview"],
+        conflicts_with_all = ["exit_after_frames", "exit_after_full_worker_saves", "exit_after_full_worker_no_redraw"],
+        hide = true
+    )]
+    exit_after_full_worker_focus_pause: bool,
 }
 
 fn main() -> Result<()> {
@@ -263,6 +273,7 @@ fn main() -> Result<()> {
                 args.native_worker_preview,
                 args.exit_after_full_worker_saves,
                 args.exit_after_full_worker_no_redraw,
+                args.exit_after_full_worker_focus_pause,
                 log_lines.clone(),
             )
             .map_err(|error| std::io::Error::other(error.to_string()))?;
@@ -500,9 +511,25 @@ mod speaker_cli_tests {
         ])
         .unwrap();
         assert!(no_redraw.exit_after_full_worker_no_redraw);
+        let focus_pause = Args::try_parse_from([
+            "starbyte-egui",
+            "--demo",
+            "--native-worker-preview",
+            "--exit-after-full-worker-focus-pause",
+        ])
+        .unwrap();
+        assert!(focus_pause.exit_after_full_worker_focus_pause);
         assert!(
             Args::try_parse_from(["starbyte-egui", "--demo", "--exit-after-full-worker-saves"])
                 .is_err()
+        );
+        assert!(
+            Args::try_parse_from([
+                "starbyte-egui",
+                "--demo",
+                "--exit-after-full-worker-focus-pause",
+            ])
+            .is_err()
         );
     }
 

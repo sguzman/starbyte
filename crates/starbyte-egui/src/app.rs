@@ -6720,7 +6720,10 @@ mod session_view_bridge_tests {
         // the owner or invalidate legitimate stills from its cartridge.
         let active_generation = Some(4);
         let failed_requested_generation = Some(5);
-        assert!(worker_screenshot_receipt_is_current(Some(4), active_generation));
+        assert!(worker_screenshot_receipt_is_current(
+            Some(4),
+            active_generation
+        ));
         assert!(!worker_screenshot_receipt_is_current(
             Some(4),
             failed_requested_generation,
@@ -6844,7 +6847,12 @@ mod session_view_bridge_tests {
             .recv_timeout(Duration::from_secs(10))
             .unwrap()
             .unwrap();
-        assert!(failed.recv_timeout(Duration::from_secs(10)).unwrap().is_err());
+        assert!(
+            failed
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap()
+                .is_err()
+        );
         assert_eq!(step.status.rom_path, Some(rom.clone()));
         assert!(worker_screenshot_receipt_is_current(Some(1), Some(1)));
         assert!(worker_save_receipt_is_current(Some(1), Some(1)));

@@ -537,6 +537,14 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
         self.transact(|engine| engine.flush_sram().map_err(|e| e.to_string()))
     }
 
+    /// Capture the owning thread's framebuffer at a serialized point in
+    /// game time. The caller is responsible for writing PNG asynchronously.
+    pub fn queue_screenshot_frame(
+        &self,
+    ) -> Result<Receiver<Result<PublishedGameFrame, String>>, String> {
+        self.submit_transaction(|engine| Ok(engine.capture_frame()))
+    }
+
     pub fn read_status(&self) -> Result<SessionSnapshot, String> {
         self.transact(|engine| Ok(engine.snapshot()))
     }

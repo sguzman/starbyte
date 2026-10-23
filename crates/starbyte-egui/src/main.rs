@@ -284,7 +284,24 @@ fn run_scheduler_smoke(assets: AssetConfig, rom: PathBuf) -> Result<()> {
         "quick-load restored frame {} instead of saved frame {saved}",
         restored.status.frame
     );
-    anyhow::ensure!(restored.rgba.is_some(), "restored still image was not published");
+    let rgba = restored
+        .rgba
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("restored still image was not published"))?;
+    let screenshot = rom.with_extension("scheduler-smoke.png");
+    crate::app::write_png_screenshot(
+        &screenshot,
+        rgba,
+        restored.status.framebuffer_width,
+        restored.status.framebuffer_height,
+    )?;
+    let decoded = image::open(&screenshot)?;
+    anyhow::ensure!(
+        decoded.width() == restored.status.framebuffer_width
+            && decoded.height() == restored.status.framebuffer_height,
+        "worker screenshot dimensions did not survive PNG round-trip"
+    );
+    std::fs::remove_file(&screenshot)?;
 
     let engine = worker.shutdown()
         .map_err(|_| anyhow::anyhow!("emulation scheduler worker panicked"))?;

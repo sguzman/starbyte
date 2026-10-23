@@ -485,16 +485,19 @@ fn run_owned_clock<Machine, Frame>(
         }
 
         let interval = policy.interval(base_interval);
-        if !before.should_run()
-            || !was_running
-            || active_speed != policy.speed_percent
-        {
+        let speed_changed = active_speed != policy.speed_percent;
+        if !before.should_run() || !was_running || speed_changed {
             // A command may arrive while waiting in recv_timeout. Comparing
             // to the policy captured at the top of *this* iteration is not
             // enough: it can already contain the changed speed. Track the
             // speed from the last truly executed scheduling interval.
             deadline = Instant::now();
             active_speed = policy.speed_percent;
+            if speed_changed {
+                // Report FPS measured at the new rate only, not a mixture of
+                // old and new speed windows or a synthetic transition hitch.
+                frames.suspend_timing_window();
+            }
         }
         let now = Instant::now();
         if now < deadline {

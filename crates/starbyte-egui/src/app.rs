@@ -1650,7 +1650,7 @@ impl StarbyteApp {
         if output_volume <= 0.0 {
             return;
         }
-        let samples = &self.session.emulator().audio_samples().samples;
+        let samples = &self.session.frame_audio_samples();
         if samples.is_empty() || samples.len() % 2 != 0 {
             return;
         }
@@ -1711,7 +1711,7 @@ impl StarbyteApp {
                 if self.exit_after_frames.is_some() {
                     self.native_smoke_audio.record(
                         self.session.snapshot().frame,
-                        &self.session.emulator().audio_samples().samples,
+                        &self.session.frame_audio_samples(),
                     );
                 }
                 let uploaded = Instant::now();
@@ -1724,7 +1724,7 @@ impl StarbyteApp {
                 );
                 self.frame_performance
                     .record_texture_upload(uploaded.elapsed());
-                let pcm = &self.session.emulator().audio_samples().samples;
+                let pcm = &self.session.frame_audio_samples();
                 self.last_audio_pairs = pcm.len() / 2;
                 self.last_audio_nonzero_pairs = pcm
                     .chunks_exact(2)
@@ -2602,7 +2602,7 @@ impl StarbyteApp {
                 if prefs.status_sound {
                     separator(ui);
                     let sound = audio_playback_status(
-                        self.session.emulator().isolated_apu_driver_probe_enabled(),
+                        self.session.isolated_audio_driver_enabled(),
                         self.config.audio.enabled,
                         self.audio_muted,
                         self.config.audio.volume,

@@ -62,6 +62,37 @@ const GAMEPAD_STICK_DEADZONE: f32 = 0.5;
 /// Avoid binding from minor stick drift or calibration noise.
 const GAMEPAD_BIND_AXIS_THRESHOLD: f32 = 0.75;
 
+/// Keep short button-press edges separate from physical held state. The
+/// established synchronous player consumes their union; the independent
+/// worker can consume both components without losing a press/release
+/// completed between SNES frame samples.
+#[derive(Debug, Default, Clone, Copy)]
+struct ControllerInputSample {
+    held: ControllerState,
+    pressed: ControllerState,
+}
+
+impl ControllerInputSample {
+    fn combined(self) -> ControllerState {
+        let held = self.held;
+        let pressed = self.pressed;
+        ControllerState {
+            b: held.b || pressed.b,
+            y: held.y || pressed.y,
+            select: held.select || pressed.select,
+            start: held.start || pressed.start,
+            up: held.up || pressed.up,
+            down: held.down || pressed.down,
+            left: held.left || pressed.left,
+            right: held.right || pressed.right,
+            a: held.a || pressed.a,
+            x: held.x || pressed.x,
+            l: held.l || pressed.l,
+            r: held.r || pressed.r,
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 struct StickAxes {
     x: f32,
@@ -1172,27 +1203,35 @@ impl StarbyteApp {
     }
 
     fn effective_controller_state(&self, ctx: &egui::Context) -> ControllerState {
-        // Never route live controller input to gameplay when Hyprland has
-        // moved native window focus elsewhere.
+        self.effective_controller_sample(ctx).combined()
+    }
+
+    fn effective_controller_sample(&self, ctx: &egui::Context) -> ControllerInputSample {
+        // Focus releases both held buttons and pending edges before either
+        // the legacy player or the eventual worker processes controller 1.
         if !ctx.input(|input| input.focused) {
-            return ControllerState::default();
+            return ControllerInputSample::default();
         }
-        // Keyboard focus must not suppress an independent gamepad when the
-        // default Auto input mode is active.
         let (keyboard_enabled, gamepad_enabled) = controller_input_sources(
             self.config.input.active_device,
             ctx.wants_keyboard_input(),
             self.pending_keyboard_bind.is_some(),
         );
-        let mut state = self.held_input;
+        let mut sample = ControllerInputSample {
+            held: self.held_input,
+            pressed: ControllerState::default(),
+        };
         if keyboard_enabled {
             for &action in input_actions() {
                 if let Some(binding) = self.config.input.keyboard_bindings.get(action)
                     && let Some(key) = parse_egui_key(binding)
-                    && (self.queued_keyboard_presses.contains(action)
-                        || ctx.input(|input| gameplay_key_active(input, key)))
                 {
-                    set_controller_flag(&mut state, action, true);
+                    if ctx.input(|input| gameplay_key_active(input, key)) {
+                        set_controller_flag(&mut sample.held, action, true);
+                    }
+                    if self.queued_keyboard_presses.contains(action) {
+                        set_controller_flag(&mut sample.pressed, action, true);
+                    }
                 }
             }
         }
@@ -1201,18 +1240,21 @@ impl StarbyteApp {
             && self.pending_keyboard_bind.is_none()
         {
             for &action in input_actions() {
-                if let Some(binding) = self.config.input.gamepad_bindings.get(action)
-                    && gamepad_button_active(
-                        &self.gamepad_buttons_down,
-                        &self.queued_gamepad_presses,
-                        binding,
-                    )
-                {
-                    set_controller_flag(&mut state, action, true);
+                if let Some(binding) = self.config.input.gamepad_bindings.get(action) {
+                    if self.gamepad_buttons_down.contains(binding) {
+                        set_controller_flag(&mut sample.held, action, true);
+                    }
+                    if self
+                        .queued_gamepad_presses
+                        .values()
+                        .any(|presses| presses.contains(binding))
+                    {
+                        set_controller_flag(&mut sample.pressed, action, true);
+                    }
                 }
             }
         }
-        state
+        sample
     }
 
     fn capture_gameplay_key_presses(&mut self, ctx: &egui::Context, was_recording_binding: bool) {
@@ -4350,6 +4392,49 @@ impl Drop for StarbyteApp {
 }
 
 #[cfg(test)]
+mod controller_sample_tests {
+    use super::{ControllerInputSample, ControllerState};
+
+    #[test]
+    fn short_press_is_visible_even_when_button_was_released_before_frame() {
+        let mut sample = ControllerInputSample::default();
+        sample.pressed.b = true;
+        sample.held.start = true;
+        let combined = sample.combined();
+        assert!(combined.b);
+        assert!(combined.start);
+        assert_eq!(combined.to_bits(), 0x9000);
+        assert_eq!(sample.held.to_bits(), 0x1000);
+        assert_eq!(sample.pressed.to_bits(), 0x8000);
+    }
+
+    #[test]
+    fn all_snes_buttons_survive_held_and_pressed_union() {
+        let sample = ControllerInputSample {
+            held: ControllerState {
+                b: true,
+                y: true,
+                up: true,
+                left: true,
+                a: true,
+                l: true,
+                ..ControllerState::default()
+            },
+            pressed: ControllerState {
+                select: true,
+                start: true,
+                down: true,
+                right: true,
+                x: true,
+                r: true,
+                ..ControllerState::default()
+            },
+        };
+        assert_eq!(sample.combined().to_bits(), 0xfff0);
+    }
+}
+
+#[cfg(test)]
 mod playback_tests {
     use std::time::{Duration, Instant};
 
@@ -5466,6 +5551,7 @@ fn pressed_button_labels(state: ControllerState) -> String {
     }
 }
 
+#[cfg(test)]
 fn gamepad_button_active<K: Eq + std::hash::Hash>(
     held: &BTreeSet<String>,
     queued_by_controller: &HashMap<K, BTreeSet<String>>,

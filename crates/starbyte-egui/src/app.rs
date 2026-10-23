@@ -706,6 +706,8 @@ pub struct StarbyteApp {
     worker_save_smoke_stage: Option<WorkerSaveSmokeStage>,
     worker_save_smoke_receipt: Option<(SessionSaveAction, Result<(), String>)>,
     worker_save_smoke_screenshot: Option<Result<PathBuf, String>>,
+    worker_no_redraw_smoke: bool,
+    worker_no_redraw_gap: Option<(Instant, u64)>,
     audio_output: Option<AudioOutput>,
     speaker_probe: SpeakerProbeState,
     /// Session mute defaults from persisted startup preference, then follows
@@ -807,6 +809,7 @@ impl StarbyteApp {
         exit_after_frames: Option<u64>,
         use_worker_preview: bool,
         worker_save_smoke: bool,
+        worker_no_redraw_smoke: bool,
         logs: SharedLogBuffer,
     ) -> Result<Self> {
         // Headless Weston has no keyboard focus until a compositor explicitly
@@ -814,7 +817,7 @@ impl StarbyteApp {
         // execution test: disabling focus pause in this *opt-in test session*
         // avoids waiting forever for a focus event that never arrives. Normal
         // launches retain their persisted background-pause preference.
-        if exit_after_frames.is_some() || worker_save_smoke {
+        if exit_after_frames.is_some() || worker_save_smoke || worker_no_redraw_smoke {
             config.ui.pause_when_unfocused = false;
         }
         if let Some(prefer_dark_mode) = prefer_dark_mode_override {
@@ -927,6 +930,8 @@ impl StarbyteApp {
             worker_save_smoke_stage: worker_save_smoke.then_some(WorkerSaveSmokeStage::WaitForGame),
             worker_save_smoke_receipt: None,
             worker_save_smoke_screenshot: None,
+            worker_no_redraw_smoke,
+            worker_no_redraw_gap: None,
             audio_output: None,
             speaker_probe: SpeakerProbeState::Idle,
             audio_muted,
@@ -4778,6 +4783,26 @@ impl eframe::App for StarbyteApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some((deadline, at_start)) = self.worker_no_redraw_gap {
+            let now = Instant::now();
+            if now < deadline {
+                // No egui heartbeat, gamepad polling, menu work, display
+                // upload or emulator mutation while the worker advances.
+                ctx.request_repaint_after(deadline - now);
+                return;
+            }
+            let completed = self.full_worker.as_ref().map_or(0, |worker| {
+                worker.engine.completed_frames().saturating_sub(at_start)
+            });
+            if completed >= 45 {
+                println!("STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_OK advanced_frames={completed}");
+            } else {
+                println!("STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_FAILED advanced_frames={completed}");
+            }
+            self.worker_no_redraw_gap = None;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
         // Theme is installed at construction and when the user changes it.
         // Replacing egui visuals on every repaint invalidates unnecessary UI
         // state during time-critical gameplay.
@@ -5001,6 +5026,21 @@ impl eframe::App for StarbyteApp {
             }
             self.last_effective_speed_percent = speed;
             self.advance_full_worker_save_smoke(ctx);
+            if self.worker_no_redraw_smoke
+                && self.session_snapshot().has_rom
+                && self.session_snapshot().frame >= 10
+                && self.framebuffer_texture.is_some()
+            {
+                self.worker_no_redraw_smoke = false;
+                if let Some(worker) = &self.full_worker {
+                    self.worker_no_redraw_gap = Some((
+                        Instant::now() + Duration::from_secs(2),
+                        worker.engine.completed_frames(),
+                    ));
+                    ctx.request_repaint_after(Duration::from_secs(2));
+                    return;
+                }
+            }
             self.queued_keyboard_presses.clear();
             self.queued_gamepad_presses.clear();
             if let Some(limit) = self.exit_after_frames

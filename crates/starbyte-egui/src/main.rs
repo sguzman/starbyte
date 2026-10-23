@@ -131,6 +131,11 @@ struct Args {
     /// the original native library window rather than the stripped preview.
     #[arg(long, requires_all = ["demo", "native_worker_preview"], conflicts_with = "exit_after_frames", hide = true)]
     exit_after_full_worker_saves: bool,
+
+    /// CI only: freeze the entire original egui window callback for two
+    /// seconds and require the emulator worker to keep executing frames.
+    #[arg(long, requires_all = ["demo", "native_worker_preview"], conflicts_with_all = ["exit_after_frames", "exit_after_full_worker_saves"], hide = true)]
+    exit_after_full_worker_no_redraw: bool,
 }
 
 fn main() -> Result<()> {
@@ -257,6 +262,7 @@ fn main() -> Result<()> {
                 args.exit_after_frames,
                 args.native_worker_preview,
                 args.exit_after_full_worker_saves,
+                args.exit_after_full_worker_no_redraw,
                 log_lines.clone(),
             )
             .map_err(|error| std::io::Error::other(error.to_string()))?;
@@ -486,6 +492,14 @@ mod speaker_cli_tests {
         ])
         .unwrap();
         assert!(save_probe.exit_after_full_worker_saves);
+        let no_redraw = Args::try_parse_from([
+            "starbyte-egui",
+            "--demo",
+            "--native-worker-preview",
+            "--exit-after-full-worker-no-redraw",
+        ])
+        .unwrap();
+        assert!(no_redraw.exit_after_full_worker_no_redraw);
         assert!(
             Args::try_parse_from(["starbyte-egui", "--demo", "--exit-after-full-worker-saves"])
                 .is_err()

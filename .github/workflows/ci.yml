@@ -127,6 +127,19 @@ jobs:
             }
           cat "$RUNNER_TEMP/starbyte-full-save.log"
           grep -F "STARBYTE_FULL_LIBRARY_SAVE_SMOKE_OK frame=" "$RUNNER_TEMP/starbyte-full-save.log"
+          # The complete original window must not control emulation time:
+          # withhold all egui callbacks for two seconds, confirm the worker
+          # completes at least 45 independent frames on native Weston.
+          timeout 90s target/debug/starbyte-egui --demo --native-worker-preview --exit-after-full-worker-no-redraw \
+            --config "$RUNNER_TEMP/starbyte-full-no-redraw-config.toml" \
+            --cache-dir "$RUNNER_TEMP/starbyte-full-no-redraw-cache" \
+            > "$RUNNER_TEMP/starbyte-full-no-redraw.log" 2>&1 || {
+              cat "$RUNNER_TEMP/weston.log"
+              cat "$RUNNER_TEMP/starbyte-full-no-redraw.log"
+              exit 1
+            }
+          cat "$RUNNER_TEMP/starbyte-full-no-redraw.log"
+          grep -F "STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_OK advanced_frames=" "$RUNNER_TEMP/starbyte-full-no-redraw.log"
           # This acceptance shell consumes worker frames through egui while
           # executing game frames from a separate OS thread.
           timeout 90s target/debug/starbyte-egui --demo --threaded-preview --preview-background --exit-after-frames 30 \

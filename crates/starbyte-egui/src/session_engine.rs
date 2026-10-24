@@ -756,7 +756,9 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
     }
 
     pub fn configure_sound(&self, enabled: bool, muted: bool, volume: f32) -> Result<(), String> {
-        self.post(move |engine| engine.set_audio(enabled, muted, volume))
+        // User mute/unmute must not fail because a separate save/cheat job
+        // queue is saturated; keep the command ordered with the emulator.
+        self.update_live_control(move |engine| engine.set_audio(enabled, muted, volume))
     }
 
     pub fn queue_speaker_check(&self) -> Result<Receiver<Result<(), String>>, String> {

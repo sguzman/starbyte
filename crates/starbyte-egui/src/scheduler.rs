@@ -223,6 +223,9 @@ enum Command<Machine> {
         Sender<Result<(), String>>,
     ),
     Post(Box<dyn FnOnce(&mut Machine) + Send>),
+    /// Infrequent live controls such as mute are exempt from the quota for
+    /// long-running save/cheat jobs, but stay ordered with worker commands.
+    LiveControl(Box<dyn FnOnce(&mut Machine) + Send>),
     Shutdown,
 }
 
@@ -280,6 +283,7 @@ fn apply_command<Machine>(
             action(machine);
             pending_posts.fetch_sub(1, Ordering::AcqRel);
         }
+        Command::LiveControl(action) => action(machine),
         Command::Shutdown => return false,
     }
     true
@@ -454,6 +458,18 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
         update: impl FnOnce(&mut Machine) + Send + 'static,
     ) -> Result<(), String> {
         self.send_bounded(Command::SpeedAndApply(speed_percent, Box::new(update)))
+    }
+
+    /// Queue an infrequent, safety-relevant live setting (e.g. Mute) without
+    /// waiting for file/cheat operation quota. This is not for repeated
+    /// frame input or arbitrary jobs, which must still use post().
+    pub fn update_live_control(
+        &self,
+        action: impl FnOnce(&mut Machine) + Send + 'static,
+    ) -> Result<(), String> {
+        self.commands
+            .send(Command::LiveControl(Box::new(action)))
+            .map_err(|_| "emulation worker is not running".to_owned())
     }
 
     /// Queue a user-initiated operation without blocking the egui event
@@ -1153,6 +1169,32 @@ mod tests {
         assert_eq!(worker.outstanding_async_operations(), MAX_PENDING_POSTS);
         release_tx.send(()).unwrap();
         assert_eq!(worker.transact(|speed| Ok(*speed)).unwrap(), 100);
+        assert_eq!(worker.outstanding_async_operations(), 0);
+        worker.shutdown().unwrap();
+    }
+
+    #[test]
+    fn mute_control_still_queues_when_file_operation_quota_is_full() {
+        let worker =
+            EmulatorScheduler::spawn(true, Duration::from_millis(20), |enabled| Ok(*enabled))
+                .unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        worker
+            .post(move |_| {
+                let _ = started_tx.send(());
+                let _ = release_rx.recv();
+            })
+            .unwrap();
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        for _ in 1..MAX_PENDING_POSTS {
+            worker.post(|_| {}).unwrap();
+        }
+        assert!(worker.post(|_| {}).is_err());
+        worker.update_live_control(|enabled| *enabled = false).unwrap();
+        assert_eq!(worker.outstanding_async_operations(), MAX_PENDING_POSTS);
+        release_tx.send(()).unwrap();
+        assert!(!worker.transact(|enabled| Ok(*enabled)).unwrap());
         assert_eq!(worker.outstanding_async_operations(), 0);
         worker.shutdown().unwrap();
     }

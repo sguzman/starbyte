@@ -10,7 +10,8 @@ use std::{
     fs::{self, File},
     io::Write,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    ops::{Deref, DerefMut},
+    process::{Child, Command, Stdio},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -19,6 +20,32 @@ struct Probe {
     name: &'static str,
     args: &'static [&'static str],
     markers: &'static [&'static str],
+}
+
+/// Child processes are not killed by std::process::Child::drop. A physical
+/// compositor inspection error must not leak a running emulator into the
+/// owner's actual Hyprland workspace.
+struct KillOnDrop(Child);
+
+impl Deref for KillOnDrop {
+    type Target = Child;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for KillOnDrop {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }
 
 const PROBES: &[Probe] = &[
@@ -429,10 +456,12 @@ fn run_probe(
     let log_path = probe_dir.join("starbyte.log");
     let log = File::create(&log_path)?;
     let mut command = isolated_probe_command(binary, &probe_dir, probe)?;
-    let mut child = command
-        .stdout(Stdio::from(log.try_clone()?))
-        .stderr(Stdio::from(log))
-        .spawn()?;
+    let mut child = KillOnDrop(
+        command
+            .stdout(Stdio::from(log.try_clone()?))
+            .stderr(Stdio::from(log))
+            .spawn()?,
+    );
     let started = Instant::now();
     let timeout = Duration::from_secs(90);
     let mut switched_workspace = false;
@@ -633,6 +662,29 @@ mod tests {
         PROBES, fresh_gap_start_at, gap_age_at, missing_markers, native_client_on_workspace,
         workspace_id,
     };
+
+    #[cfg(unix)]
+    #[test]
+    fn unsuccessful_probe_scope_reaps_child_instead_of_leaving_emulator_running() {
+        use std::process::{Command, Stdio};
+
+        // A real compositor read can fail after the child has launched. The
+        // watchdog owns the process even when the caller returns an error.
+        let child = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut guarded = super::KillOnDrop(child);
+        let pid = guarded.id();
+        assert!(guarded.try_wait().unwrap().is_none());
+        drop(guarded);
+        // A reaped child is no longer waitable: Linux /proc must not retain
+        // a live process with this PID after the guard has been dropped.
+        assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
+    }
 
     #[test]
     fn only_explicit_success_markers_pass_a_probe() {

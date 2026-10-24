@@ -625,6 +625,7 @@ impl NativeSmokeAudioMetrics {
 #[derive(Debug, Default)]
 struct QueuedKeyboardPresses {
     actions: BTreeSet<String>,
+    last_poll: Option<Instant>,
 }
 
 impl QueuedKeyboardPresses {
@@ -635,7 +636,15 @@ impl QueuedKeyboardPresses {
         bindings: &BTreeMap<String, String>,
         allow_keyboard_gameplay: bool,
     ) {
-        if !allow_keyboard_gameplay {
+        let now = Instant::now();
+        let missed_callbacks = self.last_poll.is_some_and(|last| {
+            now.saturating_duration_since(last) >= GAMEPAD_STALE_POLL_INTERVAL
+        });
+        self.last_poll = Some(now);
+        if !allow_keyboard_gameplay || !ctx.input(|input| input.focused) || missed_callbacks {
+            // A hidden Wayland window can lose the release callback, leaving
+            // a press from before the gap queued for playback after return.
+            // Reject that stale edge, but allow new presses on the next poll.
             self.actions.clear();
             return;
         }
@@ -8807,6 +8816,67 @@ mod playback_tests {
             pending.capture(ctx, &bindings, true);
             assert!(!pending.contains("b"));
         });
+    }
+
+    #[test]
+    fn queued_keyboard_taps_expire_on_focus_loss_or_hidden_window_gap() {
+        use super::QueuedKeyboardPresses;
+
+        let mut pending = QueuedKeyboardPresses::default();
+        let bindings = std::collections::BTreeMap::from([("b".to_owned(), "B".to_owned())]);
+        let ctx = egui::Context::default();
+        let key_event = egui::Event::Key {
+            key: egui::Key::B,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        };
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![key_event.clone()],
+                ..Default::default()
+            },
+            |ctx| {
+                pending.capture(ctx, &bindings, true);
+                assert!(pending.contains("b"));
+            },
+        );
+        let _ = ctx.run(
+            egui::RawInput {
+                focused: false,
+                ..Default::default()
+            },
+            |ctx| {
+                pending.capture(ctx, &bindings, true);
+                assert!(!pending.contains("b"));
+            },
+        );
+        let _ = ctx.run(
+            egui::RawInput {
+                focused: true,
+                events: vec![key_event.clone()],
+                ..Default::default()
+            },
+            |ctx| {
+                pending.capture(ctx, &bindings, true);
+                assert!(pending.contains("b"), "fresh focused press must work");
+                pending.last_poll = Some(Instant::now() - Duration::from_secs(2));
+                pending.capture(ctx, &bindings, true);
+                assert!(!pending.contains("b"), "stale queued tap must not replay");
+            },
+        );
+        let _ = ctx.run(
+            egui::RawInput {
+                focused: true,
+                events: vec![key_event],
+                ..Default::default()
+            },
+            |ctx| {
+                pending.capture(ctx, &bindings, true);
+                assert!(pending.contains("b"), "new post-gap press must work");
+            },
+        );
     }
 
     #[test]

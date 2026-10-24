@@ -1191,7 +1191,9 @@ mod tests {
             worker.post(|_| {}).unwrap();
         }
         assert!(worker.post(|_| {}).is_err());
-        worker.update_live_control(|enabled| *enabled = false).unwrap();
+        worker
+            .update_live_control(|enabled| *enabled = false)
+            .unwrap();
         assert_eq!(worker.outstanding_async_operations(), MAX_PENDING_POSTS);
         release_tx.send(()).unwrap();
         assert!(!worker.transact(|enabled| Ok(*enabled)).unwrap());

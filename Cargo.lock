@@ -3741,6 +3741,7 @@ dependencies = [
  "image",
  "rfd",
  "rodio",
+ "serde_json",
  "starbyte-core",
  "starbyte-frontend",
  "tempfile",

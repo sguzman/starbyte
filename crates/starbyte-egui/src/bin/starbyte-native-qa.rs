@@ -87,6 +87,16 @@ const PROBES: &[Probe] = &[
     },
 ];
 
+const PHYSICAL_WORKSPACE_PROBE: Probe = Probe {
+    name: "real-workspace-progress",
+    args: &["--exit-after-full-worker-no-redraw"],
+    markers: &[
+        "STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame=",
+        "STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_OK advanced_frames=",
+        "STARBYTE_FULL_LIBRARY_CLOCK_PACING_SMOKE_OK advanced_frames=",
+    ],
+};
+
 fn missing_markers<'a>(text: &str, markers: &'a [&'a str]) -> Vec<&'a str> {
     markers
         .iter()
@@ -176,10 +186,102 @@ fn isolated_probe_command(
     Ok(command)
 }
 
+fn hyprland_json(command: &str) -> Result<serde_json::Value, Box<dyn Error>> {
+    let output = Command::new("hyprctl").args(["-j", command]).output()?;
+    if !output.status.success() {
+        return Err(format!("hyprctl {command} failed").into());
+    }
+    Ok(serde_json::from_slice(&output.stdout)?)
+}
+
+/// Avoid interpolating any user-controlled workspace name into Lua source.
+/// Both the QA workspace and the original numeric workspace are generated here.
+fn dispatch_workspace(target: &str) -> Result<(), Box<dyn Error>> {
+    if target.is_empty()
+        || !target
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == ':')
+    {
+        return Err("unsafe workspace selector".into());
+    }
+    let lua = format!("hl.dsp.focus({{ workspace = \"{target}\" }})");
+    let output = Command::new("hyprctl").args(["dispatch", &lua]).output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "Hyprland workspace dispatcher failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn workspace_id(value: &serde_json::Value) -> Option<i64> {
+    value.get("id")?.as_i64().filter(|id| *id > 0)
+}
+
+fn native_client_on_workspace(clients: &serde_json::Value, pid: u32, workspace: i64) -> bool {
+    clients.as_array().is_some_and(|entries| {
+        entries.iter().any(|entry| {
+            entry.get("pid").and_then(serde_json::Value::as_u64) == Some(u64::from(pid))
+                && entry.get("xwayland").and_then(serde_json::Value::as_bool) == Some(false)
+                && entry
+                    .get("workspace")
+                    .and_then(|ws| ws.get("id"))
+                    .and_then(serde_json::Value::as_i64)
+                    == Some(workspace)
+        })
+    })
+}
+
+struct RestoreWorkspace(i64);
+
+impl Drop for RestoreWorkspace {
+    fn drop(&mut self) {
+        // Workspace restoration must occur even after a failed probe, not
+        // leave the QA operator's actual desktop on the empty test workspace.
+        if let Err(error) = dispatch_workspace(&self.0.to_string()) {
+            eprintln!("Could not restore previous Hyprland workspace: {error}");
+        }
+    }
+}
+
+fn exercise_real_workspace(pid: u32) -> Result<(), Box<dyn Error>> {
+    let original = workspace_id(&hyprland_json("activeworkspace")?)
+        .ok_or("native workspace QA needs a regular positive numeric workspace")?;
+    if !native_client_on_workspace(&hyprland_json("clients")?, pid, original) {
+        return Err(
+            "test window is not a native Wayland client on the active workspace".into()
+        );
+    }
+    let name = format!("starbyte-qa-{pid}");
+    let target = format!("name:{name}");
+    let restore = RestoreWorkspace(original);
+    dispatch_workspace(&target)?;
+    let active = hyprland_json("activeworkspace")?;
+    let observed_name = active.get("name").and_then(serde_json::Value::as_str);
+    // Some Hyprland versions return named workspaces with a prefix.
+    let switched = (observed_name == Some(name.as_str())
+        || observed_name == Some(target.as_str()))
+        && active.get("id").and_then(serde_json::Value::as_i64) != Some(original);
+    if !switched {
+        return Err("Hyprland did not switch to the isolated QA workspace".into());
+    }
+    // The app has already published the exact worker-frame baseline in the
+    // GAP_BEGIN marker. Remain on a *real other workspace* for the full gap.
+    thread::sleep(Duration::from_millis(2_250));
+    drop(restore);
+    if workspace_id(&hyprland_json("activeworkspace")?) != Some(original) {
+        return Err("Hyprland did not return to the original workspace".into());
+    }
+    Ok(())
+}
+
 fn run_probe(
     binary: &Path,
     root: &Path,
     probe: &Probe,
+    physical_workspace: bool,
 ) -> Result<(bool, u128, Vec<&'static str>), Box<dyn Error>> {
     let probe_dir = root.join(probe.name);
     fs::create_dir(&probe_dir)?;
@@ -192,9 +294,26 @@ fn run_probe(
         .spawn()?;
     let started = Instant::now();
     let timeout = Duration::from_secs(90);
+    let mut switched_workspace = false;
     let exited = loop {
         if let Some(status) = child.try_wait()? {
             break status.success();
+        }
+        // The process must still be alive when the physical switch starts.
+        // Avoid a false pass when a successful marker was printed *after*
+        // the child had already exited without ever being off-workspace.
+        if physical_workspace
+            && !switched_workspace
+            && String::from_utf8_lossy(&fs::read(&log_path)?).contains(
+                "STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame=",
+            )
+        {
+            if let Err(error) = exercise_real_workspace(child.id()) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+            switched_workspace = true;
         }
         if started.elapsed() >= timeout {
             let _ = child.kill();
@@ -206,7 +325,7 @@ fn run_probe(
     let output = fs::read_to_string(log_path)?;
     let missing = missing_markers(&output, probe.markers);
     Ok((
-        exited && missing.is_empty(),
+        exited && missing.is_empty() && (!physical_workspace || switched_workspace),
         started.elapsed().as_millis(),
         missing,
     ))
@@ -221,12 +340,16 @@ fn run() -> Result<(), Box<dyn Error>> {
     });
     let mut binary = default_binary;
     let mut args = env::args().skip(1);
+    let mut physical_workspace = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--binary" => binary = PathBuf::from(args.next().ok_or("--binary needs a path")?),
+            "--physical-workspace" => physical_workspace = true,
             "--help" | "-h" => {
-                println!("Usage: starbyte-native-qa [--binary PATH]");
-                println!("Run local, isolated demo smoke probes on native Hyprland.");
+                println!("Usage: starbyte-native-qa [--binary PATH] [--physical-workspace]");
+                println!("Run isolated demo smoke probes on native Hyprland.");
+                println!("--physical-workspace also switches to a temporary real workspace");
+                println!("and restores the original workspace after measuring worker pacing.");
                 return Ok(());
             }
             _ => return Err(format!("unrecognized option: {arg}").into()),
@@ -256,8 +379,16 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut report = File::create(root.join("results.tsv"))?;
     writeln!(report, "probe\tresult\telapsed_ms\tmissing_markers")?;
     let mut passed = 0;
-    for probe in PROBES {
-        let result = run_probe(&binary, &root, probe);
+    let mut total = 0;
+    let supplemental = physical_workspace.then_some(&PHYSICAL_WORKSPACE_PROBE);
+    for probe in PROBES.iter().chain(supplemental) {
+        total += 1;
+        let result = run_probe(
+            &binary,
+            &root,
+            probe,
+            physical_workspace && probe.name == PHYSICAL_WORKSPACE_PROBE.name,
+        );
         let (ok, elapsed, missing) = match result {
             Ok((ok, elapsed, missing)) => (ok, elapsed, missing.join(" | ")),
             Err(error) => (false, 0, format!("probe error: {error}")),
@@ -276,13 +407,15 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
     report.flush()?;
     println!(
-        "Native Hyprland synthetic probes: {passed}/{}.",
-        PROBES.len()
+        "Native Hyprland smoke probes: {passed}/{total} (real workspace opt-in: {physical_workspace})."
     );
     println!("Local-only logs and context: {}", root.display());
-    println!("Physical hardware and real workspace acceptance: NOT TESTED.");
-    if passed != PROBES.len() {
-        return Err("one or more native synthetic probes failed; inspect local logs".into());
+    if physical_workspace {
+        println!("Real workspace switch was requested and checked; review local receipt.");
+    }
+    println!("Physical speaker, gamepad, device recovery and production acceptance: NOT TESTED.");
+    if passed != total {
+        return Err("one or more native probes failed; inspect local logs".into());
     }
     Ok(())
 }
@@ -296,7 +429,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{PROBES, missing_markers};
+    use super::{PROBES, missing_markers, native_client_on_workspace, workspace_id};
 
     #[test]
     fn only_explicit_success_markers_pass_a_probe() {
@@ -340,13 +473,26 @@ mod tests {
     }
 
     #[test]
+    fn physical_workspace_receipts_require_a_native_client_and_positive_workspace() {
+        assert_eq!(workspace_id(&serde_json::json!({"id": 6, "name": "6"})), Some(6));
+        assert_eq!(workspace_id(&serde_json::json!({"id": -99})), None);
+        let clients = serde_json::json!([
+            {"pid": 4321, "xwayland": false, "workspace": {"id": 6}},
+            {"pid": 5432, "xwayland": true, "workspace": {"id": 6}}
+        ]);
+        assert!(native_client_on_workspace(&clients, 4321, 6));
+        assert!(!native_client_on_workspace(&clients, 5432, 6));
+        assert!(!native_client_on_workspace(&clients, 4321, 5));
+    }
+
+    #[test]
     fn native_probes_require_real_ci_smoke_contract_markers() {
         let ci = std::fs::read_to_string(format!(
             "{}/../../.github/workflows/ci.yml",
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap();
-        for probe in PROBES {
+        for probe in PROBES.iter().chain(std::iter::once(&super::PHYSICAL_WORKSPACE_PROBE)) {
             for marker in probe.markers {
                 assert!(
                     ci.contains(marker),

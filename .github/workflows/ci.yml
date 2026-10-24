@@ -158,6 +158,7 @@ jobs:
               exit 1
             }
           cat "$RUNNER_TEMP/starbyte-full-no-redraw.log"
+          grep -F "STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame=" "$RUNNER_TEMP/starbyte-full-no-redraw.log"
           grep -F "STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_OK advanced_frames=" "$RUNNER_TEMP/starbyte-full-no-redraw.log"
           # Measure worker-produced frames per real elapsed second without
           # egui callbacks. This is virtual-Weston pacing evidence, not

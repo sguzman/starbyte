@@ -736,12 +736,18 @@ mod tests {
             stream_recoveries: Arc::new(AtomicU64::new(0)),
         };
         output.set_volume(0.25);
-        assert!(matches!(receiver.try_recv().unwrap(), AudioMessage::VolumeChanged));
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            AudioMessage::VolumeChanged
+        ));
         // No redundant wakeups when UI repeatedly applies the same volume.
         output.set_volume(0.25);
         assert!(receiver.try_recv().is_err());
         output.set_volume(0.0);
-        assert!(matches!(receiver.try_recv().unwrap(), AudioMessage::VolumeChanged));
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            AudioMessage::VolumeChanged
+        ));
         assert_eq!(
             f32::from_bits(output.volume_bits.load(Ordering::Acquire)),
             0.0
@@ -768,7 +774,10 @@ mod tests {
         };
         output.enqueue(&[1, -1], 1.0, 1.0);
         output.set_volume(0.0);
-        assert!(matches!(receiver.try_recv().unwrap(), AudioMessage::Frame { .. }));
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            AudioMessage::Frame { .. }
+        ));
         assert_eq!(
             f32::from_bits(output.volume_bits.load(Ordering::Acquire)),
             0.0

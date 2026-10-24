@@ -797,7 +797,10 @@ mod tests {
             stream_recoveries: Arc::new(AtomicU64::new(0)),
         };
         assert!(output.request_reopen());
-        assert!(!output.request_reopen(), "full channel must refuse without blocking");
+        assert!(
+            !output.request_reopen(),
+            "full channel must refuse without blocking"
+        );
         assert!(matches!(receiver.try_recv().unwrap(), AudioMessage::Reopen));
         assert_eq!(output.stream_failures(), 0);
         assert_eq!(output.stream_recoveries(), 0);
@@ -811,8 +814,7 @@ mod tests {
         output.device_status.store(1, Ordering::Release);
         assert!(output.request_reopen());
         let deadline = Instant::now() + Duration::from_secs(2);
-        while output.device_status() != AudioDeviceStatus::NotAttempted
-            && Instant::now() < deadline
+        while output.device_status() != AudioDeviceStatus::NotAttempted && Instant::now() < deadline
         {
             std::thread::sleep(Duration::from_millis(5));
         }

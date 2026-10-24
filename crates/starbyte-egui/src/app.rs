@@ -1887,8 +1887,9 @@ impl StarbyteApp {
                 continue;
             }
             self.status_line = match result {
-                Ok(()) => "Audio route reset queued; next PCM or speaker check will reopen it."
-                    .to_owned(),
+                Ok(()) => {
+                    "Audio route reset queued; next PCM or speaker check will reopen it.".to_owned()
+                }
                 Err(error) => format!("Audio route reset failed: {error}"),
             };
         }

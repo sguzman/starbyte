@@ -73,13 +73,14 @@ cancel_stale_pending_native_runs() {
   local json keep ids id
   json="$(gh api 'repos/sguzman/starbyte/actions/runs?per_page=100')" ||
     fail 'cannot_list_native_qa_runs'
-  keep="$(printf '%s' "$json" | jq -r '
+  keep="$(printf '%s' "$json" | jq -r --arg sha "$requested_sha" '
     [.workflow_runs[]
      | select(.name == "native Hyprland acceptance" and .head_branch == "main")
+     | select(.head_sha == $sha and .event == "workflow_dispatch")
      | select(.status == "queued" or .status == "pending" or .status == "waiting")
     ] | sort_by(.created_at, .id) | last | .id // empty
   ')" || fail 'cannot_select_latest_native_qa'
-  [[ -z "$keep" || "$keep" =~ ^[0-9]+$ ]] || fail 'invalid_latest_native_run_id'
+  [[ "$keep" =~ ^[0-9]+$ ]] || fail 'latest_dispatched_qa_not_yet_visible'
   ids="$(printf '%s' "$json" | jq -r --arg keep "$keep" '
     [.workflow_runs[]
      | select(.name == "native Hyprland acceptance" and .head_branch == "main")
@@ -110,10 +111,33 @@ cancel_stale_pending_native_runs() {
 # Dispatch one fresh acceptance run pinned to current main, and retire only
 # stale pending requests. Active hardware QA is NEVER preempted. This needs
 # Actions:write on the desktop's authenticated gh identity.
+requested_sha="$(gh api repos/sguzman/starbyte/git/ref/heads/main --jq '.object.sha')" ||
+  fail 'cannot_resolve_current_main'
+[[ "$requested_sha" =~ ^[0-9a-f]{40}$ ]] || fail 'invalid_requested_main_sha'
 gh api --method POST \
   repos/sguzman/starbyte/actions/workflows/native-hyprland.yml/dispatches \
   -f ref=main >/dev/null || fail 'cannot_dispatch_latest_physical_workflow'
-sleep 3
+# GitHub may acknowledge dispatch before indexing the new run. Never cancel
+# previous requests or register an ephemeral runner unless this specific
+# latest-SHA workflow_dispatch is visible in the queue.
+dispatch_visible=false
+for attempt in 1 2 3 4 5 6; do
+  queue="$(gh api 'repos/sguzman/starbyte/actions/runs?per_page=100')" ||
+    fail 'cannot_index_latest_qa_request'
+  matches="$(printf '%s' "$queue" | jq -r --arg sha "$requested_sha" '
+    [.workflow_runs[]
+     | select(.name == "native Hyprland acceptance" and .head_branch == "main")
+     | select(.head_sha == $sha and .event == "workflow_dispatch")
+     | select(.status == "queued" or .status == "pending" or .status == "waiting")
+    ] | length
+  ')" || fail 'cannot_parse_latest_qa_request'
+  if [[ "$matches" =~ ^[1-9][0-9]*$ ]]; then
+    dispatch_visible=true
+    break
+  fi
+  sleep 3
+done
+[[ "$dispatch_visible" == true ]] || fail 'current_main_dispatch_did_not_appear'
 cancel_stale_pending_native_runs
 
 # An ephemeral runner unregisters after one accepted job. If a run is

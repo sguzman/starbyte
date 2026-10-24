@@ -911,10 +911,16 @@ mod tests {
             stream_recoveries: Arc::new(AtomicU64::new(0)),
         };
         output.enqueue(&[123, -123], 1.0, 1.0);
-        assert!(output.request_reopen(), "route reset must not need a free PCM slot");
+        assert!(
+            output.request_reopen(),
+            "route reset must not need a free PCM slot"
+        );
         assert!(output.reopen_pending.swap(false, Ordering::AcqRel));
         assert!(!output.reopen_pending.load(Ordering::Acquire));
-        assert!(matches!(receiver.try_recv().unwrap(), AudioMessage::Frame { .. }));
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            AudioMessage::Frame { .. }
+        ));
         assert!(receiver.try_recv().is_err());
         assert_eq!(output.stream_failures(), 0);
         assert_eq!(output.stream_recoveries(), 0);

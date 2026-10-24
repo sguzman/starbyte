@@ -142,23 +142,19 @@ fn capture_host(root: &Path) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn run_probe(
-    binary: &Path,
-    root: &Path,
-    probe: &Probe,
-) -> Result<(bool, u128, Vec<&'static str>), Box<dyn Error>> {
-    let probe_dir = root.join(probe.name);
-    fs::create_dir(&probe_dir)?;
+fn isolated_probe_command(binary: &Path, probe_dir: &Path, probe: &Probe) -> std::io::Result<Command> {
     let cache = probe_dir.join("cache");
     let xdg_config = probe_dir.join("xdg-config");
     let xdg_cache = probe_dir.join("xdg-cache");
     let xdg_data = probe_dir.join("xdg-data");
-    for dir in [&cache, &xdg_config, &xdg_cache, &xdg_data] {
-        fs::create_dir(dir)?;
+    // Startup searches HOME even when --config and --cache-dir are passed.
+    // Do not enumerate the real user's game library in a synthetic QA run.
+    let isolated_home = probe_dir.join("home");
+    for dir in [&cache, &xdg_config, &xdg_cache, &xdg_data, &isolated_home] {
+        fs::create_dir_all(dir)?;
     }
-    let log_path = probe_dir.join("starbyte.log");
-    let log = File::create(&log_path)?;
-    let mut child = Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .args(["--demo", "--native-worker-preview"])
         .args(probe.args)
         .arg("--config")
@@ -166,9 +162,24 @@ fn run_probe(
         .arg("--cache-dir")
         .arg(&cache)
         .env("WINIT_UNIX_BACKEND", "wayland")
+        .env("HOME", &isolated_home)
         .env("XDG_CONFIG_HOME", &xdg_config)
         .env("XDG_CACHE_HOME", &xdg_cache)
-        .env("XDG_DATA_HOME", &xdg_data)
+        .env("XDG_DATA_HOME", &xdg_data);
+    Ok(command)
+}
+
+fn run_probe(
+    binary: &Path,
+    root: &Path,
+    probe: &Probe,
+) -> Result<(bool, u128, Vec<&'static str>), Box<dyn Error>> {
+    let probe_dir = root.join(probe.name);
+    fs::create_dir(&probe_dir)?;
+    let log_path = probe_dir.join("starbyte.log");
+    let log = File::create(&log_path)?;
+    let mut command = isolated_probe_command(binary, &probe_dir, probe)?;
+    let mut child = command
         .stdout(Stdio::from(log.try_clone()?))
         .stderr(Stdio::from(log))
         .spawn()?;
@@ -290,6 +301,32 @@ mod tests {
         assert!(missing_markers("STARBYTE_FIRST_OK\nSTARBYTE_SECOND_OK", markers).is_empty());
         assert_eq!(PROBES.len(), 9);
         assert!(PROBES.iter().all(|p| !p.markers.is_empty()));
+    }
+
+    #[test]
+    fn native_runner_isolates_home_as_well_as_xdg_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("synthetic");
+        let command = super::isolated_probe_command(
+            std::path::Path::new("starbyte-egui"),
+            &dir,
+            &PROBES[0],
+        )
+        .unwrap();
+        let configured: std::collections::HashMap<_, _> = command
+            .get_envs()
+            .filter_map(|(key, value)| Some((key.to_str()?, value?.to_str()?)))
+            .collect();
+        for (key, path) in [
+            ("HOME", dir.join("home")),
+            ("XDG_CONFIG_HOME", dir.join("xdg-config")),
+            ("XDG_CACHE_HOME", dir.join("xdg-cache")),
+            ("XDG_DATA_HOME", dir.join("xdg-data")),
+        ] {
+            assert_eq!(configured.get(key).copied(), path.to_str());
+            assert!(path.is_dir(), "{key} needs an isolated directory");
+        }
+        assert_eq!(configured.get("WINIT_UNIX_BACKEND"), Some(&"wayland"));
     }
 
     #[test]

@@ -1,5 +1,14 @@
 # Starbyte: current state
 
+## Targeted focused QA option (2026-10-24)
+
+After the 11/12 local run, the native executor supports a focused-clock-only
+`--focused-only` mode, preserving real compositor and focus checks while
+avoiding eleven repeated GUI launches. The dispatcher must use the dedicated
+workspace wrapper. A successful 1/1 focused run would be evidence to review
+D-12, not proof of audio/device/gamepad/cutover or a complete 12/12 run.
+This newly authored mode has not yet received another physical on-host run.
+
 ## First real native QA and isolated workspace protection (2026-10-24)
 
 Local Codex ran the native harness on physical Hyprland at `b1448b3`: **11/12 passed**. Focused FPS failed after keyboard-focus loss; the two genuine workspace checks passed. Background: 142 frames in 2,374 ms (59.81 FPS), with 9 compositor samples across 2,289 ms off-workspace. Pause/resume: 2 frames while away, 1 suspension, 1 resume, and 10 resumed frames across 166 ms. The local collector restored the original workspace, left no emulator window running and retained private raw evidence. This supports **A-08 and D-14 accepted, 71/77 (92%)**; all speaker, controller, complete persistence and cutover gates remain pending.

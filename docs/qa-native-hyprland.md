@@ -12,6 +12,16 @@
 - The normal player remains the default. Run opt-in worker acceptance with `--native-worker-preview` until every prerequisite is accepted. Do not infer another item's success merely because one check passed.
 - A passing synthetic demo proves only that demo and the tested paths; commercial-ROM behavior requires separately obtained local-only evidence.
 
+## Focused-only QA without redundant windows
+
+When only D-12's physical focused-rate observation failed, rerun the single
+existing focused probe with `bash scripts/qa-native-hyprland.sh --focused-only`.
+It reserves a fresh numeric QA workspace, launches **one** GUI test window
+instead of twelve, emits a sanitized `1/1` receipt only if that window
+retains focus and produces valid worker FPS/texture evidence, and conditionally
+restores the starting workspace. No complete 12-probe, audible-speaker,
+physical-controller or production-default claim follows from the targeted pass.
+
 ## Environment receipt
 
 Capture an evidence record *before* launching the application: Git SHA, build mode, `XDG_SESSION_TYPE`, `WAYLAND_DISPLAY`, Hyprland version and monitor/workspace data from `hyprctl -j monitors` / `hyprctl -j workspaces`, GPU/renderer, audio server and device route, connected controller identification (no serial numbers), and the disposable config/cache locations. Record whether the process uses native Wayland. Redact personal filesystem paths before attaching evidence to a public issue.

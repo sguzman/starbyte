@@ -27,6 +27,11 @@ Starbyte is a **fun-first Rust SNES emulator** targeting **Linux + native Waylan
 
 ## Unattended real-Hyprland QA
 
+**Targeted retest:** After a partially successful full run, prefer
+`bash scripts/qa-native-hyprland.sh --focused-only` to rerun only the
+failed real-focused-clock probe in a fresh QA workspace. Its 1/1 receipt
+is evidence for D-12 review, never a substitute for full 12/12.
+
 **Workspace respect:** Never launch the 12 native GUI probes directly onto
 the owner's active working workspace. Use `bash scripts/qa-native-hyprland.sh`,
 which reserves a disposable numeric QA workspace, conditionally restores the

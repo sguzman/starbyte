@@ -1,5 +1,17 @@
 # Unattended native Hyprland QA execution
 
+## Targeted focused-clock retest
+
+The first physical 12-probe run passed the nine isolated smokes and both real
+workspace transitions; only focused-clock failed. Rather than disturb the
+desktop with eleven redundant windows, the local Codex executor may run
+`bash scripts/qa-native-hyprland.sh --focused-only`. It compiles/tests the
+current checkout, enters a fresh disposable QA workspace, executes only
+`real-focused-clock`, and restores the original workspace when QA retains
+focus. On success it emits `STARBYTE_NATIVE_QA_FOCUSED_OK 1/1` and strictly
+numeric redacted timing metrics. It does **not** claim `12/12`, speaker or
+controller acceptance. This new targeted path needs its own local test.
+
 ## QA workspace isolation (after first local Codex run)
 
 The first real desktop run returned 11/12 and disturbed the owner's regular workspace with repeated test windows. The wrapper now **builds and runs its unit tests without switching workspaces**, then reserves a fresh unused positive numeric workspace for the 12 GUI tests. It runs all physical probes there, and its EXIT handler restores the earlier workspace when the active workspace is still owned by QA. If the owner intentionally changes to another workspace, the collector refuses to launch additional GUI windows rather than interrupt the owner's work; the wrapper also avoids stealing focus back from an unrelated active workspace.

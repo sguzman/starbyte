@@ -683,6 +683,13 @@ fn run_probe(
     ))
 }
 
+// Fail closed until a truly independent compositor/seat can be proved.
+// This is intentionally not controlled by an environment variable or by
+// Codex setting an override on the owner's active desktop.
+fn gui_probes_allowed() -> bool {
+    false
+}
+
 fn run() -> Result<(), Box<dyn Error>> {
     let executable = env::current_exe()?;
     let default_binary = executable.with_file_name(if cfg!(windows) {
@@ -710,6 +717,17 @@ fn run() -> Result<(), Box<dyn Error>> {
             }
             _ => return Err(format!("unrecognized option: {arg}").into()),
         }
+    }
+    // The owner's first physical retests showed that a different workspace
+    // still hijacks the single active keyboard focus. Until a genuinely
+    // independent QA compositor/seat has been implemented and confirmed, no
+    // invocation of this collector may spawn a real GUI test window on the
+    // owner's live desktop, including its former non-physical nine-probe mode.
+    if !gui_probes_allowed() {
+        return Err(
+            "desktop-focus safety gate: native GUI probes require an independently isolated compositor and seat; run bash scripts/qa-native-hyprland.sh --check-only instead"
+                .into(),
+        );
     }
     require_hyprland()?;
     if !binary.is_file() {
@@ -945,6 +963,11 @@ mod tests {
         assert!(native_client_on_workspace(&clients, 4321, 6));
         assert!(!native_client_on_workspace(&clients, 5432, 6));
         assert!(!native_client_on_workspace(&clients, 4321, 5));
+    }
+
+    #[test]
+    fn physical_collector_fails_closed_on_owner_desktop() {
+        assert!(!super::gui_probes_allowed());
     }
 
     #[test]

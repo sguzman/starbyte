@@ -7453,28 +7453,33 @@ impl eframe::App for StarbyteApp {
                         callbacks,
                     } => {
                         if !ctx.input(|input| input.focused) {
-                            println!("STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_FAILED lost_keyboard_focus");
+                            println!(
+                                "STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_FAILED lost_keyboard_focus"
+                            );
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             return;
                         }
                         let elapsed = started_at.elapsed();
                         let callbacks = callbacks + 1;
                         if elapsed >= Duration::from_secs(3) {
-                            let worker_frames = self
-                                .full_worker
-                                .as_ref()
-                                .map_or(0, |worker| worker.engine.completed_frames().saturating_sub(at_start));
+                            let worker_frames = self.full_worker.as_ref().map_or(0, |worker| {
+                                worker.engine.completed_frames().saturating_sub(at_start)
+                            });
                             let presented = self
                                 .last_worker_texture_frame
                                 .unwrap_or_default()
                                 .saturating_sub(first_presented);
-                            let fps = worker_frames as f64 / elapsed.as_secs_f64().max(f64::EPSILON);
+                            let fps =
+                                worker_frames as f64 / elapsed.as_secs_f64().max(f64::EPSILON);
                             // Smoke tolerance is broad; the exact measured rate
                             // is preserved for review against D-12 acceptance.
                             if !(55.0..=65.0).contains(&fps)
                                 || callbacks < 30
                                 || presented < 90
-                                || !self.full_worker.as_ref().is_some_and(|w| w.engine.is_emulating())
+                                || !self
+                                    .full_worker
+                                    .as_ref()
+                                    .is_some_and(|w| w.engine.is_emulating())
                             {
                                 println!(
                                     "STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_FAILED fps={fps:.3} callbacks={callbacks} presented={presented} frames={worker_frames}"

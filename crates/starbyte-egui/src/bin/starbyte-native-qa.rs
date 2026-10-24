@@ -691,12 +691,14 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut binary = default_binary;
     let mut args = env::args().skip(1);
     let mut physical_workspace = false;
+    let mut only_probe: Option<String> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--binary" => binary = PathBuf::from(args.next().ok_or("--binary needs a path")?),
             "--physical-workspace" => physical_workspace = true,
+            "--only" => only_probe = Some(args.next().ok_or("--only needs a probe name")?),
             "--help" | "-h" => {
-                println!("Usage: starbyte-native-qa [--binary PATH] [--physical-workspace]");
+                println!("Usage: starbyte-native-qa [--binary PATH] [--physical-workspace] [--only PROBE]");
                 println!("Run isolated demo smoke probes on native Hyprland.");
                 println!("--physical-workspace additionally tests real workspace progress");
                 println!("and pause-on-blur before restoring the previous workspace.");
@@ -740,6 +742,12 @@ fn run() -> Result<(), Box<dyn Error>> {
         None
     };
     for probe in PROBES.iter().chain(supplemental.into_iter().flatten()) {
+        if only_probe
+            .as_deref()
+            .is_some_and(|name| name != probe.name)
+        {
+            continue;
+        }
         total += 1;
         let result = run_probe(
             &binary,
@@ -766,10 +774,13 @@ fn run() -> Result<(), Box<dyn Error>> {
         }
     }
     report.flush()?;
+    if total == 0 {
+        return Err("no probe matched --only; physical probes require --physical-workspace".into());
+    }
     // Emit aggregate evidence only after *all* native and physical probes
     // passed. A local agent can review these metrics through Actions job logs
     // without revealing physical workspace names, PIDs or personal paths.
-    if physical_workspace && passed == total {
+    if physical_workspace && only_probe.is_none() && passed == total {
         let public = sanitized_physical_receipt(&root)?;
         fs::write(
             root.join("public-evidence.json"),

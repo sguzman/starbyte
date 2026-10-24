@@ -383,14 +383,23 @@ impl OwnedSession {
     }
 
     pub fn set_audio(&mut self, enabled: bool, muted: bool, volume: f32) {
+        let was_audible = self.sound_enabled && !self.muted && self.volume > 0.0;
         self.sound_enabled = enabled;
         self.muted = muted;
-        self.volume = volume.clamp(0.0, 1.0);
+        self.volume = if volume.is_finite() {
+            volume.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let audible = self.sound_enabled && !self.muted && self.volume > 0.0;
         if let Some(output) = &self.audio {
-            output.set_volume(if enabled && !muted { self.volume } else { 0.0 });
-            if !enabled || muted || self.volume <= 0.0 {
-                // Do not keep PCM from before a mute/zero-volume interval:
-                // raising the volume later must play new audio, not backlog.
+            // Volume-only adjustments must reach the live mixer without
+            // waiting for a new gameplay buffer or egui repaint.
+            output.set_volume(if audible { self.volume } else { 0.0 });
+            if was_audible && !audible {
+                // A transition to silence must discard queued old PCM so
+                // unmuting never replays sound from a prior game moment.
+                // Do not repeatedly clear on an already-muted update.
                 output.clear();
             }
         }

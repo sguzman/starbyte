@@ -78,6 +78,9 @@ enum AudioMessage {
         queued_at: Instant,
     },
     Clear,
+    /// Apply a live volume change to already-queued Rodio buffers even when
+    /// the emulator is paused and sends no fresh game PCM.
+    VolumeChanged,
 }
 
 /// The UI owns only a bounded nonblocking sender, never a device or mixer.
@@ -233,11 +236,16 @@ impl AudioOutput {
         self.stream_recoveries.load(Ordering::Acquire)
     }
 
-    /// Update the mixer level without opening an audio device or waiting
-    /// on its thread. Applied to the next emulated audio buffer.
+    /// Update active playback volume even when the game is paused and no
+    /// further PCM arrives. Changes are coalesced into the shared atomic,
+    /// then signalled nonblocking to the dedicated audio worker. If the
+    /// bounded queue is full, a queued frame will still apply the latest
+    /// atomic volume before appending audio.
     pub fn set_volume(&self, volume: f32) {
-        self.volume_bits
-            .store(normalize_volume(volume).to_bits(), Ordering::Release);
+        let next = normalize_volume(volume).to_bits();
+        if self.volume_bits.swap(next, Ordering::AcqRel) != next {
+            let _ = self.sender.try_send(AudioMessage::VolumeChanged);
+        }
     }
 
     /// Bounded try-send: full queues lose stale audio rather than blocking
@@ -492,6 +500,12 @@ fn audio_worker(
                 stretch.reset();
                 continue;
             }
+            AudioMessage::VolumeChanged => {
+                if let Some(output) = &device {
+                    apply_sink_volume(&output.sink, &volume_bits);
+                }
+                continue;
+            }
         };
         let now = Instant::now();
         if frame_generation != active_generation
@@ -573,6 +587,14 @@ fn audio_worker(
     }
 }
 
+/// Apply the latest atomic gain to the *existing* mixer, even when game
+/// emulation is paused and no new SamplesBuffer can refresh Sink::volume.
+fn apply_sink_volume(sink: &Sink, volume_bits: &AtomicU32) {
+    sink.set_volume(normalize_volume(f32::from_bits(
+        volume_bits.load(Ordering::Acquire),
+    )));
+}
+
 /// Set tempo and pitch together through Rodio's real sink control.
 fn set_sink_playback_speed(sink: &Sink, speed: f32) {
     sink.set_speed(normalize_playback_speed(speed));
@@ -651,8 +673,9 @@ mod tests {
 
     use super::{
         AudioDeviceStatus, AudioMessage, AudioOutput, PlaybackContinuity, StreamRecovery,
-        frame_is_fresh, normalize_pitch, normalize_playback_speed, normalize_volume,
-        pcm16_stereo_to_float, retry_ready, set_sink_playback_speed, speaker_test_tone,
+        apply_sink_volume, frame_is_fresh, normalize_pitch, normalize_playback_speed,
+        normalize_volume, pcm16_stereo_to_float, retry_ready, set_sink_playback_speed,
+        speaker_test_tone,
     };
 
     #[test]
@@ -693,6 +716,63 @@ mod tests {
         );
         assert_eq!(normalize_volume(-1.0), 0.0);
         assert_eq!(normalize_volume(0.75), 0.75);
+    }
+
+    #[test]
+    fn volume_change_wakes_idle_playback_without_opening_a_device() {
+        let (sender, receiver) = sync_channel(4);
+        let output = AudioOutput {
+            sender,
+            generation: Arc::new(AtomicU64::new(0)),
+            device_status: Arc::new(AtomicU8::new(0)),
+            volume_bits: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+            submitted_frames: Arc::new(AtomicU64::new(0)),
+            submitted_nonzero_frames: Arc::new(AtomicU64::new(0)),
+            test_tones_submitted: Arc::new(AtomicU64::new(0)),
+            producer_dropped_frames: Arc::new(AtomicU64::new(0)),
+            worker_dropped_frames: Arc::new(AtomicU64::new(0)),
+            sink_empty_on_pcm: Arc::new(AtomicU64::new(0)),
+            stream_failures: Arc::new(AtomicU64::new(0)),
+            stream_recoveries: Arc::new(AtomicU64::new(0)),
+        };
+        output.set_volume(0.25);
+        assert!(matches!(receiver.try_recv().unwrap(), AudioMessage::VolumeChanged));
+        // No redundant wakeups when UI repeatedly applies the same volume.
+        output.set_volume(0.25);
+        assert!(receiver.try_recv().is_err());
+        output.set_volume(0.0);
+        assert!(matches!(receiver.try_recv().unwrap(), AudioMessage::VolumeChanged));
+        assert_eq!(
+            f32::from_bits(output.volume_bits.load(Ordering::Acquire)),
+            0.0
+        );
+        assert_eq!(output.device_status(), AudioDeviceStatus::NotAttempted);
+    }
+
+    #[test]
+    fn full_queue_does_not_block_new_mute_level() {
+        let (sender, receiver) = sync_channel(1);
+        let output = AudioOutput {
+            sender,
+            generation: Arc::new(AtomicU64::new(0)),
+            device_status: Arc::new(AtomicU8::new(0)),
+            volume_bits: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+            submitted_frames: Arc::new(AtomicU64::new(0)),
+            submitted_nonzero_frames: Arc::new(AtomicU64::new(0)),
+            test_tones_submitted: Arc::new(AtomicU64::new(0)),
+            producer_dropped_frames: Arc::new(AtomicU64::new(0)),
+            worker_dropped_frames: Arc::new(AtomicU64::new(0)),
+            sink_empty_on_pcm: Arc::new(AtomicU64::new(0)),
+            stream_failures: Arc::new(AtomicU64::new(0)),
+            stream_recoveries: Arc::new(AtomicU64::new(0)),
+        };
+        output.enqueue(&[1, -1], 1.0, 1.0);
+        output.set_volume(0.0);
+        assert!(matches!(receiver.try_recv().unwrap(), AudioMessage::Frame { .. }));
+        assert_eq!(
+            f32::from_bits(output.volume_bits.load(Ordering::Acquire)),
+            0.0
+        );
     }
 
     #[test]
@@ -791,6 +871,20 @@ mod tests {
         assert_eq!(output.submitted_frames(), 0);
         output.enqueue(&[1], 1.0, 1.0); // invalid PCM never enters the queue
         assert_eq!(output.producer_dropped_frames(), 1);
+    }
+
+    #[test]
+    fn idle_rodio_sink_applies_live_volume_without_new_pcm() {
+        let (sink, _queue) = rodio::Sink::new();
+        let volume = AtomicU32::new(1.0_f32.to_bits());
+        apply_sink_volume(&sink, &volume);
+        assert_eq!(sink.volume(), 1.0);
+        volume.store(0.35_f32.to_bits(), Ordering::Release);
+        apply_sink_volume(&sink, &volume);
+        assert_eq!(sink.volume(), 0.35);
+        volume.store(0.0_f32.to_bits(), Ordering::Release);
+        apply_sink_volume(&sink, &volume);
+        assert_eq!(sink.volume(), 0.0);
     }
 
     #[test]

@@ -20,7 +20,7 @@ fi
   fail 'must_inherit_active_hyprland_environment'
 [[ -d "${XDG_RUNTIME_DIR:-/nonexistent}" ]] || fail 'missing_runtime_directory'
 
-for command_name in gh curl sha256sum tar hyprctl git; do
+for command_name in gh curl sha256sum tar hyprctl git jq; do
   command -v "$command_name" >/dev/null 2>&1 || fail "missing_${command_name}"
 done
 hyprctl -j activeworkspace >/dev/null 2>&1 || fail 'hyprland_ipc_unavailable'
@@ -60,29 +60,74 @@ fi
 printf '%s  %s\n' "${digest#sha256:}" "$archive" | sha256sum -c --status ||
   fail 'cached_runner_archive_checksum_invalid'
 
-# Dispatch a fresh acceptance run pinned to the repository's *current*
-# main. Earlier queued revisions can be consumed automatically as well;
-# do not silently accept an obsolete 11-probe build as the latest 12-probe
-# physical evidence. This requires Actions:write on the local gh identity.
+# A physical workspace test must never be cancelled while it is running:
+# abruptly killing the orchestrator could strand Hyprland on its temporary
+# workspace. Cancel ONLY stale queued/pending requests, never in_progress.
+# Keep the newest main-branch request and do not waste ephemeral runner
+# registration tokens draining obsolete 11-probe or older source revisions.
+#
+# The Actions runs index can lag behind a dispatch, so retain the newest
+# existing run rather than canceling everything blindly. The canceled
+# requests contain no hardware evidence and cannot contribute to acceptance.
+cancel_stale_pending_native_runs() {
+  local json keep ids id
+  json="$(gh api 'repos/sguzman/starbyte/actions/runs?per_page=100')" ||
+    fail 'cannot_list_native_qa_runs'
+  keep="$(printf '%s' "$json" | jq -r '
+    [.workflow_runs[]
+     | select(.name == "native Hyprland acceptance" and .head_branch == "main")
+     | select(.status == "queued" or .status == "pending" or .status == "waiting")
+    ] | sort_by(.created_at, .id) | last | .id // empty
+  ')" || fail 'cannot_select_latest_native_qa'
+  [[ -z "$keep" || "$keep" =~ ^[0-9]+$ ]] || fail 'invalid_latest_native_run_id'
+  ids="$(printf '%s' "$json" | jq -r --arg keep "$keep" '
+    [.workflow_runs[]
+     | select(.name == "native Hyprland acceptance" and .head_branch == "main")
+     | select(.status == "queued" or .status == "pending" or .status == "waiting")
+     | select((.id | tostring) != $keep)
+    ] | .[].id
+  ')" || fail 'cannot_select_stale_native_qa'
+  while IFS= read -r id; do
+    [[ -z "$id" ]] && continue
+    [[ "$id" =~ ^[0-9]+$ ]] || fail 'invalid_stale_native_run_id'
+    # A job could have just acquired a runner; cancellation is attempted
+    # only after rechecking its current status, never on a running job.
+    local state
+    state="$(gh api "repos/sguzman/starbyte/actions/runs/$id" --jq '.status')" ||
+      fail 'cannot_recheck_native_qa_run'
+    case "$state" in
+      queued|pending|waiting)
+        gh api --method POST "repos/sguzman/starbyte/actions/runs/$id/cancel" >/dev/null ||
+          fail 'cannot_cancel_obsolete_queued_native_qa'
+        ;;
+      in_progress|completed|requested)
+        ;;
+      *) fail 'unexpected_native_qa_run_state' ;;
+    esac
+  done <<<"$ids"
+}
+
+# Dispatch one fresh acceptance run pinned to current main, and retire only
+# stale pending requests. Active hardware QA is NEVER preempted. This needs
+# Actions:write on the desktop's authenticated gh identity.
 gh api --method POST \
   repos/sguzman/starbyte/actions/workflows/native-hyprland.yml/dispatches \
   -f ref=main >/dev/null || fail 'cannot_dispatch_latest_physical_workflow'
+sleep 3
+cancel_stale_pending_native_runs
 
-# Each ephemeral runner unregisters after exactly one accepted job. Drain up
-# to four pending native QA runs (including previously queued older ones),
-# rechecking GitHub each time rather than making an operator count them.
-# No runner service survives when this process exits.
-for ((job = 1; job <= 4; job++)); do
-  pending="$(gh api 'repos/sguzman/starbyte/actions/runs?per_page=50' --jq '
+# An ephemeral runner unregisters after one accepted job. If a run is
+# already executing, do not supersede it or claim this runner serviced it.
+# A two-pass index recheck covers dispatch-index propagation.
+for ((job = 1; job <= 2; job++)); do
+  pending="$(gh api 'repos/sguzman/starbyte/actions/runs?per_page=100' --jq '
     [.workflow_runs[]
-     | select(.name == "native Hyprland acceptance")
+     | select(.name == "native Hyprland acceptance" and .head_branch == "main")
      | select(.status == "queued" or .status == "pending" or .status == "waiting")
     ] | length
   ')" || fail 'cannot_query_pending_qa_jobs'
   [[ "$pending" =~ ^[0-9]+$ ]] || fail 'invalid_pending_qa_count'
   if (( pending == 0 )); then
-    # GitHub can acknowledge a workflow_dispatch a moment before its run
-    # appears in the run index. Recheck once if this was our first pass.
     if (( job == 1 )); then
       sleep 3
       continue

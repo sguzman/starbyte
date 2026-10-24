@@ -41,6 +41,65 @@ zero effect on the owner's active desktop before running a single probe.
 Do not install permanent services, change Hyprland config, ask the owner to
 manually test, or override the safeguard.
 
+## Candidate isolated-compositor design (not implemented or verified)
+
+The local investigation on 2026-10-24 did not start any experimental
+compositor. Hyprland/Aquamarine are installed, Weston is not, and this host
+has no independently assigned QA input seat. The presence of render-only DRM
+nodes does not establish seat isolation. The `--check-only` wrapper completed
+without workspace changes or GUI windows.
+
+The next design to validate is a two-stage, software-rendered nested setup:
+
+1. Start Weston with its documented `headless` backend and Pixman renderer in
+   a dedicated process/mount namespace. Give it a fresh private
+   `XDG_RUNTIME_DIR` and socket name. Do not expose the owner's Wayland socket,
+   `/dev/input`, DRM primary nodes, systemd user-manager socket, or D-Bus
+   sockets to that namespace. Weston documents the headless backend as having
+   no input or output; this is preliminary infrastructure evidence only, not
+   Hyprland or Starbyte acceptance.
+2. Start Hyprland as a nested Wayland client of that private Weston socket,
+   with an ephemeral config and private runtime path. Require startup evidence
+   that Aquamarine selected the Wayland backend. Deny access to all host input
+   and DRM devices. Set `HYPRLAND_NO_SD_VARS=1`, and keep systemd/D-Bus sockets
+   inaccessible, so a child compositor cannot import or unset the owner's
+   activation environment.
+3. Launch Starbyte with only the nested Hyprland socket in its environment.
+   Provide input only through a virtual-keyboard protocol client connected to
+   that private socket. Confirm the focused Starbyte surface and key events
+   through the nested compositor's private IPC, never through the owner's
+   compositor. Ensure all compositor and test processes are reaped on failure.
+
+The DRM kernel documentation says render nodes do not permit modesetting or
+DRM-master operations, but they still share GPU execution resources. If the
+Wayland-nested design cannot start without opening a host DRM or input device,
+stop and require a separately provisioned VM or physically separate seat; do
+not fall back to the owner's compositor. Hyprland's `AQ_DRM_DEVICES` and
+`AQ_NO_KMS_REQUIREMENT` options alone are not an isolation boundary. The
+`HYPRLAND_NO_SD_VARS` guard is necessary but not sufficient without hiding
+session-manager sockets.
+
+References for the proposed boundaries: [Weston's backend and renderer
+documentation](https://wayland.pages.freedesktop.org/weston/toc/running-weston.html),
+[Hyprland environment variables](https://wiki.hypr.land/configuring/core/environment-variables/),
+[Aquamarine device selection](https://github.com/hyprwm/aquamarine/blob/main/docs/env.md),
+[Linux DRM render-node guarantees](https://docs.kernel.org/6.11/gpu/drm-uapi.html),
+and [Hyprland's backend and virtual-keyboard protocol registration](https://github.com/hyprwm/Hyprland/blob/main/CMakeLists.txt).
+
+Before allowing any GUI probe, a dedicated supervisor and regression tests
+must prove: the socket and environment are private; the sandbox cannot open
+host input or DRM primary nodes; no host Hyprland IPC is reachable; compositor
+startup selects only the nested Wayland backend; a virtual key focuses and
+operates only Starbyte inside that compositor; and all child processes stop
+on success, timeout, and failure. Weston results must remain labeled
+preliminary. Even a verified nested Hyprland run would not establish physical
+monitor, GPU scanout, audible-device, or hardware-gamepad acceptance.
+
+No such sandbox or test was available in this checkout/session, so this
+design is not permission to start a compositor. The existing wrapper and
+collector hard-stops remain authoritative until the complete safety proof and
+regression coverage exist.
+
 ## Evidence already obtained
 
 - Native full harness on `b1448b3`: 11/12 pass. Nine original-window

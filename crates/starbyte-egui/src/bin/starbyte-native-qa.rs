@@ -971,6 +971,31 @@ mod tests {
     }
 
     #[test]
+    fn wrapper_blocks_gui_modes_before_external_commands() {
+        let wrapper = include_str!("../../../../scripts/qa-native-hyprland.sh");
+        let case_start = wrapper
+            .find("case \"${1:-}\" in")
+            .expect("wrapper must validate mode before running commands");
+        let cases = &wrapper[case_start..];
+        let focused = cases
+            .split("  \"\"|--focused-only)")
+            .nth(1)
+            .expect("focused-only mode must have an explicit safety branch")
+            .split(";;")
+            .next()
+            .expect("focused-only safety branch must terminate");
+
+        assert!(focused.contains("fail 'owner_desktop_focus_must_not_be_stolen"));
+        assert!(!focused.contains("cargo"));
+        assert!(!focused.contains("git"));
+        assert!(!focused.contains("hyprctl"));
+        assert!(!focused.contains("starbyte-native-qa"));
+        assert!(wrapper[case_start..]
+            .find("for command_name in cargo git")
+            .is_some_and(|commands| commands > 0));
+    }
+
+    #[test]
     fn isolated_qa_workspace_guard_rejects_external_focus_and_invalid_ids() {
         let active = serde_json::json!({"id": 812345, "name": "812345"});
         assert!(super::qa_workspace_matches("812345", &active));

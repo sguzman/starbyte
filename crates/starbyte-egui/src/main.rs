@@ -623,11 +623,8 @@ mod speaker_cli_tests {
         let parsed = Args::try_parse_from(flags).unwrap();
         assert!(parsed.exit_after_full_worker_physical_pause);
         assert!(
-            Args::try_parse_from([
-                "starbyte-egui",
-                "--exit-after-full-worker-physical-pause"
-            ])
-            .is_err()
+            Args::try_parse_from(["starbyte-egui", "--exit-after-full-worker-physical-pause"])
+                .is_err()
         );
         assert!(
             Args::try_parse_from([

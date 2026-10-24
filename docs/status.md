@@ -4,6 +4,10 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## Stream fault/recovery diagnostics (2026-10-23)
+
+The dedicated Rodio/CPAL audio worker now counts detected post-open stream faults separately from successful recovery opens. A new output attempt is not treated as recovered until opening succeeds; callbacks for alternate output candidates are isolated, preventing false failures from a rejected device. Counters are visible in the original Sound panel for worker and legacy audio. [`ae9ce76`](https://github.com/sguzman/starbyte/commit/ae9ce76602758eac3e2abbfea1abf081adc53af5) is checked by [CI 40045761526](https://github.com/sguzman/starbyte/actions/runs/40045761526), with device-free tests. Actual USB/audio-route disconnect/reconnect, PipeWire behavior, speaker audibility and gamepad evidence are still unverified; no acceptance task can be completed from these counters alone. **69/77 accepted; worker preview still opt-in.**
+
 ## Asynchronous ROM feedback and stream recovery (2026-10-23)
 
 The opt-in original-window worker now carries request identities through save and screenshot completions so older acknowledgements do not replace newer ROM-loading status. Screenshot pixels already captured before a successful replacement are still written to disk rather than discarded. [`baf5a02`](https://github.com/sguzman/starbyte/commit/baf5a025a40ce8bf70c151819aba22decda0bac9) passed [all four CI jobs](https://github.com/sguzman/starbyte/actions/runs/40043507022), including native virtual Weston.

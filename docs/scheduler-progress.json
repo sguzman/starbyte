@@ -5,8 +5,8 @@
   "source": "docs/scheduler-migration.md",
   "interpretation": "Accepted status mirrors the human-reviewed source checklist. A passing virtual Weston job does not establish physical Hyprland, audible speakers, gamepad, or production cutover.",
   "last_verified_code": {
-    "commit": "7839b30b2440f4189cd0c4929bd89f30b41dca20",
-    "ci_run": 40044092562,
+    "commit": "ae9ce76602758eac3e2abbfea1abf081adc53af5",
+    "ci_run": 40045761526,
     "jobs": [
       "test (ubuntu-latest)",
       "test (windows-latest)",

@@ -1,7 +1,13 @@
 # Emulation scheduler migration
 
-**Status: in progress. Code commit [`a35ced5`](https://github.com/sguzman/starbyte/commit/a35ced5ddd05e6f4908967ebe4b322bbf6b42ef6) adds selection/generation fencing for late speaker-test receipts; [CI run 40042065947](https://github.com/sguzman/starbyte/actions/runs/40042065947) provides exact-revision Linux, Windows, formatting/Clippy and pinned Rust 1.88 checks. Verified source progress is 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. The complete original library worker is still opt-in; production-default cutover, physical Hyprland and audible-device quality remain unverified.**
+**Status: in progress. Code commit [`ae9ce76`](https://github.com/sguzman/starbyte/commit/ae9ce76602758eac3e2abbfea1abf081adc53af5) carries device-specific fault flags and separate recovery counters; [CI run 40045761526](https://github.com/sguzman/starbyte/actions/runs/40045761526) provides exact-revision Linux/Weston, Windows, formatting/Clippy, and pinned Rust 1.88 checks. Verified source progress is 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. The full-library worker is still opt-in; production cutover, physical Hyprland, speaker audibility and actual disconnect/reconnect recovery remain unverified.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
+
+## 2026-10-23 stream-fault accounting and candidate isolation
+
+The audio worker now distinguishes **CPAL stream faults** from **successful output reopenings** and publishes both counts through the opt-in original-window Sound panel and the legacy worker's audio output. A successful initial open, or an unsuccessful retry after a reported fault, never counts as a recovery. Each default/alternate-device candidate owns its own fault flag; a callback from a rejected candidate cannot mark the ultimately selected stream failed and trigger a spurious second restart.
+
+[`ae9ce76`](https://github.com/sguzman/starbyte/commit/ae9ce76602758eac3e2abbfea1abf081adc53af5) includes device-free tests for these distinctions; [CI 40045761526](https://github.com/sguzman/starbyte/actions/runs/40045761526) is the exact-code verification run. These counters measure software events only. They **do not** verify that a physically disconnected output is detected, reconnection is audible or a background game continues making sound. P-18 stays pending, as do all seven other hardware/production tasks.
 
 ## 2026-10-23 post-handoff receipt and audio recovery hardening
 

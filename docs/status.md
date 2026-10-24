@@ -4,6 +4,10 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## Focused-FPS evidence integrity (2026-10-24)
+
+[`dede0ce`](https://github.com/sguzman/starbyte/commit/dede0ceb325739edf5b86bdfa32f537cd1687600) rejects the physical focused-clock success receipt when advertised FPS contradicts actual completed worker frames and elapsed wall time, or when frame evidence is missing. Regression tests include zero frames, inconsistent rates and normal timestamp rounding. [Exact-code CI 40131591925](https://github.com/sguzman/starbyte/actions/runs/40131591925) passed Linux/virtual Wayland, Windows, lint and Rust 1.88. This improves **evidence validity**, not physical gate acceptance. The native self-hosted run remains unclaimed; accepted is still 69/77 (90%).
+
 ## Native QA runner prioritization, failure cleanup and sanitized evidence (2026-10-24)
 
 [`25e8165`](https://github.com/sguzman/starbyte/commit/25e8165ac74307e440e312e5bb1a7275ad221adc) makes the unattended local ephemeral runner select the exact current `main` workflow_dispatch before retiring obsolete *queued* physical requests. Active native jobs are never deliberately canceled; a missing latest dispatch fails instead of quietly running stale code. The queue filters were independently checked with a synthetic mixed-state run-index fixture. [`84bee78`](https://github.com/sguzman/starbyte/commit/84bee78ba01cb977a739b045fd732c874a2e2215) ensures Rust's native probe collector kills and reaps an emulator child if a compositor query or early observation fails, with a Linux process-lifetime regression.

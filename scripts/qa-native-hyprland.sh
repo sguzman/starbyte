@@ -13,7 +13,7 @@ fail() {
 [[ "${XDG_SESSION_TYPE:-}" == wayland ]] || fail 'no_native_wayland_session'
 [[ -n "${WAYLAND_DISPLAY:-}" ]] || fail 'no_wayland_display'
 [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]] || fail 'no_hyprland_session'
-for command_name in cargo git hyprctl; do
+for command_name in cargo git hyprctl jq; do
   command -v "$command_name" >/dev/null 2>&1 || fail "missing_$command_name"
 done
 
@@ -48,8 +48,36 @@ if ! cargo test --locked -p starbyte-egui --bin starbyte-native-qa >"$local_root
   fail 'runner_contract_failed_private_log_retained'
 fi
 
+# Do not create twelve test windows on the owner's working workspace.
+# The physical tests still need compositor focus, so run them together in one
+# fresh, unused numeric QA workspace rather than scattering windows among
+# whichever workspaces are active. Build/tests above do not change focus.
+original_workspace="$(hyprctl -j activeworkspace | jq -er '.id | select(type == "number" and . > 0)')" ||
+  fail 'original_workspace_not_regular_numeric'
+qa_workspace=$((800000 + $ % 100000))
+while hyprctl -j workspaces | jq -e --argjson id "$qa_workspace"   '.[] | select(.id == $id)' >/dev/null; do
+  qa_workspace=$((qa_workspace + 1))
+done
+# Do not steal the user's focus back if they intentionally changed to a
+# different workspace during QA. Restore only when the active workspace is
+# ours, including a temporary starbyte-qa-* compositor transition.
+restore_desktop_workspace() {
+  local active_id active_name
+  active_id="$(hyprctl -j activeworkspace | jq -r '.id // empty' 2>/dev/null)" || return
+  active_name="$(hyprctl -j activeworkspace | jq -r '.name // empty' 2>/dev/null)" || return
+  if [[ "$active_id" == "$qa_workspace" || "$active_name" == starbyte-qa-* || "$active_name" == name:starbyte-qa-* ]]; then
+    hyprctl dispatch "hl.dsp.focus({ workspace = $original_workspace })" >/dev/null 2>&1 ||
+      printf 'STARBYTE_NATIVE_QA_FAILED desktop_workspace_restore_failed\n' >&2
+  fi
+}
+trap restore_desktop_workspace EXIT
+hyprctl dispatch "hl.dsp.focus({ workspace = $qa_workspace })" >/dev/null ||
+  fail 'cannot_enter_dedicated_qa_workspace'
+[[ "$(hyprctl -j activeworkspace | jq -r '.id // empty')" == "$qa_workspace" ]] ||
+  fail 'dedicated_qa_workspace_not_active'
+
 set +e
-target/debug/starbyte-native-qa --physical-workspace >"$local_root/native-qa.log" 2>&1
+STARBYTE_QA_WORKSPACE_ID="$qa_workspace" target/debug/starbyte-native-qa --physical-workspace >"$local_root/native-qa.log" 2>&1
 probe_status=$?
 set -e
 
@@ -65,7 +93,7 @@ awk -F '\t' '
   $2 != "pass" { exit 1 }
   { count++ }
   END { if (count != 12) exit 1 }
-' "$probe_root/results.tsv" || fail 'incomplete_11_probe_receipts'
+' "$probe_root/results.tsv" || fail 'incomplete_12_probe_receipts'
 focused_receipt="$probe_root/real-focused-clock/focused-clock-observation.json"
 [[ -s "$focused_receipt" ]] || fail 'missing_focused_clock_compositor_receipt'
 grep -Fq '"native_wayland_client": true' "$focused_receipt" ||

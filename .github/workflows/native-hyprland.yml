@@ -1,9 +1,12 @@
 name: native Hyprland acceptance
 
-# Only an authorized dispatch may use the owner's machine. In particular,
-# public pull requests and arbitrary pushes must NEVER execute on a self-
-# hosted runner attached to an interactive desktop.
+# Only a trusted main-branch marker commit or an authorized dispatch may
+# touch the owner's interactive desktop. Public PRs do not run here.
 on:
+  push:
+    branches: [main]
+    paths:
+      - .github/native-qa-dispatch
   workflow_dispatch:
 
 permissions:

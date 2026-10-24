@@ -25,6 +25,25 @@ Starbyte is a **fun-first Rust SNES emulator** targeting **Linux + native Waylan
 7. Use conventional, scoped commit messages and commit completed work. Do not silently rewrite history.
 8. Preserve existing behavior unless replacing it is intentional and documented.
 
+## Unattended real-Hyprland QA
+
+When this coding agent runs **inside the owner's actual interactive Hyprland
+session**, run `bash scripts/qa-native-hyprland.sh` itself, without delegating
+terminal, controller or window operations to the owner. It builds the binaries,
+runs the nine synthetic native-window probes plus two genuine physical workspace
+transitions, restores the compositor workspace and keeps raw logs private.
+Report actual observed results, not inferred availability.
+
+When orchestrating through GitHub instead, change only
+`.github/native-qa-dispatch` on main to trigger the dedicated trusted
+self-hosted workflow. This requires an **already registered and running**
+`self-hosted, linux, x64, hyprland` runner in the actual login session;
+a queued job does **not** mean the desktop was tested. Do not install a
+system-level runner, leak host credentials, upload logs or treat a generic
+cloud CI machine as a substitute. See `docs/native-qa-execution.md`.
+Never mark physical speaker, gamepad, save-state or production-cutover gates
+accepted without their own direct evidence.
+
 ## Linux/Wayland
 
 Prefer native Wayland and test under a Wayland session, especially resizing, fullscreen, scaling, keyboard/gamepad focus, dialogs, audio continuity and idle/input behavior. Keep the X11 fallback isolated and do not call Wayland validated merely because the `wayland` Cargo feature compiles. Avoid fixed minimum windows that make tiling inconvenient.

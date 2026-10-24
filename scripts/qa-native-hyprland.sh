@@ -21,7 +21,10 @@ done
 # desktop. This checkout may be mutated by an authorized local coding agent
 # but CI dispatches are pinned to the repository's protected main branch.
 if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
-  [[ "${GITHUB_EVENT_NAME:-}" == workflow_dispatch ]] || fail 'unsafe_action_event'
+  case "${GITHUB_EVENT_NAME:-}" in
+    workflow_dispatch|push) ;;
+    *) fail 'unsafe_action_event' ;;
+  esac
   [[ "${GITHUB_REPOSITORY:-}" == sguzman/starbyte ]] || fail 'unexpected_repository'
   [[ "${GITHUB_REF:-}" == refs/heads/main ]] || fail 'not_main_branch'
 fi

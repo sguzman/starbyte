@@ -9004,18 +9004,11 @@ mod playback_tests {
     #[test]
     fn resynced_gamepad_buttons_are_only_currently_held_not_queued_taps() {
         use gilrs::Button;
-        let active = std::collections::BTreeSet::from([
-            Button::South,
-            Button::DPadRight,
-        ]);
+        let active = std::collections::BTreeSet::from([Button::South, Button::DPadRight]);
         let held = super::cached_button_names(|button| active.contains(&button));
-        assert_eq!(
-            held,
-            std::collections::BTreeSet::from([
-                "South".to_owned(),
-                "DPadRight".to_owned(),
-            ])
-        );
+        assert_eq!(held.len(), 2);
+        assert!(held.contains("South"));
+        assert!(held.contains("DPadRight"));
         // A completed hidden-workspace press/release is absent from the
         // current snapshot, so restoring held state cannot replay it.
         assert!(!held.contains("Start"));

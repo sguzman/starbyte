@@ -1270,7 +1270,9 @@ mod tests {
         };
         let mut owner = OwnedSession::create(assets).unwrap();
         owner.set_audio(false, true, 0.0);
-        owner.load_rom(&rom_path, SoundSessionMode::Persistent).unwrap();
+        owner
+            .load_rom(&rom_path, SoundSessionMode::Persistent)
+            .unwrap();
         owner.set_cheats(&[CheatEntry {
             id: "retry-sram".to_owned(),
             game_id: "sram-retry".to_owned(),

@@ -17,6 +17,14 @@ until a separately verified compositor **and input seat** can perform
 real GUI QA without workspace or keyboard-focus hijacking. No workaround
 may simply restore the previous focus after stealing it.
 
+`scripts/qa-isolated-wayland.sh --check-only` now verifies a Bubblewrap
+process/mount namespace with the host display, session sockets, input/DRM
+devices, and user configuration excluded. The local namespace-view check
+passed without starting a compositor; Weston and its disposable client are
+not installed, so the Weston smoke correctly stops before launch. No separate
+Hyprland compositor or virtual input seat is verified. The GUI hard-stops
+remain in force, and scheduler acceptance remains **71/77 (92%)**.
+
 
 ## Targeted focused QA option (2026-10-24)
 

@@ -5,6 +5,7 @@
 ## P0 — reach a genuinely playable game
 
 - [ ] Validate native Wayland launch, tiled-window behavior, fullscreen, focus and gamepad use on the target Linux desktop. **Actual Hyprland commercial-ROM window launch and 500-frame clean exit now verified** (2026-10-12); controller enumeration verified, but button responsiveness, fullscreen, focus and open-ended play still require acceptance. Weston headless smoke also runs in Linux CI.
+- [ ] Finish isolated native-QA infrastructure: Bubblewrap namespace-view checks now hide the host display/session sockets and physical device trees, but Weston smoke is blocked because Weston is not installed, and nested Hyprland/private virtual-seat behavior remains unverified. See [native QA execution](native-qa-execution.md); existing GUI launch guards stay closed.
 - [x] Provide a copyright-free, built-in visual demo for local Wayland smoke testing and generated CPU-to-PPU pixel regression (implemented; native desktop verification remains open).
 - [x] Capture a recognizable Super Mario World title frame from a user-supplied ROM; real-ROM screenshot evidence is documented in [the compatibility record](compatibility/super-mario-world.md).
 - [x] Drive Super Mario World title, save-selection, welcome and overworld navigation into Yoshi's Island 2; deterministic headless input confirms sustained rightward movement, a running jump, camera scrolling and death/recovery. Native controls remain a separate open gate.

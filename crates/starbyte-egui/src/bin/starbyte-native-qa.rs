@@ -990,9 +990,40 @@ mod tests {
         assert!(!focused.contains("git"));
         assert!(!focused.contains("hyprctl"));
         assert!(!focused.contains("starbyte-native-qa"));
-        assert!(wrapper[case_start..]
-            .find("for command_name in cargo git")
-            .is_some_and(|commands| commands > 0));
+        assert!(
+            wrapper[case_start..]
+                .find("for command_name in cargo git")
+                .is_some_and(|commands| commands > 0)
+        );
+    }
+
+    #[test]
+    fn isolated_wayland_harness_hides_host_display_and_devices() {
+        let harness = include_str!("../../../../scripts/qa-isolated-wayland.sh");
+        for required in [
+            "--unshare-all --die-with-parent --new-session",
+            "--tmpfs /run",
+            "--tmpfs /tmp",
+            "--dev /dev",
+            "--clearenv",
+            "--unsetenv DISPLAY",
+            "--unsetenv WAYLAND_SOCKET",
+            "test ! -e /dev/input",
+            "test ! -e /dev/dri",
+            "test ! -e /run/user/qa/bus",
+            "test ! -e /tmp/.X11-unix",
+            "--backend=headless --renderer=pixman",
+            "timeout --signal=TERM 2s",
+            "weston-simple-shm",
+            "PRIVATE_WESTON_TORN_DOWN",
+        ] {
+            assert!(
+                harness.contains(required),
+                "missing isolation guard: {required}"
+            );
+        }
+        assert!(!harness.contains("hyprctl"));
+        assert!(!harness.contains("XDG_SESSION_BUS_ADDRESS"));
     }
 
     #[test]

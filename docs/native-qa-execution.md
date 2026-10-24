@@ -41,13 +41,32 @@ zero effect on the owner's active desktop before running a single probe.
 Do not install permanent services, change Hyprland config, ask the owner to
 manually test, or override the safeguard.
 
-## Candidate isolated-compositor design (not implemented or verified)
+## Isolated Wayland infrastructure (partially implemented)
 
 The local investigation on 2026-10-24 did not start any experimental
 compositor. Hyprland/Aquamarine are installed, Weston is not, and this host
 has no independently assigned QA input seat. The presence of render-only DRM
 nodes does not establish seat isolation. The `--check-only` wrapper completed
 without workspace changes or GUI windows.
+
+`scripts/qa-isolated-wayland.sh` is the bounded infrastructure entrypoint. Its
+`--check-only` mode creates a private runtime directory and enters a
+Bubblewrap process/mount namespace with a cleared environment, private `/run`
+and `/tmp`, a minimal `/dev`, no network namespace access, and only read-only
+system binaries. It checks that host display/session sockets and input/DRM
+device directories are absent, host `DISPLAY` and `WAYLAND_SOCKET` are unset,
+and the private Wayland socket is not present before compositor startup. It
+does not alter or inspect the running compositor. The check passed locally on
+2026-10-24. This verifies the namespace view, not compositor behavior.
+
+The `--weston-smoke` mode is implemented but was not run: Weston and its
+`weston-simple-shm` client are not installed. It refuses before spawning any
+process if either is missing. When available, it starts Weston with the
+headless backend and Pixman renderer inside the same namespace, connects the
+disposable client through only the private socket, then reaps Weston. This
+would be preliminary Weston infrastructure evidence, not Hyprland or Starbyte
+acceptance. A regression test checks the source-level isolation guards. The
+existing wrapper and collector hard-stops remain authoritative.
 
 The next design to validate is a two-stage, software-rendered nested setup:
 
@@ -95,10 +114,12 @@ on success, timeout, and failure. Weston results must remain labeled
 preliminary. Even a verified nested Hyprland run would not establish physical
 monitor, GPU scanout, audible-device, or hardware-gamepad acceptance.
 
-No such sandbox or test was available in this checkout/session, so this
-design is not permission to start a compositor. The existing wrapper and
-collector hard-stops remain authoritative until the complete safety proof and
-regression coverage exist.
+No separate Hyprland compositor or private virtual input seat has been
+verified. In particular, there is no evidence yet that Hyprland can run
+nested under the isolated Weston socket, select only the nested Wayland
+backend, or accept virtual-keyboard input without host session interaction.
+Do not start Hyprland or Starbyte until those boundaries have dedicated
+fail-closed tests. The native GUI wrapper and collector remain blocked.
 
 ## Evidence already obtained
 

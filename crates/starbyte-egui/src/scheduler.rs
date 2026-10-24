@@ -210,6 +210,8 @@ impl<Frame> FrameMailbox<Frame> {
     }
 }
 
+type LiveControlSlot<Machine> = Arc<Mutex<Option<Box<dyn FnOnce(&mut Machine) + Send>>>>;
+
 enum Command<Machine> {
     Run(bool),
     Focus(bool),
@@ -223,9 +225,9 @@ enum Command<Machine> {
         Sender<Result<(), String>>,
     ),
     Post(Box<dyn FnOnce(&mut Machine) + Send>),
-    /// Infrequent live controls such as mute are exempt from the quota for
-    /// long-running save/cheat jobs, but stay ordered with worker commands.
-    LiveControl(Box<dyn FnOnce(&mut Machine) + Send>),
+    /// Latest-only user sound settings remain ordered without allocating a
+    /// new command for every volume slider update during long file jobs.
+    LiveControl(LiveControlSlot<Machine>),
     Shutdown,
 }
 
@@ -283,7 +285,15 @@ fn apply_command<Machine>(
             action(machine);
             pending_posts.fetch_sub(1, Ordering::AcqRel);
         }
-        Command::LiveControl(action) => action(machine),
+        Command::LiveControl(slot) => {
+            let pending = slot
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .take();
+            if let Some(action) = pending {
+                action(machine);
+            }
+        }
         Command::Shutdown => return false,
     }
     true
@@ -311,6 +321,7 @@ pub struct EmulatorScheduler<Machine: Send + 'static, Frame: Send + 'static> {
     resumed_transitions: Arc<AtomicU64>,
     gui_heartbeat: Arc<GuiHeartbeat>,
     pending_posts: Arc<AtomicUsize>,
+    live_control_slot: LiveControlSlot<Machine>,
     join: Option<JoinHandle<Machine>>,
 }
 
@@ -362,6 +373,7 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
         let worker_heartbeat = Arc::clone(&gui_heartbeat);
         let pending_posts = Arc::new(AtomicUsize::new(0));
         let worker_pending_posts = Arc::clone(&pending_posts);
+        let live_control_slot = Arc::new(Mutex::new(None));
         let join = thread::Builder::new()
             .name("starbyte-emulation".to_owned())
             .spawn(move || {
@@ -388,6 +400,7 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
             resumed_transitions,
             gui_heartbeat,
             pending_posts,
+            live_control_slot,
             join: Some(join),
         })
     }
@@ -460,16 +473,33 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
         self.send_bounded(Command::SpeedAndApply(speed_percent, Box::new(update)))
     }
 
-    /// Queue an infrequent, safety-relevant live setting (e.g. Mute) without
-    /// waiting for file/cheat operation quota. This is not for repeated
-    /// frame input or arbitrary jobs, which must still use post().
+    /// Coalesce live sound settings (mute/volume) into a single pending owner
+    /// command. Frequent slider drags cannot build an unbounded queue, and a
+    /// full file/cheat operation quota cannot reject a user mute request.
+    /// Only the latest pending setting is applied, in owner-command order.
     pub fn update_live_control(
         &self,
         action: impl FnOnce(&mut Machine) + Send + 'static,
     ) -> Result<(), String> {
-        self.commands
-            .send(Command::LiveControl(Box::new(action)))
-            .map_err(|_| "emulation worker is not running".to_owned())
+        if self.is_worker_finished() {
+            return Err("emulation worker is not running".to_owned());
+        }
+        let mut slot = self
+            .live_control_slot
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let already_pending = slot.is_some();
+        *slot = Some(Box::new(action));
+        if !already_pending
+            && self
+                .commands
+                .send(Command::LiveControl(Arc::clone(&self.live_control_slot)))
+                .is_err()
+        {
+            slot.take();
+            return Err("emulation worker is not running".to_owned());
+        }
+        Ok(())
     }
 
     /// Queue a user-initiated operation without blocking the egui event
@@ -1198,6 +1228,39 @@ mod tests {
         release_tx.send(()).unwrap();
         assert!(!worker.transact(|enabled| Ok(*enabled)).unwrap());
         assert_eq!(worker.outstanding_async_operations(), 0);
+        worker.shutdown().unwrap();
+    }
+
+    #[test]
+    fn burst_of_live_volume_changes_coalesces_to_last_pending_setting() {
+        let worker = EmulatorScheduler::spawn(0_u32, Duration::from_millis(20), |volume| {
+            Ok(*volume)
+        })
+        .unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        worker
+            .post(move |_| {
+                let _ = started_tx.send(());
+                let _ = release_rx.recv();
+            })
+            .unwrap();
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let applied = Arc::new(AtomicUsize::new(0));
+        for latest in 0_u32..500 {
+            let applied = Arc::clone(&applied);
+            worker
+                .update_live_control(move |volume| {
+                    *volume = latest;
+                    applied.fetch_add(1, Ordering::AcqRel);
+                })
+                .unwrap();
+        }
+        assert!(worker.live_control_slot.lock().unwrap().is_some());
+        release_tx.send(()).unwrap();
+        assert_eq!(worker.transact(|volume| Ok(*volume)).unwrap(), 499);
+        assert_eq!(applied.load(Ordering::Acquire), 1);
+        assert!(worker.live_control_slot.lock().unwrap().is_none());
         worker.shutdown().unwrap();
     }
 

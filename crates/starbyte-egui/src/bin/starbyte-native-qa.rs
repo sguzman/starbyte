@@ -581,7 +581,9 @@ fn run_probe(
     if let Ok(expected) = env::var("STARBYTE_QA_WORKSPACE_ID") {
         let active = hyprland_json("activeworkspace")?;
         if !qa_workspace_matches(&expected, &active) {
-            return Err("dedicated QA workspace no longer active; refusing to spawn a window".into());
+            return Err(
+                "dedicated QA workspace no longer active; refusing to spawn a window".into(),
+            );
         }
     }
     let log_path = probe_dir.join("starbyte.log");
@@ -698,7 +700,9 @@ fn run() -> Result<(), Box<dyn Error>> {
             "--physical-workspace" => physical_workspace = true,
             "--only" => only_probe = Some(args.next().ok_or("--only needs a probe name")?),
             "--help" | "-h" => {
-                println!("Usage: starbyte-native-qa [--binary PATH] [--physical-workspace] [--only PROBE]");
+                println!(
+                    "Usage: starbyte-native-qa [--binary PATH] [--physical-workspace] [--only PROBE]"
+                );
                 println!("Run isolated demo smoke probes on native Hyprland.");
                 println!("--physical-workspace additionally tests real workspace progress");
                 println!("and pause-on-blur before restoring the previous workspace.");
@@ -742,10 +746,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         None
     };
     for probe in PROBES.iter().chain(supplemental.into_iter().flatten()) {
-        if only_probe
-            .as_deref()
-            .is_some_and(|name| name != probe.name)
-        {
+        if only_probe.as_deref().is_some_and(|name| name != probe.name) {
             continue;
         }
         total += 1;
@@ -954,7 +955,10 @@ mod tests {
         assert!(!super::qa_workspace_matches("0", &active));
         assert!(!super::qa_workspace_matches("-1", &active));
         assert!(!super::qa_workspace_matches("invalid", &active));
-        assert!(!super::qa_workspace_matches("812345", &serde_json::json!({})));
+        assert!(!super::qa_workspace_matches(
+            "812345",
+            &serde_json::json!({})
+        ));
     }
 
     #[test]

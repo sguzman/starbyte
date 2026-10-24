@@ -449,6 +449,17 @@ fn workspace_id(value: &serde_json::Value) -> Option<i64> {
     value.get("id")?.as_i64().filter(|id| *id > 0)
 }
 
+/// If the wrapper reserved a dedicated QA workspace, never open another
+/// test window after the user has moved focus elsewhere. Failing a probe is
+/// preferable to interrupting the working desktop with a new window.
+fn qa_workspace_matches(expected: &str, active: &serde_json::Value) -> bool {
+    expected
+        .parse::<i64>()
+        .ok()
+        .filter(|id| *id > 0)
+        .is_some_and(|id| workspace_id(active) == Some(id))
+}
+
 fn native_client_on_workspace(clients: &serde_json::Value, pid: u32, workspace: i64) -> bool {
     clients.as_array().is_some_and(|entries| {
         entries.iter().any(|entry| {
@@ -567,6 +578,12 @@ fn run_probe(
 ) -> Result<(bool, u128, Vec<&'static str>), Box<dyn Error>> {
     let probe_dir = root.join(probe.name);
     fs::create_dir(&probe_dir)?;
+    if let Ok(expected) = env::var("STARBYTE_QA_WORKSPACE_ID") {
+        let active = hyprland_json("activeworkspace")?;
+        if !qa_workspace_matches(&expected, &active) {
+            return Err("dedicated QA workspace no longer active; refusing to spawn a window".into());
+        }
+    }
     let log_path = probe_dir.join("starbyte.log");
     let log = File::create(&log_path)?;
     let mut command = isolated_probe_command(binary, &probe_dir, probe)?;
@@ -916,6 +933,17 @@ mod tests {
         assert!(native_client_on_workspace(&clients, 4321, 6));
         assert!(!native_client_on_workspace(&clients, 5432, 6));
         assert!(!native_client_on_workspace(&clients, 4321, 5));
+    }
+
+    #[test]
+    fn isolated_qa_workspace_guard_rejects_external_focus_and_invalid_ids() {
+        let active = serde_json::json!({"id": 812345, "name": "812345"});
+        assert!(super::qa_workspace_matches("812345", &active));
+        assert!(!super::qa_workspace_matches("812346", &active));
+        assert!(!super::qa_workspace_matches("0", &active));
+        assert!(!super::qa_workspace_matches("-1", &active));
+        assert!(!super::qa_workspace_matches("invalid", &active));
+        assert!(!super::qa_workspace_matches("812345", &serde_json::json!({})));
     }
 
     #[test]

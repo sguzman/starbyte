@@ -637,9 +637,9 @@ impl QueuedKeyboardPresses {
         allow_keyboard_gameplay: bool,
     ) {
         let now = Instant::now();
-        let missed_callbacks = self.last_poll.is_some_and(|last| {
-            now.saturating_duration_since(last) >= GAMEPAD_STALE_POLL_INTERVAL
-        });
+        let missed_callbacks = self
+            .last_poll
+            .is_some_and(|last| now.saturating_duration_since(last) >= GAMEPAD_STALE_POLL_INTERVAL);
         self.last_poll = Some(now);
         if !allow_keyboard_gameplay || !ctx.input(|input| input.focused) || missed_callbacks {
             // A hidden Wayland window can lose the release callback, leaving

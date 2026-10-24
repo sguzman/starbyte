@@ -4,6 +4,10 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## Idle audio device-fault handling (2026-10-23)
+
+The detached Rodio/CPAL worker now observes failed output-stream callbacks while emulation is paused, polling every 250 ms instead of waiting indefinitely for the next synthesized PCM or UI control message. A faulted output is released and retried with the existing 10-second cooldown; startup with no prior output remains lazy, and manual desktop-route re-selection is kept separate from *automatic* post-fault recovery accounting. [Source `fe1d16b`](https://github.com/sguzman/starbyte/commit/fe1d16bf97d664af454c95ca4c878ff88adba5da) passed [all four CI jobs in run 40055135458](https://github.com/sguzman/starbyte/actions/runs/40055135458), including native virtual-Wayland smoke. Actual CPAL callback behavior across physical unplug/replug, speaker audibility and perceived sound continuity remain untested; **scheduler 69/77 (90%)** remains the accepted checkpoint.
+
 ## Live mixer volume and desktop route recovery
 
 The Rodio audio worker now applies volume changes to its **existing sink** even when emulation is paused and no new PCM arrives. Muting still clears queued game audio, but repeated already-muted updates do not re-clear the sink. The Sound panel adds **Reselect desktop audio output**: it releases a stale Rodio/CPAL route when changing the default OS output fails to trigger a stream-error callback, without altering the current game or save state. The next fresh game PCM or in-game speaker check attempts to open the current default output. The UI distinguishes an accepted reset request from a successful device reopen; manually selecting a route does not invent a CPAL failure or automatic recovery.

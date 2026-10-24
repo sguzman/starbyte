@@ -1,7 +1,13 @@
 # Emulation scheduler migration
 
-**Status: in progress. Latest code [`f72b672`](https://github.com/sguzman/starbyte/commit/f72b67215de38727e029d02f4da04bc5e2bc5134) fixes idle mixer volume application and adds manual desktop audio route re-selection, following worker-owned pause/resume diagnostics; [CI 40054055103](https://github.com/sguzman/starbyte/actions/runs/40054055103) checks the exact source on Linux/Weston, Windows, formatting/Clippy and Rust 1.88. Checklist-backed progress remains 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. Full-library worker stays opt-in; no physical Hyprland, audible-speaker, gamepad or production-default acceptance is inferred from synthetic CI.**
+**Status: in progress. Latest code [`fe1d16b`](https://github.com/sguzman/starbyte/commit/fe1d16bf97d664af454c95ca4c878ff88adba5da) monitors CPAL output faults while emulation is silent and retries a failed device without reopening unused or manually reset routes; manual re-selection never counts as automatic fault recovery. [CI 40055135458](https://github.com/sguzman/starbyte/actions/runs/40055135458) passed all four Linux/Weston, Windows, Clippy and Rust 1.88 jobs. Accepted checklist remains 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. Full-library worker remains opt-in; real physical Hyprland, speaker, gamepad and cutover evidence is still pending.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
+
+## Silent playback: real CPAL-fault polling and honest recovery counts
+
+[Code `fe1d16b`](https://github.com/sguzman/starbyte/commit/fe1d16bf97d664af454c95ca4c878ff88adba5da) fixes a worker lifetime gap in the existing audio recovery path. Previously the Rodio/CPAL worker waited indefinitely for its next PCM/control message; when emulation was paused, an asynchronous stream-failure callback could go unnoticed until gameplay resumed. The worker now checks for already-open stream faults on a bounded 250 ms idle interval and retries failed outputs using the existing 10-second cooldown, even with no new PCM. A previously unused sound route is not opened simply because the poll fired. Manual route re-selection also cancels outstanding automatic-recovery attribution so subsequent reopening is not mislabeled as fault recovery.
+
+[Exact-code CI 40055135458](https://github.com/sguzman/starbyte/actions/runs/40055135458) passed Linux tests including original-window Weston, Windows tests and benchmarks, formatting/Clippy and the pinned Rust 1.88 build. Device-independent tests cover idle retry prerequisites, cooldown and the separation of manual resets from automatic fault recovery. They cannot prove that a particular real-world unplug produces a CPAL callback, that a recovered OS stream routes to the desired speaker, or that game PCM is audible after reconnection. **P-18 is pending; total remains 69/77 (90%).**
 
 ## Mixer gain during paused play and manual default-route reset
 

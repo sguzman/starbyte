@@ -512,7 +512,10 @@ fn run_probe(
         true
     };
     Ok((
-        exited && missing.is_empty() && (!physical_workspace || switched_workspace) && focused_observed,
+        exited
+            && missing.is_empty()
+            && (!physical_workspace || switched_workspace)
+            && focused_observed,
         started.elapsed().as_millis(),
         missing,
     ))
@@ -749,12 +752,14 @@ mod tests {
             5432
         )
         .is_none());
-        assert!(super::focused_clock_receipt(
-            "STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_BEGIN frame=30",
-            25,
-            5432
-        )
-        .is_none());
+        assert!(
+            super::focused_clock_receipt(
+                "STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_BEGIN frame=30",
+                25,
+                5432
+            )
+            .is_none()
+        );
     }
 
     #[test]

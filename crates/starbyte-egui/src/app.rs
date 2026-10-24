@@ -79,6 +79,18 @@ pub(crate) fn discard_gamepad_backlog(
     !window_focused || now.saturating_duration_since(last_poll) >= GAMEPAD_STALE_POLL_INTERVAL
 }
 
+pub(crate) fn should_resync_gamepad(
+    focused: bool,
+    previously_focused: bool,
+    last_poll: Instant,
+    now: Instant,
+) -> bool {
+    // A focused callback can arrive promptly after many *unfocused* ones.
+    // Even without a long time gap, old controller state was cleared on blur
+    // and must be reconstructed without replaying any press edges.
+    discard_gamepad_backlog(focused, last_poll, now) || (focused && !previously_focused)
+}
+
 /// Reconstruct only the controller's *current* state after draining old
 /// Gilrs events on an off-workspace return. An old tap that was also
 /// released while away must not become a fresh press edge.
@@ -1113,6 +1125,7 @@ pub struct StarbyteApp {
     next_job_id: u64,
     gilrs: Option<Gilrs>,
     last_gamepad_poll: Instant,
+    last_gamepad_focused: bool,
     gamepad_buttons_down: BTreeSet<String>,
     gamepad_buttons_by_id: HashMap<GamepadId, BTreeSet<String>>,
     /// Unconsumed button press edges by physical controller.
@@ -1384,6 +1397,7 @@ impl StarbyteApp {
             next_job_id: 1,
             gilrs,
             last_gamepad_poll: Instant::now(),
+            last_gamepad_focused: false,
             gamepad_buttons_down: BTreeSet::new(),
             gamepad_buttons_by_id: HashMap::new(),
             queued_gamepad_presses: HashMap::new(),
@@ -3085,8 +3099,14 @@ impl StarbyteApp {
 
     fn poll_gamepad_events(&mut self, window_focused: bool) {
         let now = Instant::now();
-        let discard_backlog = discard_gamepad_backlog(window_focused, self.last_gamepad_poll, now);
+        let discard_backlog = should_resync_gamepad(
+            window_focused,
+            self.last_gamepad_focused,
+            self.last_gamepad_poll,
+            now,
+        );
         self.last_gamepad_poll = now;
+        self.last_gamepad_focused = window_focused;
         let Some(gilrs) = self.gilrs.as_mut() else {
             return;
         };
@@ -9013,6 +9033,29 @@ mod playback_tests {
         // current snapshot, so restoring held state cannot replay it.
         assert!(!held.contains("Start"));
         assert!(!held.contains("Unknown"));
+    }
+
+    #[test]
+    fn focus_return_resynchronizes_even_when_callbacks_never_stopped() {
+        let before = Instant::now();
+        assert!(super::should_resync_gamepad(
+            true,
+            false,
+            before,
+            before + Duration::from_millis(16)
+        ));
+        assert!(!super::should_resync_gamepad(
+            true,
+            true,
+            before,
+            before + Duration::from_millis(16)
+        ));
+        assert!(super::should_resync_gamepad(
+            false,
+            true,
+            before,
+            before + Duration::from_millis(16)
+        ));
     }
 
     #[test]

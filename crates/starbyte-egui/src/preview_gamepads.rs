@@ -11,7 +11,7 @@ use gilrs::{Axis, EventType, GamepadId, Gilrs};
 use starbyte_core::input::ControllerState;
 
 use crate::{
-    app::{cached_connected_gamepads, discard_gamepad_backlog, input_actions, set_controller_flag},
+    app::{cached_connected_gamepads, input_actions, set_controller_flag, should_resync_gamepad},
     session_engine::controller_from_bits,
 };
 
@@ -64,6 +64,7 @@ pub struct PreviewGamepads {
     sticks_by_id: HashMap<GamepadId, ControllerAxes>,
     bindings: BTreeMap<String, String>,
     last_poll: Instant,
+    last_focused: bool,
 }
 
 impl PreviewGamepads {
@@ -75,6 +76,7 @@ impl PreviewGamepads {
             sticks_by_id: HashMap::new(),
             bindings,
             last_poll: Instant::now(),
+            last_focused: false,
         }
     }
 
@@ -86,7 +88,9 @@ impl PreviewGamepads {
 
     pub fn poll(&mut self, focused: bool) -> (ControllerState, ControllerState) {
         let now = Instant::now();
-        let discard_backlog = discard_gamepad_backlog(focused, self.last_poll, now);
+        let discard_backlog =
+            should_resync_gamepad(focused, self.last_focused, self.last_poll, now);
+        self.last_focused = focused;
         if discard_backlog {
             // A compositor may skip egui updates without delivering a blur
             // event. Old held state and queued events must both be discarded:
@@ -230,14 +234,22 @@ mod tests {
     #[test]
     fn stale_events_are_not_replayed_after_background_or_long_callback_gap() {
         let now = Instant::now();
-        assert!(discard_gamepad_backlog(false, now, now));
-        assert!(discard_gamepad_backlog(
+        assert!(should_resync_gamepad(false, true, now, now));
+        assert!(should_resync_gamepad(
+            true,
             true,
             now,
             now + Duration::from_secs(2)
         ));
-        assert!(!discard_gamepad_backlog(
+        assert!(!should_resync_gamepad(
             true,
+            true,
+            now,
+            now + Duration::from_millis(16)
+        ));
+        assert!(should_resync_gamepad(
+            true,
+            false,
             now,
             now + Duration::from_millis(16)
         ));

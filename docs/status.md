@@ -4,6 +4,10 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## Native Hyprland acceptance executor prepared and source verified (2026-10-24)
+
+[`4304e20`](https://github.com/sguzman/starbyte/commit/4304e200501bf7759253c2dd73a2176bb46e6aef) adds a physical focused-window worker FPS/texture measurement and compositor-active-window evidence receipt to the opt-in native QA harness. It extends the physical plan to 12 checks and provides an ephemeral local runner bootstrap that can dispatch the latest trusted main workflow without installing a permanent desktop service. [CI 40127403253](https://github.com/sguzman/starbyte/actions/runs/40127403253) passed Linux, Windows, lint/Clippy and Rust 1.88. **Hosted success verifies code only.** Actual physical workflow attempts remain queued without a connected local runner, so speaker, gamepad, off-workspace behavior and default cutover are not accepted; scheduler ledger stays **69/77 (90%)**.
+
 ## Verified paused SRAM retries and robust audio-route resets (2026-10-24)
 
 [`af46bc3`](https://github.com/sguzman/starbyte/commit/af46bc34ef509d848daafc85b0a3cf7e224d36e2) repairs a 30-second retry delay after failed battery-SRAM writes. Failed saves retry after 5 seconds while successful writes retain the 30-second cadence; an integration test exercises an actual failed atomic write and subsequent recovery. [`9b62b85`](https://github.com/sguzman/starbyte/commit/9b62b85b862fbcc52f7f3c4414275adb24790f5d) adds a paused-owner maintenance hook so failed SRAM persists without emulating frames or waiting for Wayland redraws; paused retry and idle hook regressions pass [CI 40120984331](https://github.com/sguzman/starbyte/actions/runs/40120984331).

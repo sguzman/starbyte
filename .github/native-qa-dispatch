@@ -1,10 +1,8 @@
-# Trusted trigger for Starbyte's dedicated native Hyprland runner.
-# Changing this file on main requests one physical QA run.
-# It does not assert that the owner's desktop is reachable.
-request=2026-10-24-native-hyprland-acceptance-02
-requested_revision=752b8f72243c042692eecbfd89e7462ea609af5a
-scope=original-window,real-workspace-progress,real-background-pause
+# Trusted main-branch trigger for native Hyprland acceptance.
+# This is a request, NOT evidence that a local runner or hardware QA ran.
+request=2026-10-24-native-hyprland-acceptance-03
+requested_revision=4304e200501bf7759253c2dd73a2176bb46e6aef
+scope=9-original-window-smokes,1-physical-focused-clock,2-physical-workspace-transitions
 raw_logs=local_only
 hardware_audio_gamepad=not_tested_until_observed
-
 runner_labels=self-hosted,linux,x64

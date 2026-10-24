@@ -16,17 +16,17 @@
     "conclusion": "success"
   },
   "overall": {
-    "accepted": 69,
+    "accepted": 71,
     "total": 77,
-    "percent": 90
+    "percent": 92
   },
   "milestones": [
     {
       "id": "A",
       "title": "clock and ownership foundation",
-      "accepted": 7,
+      "accepted": 8,
       "total": 8,
-      "percent": 88,
+      "percent": 100,
       "acceptance_scope": "checklist-backed; unverified physical acceptance remains pending",
       "tasks": [
         {
@@ -66,7 +66,7 @@
         },
         {
           "id": "A-08",
-          "status": "pending",
+          "status": "accepted",
           "text": "🖥️ Verify worker scheduling while Hyprland is off-workspace or occluded."
         }
       ]
@@ -374,9 +374,9 @@
     {
       "id": "D",
       "title": "validation",
-      "accepted": 11,
+      "accepted": 12,
       "total": 15,
-      "percent": 73,
+      "percent": 80,
       "acceptance_scope": "checklist-backed; unverified physical acceptance remains pending",
       "tasks": [
         {
@@ -446,7 +446,7 @@
         },
         {
           "id": "D-14",
-          "status": "pending",
+          "status": "accepted",
           "text": "💤 Repeat with background pause checked; verify true stop, no catch-up burst and clean resume."
         },
         {

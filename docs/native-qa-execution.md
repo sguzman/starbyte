@@ -1,5 +1,12 @@
 # Unattended native Hyprland QA execution
 
+## QA workspace isolation (after first local Codex run)
+
+The first real desktop run returned 11/12 and disturbed the owner's regular workspace with repeated test windows. The wrapper now **builds and runs its unit tests without switching workspaces**, then reserves a fresh unused positive numeric workspace for the 12 GUI tests. It runs all physical probes there, and its EXIT handler restores the earlier workspace when the active workspace is still owned by QA. If the owner intentionally changes to another workspace, the collector refuses to launch additional GUI windows rather than interrupt the owner's work; the wrapper also avoids stealing focus back from an unrelated active workspace.
+
+The focused-clock probe genuinely requires keyboard focus, so the runner may still cause one intentional short switch to the dedicated QA workspace. A local agent must not claim complete non-interference, and should avoid launching another entire harness without a need. The new isolation path still requires testing on real Hyprland before being treated as verified. No permanent changes to the owner's compositor configuration are made.
+
+
 Starbyte has **two different execution environments**. Regular GitHub-hosted
 Linux CI runs Rust and virtual-Wayland tests. It does not have the owner's GPU,
 speakers, controller, active Hyprland workspaces or saved game paths. The

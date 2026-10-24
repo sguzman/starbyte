@@ -1,5 +1,16 @@
 # Emulation scheduler migration
 
+## 2026-10-24 first actual desktop Hyprland acceptance — 11/12 physical probes
+
+The locally running Codex executor fast-forwarded a clean Starbyte checkout to [`b1448b3`](https://github.com/sguzman/starbyte/commit/b1448b392556b03c963cc273744826a0d7affbbb) and ran the existing full native harness in the owner's **real** Hyprland/Wayland login. Its sanitized report records **11 of 12 probes passed**: all nine isolated original-window smokes and both compositor workspace transitions passed; focused-clock observation **failed** on `lost_keyboard_focus`, with no valid focused FPS measurement. The original workspace was restored, no QA window remained, and Git was clean.
+
+Real background-play transition: **142 independently completed frames, 59.81 FPS over 2,374 ms**, texture catch-up at frame **154**, away-workspace sampling for **2,289 ms across 9 compositor observations**. This satisfies the explicitly off-workspace alternative of **A-08** (not occlusion or sound); now accepted.
+
+Real pause-on-blur transition: **2 frames** advanced while away, **1 suspension**, **1 resume**, and **10 resumed frames in 166 ms**, with no catch-up burst. This satisfies **D-14**; now accepted. These results were reported by local Codex, with private raw receipts retained locally; the full 12/12 sanitized aggregate was not emitted because the focused probe failed.
+
+**Evidence-scoped progress is now 71/77 (92%)**, milestone A 8/8, milestone D 12/15. **Still pending (six):** P-18 physical background speaker/device recovery; P-19 hardware gamepad/menu/save acceptance; C-16 production cutover; D-12 focused FPS; D-13 off-workspace **sound** (video-only evidence is insufficient); D-15 complete native saves, inputs, cheats, screenshots and SRAM. No physical speaker/gamepad/persistence/cutover claim is made. The old 69/77 references below are historical checkpoints.
+
+
 **2026-10-24 focused evidence integrity:** [`dede0ce`](https://github.com/sguzman/starbyte/commit/dede0ceb325739edf5b86bdfa32f537cd1687600) now rejects focused physical-clock receipts with an inconsistent FPS/frame-duration combination or zero worker frames. [CI 40131591925](https://github.com/sguzman/starbyte/actions/runs/40131591925) passed four code jobs; these are not physical measurements. The desktop runner remains unattached and no task was newly accepted (69/77).
 
 **Status: in progress. Earlier native-QA source [`e693be2`](https://github.com/sguzman/starbyte/commit/e693be2b717bed82dfb2156d359caad1dff8bcc8) adds a redacted, machine-readable physical clock/pause evidence receipt, gated on the complete twelve-probe local Hyprland run. [`25e8165`](https://github.com/sguzman/starbyte/commit/25e8165ac74307e440e312e5bb1a7275ad221adc) prioritizes exact-current-main physical requests without interrupting active probes; [`84bee78`](https://github.com/sguzman/starbyte/commit/84bee78ba01cb977a739b045fd732c874a2e2215) reaps probe children on compositor errors. [Exact-code CI 40130239670](https://github.com/sguzman/starbyte/actions/runs/40130239670) passed all four jobs. Actual physical execution is **still blocked** by lack of an attached local Hyprland runner; a pending GitHub job is not evidence. Accepted checklist remains 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. Production worker stays opt-in until direct physical/audio/gamepad/cutover evidence.**
@@ -534,7 +545,7 @@ again. Disabling `pause_when_unfocused` alone does not create a game clock.
 The correct long-term owner of ROM state, frame timing and save mutations is a
 dedicated emulation thread. The renderer merely consumes completed frames.
 
-## Milestone A: clock and ownership foundation — 7/8 source tasks (88%)
+## Milestone A: clock and ownership foundation — 8/8 accepted tasks (100%)
 
 - [x] ⏱️ Move deadline pacing into `scheduler.rs` with a dedicated OS thread.
 - [x] 🎮 Give the worker exclusive ownership of a generic machine object.
@@ -543,7 +554,7 @@ dedicated emulation thread. The renderer merely consumes completed frames.
 - [x] 🛑 Make a failed emulation frame halt the worker and expose its error.
 - [x] 📦 Bound outstanding asynchronous operations to 128 without blocking the GUI or losing separately ordered policy commands.
 - [x] 🧪 Confirm format, Clippy and full workspace tests on code commit `d0254a7` (CI run 39951239026).
-- [ ] 🖥️ Verify worker scheduling while Hyprland is off-workspace or occluded.
+- [x] 🖥️ Verify worker scheduling while Hyprland is off-workspace or occluded.
 
 ## Milestone B: thread-owned frontend session — 18/18 source tasks (100%; source-only)
 
@@ -612,7 +623,7 @@ complete Starbyte library application.
 - [x] 🧹 Complete the opt-in original-window worker shutdown handoff: stop clock, flush SRAM, clear audio and join exactly once (CI 40016711374; production-default cutover remains separately gated).
 - [ ] 🚀 Make the worker the default runtime only after passing acceptance gates.
 
-## Milestone D: validation — 11/15 checkpoints (73%; Linux no-redraw acceptance passed on `135cf2e`, complete run verification pending)
+## Milestone D: validation — 12/15 accepted checkpoints (80%; focused FPS, sound and full persistence still pending)
 
 - [x] 🧪 Add a display-server-free, real built-in ROM smoke path (`--demo --scheduler-smoke`) to CI.
 - [x] 🖥️ Add an opt-in `--threaded-preview` native egui shell and Weston smoke that requires a rendered texture.
@@ -627,7 +638,7 @@ complete Starbyte library application.
 - [x] 🌙 In native Weston, suppress egui callback work and heartbeats for two seconds with background pause disabled; verify the worker advances at least 45 independent frames (observed 121 on commit `135cf2e`, run 39962498642).
 - [ ] 🪟 Run Wayland window visible/focused and confirm accurate ~60.1 emulated FPS.
 - [ ] 🌌 Switch to another Hyprland workspace; confirm continued emulation and sound when allowed.
-- [ ] 💤 Repeat with background pause checked; verify true stop, no catch-up burst and clean resume.
+- [x] 💤 Repeat with background pause checked; verify true stop, no catch-up burst and clean resume.
 - [ ] 🛡️ Confirm manual Pause, gamepad, cheats, screenshot, quick/disk saves and SRAM across restarts.
 
 **Implementation note:** These source milestones measure tested opt-in ownership,

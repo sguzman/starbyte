@@ -1,8 +1,10 @@
 # Native Hyprland scheduler acceptance
 
-**State:** acceptance procedure only. This document does **not** assert that the checks below have run or passed. It does not authorize switching the production runtime. Track accepted tasks in [scheduler-progress.json](scheduler-progress.json) and [scheduler-migration.md](scheduler-migration.md).
+**State:** first real desktop run on 2026-10-24 passed 11/12 probes: nine isolated smokes and both real workspace transitions passed; the focused-clock observation failed due to lost keyboard focus. Subsequent QA workspace isolation is implemented but not yet physically rerun. It does not authorize switching the production runtime. Track accepted tasks in [scheduler-progress.json](scheduler-progress.json) and [scheduler-migration.md](scheduler-migration.md).
 
 ## Rules for the QA operator
+
+- Launch the 12-probe GUI harness through `bash scripts/qa-native-hyprland.sh`; the wrapper now reserves a **fresh dedicated numeric test workspace**, restores the original on normal exit, and refuses subsequent window launches after user focus leaves QA. Avoid manually opening individual test windows on the owner's active workspace. The focused test still needs temporary keyboard focus; record any interruption as a failure rather than coercing focus back.
 
 - Execute in a real, GPU-backed Hyprland Wayland session. Headless Weston, XWayland and a green hosted CI job are not substitutes. Record the compositor, renderer, display, GPU, backend, Rust build and exact Starbyte commit.
 - Use an isolated disposable config and cache. Do not edit the user's live settings or overwrite saves; never commit ROMs, game saves, screenshots from proprietary games or private machine paths.

@@ -1,5 +1,12 @@
 # Starbyte: current state
 
+## First real native QA and isolated workspace protection (2026-10-24)
+
+Local Codex ran the native harness on physical Hyprland at `b1448b3`: **11/12 passed**. Focused FPS failed after keyboard-focus loss; the two genuine workspace checks passed. Background: 142 frames in 2,374 ms (59.81 FPS), with 9 compositor samples across 2,289 ms off-workspace. Pause/resume: 2 frames while away, 1 suspension, 1 resume, and 10 resumed frames across 166 ms. The local collector restored the original workspace, left no emulator window running and retained private raw evidence. This supports **A-08 and D-14 accepted, 71/77 (92%)**; all speaker, controller, complete persistence and cutover gates remain pending.
+
+Subsequent isolated QA launcher changes on main reserve an unused numeric Hyprland workspace only for the live GUI probe phase, then conditionally restore the previous workspace; the Rust collector refuses to spawn additional windows if that QA workspace is no longer active. The source/CI tests of those new guard paths must not be mistaken for a second physical run. Foreground-FPS observation still temporarily requires actual input focus, so zero visual/focus disturbance is not guaranteed.
+
+
 **Updated:** 2026-10-24. **Project direction:** active development. **Product maturity:** experimental Rust SNES emulator, intended for comfortable Linux/Wayland play rather than cycle-perfect hardware accuracy.
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.

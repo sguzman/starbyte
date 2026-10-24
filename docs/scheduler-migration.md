@@ -2,6 +2,14 @@
 
 **Status: in progress. Code commit [`a35ced5`](https://github.com/sguzman/starbyte/commit/a35ced5ddd05e6f4908967ebe4b322bbf6b42ef6) adds selection/generation fencing for late speaker-test receipts; [CI run 40042065947](https://github.com/sguzman/starbyte/actions/runs/40042065947) provides exact-revision Linux, Windows, formatting/Clippy and pinned Rust 1.88 checks. Verified source progress is 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. The complete original library worker is still opt-in; production-default cutover, physical Hyprland and audible-device quality remain unverified.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
+
+## 2026-10-23 post-handoff receipt and audio recovery hardening
+
+- The full-library opt-in worker preserves separately ordered save and screenshot operations when another ROM is selected. A completed screenshot owns its captured pixels and still writes its PNG after a later cartridge installation, but outdated save/screenshot acknowledgements cannot replace the newer ROM-selection status. The same installed-owner/selection split also fences asynchronous speaker-test status. The source regression and original-window native Weston suite passed on [`baf5a02`](https://github.com/sguzman/starbyte/commit/baf5a025a40ce8bf70c151819aba22decda0bac9), [CI 40043507022](https://github.com/sguzman/starbyte/actions/runs/40043507022).
+- The background Rodio output worker can now observe a CPAL stream error after an otherwise successful device open, drop the invalidated stream, clear stale PCM/stretch continuity and retry an output device on its own thread. This preserves default/alternate-output fallback and keeps all OS audio operations away from egui callbacks. [`7839b30`](https://github.com/sguzman/starbyte/commit/7839b30b2440f4189cd0c4929bd89f30b41dca20) adds a device-free callback regression; [CI 40044092562](https://github.com/sguzman/starbyte/actions/runs/40044092562) checks format, Rust 1.88, Linux native Weston and Windows. The physical unplug/replug, speaker audibility and background audio quality acceptance still require real-device observations.
+- These changes improve source robustness and diagnostics; they do not complete any of the eight pending physical/production gates. **Accepted source ledger: 69/77 (90%)**. The legacy player remains default and the worker-backed original window remains opt-in.
+
+
 **Machine-readable source checklist:** [scheduler-progress.json](scheduler-progress.json) (77 stable task IDs and checked-status parity tested by Rust CI).
 **Branch:** `main`. **Scope:** Rust/egui game-loop ownership and window-independent SNES timing.
 

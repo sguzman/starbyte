@@ -4,6 +4,12 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## Asynchronous ROM feedback and stream recovery (2026-10-23)
+
+The opt-in original-window worker now carries request identities through save and screenshot completions so older acknowledgements do not replace newer ROM-loading status. Screenshot pixels already captured before a successful replacement are still written to disk rather than discarded. [`baf5a02`](https://github.com/sguzman/starbyte/commit/baf5a025a40ce8bf70c151819aba22decda0bac9) passed [all four CI jobs](https://github.com/sguzman/starbyte/actions/runs/40043507022), including native virtual Weston.
+
+Rodio/CPAL output-stream errors after initial device open now set an atomic fault flag. The dedicated audio worker owns device disposal/reopening and resets PCM/stretch continuity; the audio callback and egui remain nonblocking. [`7839b30`](https://github.com/sguzman/starbyte/commit/7839b30b2440f4189cd0c4929bd89f30b41dca20) includes a synthetic device-disconnect callback test. Passing host CI does **not** establish real USB/headphone unplug/replug recovery, PipeWire routing, actual speaker audibility or background audio quality. Those acceptance gates remain open in [the native QA procedure](qa-native-hyprland.md). Source milestone counts remain **69/77 (90%)** and production defaults remain unchanged.
+
 ## Worker-owned original-window scheduler checkpoint (2026-10-23)
 
 The original Starbyte library window now supports an **opt-in** exclusive emulation worker via `--native-worker-preview`; no redundant synchronous `FrontendSession` exists in that mode. Hosted Linux/Weston, Windows, Clippy and pinned Rust 1.88 CI at [`a35ced5`](https://github.com/sguzman/starbyte/commit/a35ced5ddd05e6f4908967ebe4b322bbf6b42ef6) includes direct owner pacing without egui redraws, cartridge-replacement and save receipt ordering, original-window menus/shortcuts, native virtual compositor checks and stale speaker-test receipt fencing. A pending speaker-test acknowledgement cannot replace status from a newer ROM request or installation. **The code CI must be confirmed green at its exact run before reporting all jobs verified.**

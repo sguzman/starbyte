@@ -37,7 +37,7 @@ Report actual observed results, not inferred availability.
 When orchestrating through GitHub instead, change only
 `.github/native-qa-dispatch` on main to trigger the dedicated trusted
 self-hosted workflow. This requires an **already registered and running**
-`self-hosted, linux, x64, hyprland` runner in the actual login session;
+`self-hosted, linux, x64` runner in the actual login session;
 a queued job does **not** mean the desktop was tested. Do not install a
 system-level runner, leak host credentials, upload logs or treat a generic
 cloud CI machine as a substitute. See `docs/native-qa-execution.md`.

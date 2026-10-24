@@ -25,10 +25,10 @@ authorize production cutover.
 `.github/workflows/native-hyprland.yml` runs only when an authorized actor
 invokes `workflow_dispatch` on main **or commits a change to**
 `.github/native-qa-dispatch` on main. These triggers never accept public
-pull-request code. The job targets **[self-hosted, linux, x64, hyprland]** with
+pull-request code. The job targets **[self-hosted, linux, x64]** with
 read-only GitHub permissions and no persisted checkout credentials.
 
-The runner must already be **registered, online, labeled `hyprland`, and
+The runner must already be **registered, online, and
 running as part of the owner's interactive Wayland login**. A system service
 without `WAYLAND_DISPLAY` and `HYPRLAND_INSTANCE_SIGNATURE` is deliberately
 rejected, not allowed to fall back to XWayland or fake physical evidence.

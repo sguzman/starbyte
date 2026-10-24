@@ -4,6 +4,10 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## Verified latest-only live sound controls (2026-10-24)
+
+[`fceb8e1`](https://github.com/sguzman/starbyte/commit/fceb8e1fbd433631e384ca24fcd3890d3d34acc0) coalesces rapid mute/volume-slider updates into a single pending serialized owner-thread command instead of enqueuing unbounded volume mutations behind file/cheat jobs. The new 500-update stress regression confirms the final setting wins and executes once. The existing saturated-file-queue mute test still passes. [Exact-source CI 40119339861](https://github.com/sguzman/starbyte/actions/runs/40119339861) passed all four jobs including virtual-Wayland smoke. It does not measure real speaker mute latency. Remaining scheduler acceptance **69/77 (90%)**.
+
 ## Verified atomic playback and focus-recovery capture safety (2026-10-24)
 
 [`63aa5da`](https://github.com/sguzman/starbyte/commit/63aa5da8cc2a55142ab0aa7a3acc4c2ebfe308af) applies frame clock speed and session audio tempo/pitch together in one bounded owner-thread command. When the async file/cheat quota is saturated, both are rejected without creating a mismatch. [`626f9e6`](https://github.com/sguzman/starbyte/commit/626f9e68b7b357e69429597dc4a1faab39acd32c) routes infrequent Mute/sound settings through an ordered live-control path that is not refused due to that unrelated queue's saturation. [`bcfc3c6`](https://github.com/sguzman/starbyte/commit/bcfc3c6d126492b6de2efc7c3400e4c9987f9442) keeps rebinding gesture suppression through hidden-window focus interruptions until button or axis release. A concurrent keyboard-edge expiration change also prevents stale queued keys from replaying on return.

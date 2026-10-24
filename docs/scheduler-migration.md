@@ -3,6 +3,10 @@
 **Status: in progress. Code commit [`ae9ce76`](https://github.com/sguzman/starbyte/commit/ae9ce76602758eac3e2abbfea1abf081adc53af5) carries device-specific fault flags and separate recovery counters; [CI run 40045761526](https://github.com/sguzman/starbyte/actions/runs/40045761526) provides exact-revision Linux/Weston, Windows, formatting/Clippy, and pinned Rust 1.88 checks. Verified source progress is 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. The full-library worker is still opt-in; production cutover, physical Hyprland, speaker audibility and actual disconnect/reconnect recovery remain unverified.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
 
+## Native Hyprland QA runner (source milestone)
+
+[`f6e3890`](https://github.com/sguzman/starbyte/commit/f6e3890316bea574bb401d8b8bd608cd7e16fcc6) adds an opt-in Rust binary that runs nine existing original-window worker demo smoke modes on a local Hyprland host, checks the original CI success markers and writes isolated local receipts. [CI 40046303687](https://github.com/sguzman/starbyte/actions/runs/40046303687) is the exact-revision source verification. No physical Hyprland run is claimed; workspace transitions, gamepads, speaker audibility, actual output-device reconnect and production cutover remain unaccepted. The source ledger remains **69/77**.
+
 ## 2026-10-23 stream-fault accounting and candidate isolation
 
 The audio worker now distinguishes **CPAL stream faults** from **successful output reopenings** and publishes both counts through the opt-in original-window Sound panel and the legacy worker's audio output. A successful initial open, or an unsuccessful retry after a reported fault, never counts as a recovery. Each default/alternate-device candidate owns its own fault flag; a callback from a rejected candidate cannot mark the ultimately selected stream failed and trigger a spurious second restart.

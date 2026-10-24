@@ -14,6 +14,19 @@
 
 Capture an evidence record *before* launching the application: Git SHA, build mode, `XDG_SESSION_TYPE`, `WAYLAND_DISPLAY`, Hyprland version and monitor/workspace data from `hyprctl -j monitors` / `hyprctl -j workspaces`, GPU/renderer, audio server and device route, connected controller identification (no serial numbers), and the disposable config/cache locations. Record whether the process uses native Wayland. Redact personal filesystem paths before attaching evidence to a public issue.
 
+## Unattended native smoke adjunct (QA operator)
+
+A QA agent with access to the **actual physical Hyprland session** can build the binaries and run the isolated Rust probe collector from this checkout:
+
+```sh
+cargo build --locked -p starbyte-egui --bins
+target/debug/starbyte-native-qa
+```
+
+The helper refuses non-Hyprland sessions, records `hyprctl` monitor/workspace metadata and the working-checkout Git revision, and runs nine existing `--demo --native-worker-preview` original-window smoke modes with isolated XDG config, data, cache and per-mode logs. It writes `results.tsv` and raw logs in a new private local temporary directory, exits nonzero on any missing success marker or probe error, and performs no changes to the user's normal Starbyte configuration or saves. Run it through the local QA agent rather than handing these terminal steps to the user. Never publish raw logs or environment context before checking them for private paths and machine identifiers.
+
+**Scope limit:** These are native-host **synthetic** checks. The helper does not switch the real Hyprland workspace, move a physical gamepad, record speaker audibility, unplug a device, exercise commercial ROMs, or authorize the worker as production default. All eight pending hardware/cutover gates remain independently unaccepted until the full table below has direct evidence. The helper's own CI compilation and contract-marker tests do not imply it was executed on physical Hyprland.
+
 ## Automated native checks
 
 | Gate | Execution | Required observation |

@@ -4,6 +4,10 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## Native Hyprland smoke adjunct (2026-10-23)
+
+The standalone Rust `starbyte-native-qa` binary ([`f6e3890`](https://github.com/sguzman/starbyte/commit/f6e3890316bea574bb401d8b8bd608cd7e16fcc6)) runs nine original-window demo worker checks on an actual Hyprland host, with disposable XDG directories and local-only evidence. Unit tests cross-check its expected success markers against the existing CI workflow. [CI 40046303687](https://github.com/sguzman/starbyte/actions/runs/40046303687) is its code-verification run. The binary has not been run on the user's physical Hyprland session here and does not automate real workspace switching, speakers, device unplug/replug or gamepad controls. Acceptance remains **69/77 (90%)**.
+
 ## Stream fault/recovery diagnostics (2026-10-23)
 
 The dedicated Rodio/CPAL audio worker now counts detected post-open stream faults separately from successful recovery opens. A new output attempt is not treated as recovered until opening succeeds; callbacks for alternate output candidates are isolated, preventing false failures from a rejected device. Counters are visible in the original Sound panel for worker and legacy audio. [`ae9ce76`](https://github.com/sguzman/starbyte/commit/ae9ce76602758eac3e2abbfea1abf081adc53af5) is checked by [CI 40045761526](https://github.com/sguzman/starbyte/actions/runs/40045761526), with device-free tests. Actual USB/audio-route disconnect/reconnect, PipeWire behavior, speaker audibility and gamepad evidence are still unverified; no acceptance task can be completed from these counters alone. **69/77 accepted; worker preview still opt-in.**

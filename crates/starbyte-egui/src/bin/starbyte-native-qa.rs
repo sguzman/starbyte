@@ -406,7 +406,9 @@ fn run_probe(
                 if !native_client_on_workspace(&hyprland_json("clients")?, child.id(), active) {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err("focused QA window lost the native Hyprland foreground workspace".into());
+                    return Err(
+                        "focused QA window lost the native Hyprland foreground workspace".into(),
+                    );
                 }
                 focused_samples += 1;
             }

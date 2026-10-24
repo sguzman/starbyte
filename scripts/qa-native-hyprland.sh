@@ -54,7 +54,7 @@ fi
 # whichever workspaces are active. Build/tests above do not change focus.
 original_workspace="$(hyprctl -j activeworkspace | jq -er '.id | select(type == "number" and . > 0)')" ||
   fail 'original_workspace_not_regular_numeric'
-qa_workspace=$((800000 + $ % 100000))
+qa_workspace=$((800000 + BASHPID % 100000))
 while hyprctl -j workspaces | jq -e --argjson id "$qa_workspace"   '.[] | select(.id == $id)' >/dev/null; do
   qa_workspace=$((qa_workspace + 1))
 done

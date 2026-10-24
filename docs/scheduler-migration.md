@@ -1,7 +1,11 @@
 # Emulation scheduler migration
 
-**Status: in progress. Code commit [`ae9ce76`](https://github.com/sguzman/starbyte/commit/ae9ce76602758eac3e2abbfea1abf081adc53af5) carries device-specific fault flags and separate recovery counters; [CI run 40045761526](https://github.com/sguzman/starbyte/actions/runs/40045761526) provides exact-revision Linux/Weston, Windows, formatting/Clippy, and pinned Rust 1.88 checks. Verified source progress is 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. The full-library worker is still opt-in; production cutover, physical Hyprland, speaker audibility and actual disconnect/reconnect recovery remain unverified.**
+**Status: in progress. [`9cab61a`](https://github.com/sguzman/starbyte/commit/9cab61a569698b1e98d9c1946f36800f76d35dc5) adds a source-level opt-in native-workspace transition QA helper, isolated from users' ROM libraries and live config; [CI 40048375872](https://github.com/sguzman/starbyte/actions/runs/40048375872) validates Linux/Weston, Windows, formatting/Clippy and Rust 1.88. Checklist-backed progress remains 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. Full-library worker is opt-in. A source-level QA probe does not complete physical Hyprland, audible-speaker, gamepad, or production-default acceptance.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
+
+## Opt-in real Hyprland workspace QA adjunct
+
+[`9cab61a`](https://github.com/sguzman/starbyte/commit/9cab61a569698b1e98d9c1946f36800f76d35dc5) adds `starbyte-native-qa --physical-workspace` to the nine isolated synthetic demo probes. On a real compositor using the current Lua dispatcher API, this optional tenth probe verifies the spawned Starbyte window is native Wayland and on a regular numeric workspace; it switches to a private named workspace during an independent emulation gap, restores the original workspace even on ordinary failures, and records a minimal local JSON receipt. This follows the accepted source test pattern but no physical execution occurred in hosted CI. [CI 40048375872](https://github.com/sguzman/starbyte/actions/runs/40048375872) checks code and virtual Weston only. **The 8 hardware/cutover checklist gates remain pending** until actual physical evidence and gate-specific observations exist.
 
 ## Native Hyprland QA runner (source milestone)
 

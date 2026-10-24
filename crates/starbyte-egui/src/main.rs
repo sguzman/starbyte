@@ -137,6 +137,21 @@ struct Args {
     #[arg(long, requires_all = ["demo", "native_worker_preview"], conflicts_with_all = ["exit_after_frames", "exit_after_full_worker_saves"], hide = true)]
     exit_after_full_worker_no_redraw: bool,
 
+    /// Physical QA: measure focused Wayland worker FPS and texture delivery.
+    #[arg(
+        long,
+        requires_all = ["demo", "native_worker_preview"],
+        conflicts_with_all = [
+            "exit_after_frames",
+            "exit_after_full_worker_saves",
+            "exit_after_full_worker_no_redraw",
+            "exit_after_full_worker_focus_pause",
+            "exit_after_full_worker_physical_pause"
+        ],
+        hide = true
+    )]
+    exit_after_full_worker_focused_clock: bool,
+
     /// CI only: pause the original worker by focus policy, withhold all
     /// original window updates for two seconds, then require clean resume.
     #[arg(
@@ -389,6 +404,7 @@ fn main() -> Result<()> {
                 args.native_worker_preview,
                 args.exit_after_full_worker_saves,
                 args.exit_after_full_worker_no_redraw,
+                args.exit_after_full_worker_focused_clock,
                 args.exit_after_full_worker_focus_pause,
                 args.exit_after_full_worker_physical_pause,
                 args.exit_after_full_worker_panic,

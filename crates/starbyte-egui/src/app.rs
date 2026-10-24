@@ -1077,6 +1077,8 @@ pub struct StarbyteApp {
     worker_save_smoke_step_count: u32,
     worker_save_smoke_previous_step_frame: Option<u64>,
     worker_no_redraw_smoke: bool,
+    /// Actual foreground worker pacing plus fresh original-window frames.
+    worker_focused_clock_smoke: Option<WorkerFocusedClockSmoke>,
     worker_no_redraw_gap: Option<(Instant, u64, u64)>,
     /// After hidden-window clock acceptance, require a fresh RGBA upload.
     worker_no_redraw_verify: Option<(Instant, u64, u64)>,
@@ -1182,6 +1184,16 @@ pub struct StarbyteApp {
     background_suspended: bool,
 }
 
+enum WorkerFocusedClockSmoke {
+    WaitingForGame,
+    Measuring {
+        started_at: Instant,
+        at_start: u64,
+        first_presented: u64,
+        callbacks: u64,
+    },
+}
+
 // Regular desktop game loads use audible emulation with writable SRAM.
 // Keep the old silent compatibility path available only as an explicit fallback.
 fn load_rom_with_default_sound(session: &mut FrontendSession, path: &Path) -> Result<()> {
@@ -1201,6 +1213,7 @@ impl StarbyteApp {
         use_worker_preview: bool,
         worker_save_smoke: bool,
         worker_no_redraw_smoke: bool,
+        worker_focused_clock_smoke: bool,
         worker_focus_pause_smoke: bool,
         worker_real_focus_pause_smoke: bool,
         worker_panic_smoke: bool,
@@ -1218,6 +1231,7 @@ impl StarbyteApp {
         if exit_after_frames.is_some()
             || worker_save_smoke
             || worker_no_redraw_smoke
+            || worker_focused_clock_smoke
             || worker_focus_pause_smoke
             || worker_real_focus_pause_smoke
             || worker_panic_smoke
@@ -1355,6 +1369,8 @@ impl StarbyteApp {
             worker_save_smoke_step_count: 0,
             worker_save_smoke_previous_step_frame: None,
             worker_no_redraw_smoke,
+            worker_focused_clock_smoke: worker_focused_clock_smoke
+                .then_some(WorkerFocusedClockSmoke::WaitingForGame),
             worker_no_redraw_gap: None,
             worker_no_redraw_verify: None,
             last_worker_texture_frame: None,
@@ -7399,6 +7415,89 @@ impl eframe::App for StarbyteApp {
             self.advance_full_worker_save_smoke(ctx);
             self.advance_full_worker_shortcut_smoke(ctx);
             self.advance_full_worker_mode_smoke(ctx);
+            if let Some(stage) = self.worker_focused_clock_smoke.take() {
+                match stage {
+                    WorkerFocusedClockSmoke::WaitingForGame => {
+                        if self.session_snapshot().frame >= 30
+                            && self.framebuffer_texture.is_some()
+                            && ctx.input(|input| input.focused)
+                        {
+                            if let Some(worker) = &self.full_worker {
+                                let at_start = worker.engine.completed_frames();
+                                let first_presented =
+                                    self.last_worker_texture_frame.unwrap_or_default();
+                                let started_unix_ms = SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis();
+                                println!(
+                                    "STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_BEGIN frame={at_start} started_unix_ms={started_unix_ms}"
+                                );
+                                self.worker_focused_clock_smoke =
+                                    Some(WorkerFocusedClockSmoke::Measuring {
+                                        started_at: Instant::now(),
+                                        at_start,
+                                        first_presented,
+                                        callbacks: 0,
+                                    });
+                            }
+                        } else {
+                            self.worker_focused_clock_smoke =
+                                Some(WorkerFocusedClockSmoke::WaitingForGame);
+                        }
+                    }
+                    WorkerFocusedClockSmoke::Measuring {
+                        started_at,
+                        at_start,
+                        first_presented,
+                        callbacks,
+                    } => {
+                        if !ctx.input(|input| input.focused) {
+                            println!("STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_FAILED lost_keyboard_focus");
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            return;
+                        }
+                        let elapsed = started_at.elapsed();
+                        let callbacks = callbacks + 1;
+                        if elapsed >= Duration::from_secs(3) {
+                            let worker_frames = self
+                                .full_worker
+                                .as_ref()
+                                .map_or(0, |worker| worker.engine.completed_frames().saturating_sub(at_start));
+                            let presented = self
+                                .last_worker_texture_frame
+                                .unwrap_or_default()
+                                .saturating_sub(first_presented);
+                            let fps = worker_frames as f64 / elapsed.as_secs_f64().max(f64::EPSILON);
+                            // Smoke tolerance is broad; the exact measured rate
+                            // is preserved for review against D-12 acceptance.
+                            if !(55.0..=65.0).contains(&fps)
+                                || callbacks < 30
+                                || presented < 90
+                                || !self.full_worker.as_ref().is_some_and(|w| w.engine.is_emulating())
+                            {
+                                println!(
+                                    "STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_FAILED fps={fps:.3} callbacks={callbacks} presented={presented} frames={worker_frames}"
+                                );
+                            } else {
+                                println!(
+                                    "STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_OK fps={fps:.3} callbacks={callbacks} presented={presented} frames={worker_frames} wall_ms={}",
+                                    elapsed.as_millis()
+                                );
+                            }
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            return;
+                        }
+                        self.worker_focused_clock_smoke =
+                            Some(WorkerFocusedClockSmoke::Measuring {
+                                started_at,
+                                at_start,
+                                first_presented,
+                                callbacks,
+                            });
+                    }
+                }
+            }
             if self.worker_no_redraw_smoke
                 && self.session_snapshot().has_rom
                 && self.session_snapshot().frame >= 10

@@ -807,6 +807,26 @@ enum WorkerFocusPauseSmoke {
         resumed_frames: u64,
         manual_paused_frames: u64,
     },
+    /// Opt-in physical Hyprland focus test; unlike the above synthetic
+    /// stages this never overrides the real egui window focus value.
+    RealWaitingForGame,
+    RealArming {
+        deadline: Instant,
+    },
+    RealAwaitReturn {
+        started_at: Instant,
+        at_start: u64,
+        suspensions_before: u64,
+        resumptions_before: u64,
+    },
+    RealAwaitResume {
+        deadline: Instant,
+        started_at: Instant,
+        at_return: u64,
+        advanced_away: u64,
+        suspensions: u64,
+        resumptions_before: u64,
+    },
 }
 
 /// CI-only complete-window replacement error: a failed install must
@@ -952,7 +972,7 @@ pub struct StarbyteApp {
     worker_save_smoke_step_count: u32,
     worker_save_smoke_previous_step_frame: Option<u64>,
     worker_no_redraw_smoke: bool,
-    worker_no_redraw_gap: Option<(Instant, u64)>,
+    worker_no_redraw_gap: Option<(Instant, u64, u64)>,
     /// After hidden-window clock acceptance, require a fresh RGBA upload.
     worker_no_redraw_verify: Option<(Instant, u64, u64)>,
     last_worker_texture_frame: Option<u64>,
@@ -1075,6 +1095,7 @@ impl StarbyteApp {
         worker_save_smoke: bool,
         worker_no_redraw_smoke: bool,
         worker_focus_pause_smoke: bool,
+        worker_real_focus_pause_smoke: bool,
         worker_panic_smoke: bool,
         worker_sram_smoke: bool,
         worker_replacement_smoke: bool,
@@ -1091,6 +1112,7 @@ impl StarbyteApp {
             || worker_save_smoke
             || worker_no_redraw_smoke
             || worker_focus_pause_smoke
+            || worker_real_focus_pause_smoke
             || worker_panic_smoke
             || worker_sram_smoke
             || worker_replacement_smoke
@@ -1230,8 +1252,11 @@ impl StarbyteApp {
             worker_no_redraw_verify: None,
             last_worker_texture_frame: None,
             worker_presentation: WorkerPresentationMetrics::default(),
-            worker_focus_pause_smoke: worker_focus_pause_smoke
-                .then_some(WorkerFocusPauseSmoke::WaitingForGame),
+            worker_focus_pause_smoke: if worker_real_focus_pause_smoke {
+                Some(WorkerFocusPauseSmoke::RealWaitingForGame)
+            } else {
+                worker_focus_pause_smoke.then_some(WorkerFocusPauseSmoke::WaitingForGame)
+            },
             worker_panic_smoke,
             worker_panic_sent: false,
             worker_sram_smoke,
@@ -6209,7 +6234,100 @@ impl eframe::App for StarbyteApp {
                 manual_paused_frames,
             });
         }
-        if let Some((deadline, at_start)) = self.worker_no_redraw_gap {
+        // This physical-mode check does not impersonate a compositor focus
+        // event. The local QA operator switches the real Hyprland workspace,
+        // and the worker independently reacts to blur or stale UI heartbeats.
+        if let Some(WorkerFocusPauseSmoke::RealAwaitReturn {
+            started_at,
+            at_start,
+            suspensions_before,
+            resumptions_before,
+        }) = self.worker_focus_pause_smoke
+        {
+            let now = Instant::now();
+            if now.saturating_duration_since(started_at) > Duration::from_secs(8) {
+                println!("STARBYTE_FULL_LIBRARY_REAL_PAUSE_SMOKE_FAILED return_timeout");
+                self.worker_focus_pause_smoke = None;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                return;
+            }
+            if now.saturating_duration_since(started_at) >= Duration::from_millis(2_250)
+                && ctx.input(|input| input.focused)
+            {
+                let Some(worker) = &self.full_worker else {
+                    println!("STARBYTE_FULL_LIBRARY_REAL_PAUSE_SMOKE_FAILED missing_worker");
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                };
+                let advanced_away = worker.engine.completed_frames().saturating_sub(at_start);
+                let suspensions = worker
+                    .engine
+                    .suspended_transitions()
+                    .saturating_sub(suspensions_before);
+                if suspensions == 0 || advanced_away > 100 {
+                    println!(
+                        "STARBYTE_FULL_LIBRARY_REAL_PAUSE_SMOKE_FAILED advanced_away={advanced_away} suspend_events={suspensions}"
+                    );
+                    self.worker_focus_pause_smoke = None;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                }
+                self.worker_focus_pause_smoke = Some(WorkerFocusPauseSmoke::RealAwaitResume {
+                    deadline: now + Duration::from_secs(3),
+                    started_at: now,
+                    at_return: worker.engine.completed_frames(),
+                    advanced_away,
+                    suspensions,
+                    resumptions_before,
+                });
+            }
+        }
+        if let Some(WorkerFocusPauseSmoke::RealAwaitResume {
+            deadline,
+            started_at,
+            at_return,
+            advanced_away,
+            suspensions,
+            resumptions_before,
+        }) = self.worker_focus_pause_smoke
+        {
+            let Some(worker) = &self.full_worker else {
+                println!("STARBYTE_FULL_LIBRARY_REAL_PAUSE_SMOKE_FAILED resume_missing_worker");
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                return;
+            };
+            let frames = worker.engine.completed_frames().saturating_sub(at_return);
+            let resumed = worker
+                .engine
+                .resumed_transitions()
+                .saturating_sub(resumptions_before);
+            if frames >= 10 && worker.engine.is_emulating() {
+                let elapsed = started_at.elapsed();
+                if resumed == 0 || elapsed < Duration::from_millis(80) {
+                    println!(
+                        "STARBYTE_FULL_LIBRARY_REAL_PAUSE_SMOKE_FAILED catchup_or_no_resume frames={frames} elapsed_ms={} resumed={resumed}",
+                        elapsed.as_millis()
+                    );
+                } else {
+                    println!(
+                        "STARBYTE_FULL_LIBRARY_REAL_PAUSE_SMOKE_OK advanced_away={advanced_away} suspend_events={suspensions} resumed_events={resumed} resumed_frames={frames} resume_elapsed_ms={}",
+                        elapsed.as_millis()
+                    );
+                }
+                self.worker_focus_pause_smoke = None;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                return;
+            }
+            if Instant::now() >= deadline {
+                println!(
+                    "STARBYTE_FULL_LIBRARY_REAL_PAUSE_SMOKE_FAILED resume_timeout frames={frames} resumed={resumed}"
+                );
+                self.worker_focus_pause_smoke = None;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                return;
+            }
+        }
+        if let Some((deadline, at_start, suspensions_before)) = self.worker_no_redraw_gap {
             let now = Instant::now();
             if now < deadline {
                 // No egui heartbeat, gamepad polling, menu work, display
@@ -6220,7 +6338,20 @@ impl eframe::App for StarbyteApp {
             let completed = self.full_worker.as_ref().map_or(0, |worker| {
                 worker.engine.completed_frames().saturating_sub(at_start)
             });
+            let suspension_delta = self.full_worker.as_ref().map_or(u64::MAX, |worker| {
+                worker
+                    .engine
+                    .suspended_transitions()
+                    .saturating_sub(suspensions_before)
+            });
             self.worker_no_redraw_gap = None;
+            if suspension_delta != 0 {
+                println!(
+                    "STARBYTE_FULL_LIBRARY_CLOCK_PACING_SMOKE_FAILED unexpected_suspensions={suspension_delta}"
+                );
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                return;
+            }
             // Time the actual compositor callback gap, rather than assuming
             // its delayed egui wake happened exactly at the deadline.
             // This measures the independent NTSC worker clock, not repaint
@@ -6467,6 +6598,42 @@ impl eframe::App for StarbyteApp {
                 && self.framebuffer_texture.is_some()
             {
                 self.worker_focus_pause_smoke = Some(WorkerFocusPauseSmoke::WaitingForPause);
+            }
+            if matches!(
+                self.worker_focus_pause_smoke,
+                Some(WorkerFocusPauseSmoke::RealWaitingForGame)
+            ) && self.session_snapshot().frame >= 20
+                && self.framebuffer_texture.is_some()
+                && ctx.input(|input| input.focused)
+            {
+                self.config.ui.pause_when_unfocused = true;
+                self.worker_focus_pause_smoke = Some(WorkerFocusPauseSmoke::RealArming {
+                    deadline: Instant::now() + Duration::from_millis(250),
+                });
+            }
+            if let Some(WorkerFocusPauseSmoke::RealArming { deadline }) =
+                self.worker_focus_pause_smoke
+                && Instant::now() >= deadline
+                && ctx.input(|input| input.focused)
+            {
+                if let Some(worker) = &self.full_worker
+                    && worker.engine.is_emulating()
+                {
+                    let at_start = worker.engine.completed_frames();
+                    let started_unix_ms = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis();
+                    println!(
+                        "STARBYTE_FULL_LIBRARY_REAL_PAUSE_BEGIN frame={at_start} started_unix_ms={started_unix_ms}"
+                    );
+                    self.worker_focus_pause_smoke = Some(WorkerFocusPauseSmoke::RealAwaitReturn {
+                        started_at: Instant::now(),
+                        at_start,
+                        suspensions_before: worker.engine.suspended_transitions(),
+                        resumptions_before: worker.engine.resumed_transitions(),
+                    });
+                }
             }
             let focused = match self.worker_focus_pause_smoke {
                 Some(WorkerFocusPauseSmoke::WaitingForPause)
@@ -7001,8 +7168,11 @@ impl eframe::App for StarbyteApp {
                     println!(
                         "STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame={start_frame} started_unix_ms={started_unix_ms}"
                     );
-                    self.worker_no_redraw_gap =
-                        Some((Instant::now() + Duration::from_secs(2), start_frame));
+                    self.worker_no_redraw_gap = Some((
+                        Instant::now() + Duration::from_secs(2),
+                        start_frame,
+                        worker.engine.suspended_transitions(),
+                    ));
                     ctx.request_repaint_after(Duration::from_secs(2));
                     return;
                 }

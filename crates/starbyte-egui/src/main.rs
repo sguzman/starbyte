@@ -147,6 +147,28 @@ struct Args {
     )]
     exit_after_full_worker_focus_pause: bool,
 
+    /// Local physical Hyprland acceptance only: arm pause-on-blur in the
+    /// original window, wait for a real workspace transition, and verify the
+    /// exclusive worker stopped and resumed without catching up. Requires
+    /// external QA orchestration; it does not synthesize egui focus events.
+    #[arg(
+        long,
+        requires_all = ["demo", "native_worker_preview"],
+        conflicts_with_all = [
+            "exit_after_frames",
+            "exit_after_full_worker_saves",
+            "exit_after_full_worker_no_redraw",
+            "exit_after_full_worker_focus_pause",
+            "exit_after_full_worker_panic",
+            "exit_after_full_worker_sram",
+            "exit_after_full_worker_replacement",
+            "exit_after_full_worker_shortcuts",
+            "exit_after_full_worker_modes"
+        ],
+        hide = true
+    )]
+    exit_after_full_worker_physical_pause: bool,
+
     /// CI only: prove the original full library reports an unexpected
     /// emulation-owner panic instead of silently freezing the last frame.
     #[arg(
@@ -368,6 +390,7 @@ fn main() -> Result<()> {
                 args.exit_after_full_worker_saves,
                 args.exit_after_full_worker_no_redraw,
                 args.exit_after_full_worker_focus_pause,
+                args.exit_after_full_worker_physical_pause,
                 args.exit_after_full_worker_panic,
                 args.exit_after_full_worker_sram,
                 args.exit_after_full_worker_replacement,
@@ -588,6 +611,35 @@ mod speaker_cli_tests {
     use clap::Parser;
 
     use super::{Args, validate_frame_exit_args};
+
+    #[test]
+    fn physical_pause_flag_requires_worker_demo_and_excludes_synthetic_focus() {
+        let flags = [
+            "starbyte-egui",
+            "--demo",
+            "--native-worker-preview",
+            "--exit-after-full-worker-physical-pause",
+        ];
+        let parsed = Args::try_parse_from(flags).unwrap();
+        assert!(parsed.exit_after_full_worker_physical_pause);
+        assert!(
+            Args::try_parse_from([
+                "starbyte-egui",
+                "--exit-after-full-worker-physical-pause"
+            ])
+            .is_err()
+        );
+        assert!(
+            Args::try_parse_from([
+                "starbyte-egui",
+                "--demo",
+                "--native-worker-preview",
+                "--exit-after-full-worker-physical-pause",
+                "--exit-after-full-worker-focus-pause"
+            ])
+            .is_err()
+        );
+    }
 
     #[test]
     fn no_rom_speaker_probe_requires_explicit_opt_in() {

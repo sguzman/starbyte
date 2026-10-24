@@ -88,6 +88,7 @@ const PROBES: &[Probe] = &[
 ];
 
 const GAP_MARKER: &str = "STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame=";
+const PAUSE_GAP_MARKER: &str = "STARBYTE_FULL_LIBRARY_REAL_PAUSE_BEGIN frame=";
 const PHYSICAL_WORKSPACE_PROBE: Probe = Probe {
     name: "real-workspace-progress",
     args: &["--exit-after-full-worker-no-redraw"],
@@ -95,6 +96,15 @@ const PHYSICAL_WORKSPACE_PROBE: Probe = Probe {
         "STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame=",
         "STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_OK advanced_frames=",
         "STARBYTE_FULL_LIBRARY_CLOCK_PACING_SMOKE_OK advanced_frames=",
+    ],
+};
+
+const PHYSICAL_PAUSE_PROBE: Probe = Probe {
+    name: "real-background-pause",
+    args: &["--exit-after-full-worker-physical-pause"],
+    markers: &[
+        "STARBYTE_FULL_LIBRARY_REAL_PAUSE_BEGIN frame=",
+        "STARBYTE_FULL_LIBRARY_REAL_PAUSE_SMOKE_OK advanced_away=",
     ],
 };
 
@@ -190,10 +200,10 @@ fn isolated_probe_command(
 /// Detect the actual timestamp published by the original window when its
 /// callback gap started. A stale marker must never authorize a physical
 /// workspace switch or a falsely attributed pacing receipt.
-fn gap_age_at(log: &[u8], now: SystemTime) -> Option<Duration> {
+fn gap_age_at(log: &[u8], now: SystemTime, marker: &str) -> Option<Duration> {
     let line = String::from_utf8_lossy(log)
         .lines()
-        .find(|line| line.contains(GAP_MARKER))?
+        .find(|line| line.contains(marker))?
         .to_owned();
     let millis = line
         .split_whitespace()
@@ -204,8 +214,8 @@ fn gap_age_at(log: &[u8], now: SystemTime) -> Option<Duration> {
     now.duration_since(began).ok()
 }
 
-fn fresh_gap_start_at(log: &[u8], now: SystemTime) -> Option<SystemTime> {
-    let age = gap_age_at(log, now)?;
+fn fresh_gap_start_at(log: &[u8], now: SystemTime, marker: &str) -> Option<SystemTime> {
+    let age = gap_age_at(log, now, marker)?;
     (age <= Duration::from_millis(900)).then(|| now - age)
 }
 
@@ -332,6 +342,7 @@ fn exercise_real_workspace(
     // titles, personal file paths, serial numbers, or full compositor state.
     let receipt = serde_json::json!({
         "kind": "physical_workspace_switch_observation",
+        "probe": probe_dir.file_name().and_then(|name| name.to_str()).unwrap_or("unknown"),
         "original_workspace": original,
         "temporary_workspace": name,
         "starbyte_process_id": pid,
@@ -379,8 +390,13 @@ fn run_probe(
         // the child had already exited without ever being off-workspace.
         if physical_workspace && !switched_workspace {
             let log_bytes = fs::read(&log_path)?;
-            if String::from_utf8_lossy(&log_bytes).contains(GAP_MARKER) {
-                let result = match fresh_gap_start_at(&log_bytes, SystemTime::now()) {
+            let marker = if probe.name == PHYSICAL_PAUSE_PROBE.name {
+                PAUSE_GAP_MARKER
+            } else {
+                GAP_MARKER
+            };
+            if String::from_utf8_lossy(&log_bytes).contains(marker) {
+                let result = match fresh_gap_start_at(&log_bytes, SystemTime::now(), marker) {
                     Some(began) => exercise_real_workspace(child.id(), &probe_dir, began),
                     None => {
                         Err("no valid fresh timestamp on the original-window gap marker".into())
@@ -427,8 +443,8 @@ fn run() -> Result<(), Box<dyn Error>> {
             "--help" | "-h" => {
                 println!("Usage: starbyte-native-qa [--binary PATH] [--physical-workspace]");
                 println!("Run isolated demo smoke probes on native Hyprland.");
-                println!("--physical-workspace also switches to a temporary real workspace");
-                println!("and restores the original workspace after measuring worker pacing.");
+                println!("--physical-workspace additionally tests real workspace progress");
+                println!("and pause-on-blur before restoring the previous workspace.");
                 return Ok(());
             }
             _ => return Err(format!("unrecognized option: {arg}").into()),
@@ -459,14 +475,20 @@ fn run() -> Result<(), Box<dyn Error>> {
     writeln!(report, "probe\tresult\telapsed_ms\tmissing_markers")?;
     let mut passed = 0;
     let mut total = 0;
-    let supplemental = physical_workspace.then_some(&PHYSICAL_WORKSPACE_PROBE);
-    for probe in PROBES.iter().chain(supplemental) {
+    let supplemental = if physical_workspace {
+        Some([&PHYSICAL_WORKSPACE_PROBE, &PHYSICAL_PAUSE_PROBE])
+    } else {
+        None
+    };
+    for probe in PROBES.iter().chain(supplemental.into_iter().flatten()) {
         total += 1;
         let result = run_probe(
             &binary,
             &root,
             probe,
-            physical_workspace && probe.name == PHYSICAL_WORKSPACE_PROBE.name,
+            physical_workspace
+                && (probe.name == PHYSICAL_WORKSPACE_PROBE.name
+                    || probe.name == PHYSICAL_PAUSE_PROBE.name),
         );
         let (ok, elapsed, missing) = match result {
             Ok((ok, elapsed, missing)) => (ok, elapsed, missing.join(" | ")),
@@ -559,28 +581,45 @@ mod tests {
         let now = std::time::UNIX_EPOCH + std::time::Duration::from_millis(4_000);
         let line = b"STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame=42 started_unix_ms=3500";
         assert_eq!(
-            gap_age_at(line, now),
+            gap_age_at(line, now, super::GAP_MARKER),
             Some(std::time::Duration::from_millis(500))
         );
-        assert!(gap_age_at(line, std::time::UNIX_EPOCH).is_none());
-        assert!(gap_age_at(b"STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame=42", now).is_none());
+        assert!(gap_age_at(line, std::time::UNIX_EPOCH, super::GAP_MARKER).is_none());
+        assert!(
+            gap_age_at(
+                b"STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame=42",
+                now,
+                super::GAP_MARKER
+            )
+            .is_none()
+        );
         assert!(
             gap_age_at(
                 b"STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame=42 started_unix_ms=bad",
-                now
+                now,
+                super::GAP_MARKER
             )
             .is_none()
         );
         assert_eq!(
-            fresh_gap_start_at(line, now),
+            fresh_gap_start_at(line, now, super::GAP_MARKER),
             Some(std::time::UNIX_EPOCH + std::time::Duration::from_millis(3_500))
         );
         assert!(
             fresh_gap_start_at(
                 b"STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame=42 started_unix_ms=2700",
-                now
+                now,
+                super::GAP_MARKER
             )
             .is_none()
+        );
+        assert_eq!(
+            fresh_gap_start_at(
+                b"STARBYTE_FULL_LIBRARY_REAL_PAUSE_BEGIN frame=20 started_unix_ms=3500",
+                now,
+                super::PAUSE_GAP_MARKER
+            ),
+            Some(std::time::UNIX_EPOCH + std::time::Duration::from_millis(3_500))
         );
     }
 
@@ -598,6 +637,17 @@ mod tests {
         assert!(native_client_on_workspace(&clients, 4321, 6));
         assert!(!native_client_on_workspace(&clients, 5432, 6));
         assert!(!native_client_on_workspace(&clients, 4321, 5));
+    }
+
+    #[test]
+    fn opt_in_physical_pause_receipts_match_real_original_window_messages() {
+        let app = include_str!("../app.rs");
+        for marker in super::PHYSICAL_PAUSE_PROBE.markers {
+            assert!(
+                app.contains(marker),
+                "physical pause marker is absent from original egui window: {marker}"
+            );
+        }
     }
 
     #[test]

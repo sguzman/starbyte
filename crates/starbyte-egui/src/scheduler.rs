@@ -287,6 +287,9 @@ pub struct EmulatorScheduler<Machine: Send + 'static, Frame: Send + 'static> {
     /// Published by the exclusive clock thread, never guessed from egui
     /// focus or stale FPS samples on the presentation thread.
     clock_running: Arc<AtomicBool>,
+    /// Recorded on the owner thread, never inferred from UI paint cadence.
+    suspended_transitions: Arc<AtomicU64>,
+    resumed_transitions: Arc<AtomicU64>,
     gui_heartbeat: Arc<GuiHeartbeat>,
     pending_posts: Arc<AtomicUsize>,
     join: Option<JoinHandle<Machine>>,
@@ -332,6 +335,10 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
         let publication = Arc::clone(&frames);
         let clock_running = Arc::new(AtomicBool::new(false));
         let worker_running = Arc::clone(&clock_running);
+        let suspended_transitions = Arc::new(AtomicU64::new(0));
+        let worker_suspensions = Arc::clone(&suspended_transitions);
+        let resumed_transitions = Arc::new(AtomicU64::new(0));
+        let worker_resumptions = Arc::clone(&resumed_transitions);
         let gui_heartbeat = Arc::new(GuiHeartbeat::new());
         let worker_heartbeat = Arc::clone(&gui_heartbeat);
         let pending_posts = Arc::new(AtomicUsize::new(0));
@@ -344,6 +351,8 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
                     receiver,
                     publication,
                     worker_running,
+                    worker_suspensions,
+                    worker_resumptions,
                     worker_heartbeat,
                     worker_pending_posts,
                     base_interval,
@@ -356,6 +365,8 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
             commands: sender,
             frames,
             clock_running,
+            suspended_transitions,
+            resumed_transitions,
             gui_heartbeat,
             pending_posts,
             join: Some(join),
@@ -489,6 +500,18 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
         !self.is_worker_finished() && self.clock_running.load(Ordering::Acquire)
     }
 
+    /// Count of actual run-to-suspend transitions, including missed GUI
+    /// heartbeats. Stable while a game remains suspended.
+    pub fn suspended_transitions(&self) -> u64 {
+        self.suspended_transitions.load(Ordering::Acquire)
+    }
+
+    /// Count of transitions into running emulation, including first start.
+    /// This is owner-thread state, not a GUI repaint observation.
+    pub fn resumed_transitions(&self) -> u64 {
+        self.resumed_transitions.load(Ordering::Acquire)
+    }
+
     /// Shut down and return the owned machine so the UI can flush its SRAM
     /// and dispose resources in their normal order.
     pub fn shutdown(mut self) -> thread::Result<Machine> {
@@ -534,6 +557,8 @@ fn run_owned_clock<Machine, Frame>(
     commands: Receiver<Command<Machine>>,
     frames: Arc<FrameMailbox<Frame>>,
     clock_running: Arc<AtomicBool>,
+    suspended_transitions: Arc<AtomicU64>,
+    resumed_transitions: Arc<AtomicU64>,
     gui_heartbeat: Arc<GuiHeartbeat>,
     pending_posts: Arc<AtomicUsize>,
     base_interval: Duration,
@@ -561,13 +586,19 @@ fn run_owned_clock<Machine, Frame>(
         }
         let running = policy.playing
             && (!policy.pause_when_unfocused || (policy.focused && gui_heartbeat.is_recent()));
-        clock_running.store(running, Ordering::Release);
+        if running && !was_running {
+            resumed_transitions.fetch_add(1, Ordering::Release);
+        }
         if was_running && !running {
+            suspended_transitions.fetch_add(1, Ordering::Release);
             on_pause(&mut machine);
             // A deliberate pause is not a gameplay hitch, and restarting
             // must not count the whole background interval as a frame gap.
             frames.suspend_timing_window();
         }
+        // Publish the effective state after the counters and pause cleanup.
+        // Callers that observe the new flag also see its transition receipt.
+        clock_running.store(running, Ordering::Release);
         was_running = running;
         if !running {
             deadline = Instant::now();
@@ -705,6 +736,11 @@ mod tests {
             !worker.is_emulating(),
             "worker running status must reflect the missing-redraw pause"
         );
+        assert_eq!(
+            worker.suspended_transitions(),
+            1,
+            "heartbeat expiry must yield exactly one effective suspension"
+        );
 
         // The same compositor stall must not stop a user who explicitly
         // disabled the background pause option.
@@ -719,7 +755,60 @@ mod tests {
             worker.is_emulating(),
             "background-allowed worker must publish effective running status"
         );
+        assert_eq!(
+            worker.resumed_transitions(),
+            2,
+            "disabling the background-pause policy must resume only once"
+        );
         assert!(worker.shutdown().unwrap() >= resumed);
+    }
+
+    #[test]
+    fn suspension_and_resume_counters_change_once_per_clock_transition() {
+        let worker = EmulatorScheduler::spawn(0_u64, Duration::from_millis(3), |machine| {
+            *machine += 1;
+            Ok(*machine)
+        })
+        .unwrap();
+        assert_eq!(worker.suspended_transitions(), 0);
+        assert_eq!(worker.resumed_transitions(), 0);
+        worker.gui_heartbeat();
+        worker.set_playing(true);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !worker.is_emulating() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(worker.is_emulating());
+        assert_eq!(worker.suspended_transitions(), 0);
+        assert_eq!(worker.resumed_transitions(), 1);
+
+        worker.set_focused(false);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while worker.is_emulating() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!worker.is_emulating());
+        assert_eq!(worker.suspended_transitions(), 1);
+        let paused_count = worker.completed_frames();
+        std::thread::sleep(Duration::from_millis(110));
+        assert_eq!(worker.completed_frames(), paused_count);
+        assert_eq!(worker.suspended_transitions(), 1);
+
+        worker.gui_heartbeat();
+        worker.set_focused(true);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !worker.is_emulating() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(worker.is_emulating());
+        assert_eq!(worker.resumed_transitions(), 2);
+        worker.set_playing(false);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while worker.is_emulating() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(worker.suspended_transitions(), 2);
+        worker.shutdown().unwrap();
     }
 
     #[test]

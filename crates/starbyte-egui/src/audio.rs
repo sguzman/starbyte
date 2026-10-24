@@ -94,6 +94,8 @@ enum AudioMessage {
 pub struct AudioOutput {
     sender: SyncSender<AudioMessage>,
     generation: Arc<AtomicU64>,
+    /// Manual output resets survive a full bounded PCM producer queue.
+    reopen_pending: Arc<AtomicBool>,
     device_status: Arc<AtomicU8>,
     volume_bits: Arc<AtomicU32>,
     /// Number of fresh PCM frames actually appended to the OS mixer,
@@ -123,6 +125,8 @@ impl AudioOutput {
         let (sender, receiver) = mpsc::sync_channel(MAX_PENDING_FRAMES);
         let generation = Arc::new(AtomicU64::new(0));
         let shared_generation = Arc::clone(&generation);
+        let reopen_pending = Arc::new(AtomicBool::new(false));
+        let shared_reopen = Arc::clone(&reopen_pending);
         let device_status = Arc::new(AtomicU8::new(0));
         let shared_device_status = Arc::clone(&device_status);
         let volume_bits = Arc::new(AtomicU32::new(1.0_f32.to_bits()));
@@ -150,6 +154,7 @@ impl AudioOutput {
                 audio_worker(
                     receiver,
                     shared_generation,
+                    shared_reopen,
                     shared_device_status,
                     shared_volume_bits,
                     shared_submitted_frames,
@@ -165,6 +170,7 @@ impl AudioOutput {
         Ok(Self {
             sender,
             generation,
+            reopen_pending,
             device_status,
             volume_bits,
             submitted_frames,
@@ -254,11 +260,20 @@ impl AudioOutput {
         }
     }
 
-    /// Ask the existing sound worker to release its current CPAL/Rodio route.
-    /// The next fresh game PCM or speaker check opens the current default
-    /// output again. This is a nonblocking request, not proof of audibility.
+    /// Ask the worker to reselect the default output. The shared atomic
+    /// survives a full PCM queue; the message is only a best-effort wakeup.
+    /// Success means queued for worker processing, not physical audibility.
     pub fn request_reopen(&self) -> bool {
-        self.sender.try_send(AudioMessage::Reopen).is_ok()
+        if self.reopen_pending.swap(true, Ordering::AcqRel) {
+            return true;
+        }
+        match self.sender.try_send(AudioMessage::Reopen) {
+            Ok(()) | Err(mpsc::TrySendError::Full(_)) => true,
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                self.reopen_pending.store(false, Ordering::Release);
+                false
+            }
+        }
     }
 
     /// Bounded try-send: full queues lose stale audio rather than blocking
@@ -492,6 +507,7 @@ impl PlaybackContinuity {
 fn audio_worker(
     receiver: Receiver<AudioMessage>,
     generation: Arc<AtomicU64>,
+    reopen_pending: Arc<AtomicBool>,
     device_status: Arc<AtomicU8>,
     volume_bits: Arc<AtomicU32>,
     submitted_frames: Arc<AtomicU64>,
@@ -518,6 +534,19 @@ fn audio_worker(
             Err(mpsc::RecvTimeoutError::Timeout) => None,
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         };
+        // An explicit route change wins over automatic stream-fault recovery
+        // and is processed even if the PCM queue rejected its wakeup.
+        if reopen_pending.swap(false, Ordering::AcqRel) {
+            recovery.on_manual_reset();
+            if let Some(output) = device.take() {
+                output.clear();
+            }
+            device_status.store(0, Ordering::Release);
+            retry_after = None;
+            tone_until = None;
+            continuity.reset();
+            stretch.reset();
+        }
         // A previously healthy device can fail after unplug/restart. Reopen
         // here on the dedicated audio worker rather than the real-time CPAL
         // callback or GUI. Failed attempts still use the existing cooldown.
@@ -585,18 +614,8 @@ fn audio_worker(
                 continue;
             }
             AudioMessage::Reopen => {
-                // A default-route change does not always trigger CPAL's
-                // error callback. Explicit re-selection must not fabricate
-                // a stream-fault or successful-recovery receipt.
-                recovery.on_manual_reset();
-                if let Some(output) = device.take() {
-                    output.clear();
-                }
-                device_status.store(0, Ordering::Release);
-                retry_after = None;
-                tone_until = None;
-                continuity.reset();
-                stretch.reset();
+                // The atomic above owns the reset; this wakes the worker.
+                // Duplicate wakeups cannot reopen the device twice.
                 continue;
             }
         };
@@ -811,6 +830,7 @@ mod tests {
         let output = AudioOutput {
             sender,
             generation: Arc::new(AtomicU64::new(0)),
+            reopen_pending: Arc::new(AtomicBool::new(false)),
             device_status: Arc::new(AtomicU8::new(0)),
             volume_bits: Arc::new(AtomicU32::new(1.0f32.to_bits())),
             submitted_frames: Arc::new(AtomicU64::new(0)),
@@ -848,6 +868,7 @@ mod tests {
         let output = AudioOutput {
             sender,
             generation: Arc::new(AtomicU64::new(0)),
+            reopen_pending: Arc::new(AtomicBool::new(false)),
             device_status: Arc::new(AtomicU8::new(1)),
             volume_bits: Arc::new(AtomicU32::new(1.0f32.to_bits())),
             submitted_frames: Arc::new(AtomicU64::new(0)),
@@ -861,10 +882,40 @@ mod tests {
         };
         assert!(output.request_reopen());
         assert!(
-            !output.request_reopen(),
-            "full channel must refuse without blocking"
+            output.request_reopen(),
+            "duplicate output re-selection must coalesce without blocking"
         );
         assert!(matches!(receiver.try_recv().unwrap(), AudioMessage::Reopen));
+        assert!(receiver.try_recv().is_err());
+        assert!(output.reopen_pending.load(Ordering::Acquire));
+        assert_eq!(output.stream_failures(), 0);
+        assert_eq!(output.stream_recoveries(), 0);
+    }
+
+    #[test]
+    fn saturated_pcm_queue_does_not_lose_manual_audio_route_reset() {
+        let (sender, receiver) = sync_channel(1);
+        let output = AudioOutput {
+            sender,
+            generation: Arc::new(AtomicU64::new(0)),
+            reopen_pending: Arc::new(AtomicBool::new(false)),
+            device_status: Arc::new(AtomicU8::new(1)),
+            volume_bits: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+            submitted_frames: Arc::new(AtomicU64::new(0)),
+            submitted_nonzero_frames: Arc::new(AtomicU64::new(0)),
+            test_tones_submitted: Arc::new(AtomicU64::new(0)),
+            producer_dropped_frames: Arc::new(AtomicU64::new(0)),
+            worker_dropped_frames: Arc::new(AtomicU64::new(0)),
+            sink_empty_on_pcm: Arc::new(AtomicU64::new(0)),
+            stream_failures: Arc::new(AtomicU64::new(0)),
+            stream_recoveries: Arc::new(AtomicU64::new(0)),
+        };
+        output.enqueue(&[123, -123], 1.0, 1.0);
+        assert!(output.request_reopen(), "route reset must not need a free PCM slot");
+        assert!(output.reopen_pending.swap(false, Ordering::AcqRel));
+        assert!(!output.reopen_pending.load(Ordering::Acquire));
+        assert!(matches!(receiver.try_recv().unwrap(), AudioMessage::Frame { .. }));
+        assert!(receiver.try_recv().is_err());
         assert_eq!(output.stream_failures(), 0);
         assert_eq!(output.stream_recoveries(), 0);
     }
@@ -892,6 +943,7 @@ mod tests {
         let output = AudioOutput {
             sender,
             generation: Arc::new(AtomicU64::new(0)),
+            reopen_pending: Arc::new(AtomicBool::new(false)),
             device_status: Arc::new(AtomicU8::new(0)),
             volume_bits: Arc::new(AtomicU32::new(1.0f32.to_bits())),
             submitted_frames: Arc::new(AtomicU64::new(0)),
@@ -986,6 +1038,7 @@ mod tests {
         let output = AudioOutput {
             sender,
             generation: Arc::new(AtomicU64::new(3)),
+            reopen_pending: Arc::new(AtomicBool::new(false)),
             device_status: Arc::new(AtomicU8::new(0)),
             volume_bits: Arc::new(AtomicU32::new(1.0f32.to_bits())),
             submitted_frames: Arc::new(AtomicU64::new(0)),
@@ -1013,6 +1066,7 @@ mod tests {
         let output = AudioOutput {
             sender,
             generation: Arc::new(AtomicU64::new(0)),
+            reopen_pending: Arc::new(AtomicBool::new(false)),
             device_status: Arc::new(AtomicU8::new(0)),
             volume_bits: Arc::new(AtomicU32::new(1.0f32.to_bits())),
             submitted_frames: Arc::new(AtomicU64::new(0)),
@@ -1067,6 +1121,7 @@ mod tests {
         let output = AudioOutput {
             sender,
             generation: Arc::new(AtomicU64::new(0)),
+            reopen_pending: Arc::new(AtomicBool::new(false)),
             device_status: Arc::new(AtomicU8::new(0)),
             volume_bits: Arc::new(AtomicU32::new(1.0f32.to_bits())),
             submitted_frames: Arc::new(AtomicU64::new(0)),

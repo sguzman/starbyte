@@ -87,5 +87,53 @@ fn scheduler_ledger_matches_checked_roadmap_and_declared_percentages() {
         roadmap.contains(&format!("{completed}/{total} ({percent}%)")),
         "top-level Markdown progress differs from JSON"
     );
-    assert_eq!(completed, 69, "accepted tasks changed without audit");
+    // 2026-10-24 physical audit: local Codex ran the real Hyprland harness at
+    // b1448b3. A-08 was supported by 142 off-workspace frames at 59.81 FPS;
+    // D-14 by two away frames, one suspension/resume and ten resumed frames
+    // over 166 ms. Focused clock, audible output, controller and production
+    // cutover remain independently pending.
+    assert_eq!(completed, 71, "accepted tasks changed without audit");
+    for (group, task) in [("A", "A-08"), ("D", "D-14")] {
+        let milestone = milestones
+            .iter()
+            .find(|m| m["id"] == group)
+            .expect("audited milestone");
+        assert_eq!(
+            milestone["tasks"]
+                .as_array()
+                .expect("audited tasks")
+                .iter()
+                .find(|item| item["id"] == task)
+                .expect("audited task")["status"],
+            "accepted",
+            "{task} must match actual physical evidence"
+        );
+    }
+    for (group, task) in [
+        ("P", "P-18"),
+        ("P", "P-19"),
+        ("C", "C-16"),
+        ("D", "D-12"),
+        ("D", "D-13"),
+        ("D", "D-15"),
+    ] {
+        let milestone = milestones
+            .iter()
+            .find(|m| m["id"] == group)
+            .expect("pending milestone");
+        assert_eq!(
+            milestone["tasks"]
+                .as_array()
+                .expect("pending tasks")
+                .iter()
+                .find(|item| item["id"] == task)
+                .expect("pending task")["status"],
+            "pending",
+            "{task} requires separate acceptance"
+        );
+    }
+    assert!(
+        roadmap.contains("first actual desktop Hyprland acceptance — 11/12 physical probes"),
+        "physical acceptance audit must remain documented"
+    );
 }

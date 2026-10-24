@@ -78,6 +78,7 @@ common=(
   --setenv XDG_RUNTIME_DIR /run/user/qa
   --setenv WAYLAND_DISPLAY starbyte-qa-wayland
   --setenv STARBYTE_HOST_RUNTIME_DIR "$XDG_RUNTIME_DIR"
+  --setenv STARBYTE_HOST_CONFIG_HOME "${XDG_CONFIG_HOME:-$HOME/.config}"
   --setenv STARBYTE_HOST_WAYLAND_SOCKET "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY:-wayland-0}"
   --setenv STARBYTE_HOST_DBUS_SOCKET "$XDG_RUNTIME_DIR/bus"
   --unsetenv DISPLAY
@@ -92,6 +93,8 @@ if [[ "$mode" == --check-only ]]; then
     test -z "${WAYLAND_SOCKET-}"
     test ! -e "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"
     test ! -e "$STARBYTE_HOST_RUNTIME_DIR"
+    test ! -e "$STARBYTE_HOST_RUNTIME_DIR/hypr"
+    test ! -e "$STARBYTE_HOST_CONFIG_HOME"
     test ! -e "$STARBYTE_HOST_WAYLAND_SOCKET"
     test ! -e "$STARBYTE_HOST_DBUS_SOCKET"
     test ! -e /dev/input
@@ -99,6 +102,10 @@ if [[ "$mode" == --check-only ]]; then
     test ! -e /run/user/qa/bus
     test ! -e /run/user/qa/systemd
     test ! -e /run/dbus/system_bus_socket
+    test -z "${DBUS_SESSION_BUS_ADDRESS-}"
+    test -z "${HYPRLAND_INSTANCE_SIGNATURE-}"
+    test -z "${XDG_SESSION_ID-}"
+    test -z "${SYSTEMD_EXEC_PID-}"
     test ! -e /tmp/.X11-unix
     test "$HOME" = /home/qa
     echo PRIVATE_NAMESPACE_VIEW_OK

@@ -149,6 +149,30 @@ backend, or accept virtual-keyboard input without host session interaction.
 Do not start Hyprland or Starbyte until those boundaries have dedicated
 fail-closed tests. The native GUI wrapper and collector remain blocked.
 
+### Nested Hyprland blocker (2026-10-24)
+
+The installed Hyprland is 0.56.2 (Aquamarine 0.15.1). Its matching upstream
+[`src/Compositor.cpp`](https://github.com/hyprwm/Hyprland/blob/v0.56.2/src/Compositor.cpp#L280-L296)
+orders Aquamarine implementations as **headless, mandatory**, DRM if
+available, then Wayland as fallback. The private sandbox
+has no DRM nodes, so starting this build would select its mandatory headless
+backend before attempting the private Weston socket. Aquamarine 0.15.1's
+[`documented environment variables`](https://github.com/hyprwm/aquamarine/blob/v0.15.1/docs/env.md)
+include DRM device selection and input/debug options, but no
+backend-selection override. Consequently, launching this
+binary here cannot establish a nested Wayland compositor; a successful
+headless startup or a private Hyprland IPC socket would not be acceptable
+evidence. No Hyprland process was started. The next safe step requires an
+upstream or separately built Hyprland/Aquamarine backend-selection mechanism
+that makes Wayland mandatory and fails closed, plus regression coverage for
+that selection before launch.
+
+The isolation preflight now also asserts that the host Hyprland IPC runtime
+and personal config path are unreachable and that session-manager / Hyprland
+instance environment markers are absent. This strengthens namespace
+regression coverage; it does not validate nested compositor or input-seat
+behavior.
+
 ## Evidence already obtained
 
 - Native full harness on `b1448b3`: 11/12 pass. Nine original-window

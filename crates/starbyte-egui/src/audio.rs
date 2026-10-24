@@ -313,26 +313,29 @@ struct PlaybackDevice {
 
 impl PlaybackDevice {
     fn open_default() -> Result<Self> {
-        let stream_failed = Arc::new(AtomicBool::new(false));
-        let on_error = signal_stream_failure(Arc::clone(&stream_failed));
-        // Preserve Rodio's default-device, alternate-configuration and
-        // fallback-output search while exposing stream failures to the worker.
+        // Every attempted OS stream needs its own fault flag. A callback
+        // from a rejected fallback candidate must not poison a later healthy
+        // stream and trigger an unnecessary immediate second reopening.
         let preferred = OutputStreamBuilder::from_default_device().and_then(|builder| {
+            let failed = Arc::new(AtomicBool::new(false));
             builder
-                .with_error_callback(on_error.clone())
+                .with_error_callback(signal_stream_failure(Arc::clone(&failed)))
                 .open_stream_or_fallback()
+                .map(|stream| (stream, failed))
         });
         let opened = match preferred {
-            Ok(stream) => Ok(stream),
+            Ok(opened) => Ok(opened),
             Err(default_error) => {
                 let fallback = match rodio::cpal::default_host().output_devices() {
                     Ok(mut devices) => devices.find_map(|device| {
+                        let failed = Arc::new(AtomicBool::new(false));
                         OutputStreamBuilder::from_device(device)
                             .and_then(|builder| {
                                 builder
-                                    .with_error_callback(on_error.clone())
+                                    .with_error_callback(signal_stream_failure(Arc::clone(&failed)))
                                     .open_stream_or_fallback()
                             })
+                            .map(|stream| (stream, failed))
                             .ok()
                     }),
                     Err(_) => None,
@@ -340,7 +343,8 @@ impl PlaybackDevice {
                 fallback.ok_or(default_error)
             }
         };
-        let mut stream = opened.context("could not open a desktop audio output device")?;
+        let (mut stream, stream_failed) =
+            opened.context("could not open a desktop audio output device")?;
         stream.log_on_drop(false);
         let sink = Sink::connect_new(stream.mixer());
         Ok(Self {
@@ -875,10 +879,20 @@ mod tests {
     #[test]
     fn stream_failure_callback_signals_recovery_without_a_sound_device() {
         let failed = Arc::new(AtomicBool::new(false));
-        let mut on_error = super::signal_stream_failure(Arc::clone(&failed));
+        let selected = Arc::new(AtomicBool::new(false));
+        let mut failed_error = super::signal_stream_failure(Arc::clone(&failed));
+        let mut selected_error = super::signal_stream_failure(Arc::clone(&selected));
         assert!(!failed.load(Ordering::Acquire));
-        on_error(rodio::cpal::StreamError::DeviceNotAvailable);
+        assert!(!selected.load(Ordering::Acquire));
+
+        // Failed fallback attempts have distinct callbacks. An earlier
+        // candidate's fault cannot falsely mark the selected stream dead.
+        failed_error(rodio::cpal::StreamError::DeviceNotAvailable);
         assert!(failed.load(Ordering::Acquire));
+        assert!(!selected.load(Ordering::Acquire));
+
+        selected_error(rodio::cpal::StreamError::DeviceNotAvailable);
+        assert!(selected.load(Ordering::Acquire));
     }
 
     #[test]

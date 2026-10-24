@@ -67,6 +67,17 @@ const COMPACT_LAYOUT_WIDTH: f32 = 960.0;
 const GAMEPAD_STICK_DEADZONE: f32 = 0.5;
 /// Avoid binding from minor stick drift or calibration noise.
 const GAMEPAD_BIND_AXIS_THRESHOLD: f32 = 0.75;
+/// On resume after an egui callback gap, Gilrs may still contain press and
+/// release events from another workspace. Never reinterpret them as new input.
+const GAMEPAD_STALE_POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+pub(crate) fn discard_gamepad_backlog(
+    window_focused: bool,
+    last_poll: Instant,
+    now: Instant,
+) -> bool {
+    !window_focused || now.saturating_duration_since(last_poll) >= GAMEPAD_STALE_POLL_INTERVAL
+}
 
 /// Keep short button-press edges separate from physical held state. The
 /// established synchronous player consumes their union; the independent
@@ -1038,6 +1049,7 @@ pub struct StarbyteApp {
     jobs: Vec<JobRecord>,
     next_job_id: u64,
     gilrs: Option<Gilrs>,
+    last_gamepad_poll: Instant,
     gamepad_buttons_down: BTreeSet<String>,
     gamepad_buttons_by_id: HashMap<GamepadId, BTreeSet<String>>,
     /// Unconsumed button press edges by physical controller.
@@ -1308,6 +1320,7 @@ impl StarbyteApp {
             jobs: Vec::new(),
             next_job_id: 1,
             gilrs,
+            last_gamepad_poll: Instant::now(),
             gamepad_buttons_down: BTreeSet::new(),
             gamepad_buttons_by_id: HashMap::new(),
             queued_gamepad_presses: HashMap::new(),
@@ -3008,9 +3021,27 @@ impl StarbyteApp {
     }
 
     fn poll_gamepad_events(&mut self, window_focused: bool) {
+        let now = Instant::now();
+        let discard_backlog = discard_gamepad_backlog(window_focused, self.last_gamepad_poll, now);
+        self.last_gamepad_poll = now;
         let Some(gilrs) = self.gilrs.as_mut() else {
             return;
         };
+        if discard_backlog {
+            // The compositor may have suppressed every callback while another
+            // workspace was active, including the original blur callback.
+            // Consume Gilrs events to update its internal backend state, but
+            // do not replay a queued tap/axis crossing or retain a held key.
+            while gilrs.next_event().is_some() {}
+            self.gamepad_buttons_down.clear();
+            self.gamepad_buttons_by_id.clear();
+            self.queued_gamepad_presses.clear();
+            self.gamepad_sticks_by_id.clear();
+            self.gamepad_right_sticks_by_id.clear();
+            self.gamepad_hat_axes_by_id.clear();
+            self.captured_gamepad_inputs.clear();
+            return;
+        }
         let mut new_binding: Option<(String, String)> = None;
         while let Some(event) = gilrs.next_event() {
             match event.event {
@@ -8872,6 +8903,36 @@ mod playback_tests {
         assert!(pressed.contains("DPadUp"));
         assert!(pressed.contains("DPadLeft"));
         assert_eq!(pressed.len(), 3);
+    }
+
+    #[test]
+    fn resumed_or_unfocused_gamepad_polls_discard_old_edges() {
+        let previous = Instant::now();
+        assert!(!super::discard_gamepad_backlog(
+            true,
+            previous,
+            previous + Duration::from_millis(16)
+        ));
+        assert!(super::discard_gamepad_backlog(
+            false,
+            previous,
+            previous + Duration::from_millis(16)
+        ));
+        assert!(!super::discard_gamepad_backlog(
+            true,
+            previous,
+            previous + Duration::from_millis(499)
+        ));
+        assert!(super::discard_gamepad_backlog(
+            true,
+            previous,
+            previous + Duration::from_millis(500)
+        ));
+        assert!(super::discard_gamepad_backlog(
+            true,
+            previous,
+            previous + Duration::from_secs(2)
+        ));
     }
 
     #[test]

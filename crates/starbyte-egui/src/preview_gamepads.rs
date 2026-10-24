@@ -4,14 +4,14 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use gilrs::{Axis, EventType, GamepadId, Gilrs};
 use starbyte_core::input::ControllerState;
 
 use crate::{
-    app::{input_actions, set_controller_flag},
+    app::{discard_gamepad_backlog, input_actions, set_controller_flag},
     session_engine::controller_from_bits,
 };
 
@@ -86,16 +86,20 @@ impl PreviewGamepads {
 
     pub fn poll(&mut self, focused: bool) -> (ControllerState, ControllerState) {
         let now = Instant::now();
-        if !focused || now.duration_since(self.last_poll) >= Duration::from_millis(500) {
+        let discard_backlog = discard_gamepad_backlog(focused, self.last_poll, now);
+        if discard_backlog {
             // A compositor may skip egui updates without delivering a blur
-            // event. Treat old held buttons as released on wake or focus
-            // loss, instead of moving the guest continuously.
+            // event. Old held state and queued events must both be discarded:
+            // resetting held state alone still replays stale button taps.
             self.clear_held_controls();
         }
         self.last_poll = now;
         let mut newly_pressed = BTreeSet::new();
         if let Some(gilrs) = &mut self.gilrs {
             while let Some(event) = gilrs.next_event() {
+                if discard_backlog {
+                    continue;
+                }
                 match event.event {
                     EventType::ButtonPressed(button, _) if focused => {
                         let name = format!("{button:?}");
@@ -177,6 +181,8 @@ pub fn merge_sources(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     #[test]
@@ -198,6 +204,22 @@ mod tests {
         let active = axes.virtual_dpad();
         assert!(active.contains("DPadLeft"));
         assert!(active.contains("DPadUp"));
+    }
+
+    #[test]
+    fn stale_events_are_not_replayed_after_background_or_long_callback_gap() {
+        let now = Instant::now();
+        assert!(discard_gamepad_backlog(false, now, now));
+        assert!(discard_gamepad_backlog(
+            true,
+            now,
+            now + Duration::from_secs(2)
+        ));
+        assert!(!discard_gamepad_backlog(
+            true,
+            now,
+            now + Duration::from_millis(16)
+        ));
     }
 
     #[test]

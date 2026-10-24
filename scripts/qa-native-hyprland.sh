@@ -66,7 +66,12 @@ awk -F '\t' '
   { count++ }
   END { if (count != 12) exit 1 }
 ' "$probe_root/results.tsv" || fail 'incomplete_11_probe_receipts'
-[[ -f "$probe_root/real-focused-clock/starbyte.log" ]] || fail 'missing_focused_probe_log'
+focused_receipt="$probe_root/real-focused-clock/focused-clock-observation.json"
+[[ -s "$focused_receipt" ]] || fail 'missing_focused_clock_compositor_receipt'
+grep -Fq '"native_wayland_client": true' "$focused_receipt" ||
+  fail 'focused_clock_was_not_native_wayland'
+grep -Fq '"window_retained_keyboard_focus": true' "$focused_receipt" ||
+  fail 'focused_clock_did_not_retain_focus'
 for physical in real-workspace-progress real-background-pause; do
   receipt="$probe_root/$physical/workspace-transition.json"
   [[ -s "$receipt" ]] || fail "missing_${physical}_receipt"

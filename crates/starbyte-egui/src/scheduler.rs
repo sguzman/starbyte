@@ -277,6 +277,13 @@ fn apply_command<Machine>(
     true
 }
 
+/// The clock must restart at a fresh wall-clock origin after an effective
+/// suspension, regardless of whether policy flags changed. Speed changes
+/// likewise begin a new measurement window.
+fn should_rebase_deadline(just_resumed: bool, speed_changed: bool) -> bool {
+    just_resumed || speed_changed
+}
+
 /// Owns a machine in a dedicated thread, not inside the egui update loop.
 ///
 /// UI actions that mutate a game must use `invoke`; the caller can never
@@ -572,7 +579,6 @@ fn run_owned_clock<Machine, Frame>(
     let mut active_speed = policy.speed_percent;
     let mut deadline = Instant::now();
     loop {
-        let before = policy;
         for _ in 0..MAX_COMMANDS_PER_TICK {
             match commands.try_recv() {
                 Ok(command) => {
@@ -586,7 +592,11 @@ fn run_owned_clock<Machine, Frame>(
         }
         let running = policy.playing
             && (!policy.pause_when_unfocused || (policy.focused && gui_heartbeat.is_recent()));
-        if running && !was_running {
+        // Keep the previous *effective* clock state until the new timing
+        // origin has been selected. A lost Wayland heartbeat can suspend and
+        // resume the owner without ever changing ClockPolicy.focused/playing.
+        let just_resumed = running && !was_running;
+        if just_resumed {
             resumed_transitions.fetch_add(1, Ordering::Release);
         }
         if was_running && !running {
@@ -618,11 +628,11 @@ fn run_owned_clock<Machine, Frame>(
 
         let interval = policy.interval(base_interval);
         let speed_changed = active_speed != policy.speed_percent;
-        if !before.should_run() || !was_running || speed_changed {
-            // A command may arrive while waiting in recv_timeout. Comparing
-            // to the policy captured at the top of *this* iteration is not
-            // enough: it can already contain the changed speed. Track the
-            // speed from the last truly executed scheduling interval.
+        if should_rebase_deadline(just_resumed, speed_changed) {
+            // Rebase on every *effective* resume (including a stale GUI
+            // heartbeat becoming fresh), not only after a Run/Focus command.
+            // Otherwise a previously paused deadline can look overdue and
+            // run an unintended extra frame immediately after returning.
             deadline = Instant::now();
             active_speed = policy.speed_percent;
             if speed_changed {
@@ -761,6 +771,59 @@ mod tests {
             "disabling the background-pause policy must resume only once"
         );
         assert!(worker.shutdown().unwrap() >= resumed);
+    }
+
+    #[test]
+    fn compositor_heartbeat_resume_rebases_even_with_unchanged_focus_policy() {
+        let policy = ClockPolicy {
+            playing: true,
+            focused: true,
+            pause_when_unfocused: true,
+            ..Default::default()
+        };
+        // The GUI misses callbacks long enough to stop the effective clock;
+        // the user comes back without a Focus(false)/Focus(true) command.
+        // ClockPolicy is unchanged across the whole sequence.
+        assert!(policy.should_run());
+        let was_running = false;
+        let running = true;
+        let just_resumed = running && !was_running;
+        assert!(should_rebase_deadline(just_resumed, false));
+        // Ordinary continuously running ticks must keep the existing deadline.
+        assert!(!should_rebase_deadline(false, false));
+        assert!(should_rebase_deadline(false, true));
+    }
+
+    #[test]
+    fn heartbeat_only_resume_does_not_advance_paused_frames_or_burst() {
+        let (frames_tx, frames_rx) = mpsc::channel();
+        let worker = EmulatorScheduler::spawn(0_u64, Duration::from_millis(65), move |machine| {
+            *machine += 1;
+            let _ = frames_tx.send(Instant::now());
+            Ok(*machine)
+        })
+        .unwrap();
+        worker.gui_heartbeat();
+        worker.set_playing(true);
+        frames_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        // Let the UI heartbeat expire without sending a focus command.
+        let until = Instant::now() + Duration::from_secs(2);
+        while worker.is_emulating() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!worker.is_emulating(), "missed heartbeat must suspend the clock");
+        let stopped = worker.completed_frames();
+        std::thread::sleep(Duration::from_millis(140));
+        assert_eq!(worker.completed_frames(), stopped);
+        while frames_rx.try_recv().is_ok() {}
+        worker.gui_heartbeat();
+        let first = frames_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let second = frames_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(
+            second.saturating_duration_since(first) >= Duration::from_millis(30),
+            "resuming after a missed heartbeat caused a catch-up frame burst"
+        );
+        worker.shutdown().unwrap();
     }
 
     #[test]

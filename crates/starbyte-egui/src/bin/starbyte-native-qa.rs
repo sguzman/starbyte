@@ -172,11 +172,17 @@ fn focused_clock_receipt(
     let presented = get("presented=")?.parse::<u64>().ok()?;
     let frames = get("frames=")?.parse::<u64>().ok()?;
     let wall_ms = get("wall_ms=")?.parse::<u64>().ok()?;
+    // The application prints its rounded FPS alongside the *actual* frame
+    // delta and monotonic duration. Never accept a physically focused receipt
+    // that claims ~60 FPS while reporting missing or contradictory frames.
+    let derived_fps = frames as f64 * 1_000.0 / wall_ms.max(1) as f64;
     if !fps.is_finite()
         || !(55.0..=65.0).contains(&fps)
+        || (fps - derived_fps).abs() > 0.5
         || compositor_samples < 10
         || callbacks < 30
         || presented < 90
+        || frames < 90
         || wall_ms < 3_000
     {
         return None;
@@ -920,6 +926,27 @@ mod tests {
         assert_eq!(receipt["completed_worker_frames"], 180);
         assert_eq!(receipt["starbyte_process_id"], 5432);
         assert!(super::focused_clock_receipt(source, 3, 5432).is_none());
+        assert!(super::focused_clock_receipt(
+            "STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_OK fps=60.0 callbacks=180 presented=180 frames=0 wall_ms=3000",
+            25,
+            5432
+        )
+        .is_none());
+        assert!(super::focused_clock_receipt(
+            "STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_OK fps=60.0 callbacks=180 presented=180 frames=120 wall_ms=3000",
+            25,
+            5432
+        )
+        .is_none());
+        // The application rounds its measured FPS to three decimals and
+        // elapsed time to whole milliseconds; normal rounding still passes.
+        assert!(super::focused_clock_receipt(
+            "STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_OK fps=60.098 callbacks=180 presented=180 frames=181 wall_ms=3012",
+            25,
+            5432
+        )
+        .is_some());
+
         assert!(super::focused_clock_receipt(
             "STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_OK fps=100.0 callbacks=180 presented=180 frames=300 wall_ms=3000",
             25,

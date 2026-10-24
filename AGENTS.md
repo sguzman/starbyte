@@ -44,6 +44,12 @@ cloud CI machine as a substitute. See `docs/native-qa-execution.md`.
 Never mark physical speaker, gamepad, save-state or production-cutover gates
 accepted without their own direct evidence.
 
+## Physical acceptance: local Codex / QA operator
+
+A coding agent already executing inside the owner's **actual interactive Hyprland session** owns native QA, not the user. From a trusted current Starbyte checkout, it runs `bash scripts/qa-native-hyprland.sh`; if authenticated local `gh` has repository runner-registration and Actions privileges, `bash scripts/qa-runner-ephemeral.sh` attaches a temporary one-job runner to the existing physical workflow. Do not tell the user to run commands, inspect windows, perform controller QA or collect output. Do not give a GitHub-hosted Weston check the meaning of physical Hyprland evidence. The local collector writes private original logs and prints only a sanitized physical telemetry receipt on complete success; no secrets or personal paths in public issues/CI.
+
+When a chat agent has GitHub-only access, it **cannot execute commands on the user's desktop**, even if a physical workflow was dispatched. Check for an actual assigned self-hosted runner and completed physical job. If none is connected, record the execution blocker precisely, without inventing a test result, automatically accepting gates, or emitting repeated empty dispatches.
+
 ## Linux/Wayland
 
 Prefer native Wayland and test under a Wayland session, especially resizing, fullscreen, scaling, keyboard/gamepad focus, dialogs, audio continuity and idle/input behavior. Keep the X11 fallback isolated and do not call Wayland validated merely because the `wayland` Cargo feature compiles. Avoid fixed minimum windows that make tiling inconvenient.

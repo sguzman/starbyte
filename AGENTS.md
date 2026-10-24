@@ -25,46 +25,45 @@ Starbyte is a **fun-first Rust SNES emulator** targeting **Linux + native Waylan
 7. Use conventional, scoped commit messages and commit completed work. Do not silently rewrite history.
 8. Preserve existing behavior unless replacing it is intentional and documented.
 
-## Unattended real-Hyprland QA
+## Unattended QA and desktop-focus protection
 
-**Targeted retest:** After a partially successful full run, prefer
-`bash scripts/qa-native-hyprland.sh --focused-only` to rerun only the
-failed real-focused-clock probe in a fresh QA workspace. Its 1/1 receipt
-is evidence for D-12 review, never a substitute for full 12/12.
+**Non-negotiable:** Never switch the owner's active Hyprland workspace, focus a
+QA window, launch GUI probes, or change the owner's compositor settings in an
+unattended Codex run. A separate workspace does **not** provide a separate
+keyboard focus or seat. The owner explicitly reported unwanted focus hijacking
+in both original and targeted focused-clock retests.
 
-**Workspace respect:** Never launch the 12 native GUI probes directly onto
-the owner's active working workspace. Use `bash scripts/qa-native-hyprland.sh`,
-which reserves a disposable numeric QA workspace, conditionally restores the
-previous workspace and refuses new windows if QA has lost focus. The focused
-probe still requires temporary real focus; do not fight the owner over it.
-The first real desktop run at `b1448b3` passed 11/12; off-workspace
-progress and pause/resume were directly observed, focused FPS failed due to
-`lost_keyboard_focus`, and audio/gamepad/cutover remain untested.
+**Current guard:** `bash scripts/qa-native-hyprland.sh` and
+`bash scripts/qa-native-hyprland.sh --focused-only` intentionally refuse
+execution before launching any GUI windows or dispatching any workspace changes.
+The direct `starbyte-native-qa` binary also refuses GUI tests. No agent may
+bypass these guards through ad hoc commands or environmental overrides.
 
+**Allowed without desktop interruption:**
+`bash scripts/qa-native-hyprland.sh --check-only` builds the collector
+and runs its contract tests and the scheduler ledger, without GUI launches.
+Normal `cargo test`, lint and hosted Weston CI are likewise available but
+must not be represented as physical compositor, audio or gamepad acceptance.
 
-When this coding agent runs **inside the owner's actual interactive Hyprland
-session**, run `bash scripts/qa-native-hyprland.sh` itself, without delegating
-terminal, controller or window operations to the owner. It builds the binaries,
-runs nine isolated native-window smoke probes, one genuine focused-clock
-observation and two real compositor workspace transitions (12/12 total),
-restores the compositor workspace and keeps raw logs private.
-Report actual observed results, not inferred availability.
+**Real focused QA may resume only** after a separately isolated compositor
+**and input seat** has been independently demonstrated not to move focus or
+open test windows on the owner's active desktop. Merely using
+`movetoworkspacesilent` or a no-initial-focus window rule does not establish
+that the window is keyboard-focused for D-12. No current route satisfies this
+requirement; do not ask the human to test it manually.
 
-When orchestrating through GitHub instead, change only
-`.github/native-qa-dispatch` on main to trigger the dedicated trusted
-self-hosted workflow. This requires an **already registered and running**
-`self-hosted, linux, x64` runner in the actual login session;
-a queued job does **not** mean the desktop was tested. Do not install a
-system-level runner, leak host credentials, upload logs or treat a generic
-cloud CI machine as a substitute. See `docs/native-qa-execution.md`.
-Never mark physical speaker, gamepad, save-state or production-cutover gates
-accepted without their own direct evidence.
+The first real native run at `b1448b3` passed 11/12 and physically verified
+off-workspace emulation (A-08) and blur pause/resume (D-14), now recorded as
+71/77 accepted (92%). The targeted run at `fd522d4` measured 181 frames
+at 60.006 FPS over 3016 ms but failed focused foreground/native-client
+verification (0/1); D-12 and the other five physical gates remain open.
 
-## Physical acceptance: local Codex / QA operator
-
-A coding agent already executing inside the owner's **actual interactive Hyprland session** owns native QA, not the user. From a trusted current Starbyte checkout, it runs `bash scripts/qa-native-hyprland.sh`; if authenticated local `gh` has repository runner-registration and Actions privileges, `bash scripts/qa-runner-ephemeral.sh` attaches a temporary one-job runner to the existing physical workflow. Do not tell the user to run commands, inspect windows, perform controller QA or collect output. Do not give a GitHub-hosted Weston check the meaning of physical Hyprland evidence. The local collector writes private original logs and prints only a sanitized physical telemetry receipt on complete success; no secrets or personal paths in public issues/CI.
-
-When a chat agent has GitHub-only access, it **cannot execute commands on the user's desktop**, even if a physical workflow was dispatched. Check for an actual assigned self-hosted runner and completed physical job. If none is connected, record the execution blocker precisely, without inventing a test result, automatically accepting gates, or emitting repeated empty dispatches.
+**Roles:** ChatGPT directs and audits; local Codex performs unattended,
+non-interrupting diagnostics and future physical testing only after the
+isolation requirement is satisfied. Do not claim a GitHub-hosted virtual
+Wayland run or an unassigned self-hosted Actions job is physical acceptance.
+Do not publish raw logs, ROMs, personal paths, audio routes, or device IDs.
+Do not install a permanent runner or delegate terminal QA to the owner.
 
 ## Linux/Wayland
 

@@ -23,6 +23,23 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Verify unattended physical-QA launcher syntax
         run: bash -n scripts/qa-native-hyprland.sh
+      - name: Verify unattended GUI QA is fail-closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          # No live compositor in hosted CI, yet both routes must refuse
+          # execution BEFORE requesting any Wayland/Hyprland resources.
+          for args in "" "--focused-only"; do
+            if output="$(bash scripts/qa-native-hyprland.sh $args 2>&1)"; then
+              echo "Unexpected physical QA execution permitted" >&2
+              exit 1
+            fi
+            grep -Fq "STARBYTE_NATIVE_QA_BLOCKED owner_desktop_focus_must_not_be_stolen" <<<"$output"
+          done
+          if grep -Eq 'hyprctl[[:space:]]+dispatch|starbyte-native-qa[[:space:]]+--physical-workspace' scripts/qa-native-hyprland.sh; then
+            echo "Unattended launcher contains a focus-changing action" >&2
+            exit 1
+          fi
       - name: Verify ephemeral local QA runner syntax
         run: bash -n scripts/qa-runner-ephemeral.sh
       - name: Install Linux dependencies

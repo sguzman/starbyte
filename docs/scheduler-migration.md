@@ -1,5 +1,25 @@
 # Emulation scheduler migration
 
+## 2026-10-24 non-interference safety gate after failed second focused run
+
+Local Codex retested `real-focused-clock` on `fd522d4` and reported 0/1
+accepted: its unverified app log counted 181 frames and texture submissions
+over 3,016 ms (60.006 FPS), but the compositor foreground/native-client
+check failed. The owner confirmed the focused-only wrapper **forced the
+desktop onto the QA workspace** despite promising not to. The original
+workspace was restored afterward, but that does not undo the interruption.
+
+**Corrective action:** the unattended wrapper and direct Rust collector
+now fail closed before creating GUI windows or switching Hyprland
+workspaces. The non-GUI `--check-only` build/contract/ledger path remains
+available. Physical GUI QA may be re-enabled only after a separate compositor
+and input seat have been demonstrated to preserve the owner's workspace
+and keyboard focus. D-12 remains pending; previously accepted A-08 and
+D-14 retain their real-desktop evidence. **Overall 71/77 (92%)**.
+The historical procedure below must not be executed on the owner's active
+desktop.
+
+
 ## 2026-10-24 first actual desktop Hyprland acceptance — 11/12 physical probes
 
 The locally running Codex executor fast-forwarded a clean Starbyte checkout to [`b1448b3`](https://github.com/sguzman/starbyte/commit/b1448b392556b03c963cc273744826a0d7affbbb) and ran the existing full native harness in the owner's **real** Hyprland/Wayland login. Its sanitized report records **11 of 12 probes passed**: all nine isolated original-window smokes and both compositor workspace transitions passed; focused-clock observation **failed** on `lost_keyboard_focus`, with no valid focused FPS measurement. The original workspace was restored, no QA window remained, and Git was clean.

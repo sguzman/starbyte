@@ -1,5 +1,23 @@
 # Starbyte: current state
 
+## Owner desktop focus: physical QA suspended (2026-10-24)
+
+The first run's 11/12 successes did not justify disrupting the owner's
+working workspace. Codex's second focused-only run at `fd522d4` opened one
+window on another workspace but **forcibly switched focus to it**, violating
+the owner's non-interruption requirement. The collector rejected focused
+active-window/native-client verification (0/1), despite an unverified
+application log of 181 frames, 181 textures, 60.006 FPS in 3,016 ms.
+**D-12 is still pending; acceptance stays 71/77 (92%).**
+
+The QA wrapper and direct native collector are now **blocked from launching
+any GUI probes in the owner's active session**. `--check-only` performs
+non-GUI build/unit/ledger checks. This is intentionally a safety restriction
+until a separately verified compositor **and input seat** can perform
+real GUI QA without workspace or keyboard-focus hijacking. No workaround
+may simply restore the previous focus after stealing it.
+
+
 ## Targeted focused QA option (2026-10-24)
 
 After the 11/12 local run, the native executor supports a focused-clock-only

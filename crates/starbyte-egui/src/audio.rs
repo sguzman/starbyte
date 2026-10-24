@@ -543,6 +543,13 @@ fn audio_worker(
         }
 
         let Some(message) = message else {
+            // A saturated PCM queue can drop a VolumeChanged notification.
+            // If the game is now paused, there may be no further PCM frame to
+            // apply the new atomic gain. Reconcile the live Rodio sink on an
+            // idle health tick without reopening a disabled/unused device.
+            if let Some(output) = &device {
+                apply_sink_volume(&output.sink, &volume_bits);
+            }
             if idle_reopen_due(&recovery, device.is_some(), retry_after, Instant::now()) {
                 attempt_device_open(
                     &mut device,
@@ -906,6 +913,26 @@ mod tests {
             f32::from_bits(output.volume_bits.load(Ordering::Acquire)),
             0.0
         );
+    }
+
+    #[test]
+    fn saturated_control_queue_can_still_reconcile_idle_sink_volume() {
+        let (sender, receiver) = sync_channel(1);
+        let (sink, _queue) = rodio::Sink::new();
+        let volume = AtomicU32::new(1.0_f32.to_bits());
+        // A pending audio/control message fills the nonblocking channel,
+        // so the volume notification cannot be submitted by the GUI.
+        sender.try_send(AudioMessage::Clear).unwrap();
+        volume.store(0.0_f32.to_bits(), Ordering::Release);
+        assert!(sender.try_send(AudioMessage::VolumeChanged).is_err());
+        assert!(matches!(receiver.try_recv().unwrap(), AudioMessage::Clear));
+        // The actual worker's idle health tick must read this shared atomic,
+        // not rely exclusively on a VolumeChanged or new PCM message.
+        apply_sink_volume(&sink, &volume);
+        assert_eq!(sink.volume(), 0.0);
+        volume.store(0.65_f32.to_bits(), Ordering::Release);
+        apply_sink_volume(&sink, &volume);
+        assert_eq!(sink.volume(), 0.65);
     }
 
     #[test]

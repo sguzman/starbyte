@@ -5664,6 +5664,11 @@ impl StarbyteApp {
                 rate.last_gap_ms,
             ));
             ui.label(format!(
+                "Owner clock transitions: suspended {}, resumed {} (not UI repaint counts)",
+                worker.engine.suspended_transitions(),
+                worker.engine.resumed_transitions(),
+            ));
+            ui.label(format!(
                 "Last worker emulation CPU: {:.2} ms; coalesced video frames: {}; async owner jobs: {}",
                 self.worker_cpu.as_secs_f32() * 1_000.0,
                 worker.engine.skipped_video_frames(),

@@ -268,8 +268,7 @@ fn sanitized_physical_receipt(root: &Path) -> Result<serde_json::Value, Box<dyn 
             return Err("physical workspace transition evidence incomplete".into());
         }
     }
-    if focused["native_wayland_client"] != true
-        || focused["window_retained_keyboard_focus"] != true
+    if focused["native_wayland_client"] != true || focused["window_retained_keyboard_focus"] != true
     {
         return Err("focused window was not confirmed by Hyprland".into());
     }

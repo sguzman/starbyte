@@ -1,7 +1,13 @@
 # Emulation scheduler migration
 
-**Status: in progress. Latest code [`fe1d16b`](https://github.com/sguzman/starbyte/commit/fe1d16bf97d664af454c95ca4c878ff88adba5da) monitors CPAL output faults while emulation is silent and retries a failed device without reopening unused or manually reset routes; manual re-selection never counts as automatic fault recovery. [CI 40055135458](https://github.com/sguzman/starbyte/actions/runs/40055135458) passed all four Linux/Weston, Windows, Clippy and Rust 1.88 jobs. Accepted checklist remains 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. Full-library worker remains opt-in; real physical Hyprland, speaker, gamepad and cutover evidence is still pending.**
+**Status: in progress. Latest code [`0f1ef09`](https://github.com/sguzman/starbyte/commit/0f1ef09c1653a43afd458eb2d166d99dfa209d2d) prevents queued physical controller taps or stick edges from being replayed when the UI resumes after a hidden-workspace/callback gap, in both the full original window and worker-preview input paths. [CI 40056557353](https://github.com/sguzman/starbyte/actions/runs/40056557353) passed all four Linux/Weston, Windows, Clippy and Rust 1.88 jobs. Accepted checklist remains 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. Full-library worker remains opt-in; real physical Hyprland, audible speakers, gamepad and default cutover evidence are still pending.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
+
+## Off-workspace controller event backlog no longer replays on return
+
+[Code `0f1ef09`](https://github.com/sguzman/starbyte/commit/0f1ef09c1653a43afd458eb2d166d99dfa209d2d) fixes a gameplay-input failure mode in both input implementations. Gilrs accumulates button and axis events even while an egui window receives no redraw callback. On return, previously hidden-workspace button taps could be interpreted as fresh press edges. The worker preview already cleared its *held* state after a long update gap, but still interpreted the queued events that followed; the original-window path had the same backlog problem. Both paths now drain pending Gilrs events without applying them after focus loss or a gap of at least 500 ms, clear held/queued input and wait for genuinely new input. Normal short-interval polls retain press-and-release edge behavior.
+
+[Exact-source CI 40056557353](https://github.com/sguzman/starbyte/actions/runs/40056557353) passed Linux native Weston and workspace tests, Windows tests/benchmark compilation, formatting/Clippy and pinned Rust 1.88. New device-free regressions confirm the normal, unfocused and stale-poll decision boundary; they do **not** simulate a physical gamepad or an actual compositor-focus transition. A direct physical pad press/release and post-workspace-return test is still required for P-19/D-15, so **69/77 (90%) accepted** is unchanged.
 
 ## Silent playback: real CPAL-fault polling and honest recovery counts
 

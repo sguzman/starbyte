@@ -735,13 +735,18 @@ struct FullLibraryWorker {
     pending_launches: Vec<FullLibraryPendingLaunch>,
     pending_saves: Vec<(
         Option<u64>,
+        Option<u64>,
         SessionSaveAction,
         Receiver<Result<WorkerSaveResponse, String>>,
     )>,
-    pending_screenshots: Vec<(Option<u64>, Receiver<Result<SessionScreenshot, String>>)>,
+    pending_screenshots: Vec<(
+        Option<u64>,
+        Option<u64>,
+        Receiver<Result<SessionScreenshot, String>>,
+    )>,
     /// Capture generation is retained through asynchronous PNG encoding;
     /// a completed older write must not replace the new game's status.
-    pending_screenshot_writes: Vec<(Option<u64>, Receiver<Result<PathBuf, String>>)>,
+    pending_screenshot_writes: Vec<(Option<u64>, Option<u64>, Receiver<Result<PathBuf, String>>)>,
     pending_speaker_checks: Vec<(Option<u64>, Option<u64>, Receiver<Result<(), String>>)>,
     pending_sound_diagnostics: Option<(
         Option<u64>,
@@ -1427,12 +1432,13 @@ impl StarbyteApp {
         worker.pending_launches = waiting;
         let mut completed_saves = Vec::new();
         let mut pending_saves = Vec::new();
-        for (generation, action, reply) in std::mem::take(&mut worker.pending_saves) {
+        for (generation, selection, action, reply) in std::mem::take(&mut worker.pending_saves) {
             match reply.try_recv() {
-                Ok(result) => completed_saves.push((generation, action, result)),
-                Err(TryRecvError::Empty) => pending_saves.push((generation, action, reply)),
+                Ok(result) => completed_saves.push((generation, selection, action, result)),
+                Err(TryRecvError::Empty) => pending_saves.push((generation, selection, action, reply)),
                 Err(TryRecvError::Disconnected) => completed_saves.push((
                     generation,
+                    selection,
                     action,
                     Err("Emulation worker closed the save receipt".to_owned()),
                 )),
@@ -1441,12 +1447,13 @@ impl StarbyteApp {
         worker.pending_saves = pending_saves;
         let mut captured = Vec::new();
         let mut captures_pending = Vec::new();
-        for (generation, response) in std::mem::take(&mut worker.pending_screenshots) {
+        for (generation, selection, response) in std::mem::take(&mut worker.pending_screenshots) {
             match response.try_recv() {
-                Ok(result) => captured.push((generation, result)),
-                Err(TryRecvError::Empty) => captures_pending.push((generation, response)),
+                Ok(result) => captured.push((generation, selection, result)),
+                Err(TryRecvError::Empty) => captures_pending.push((generation, selection, response)),
                 Err(TryRecvError::Disconnected) => captured.push((
                     generation,
+                    selection,
                     Err("Screenshot capture worker stopped".to_owned()),
                 )),
             }
@@ -1454,13 +1461,16 @@ impl StarbyteApp {
         worker.pending_screenshots = captures_pending;
         let mut screenshot_writes = Vec::new();
         let mut writes_pending = Vec::new();
-        for (generation, response) in std::mem::take(&mut worker.pending_screenshot_writes) {
+        for (generation, selection, response) in std::mem::take(&mut worker.pending_screenshot_writes) {
             match response.try_recv() {
-                Ok(result) => screenshot_writes.push((generation, result)),
-                Err(TryRecvError::Empty) => writes_pending.push((generation, response)),
+                Ok(result) => screenshot_writes.push((generation, selection, result)),
+                Err(TryRecvError::Empty) => writes_pending.push((generation, selection, response)),
                 Err(TryRecvError::Disconnected) => {
-                    screenshot_writes
-                        .push((generation, Err("Screenshot PNG writer stopped".to_owned())));
+                    screenshot_writes.push((
+                        generation,
+                        selection,
+                        Err("Screenshot PNG writer stopped".to_owned()),
+                    ));
                 }
             }
         }
@@ -1620,13 +1630,22 @@ impl StarbyteApp {
                 }
             }
         }
-        for (generation, action, result) in completed_saves {
+        for (generation, selection, action, result) in completed_saves {
             // ROM path alone is not enough: the same file may have been
             // reinstalled with a different sound/save namespace. A receipt
             // from the old owner must never update the new session's UI.
             if !worker_save_receipt_is_current(generation, self.worker_active_launch_id) {
                 continue;
             }
+            let show_feedback = worker_async_feedback_is_current(
+                generation,
+                self.worker_active_launch_id,
+                selection,
+                self.latest_rom_job_id,
+                self.full_worker
+                    .as_ref()
+                    .is_some_and(|worker| !worker.pending_launches.is_empty()),
+            );
             if self.worker_save_smoke_stage.is_some() {
                 self.worker_save_smoke_receipt =
                     Some((action, result.as_ref().map(|_| ()).map_err(Clone::clone)));
@@ -1657,15 +1676,21 @@ impl StarbyteApp {
                             &mut self.worker_presentation,
                         );
                     }
-                    self.status_line = match action {
-                        SessionSaveAction::QuickSave => "Quick save stored (F5).".to_owned(),
-                        SessionSaveAction::QuickLoad => "Quick save restored (F8).".to_owned(),
-                        SessionSaveAction::SaveSlot(slot) => format!("Saved disk slot {slot}."),
-                        SessionSaveAction::LoadSlot(slot) => format!("Restored disk slot {slot}."),
-                        SessionSaveAction::FlushSram => "Cartridge SRAM persisted.".to_owned(),
-                    };
+                    if show_feedback {
+                        self.status_line = match action {
+                            SessionSaveAction::QuickSave => "Quick save stored (F5).".to_owned(),
+                            SessionSaveAction::QuickLoad => "Quick save restored (F8).".to_owned(),
+                            SessionSaveAction::SaveSlot(slot) => format!("Saved disk slot {slot}."),
+                            SessionSaveAction::LoadSlot(slot) => format!("Restored disk slot {slot}."),
+                            SessionSaveAction::FlushSram => "Cartridge SRAM persisted.".to_owned(),
+                        };
+                    }
                 }
-                Err(error) => self.status_line = format!("Save/restore failed: {error}"),
+                Err(error) => {
+                    if show_feedback {
+                        self.status_line = format!("Save/restore failed: {error}");
+                    }
+                }
             }
         }
         if self
@@ -1735,13 +1760,21 @@ impl StarbyteApp {
                 }
             }
         }
-        for (generation, result) in captured {
-            // A failed newer ROM request must not invalidate screenshots of
-            // the surviving installed cartridge. Fence on successful owner
-            // installation, never merely on the latest requested job.
-            if !worker_screenshot_receipt_is_current(generation, self.worker_active_launch_id) {
-                continue;
-            }
+        for (generation, selection, result) in captured {
+            // The capture payload owns its pixels. Finish writing a valid PNG
+            // even if another cartridge was requested or already installed.
+            let show_feedback = worker_screenshot_receipt_is_current(
+                generation,
+                self.worker_active_launch_id,
+            ) && worker_async_feedback_is_current(
+                generation,
+                self.worker_active_launch_id,
+                selection,
+                self.latest_rom_job_id,
+                self.full_worker
+                    .as_ref()
+                    .is_some_and(|worker| !worker.pending_launches.is_empty()),
+            );
             match result {
                 Ok(image) => {
                     let stamp = SystemTime::now()
@@ -1755,19 +1788,27 @@ impl StarbyteApp {
                     match spawn_screenshot_writer(path, image) {
                         Ok(reply) => {
                             if let Some(worker) = &mut self.full_worker {
-                                worker.pending_screenshot_writes.push((generation, reply));
+                                worker.pending_screenshot_writes.push((generation, selection, reply));
                             }
                         }
-                        Err(error) => self.status_line = format!("Screenshot failed: {error}"),
+                        Err(error) => {
+                            if show_feedback {
+                                self.status_line = format!("Screenshot failed: {error}");
+                            }
+                        }
                     }
                 }
-                Err(error) => self.status_line = format!("Screenshot failed: {error}"),
+                Err(error) => {
+                    if show_feedback {
+                        self.status_line = format!("Screenshot failed: {error}");
+                    }
+                }
             }
         }
         for (generation, selection, result) in completed_tones {
             // An older speaker-test acknowledgement is not new-ROM feedback.
             // Keep load and installation status visible after a fresh selection.
-            if !worker_tone_receipt_is_current(
+            if !worker_async_feedback_is_current(
                 generation,
                 self.worker_active_launch_id,
                 selection,
@@ -1793,18 +1834,27 @@ impl StarbyteApp {
         {
             self.worker_sound_diagnostics = Some(sound);
         }
-        for (generation, result) in screenshot_writes {
-            // The PNG may have been written successfully even when its game
-            // is no longer selected. Do not overwrite newer launch/status
-            // feedback with a delayed completion from that old cartridge.
-            if !worker_screenshot_receipt_is_current(generation, self.worker_active_launch_id) {
-                continue;
-            }
-            if self.worker_save_smoke_stage == Some(WorkerSaveSmokeStage::AwaitScreenshot) {
+        for (generation, selection, result) in screenshot_writes {
+            // Do not confuse a completed prior PNG with the current game.
+            let same_owner =
+                worker_screenshot_receipt_is_current(generation, self.worker_active_launch_id);
+            let show_feedback = same_owner
+                && worker_async_feedback_is_current(
+                    generation,
+                    self.worker_active_launch_id,
+                    selection,
+                    self.latest_rom_job_id,
+                    self.full_worker
+                        .as_ref()
+                        .is_some_and(|worker| !worker.pending_launches.is_empty()),
+                );
+            if same_owner
+                && self.worker_save_smoke_stage == Some(WorkerSaveSmokeStage::AwaitScreenshot)
+            {
                 self.worker_save_smoke_screenshot = Some(result.clone());
             }
             if let Ok(path) = &result {
-                if path.is_file() {
+                if same_owner && path.is_file() {
                     if let Some(WorkerReplacementSmoke::AwaitReceiptRace {
                         screenshot_written,
                         ..
@@ -1814,11 +1864,11 @@ impl StarbyteApp {
                     }
                 }
             }
-            match result {
-                Ok(path) => {
-                    self.status_line = format!("Screenshot saved to {}", path.display());
-                }
-                Err(error) => self.status_line = format!("Screenshot failed: {error}"),
+            if show_feedback {
+                self.status_line = match result {
+                    Ok(path) => format!("Screenshot saved to {}", path.display()),
+                    Err(error) => format!("Screenshot failed: {error}"),
+                };
             }
         }
         if let Some(worker) = &self.full_worker {
@@ -1854,7 +1904,7 @@ impl StarbyteApp {
             Ok(reply) => {
                 worker
                     .pending_saves
-                    .push((self.worker_active_launch_id, action, reply));
+                    .push((self.worker_active_launch_id, self.latest_rom_job_id, action, reply));
                 self.status_line = "Saving or restoring on the emulator worker...".to_owned();
             }
             Err(error) => self.status_line = error,
@@ -5260,7 +5310,7 @@ impl StarbyteApp {
                 Ok(reply) => {
                     worker
                         .pending_screenshots
-                        .push((self.worker_active_launch_id, reply));
+                        .push((self.worker_active_launch_id, self.latest_rom_job_id, reply));
                     self.status_line = "Capturing screenshot on the emulator worker...".to_owned();
                 }
                 Err(error) => self.status_line = format!("Screenshot failed: {error}"),
@@ -8869,7 +8919,7 @@ fn worker_save_receipt_is_current(
 /// receipts a pair of None generations is valid. However an intervening ROM
 /// request or a pending installation must not let an old acknowledgement
 /// overwrite the latest selection's status.
-fn worker_tone_receipt_is_current(
+fn worker_async_feedback_is_current(
     generation: Option<u64>,
     active_generation: Option<u64>,
     selection: Option<u64>,
@@ -9109,7 +9159,7 @@ fn is_superseded_rom_load(latest: Option<u64>, event_job: u64) -> bool {
 
 #[cfg(test)]
 mod rom_request_order_tests {
-    use super::{is_rom_job, is_superseded_rom_load, worker_tone_receipt_is_current};
+    use super::{is_rom_job, is_superseded_rom_load, worker_async_feedback_is_current};
 
     #[test]
     fn newer_rom_selection_supersedes_success_and_error_from_older_load() {
@@ -9124,31 +9174,31 @@ mod rom_request_order_tests {
 
     #[test]
     fn delayed_speaker_test_cannot_replace_newer_rom_selection_status() {
-        assert!(worker_tone_receipt_is_current(
+        assert!(worker_async_feedback_is_current(
             None, None, None, None, false
         ));
-        assert!(worker_tone_receipt_is_current(
+        assert!(worker_async_feedback_is_current(
             Some(4),
             Some(4),
             Some(9),
             Some(9),
             false
         ));
-        assert!(!worker_tone_receipt_is_current(
+        assert!(!worker_async_feedback_is_current(
             Some(4),
             Some(5),
             Some(9),
             Some(9),
             false
         ));
-        assert!(!worker_tone_receipt_is_current(
+        assert!(!worker_async_feedback_is_current(
             Some(4),
             Some(4),
             Some(9),
             Some(10),
             false
         ));
-        assert!(!worker_tone_receipt_is_current(
+        assert!(!worker_async_feedback_is_current(
             Some(4),
             Some(4),
             Some(9),

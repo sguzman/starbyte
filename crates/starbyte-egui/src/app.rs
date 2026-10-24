@@ -134,6 +134,15 @@ fn cached_button_names(mut is_pressed: impl FnMut(Button) -> bool) -> BTreeSet<S
         .collect()
 }
 
+/// Keep rebinding suppression only for controls still physically held after
+/// Wayland focus or repaint interruption. Stale releases must not lock input.
+fn captured_controls_still_held(
+    captured: &BTreeSet<String>,
+    physically_held: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    captured.intersection(physically_held).cloned().collect()
+}
+
 pub(crate) fn cached_connected_gamepads(gilrs: &Gilrs) -> Vec<CachedGamepad> {
     gilrs
         .gamepads()
@@ -3131,35 +3140,46 @@ impl StarbyteApp {
             self.gamepad_sticks_by_id.clear();
             self.gamepad_right_sticks_by_id.clear();
             self.gamepad_hat_axes_by_id.clear();
-            self.captured_gamepad_inputs.clear();
+            // Keep rebinding suppression across focus loss; once the window
+            // returns, retain only captures still physically held. Otherwise
+            // a mapped rebinding button held through a workspace switch could
+            // unexpectedly move the game before its first release.
+            let captured_before_gap = std::mem::take(&mut self.captured_gamepad_inputs);
             if window_focused {
                 // A key still physically down on return is held, but it is
                 // not a new press edge. A tap completed while hidden is gone.
                 for state in cached_connected_gamepads(gilrs) {
+                    let left = StickAxes {
+                        x: state.left.0,
+                        y: state.left.1,
+                    };
+                    let right = StickAxes {
+                        x: state.right.0,
+                        y: state.right.1,
+                    };
+                    let hat = StickAxes {
+                        x: state.dpad.0,
+                        y: state.dpad.1,
+                    };
+                    let mut physically_held = state.held.clone();
+                    physically_held.extend(left.dpad_buttons());
+                    physically_held.extend(left.axis_bindings("LeftStick"));
+                    physically_held.extend(right.axis_bindings("RightStick"));
+                    physically_held.extend(hat.dpad_buttons());
+                    if let Some(previous) = captured_before_gap.get(&state.id) {
+                        let retained = captured_controls_still_held(previous, &physically_held);
+                        if !retained.is_empty() {
+                            self.captured_gamepad_inputs.insert(state.id, retained);
+                        }
+                    }
                     self.gamepad_buttons_by_id.insert(state.id, state.held);
-                    self.gamepad_sticks_by_id.insert(
-                        state.id,
-                        StickAxes {
-                            x: state.left.0,
-                            y: state.left.1,
-                        },
-                    );
-                    self.gamepad_right_sticks_by_id.insert(
-                        state.id,
-                        StickAxes {
-                            x: state.right.0,
-                            y: state.right.1,
-                        },
-                    );
-                    self.gamepad_hat_axes_by_id.insert(
-                        state.id,
-                        StickAxes {
-                            x: state.dpad.0,
-                            y: state.dpad.1,
-                        },
-                    );
+                    self.gamepad_sticks_by_id.insert(state.id, left);
+                    self.gamepad_right_sticks_by_id.insert(state.id, right);
+                    self.gamepad_hat_axes_by_id.insert(state.id, hat);
                 }
                 self.refresh_gamepad_buttons_down();
+            } else {
+                self.captured_gamepad_inputs = captured_before_gap;
             }
             return;
         }
@@ -9201,6 +9221,35 @@ mod playback_tests {
         // A release from the same pad clears its suppression.
         suppressed.get_mut(&1).unwrap().remove("South");
         assert!(merged_gamepad_buttons_excluding(&pads, &suppressed).contains("South"));
+    }
+
+    #[test]
+    fn hidden_focus_return_preserves_rebind_suppression_only_until_release() {
+        use std::collections::BTreeSet;
+
+        use super::captured_controls_still_held;
+        let captured = BTreeSet::from([
+            "South".to_owned(),
+            "LeftStickX+".to_owned(),
+            "DPadRight".to_owned(),
+        ]);
+        let physically_held = BTreeSet::from([
+            "South".to_owned(),
+            "LeftStickX+".to_owned(),
+            "DPadRight".to_owned(),
+        ]);
+        assert_eq!(
+            captured_controls_still_held(&captured, &physically_held),
+            captured
+        );
+        // A gamepad held during rebinding must remain suppressed after a
+        // workspace switch; a released stick is no longer suppressed.
+        let released_axis = BTreeSet::from(["South".to_owned()]);
+        assert_eq!(
+            captured_controls_still_held(&captured, &released_axis),
+            released_axis
+        );
+        assert!(captured_controls_still_held(&captured, &BTreeSet::new()).is_empty());
     }
 
     #[test]

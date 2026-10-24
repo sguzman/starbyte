@@ -59,14 +59,42 @@ and the private Wayland socket is not present before compositor startup. It
 does not alter or inspect the running compositor. The check passed locally on
 2026-10-24. This verifies the namespace view, not compositor behavior.
 
-The `--weston-smoke` mode is implemented but was not run: Weston and its
-`weston-simple-shm` client are not installed. It refuses before spawning any
-process if either is missing. When available, it starts Weston with the
-headless backend and Pixman renderer inside the same namespace, connects the
-disposable client through only the private socket, then reaps Weston. This
-would be preliminary Weston infrastructure evidence, not Hyprland or Starbyte
-acceptance. A regression test checks the source-level isolation guards. The
-existing wrapper and collector hard-stops remain authoritative.
+The `--weston-smoke` path now has a local preliminary pass. The official Arch
+`extra` Weston 15.0.1 package and `wayland-utils` package were signature
+verified and extracted into a mode-700 temporary runtime directory; no system
+package installation was performed. Set `STARBYTE_WESTON_PACKAGE_ROOT` to
+that extracted package tree to run the same harness without installing it.
+Only the package tree is mounted read-only inside Bubblewrap. Weston started
+with the headless backend, Pixman renderer and kiosk shell. `wayland-info`
+connected through the private socket and observed `wl_compositor`; the
+packaged `weston-simple-shm` client ran under its bounded timeout. Weston was
+reaped and the socket was absent afterward. Forced startup and client failures
+and a SIGTERM interruption also left no compositor process, socket, or
+temporary QA runtime directory.
+This is preliminary Weston infrastructure evidence, not Hyprland or Starbyte
+acceptance. Regression tests cover the source-level isolation and cleanup
+guards. The existing wrapper and collector hard-stops remain authoritative.
+
+For an unprivileged extraction, use pacman's configured official Arch mirror
+and verify each detached signature before extracting:
+
+```sh
+private_dir="$(mktemp -d "$XDG_RUNTIME_DIR/starbyte-weston.XXXXXXXX")"
+chmod 700 "$private_dir"
+mkdir -p "$private_dir/pkg" "$private_dir/tree"
+for package in weston wayland-utils; do
+  url="$(pacman -Sp --print-format '%l' "$package" | awk -v name="$package" '$0 ~ "/" name "-[^/]+pkg[.]tar[.]zst$" {print; exit}')"
+  archive="$private_dir/pkg/$package.pkg.tar.zst"
+  curl --fail --location "$url" --output "$archive"
+  curl --fail --location "${url}.sig" --output "$archive.sig"
+  pacman-key --verify "$archive.sig" "$archive"
+  bsdtar -xf "$archive" -C "$private_dir/tree"
+done
+STARBYTE_WESTON_PACKAGE_ROOT="$private_dir/tree" bash scripts/qa-isolated-wayland.sh --weston-smoke
+```
+
+Remove `private_dir` after the smoke. This does not install or update host
+packages.
 
 The next design to validate is a two-stage, software-rendered nested setup:
 

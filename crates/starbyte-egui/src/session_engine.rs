@@ -1255,6 +1255,58 @@ mod tests {
     }
 
     #[test]
+    fn failed_background_sram_write_retries_after_disk_path_recovers() {
+        let dir = tempfile::tempdir().unwrap();
+        let rom_path = dir.path().join("sram-retry.sfc");
+        let mut rom = starbyte_core::testing::demo::demo_rom_bytes();
+        rom[0x7FD8] = 0x01;
+        std::fs::write(&rom_path, rom).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(dir.path().join("battery")),
+            state_dir: Some(dir.path().join("states")),
+            cache_dir: Some(dir.path().join("cache")),
+            config_path: None,
+        };
+        let mut owner = OwnedSession::create(assets).unwrap();
+        owner.set_audio(false, true, 0.0);
+        owner.load_rom(&rom_path, SoundSessionMode::Persistent).unwrap();
+        owner.set_cheats(&[CheatEntry {
+            id: "retry-sram".to_owned(),
+            game_id: "sram-retry".to_owned(),
+            name: "Set battery byte".to_owned(),
+            code: "700000:5A".to_owned(),
+            source: "test".to_owned(),
+            kind: "Action Replay".to_owned(),
+            enabled: true,
+        }]);
+        owner.step_frame().unwrap();
+        owner.session.clear_active_cheats();
+        assert_eq!(owner.session.host_read_u8(0x700000), 0x5A);
+        let path = owner.session.save_ram_path().unwrap();
+
+        // A directory at the intended .srm path forces atomic persist() to
+        // fail without permission assumptions (works under Windows CI too).
+        std::fs::create_dir_all(&path).unwrap();
+        owner.next_sram_flush = Instant::now();
+        owner.advance().unwrap();
+        let failed_deadline = owner.next_sram_flush;
+        assert!(failed_deadline > Instant::now());
+        assert!(failed_deadline <= Instant::now() + SRAM_FAILURE_RETRY_DELAY);
+        assert!(path.is_dir());
+
+        std::fs::remove_dir(&path).unwrap();
+        // Advance the retry timer rather than sleeping five seconds.
+        owner.next_sram_flush = Instant::now();
+        owner.advance().unwrap();
+        assert_eq!(std::fs::read(&path).unwrap()[0], 0x5A);
+        assert!(
+            owner.next_sram_flush >= Instant::now() + SRAM_FAILURE_RETRY_DELAY,
+            "successful write should restore the normal longer autosave cadence"
+        );
+    }
+
+    #[test]
     fn worker_shutdown_persists_battery_sram_without_gui_flush() {
         let dir = tempfile::tempdir().unwrap();
         let rom_path = dir.path().join("battery-worker.sfc");

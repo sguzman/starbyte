@@ -356,8 +356,22 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
     pub fn spawn_with_hooks(
         machine: Machine,
         base_interval: Duration,
+        step: impl FnMut(&mut Machine) -> Result<Frame, String> + Send + 'static,
+        on_pause: impl FnMut(&mut Machine) + Send + 'static,
+        on_shutdown: impl FnMut(&mut Machine) + Send + 'static,
+    ) -> std::io::Result<Self> {
+        Self::spawn_with_idle_hooks(machine, base_interval, step, on_pause, |_| {}, on_shutdown)
+    }
+
+    /// Run optional background maintenance during scheduled pause/idle ticks.
+    /// Only the owner can safely retry failed cartridge SRAM persistence while
+    /// Wayland is hidden and normal emulation frames have stopped.
+    pub fn spawn_with_idle_hooks(
+        machine: Machine,
+        base_interval: Duration,
         mut step: impl FnMut(&mut Machine) -> Result<Frame, String> + Send + 'static,
         mut on_pause: impl FnMut(&mut Machine) + Send + 'static,
+        mut on_idle: impl FnMut(&mut Machine) + Send + 'static,
         mut on_shutdown: impl FnMut(&mut Machine) + Send + 'static,
     ) -> std::io::Result<Self> {
         let (sender, receiver) = mpsc::channel();
@@ -389,6 +403,7 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
                     base_interval,
                     &mut step,
                     &mut on_pause,
+                    &mut on_idle,
                     &mut on_shutdown,
                 )
             })?;
@@ -638,6 +653,7 @@ fn run_owned_clock<Machine, Frame>(
     base_interval: Duration,
     step: &mut impl FnMut(&mut Machine) -> Result<Frame, String>,
     on_pause: &mut impl FnMut(&mut Machine),
+    on_idle: &mut impl FnMut(&mut Machine),
     on_shutdown: &mut impl FnMut(&mut Machine),
 ) -> Machine {
     let _clock_running_guard = ClockRunningGuard(Arc::clone(&clock_running));
@@ -678,6 +694,10 @@ fn run_owned_clock<Machine, Frame>(
         clock_running.store(running, Ordering::Release);
         was_running = running;
         if !running {
+            // No frame callbacks arrive when a game is paused or off-workspace.
+            // Give the owning session a bounded maintenance opportunity on
+            // this thread, without borrowing it from the renderer.
+            on_idle(&mut machine);
             deadline = Instant::now();
             match commands.recv_timeout(Duration::from_millis(50)) {
                 Ok(command) => {
@@ -744,6 +764,31 @@ fn run_owned_clock<Machine, Frame>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_hook_maintains_owner_without_advancing_paused_game_frames() {
+        let (idle_tx, idle_rx) = mpsc::channel();
+        let worker = EmulatorScheduler::spawn_with_idle_hooks(
+            0_u64,
+            Duration::from_millis(20),
+            |machine| {
+                *machine += 100;
+                Ok(*machine)
+            },
+            |_| {},
+            move |machine| {
+                *machine += 1;
+                let _ = idle_tx.send(*machine);
+            },
+            |_| {},
+        )
+        .unwrap();
+        assert!(idle_rx.recv_timeout(Duration::from_secs(2)).unwrap() >= 1);
+        assert_eq!(worker.completed_frames(), 0);
+        assert!(!worker.is_emulating());
+        let returned = worker.shutdown().unwrap();
+        assert!(returned > 0 && returned < 100);
+    }
 
     #[test]
     fn focus_policy_and_speed_remain_independent() {

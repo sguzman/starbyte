@@ -278,6 +278,7 @@ pub struct OwnedSession {
     render: RenderPort,
     controls_port: ControlsPort,
     next_sram_flush: Instant,
+    sram_retry_pending: bool,
     next_audio_retry: Instant,
     /// True only after the shutdown hook has finished on the emulation
     /// thread. Returning the owner to the GUI must not flush SRAM again.
@@ -304,6 +305,7 @@ impl OwnedSession {
             render: RenderPort::default(),
             controls_port,
             next_sram_flush: Instant::now() + SRAM_AUTOSAVE_INTERVAL,
+            sram_retry_pending: false,
             next_audio_retry: Instant::now(),
             shutdown_finalized: false,
         }
@@ -313,11 +315,12 @@ impl OwnedSession {
         // An owner returned by shutdown may later be launched again. A
         // previous finalization must not suppress its new save lifecycle.
         self.shutdown_finalized = false;
-        EmulatorScheduler::spawn_with_hooks(
+        EmulatorScheduler::spawn_with_idle_hooks(
             self,
             NTSC_FRAME_INTERVAL,
             Self::advance,
             Self::clear_game_audio,
+            Self::retry_failed_sram_while_paused,
             Self::finalize_on_worker,
         )
     }
@@ -336,17 +339,34 @@ impl OwnedSession {
         self.shutdown_finalized = true;
     }
 
+    fn record_sram_flush_result(&mut self, succeeded: bool) {
+        self.sram_retry_pending = !succeeded;
+        self.next_sram_flush = next_sram_flush_deadline(Instant::now(), succeeded);
+    }
+
     fn clear_game_audio(&mut self) {
         if let Some(audio) = &self.audio {
             audio.clear();
         }
-        // A long manual/background pause may prevent the normal 30-second
-        // frame-driven SRAM flush. Commit cartridge progress at the pause
-        // transition, without depending on any Wayland repaint callback.
+        // Persist when background/manual pause begins. An unsuccessful write
+        // retains a five-second retry even if the window never repaints again.
         let result = self.flush_sram();
-        self.next_sram_flush = next_sram_flush_deadline(Instant::now(), result.is_ok());
+        self.record_sram_flush_result(result.is_ok());
         if let Err(error) = result {
             tracing::warn!("could not persist SRAM while pausing worker: {error}");
+        }
+    }
+
+    fn retry_failed_sram_while_paused(&mut self) {
+        if !self.sram_retry_pending || Instant::now() < self.next_sram_flush {
+            return;
+        }
+        // The scheduler calls this only from its idle owner loop. Do not
+        // retry on a GUI thread and do not reset the 30-second success timer.
+        let result = self.flush_sram();
+        self.record_sram_flush_result(result.is_ok());
+        if let Err(error) = result {
+            tracing::warn!("failed to retry paused worker SRAM persistence: {error}");
         }
     }
 
@@ -477,6 +497,7 @@ impl OwnedSession {
         if result.is_ok() {
             self.blackout_monitor = BlackScreenMonitor::default();
             self.next_sram_flush = Instant::now() + SRAM_AUTOSAVE_INTERVAL;
+            self.sram_retry_pending = false;
             self.publish_controls();
         }
         result
@@ -492,6 +513,7 @@ impl OwnedSession {
         self.session.launch_game(request)?;
         self.blackout_monitor = BlackScreenMonitor::default();
         self.next_sram_flush = Instant::now() + SRAM_AUTOSAVE_INTERVAL;
+        self.sram_retry_pending = false;
         self.publish_controls();
         Ok(())
     }
@@ -688,7 +710,7 @@ impl OwnedSession {
         // active background games keep their 30-second autosave cadence.
         if Instant::now() >= self.next_sram_flush {
             let result = self.session.flush_save_ram();
-            self.next_sram_flush = next_sram_flush_deadline(Instant::now(), result.is_ok());
+            self.record_sram_flush_result(result.is_ok());
             if let Err(error) = result {
                 tracing::warn!("background SRAM autosave failed: {error}");
             }
@@ -1306,6 +1328,52 @@ mod tests {
             owner.next_sram_flush >= Instant::now() + SRAM_FAILURE_RETRY_DELAY,
             "successful write should restore the normal longer autosave cadence"
         );
+    }
+
+    #[test]
+    fn failed_paused_sram_write_recovers_without_emulating_any_new_frames() {
+        let dir = tempfile::tempdir().unwrap();
+        let rom_path = dir.path().join("paused-retry.sfc");
+        let mut rom = starbyte_core::testing::demo::demo_rom_bytes();
+        rom[0x7FD8] = 0x01;
+        std::fs::write(&rom_path, rom).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(dir.path().join("battery")),
+            state_dir: Some(dir.path().join("states")),
+            cache_dir: Some(dir.path().join("cache")),
+            config_path: None,
+        };
+        let mut owner = OwnedSession::create(assets).unwrap();
+        owner.set_audio(false, true, 0.0);
+        owner
+            .load_rom(&rom_path, SoundSessionMode::Persistent)
+            .unwrap();
+        owner.set_cheats(&[CheatEntry {
+            id: "paused-retry".to_owned(),
+            game_id: "paused-retry".to_owned(),
+            name: "Set battery byte".to_owned(),
+            code: "700000:5A".to_owned(),
+            source: "test".to_owned(),
+            kind: "Action Replay".to_owned(),
+            enabled: true,
+        }]);
+        owner.step_frame().unwrap();
+        owner.session.clear_active_cheats();
+        let path = owner.session.save_ram_path().unwrap();
+        std::fs::create_dir_all(&path).unwrap();
+
+        owner.clear_game_audio();
+        assert!(owner.sram_retry_pending);
+        assert!(path.is_dir());
+        std::fs::remove_dir(&path).unwrap();
+        // A clock still paused after focus loss has no advance() calls.
+        // Simulate expiry and use exactly the scheduler's idle callback.
+        owner.next_sram_flush = Instant::now();
+        owner.retry_failed_sram_while_paused();
+        assert_eq!(std::fs::read(&path).unwrap()[0], 0x5A);
+        assert!(!owner.sram_retry_pending);
+        assert!(owner.next_sram_flush > Instant::now() + SRAM_FAILURE_RETRY_DELAY);
     }
 
     #[test]

@@ -811,7 +811,10 @@ mod tests {
         while worker.is_emulating() && Instant::now() < until {
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(!worker.is_emulating(), "missed heartbeat must suspend the clock");
+        assert!(
+            !worker.is_emulating(),
+            "missed heartbeat must suspend the clock"
+        );
         let stopped = worker.completed_frames();
         std::thread::sleep(Duration::from_millis(140));
         assert_eq!(worker.completed_frames(), stopped);

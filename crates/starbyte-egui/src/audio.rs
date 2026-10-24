@@ -922,7 +922,7 @@ mod tests {
         let volume = AtomicU32::new(1.0_f32.to_bits());
         // A pending audio/control message fills the nonblocking channel,
         // so the volume notification cannot be submitted by the GUI.
-        sender.try_send(AudioMessage::Clear).unwrap();
+        assert!(sender.try_send(AudioMessage::Clear).is_ok());
         volume.store(0.0_f32.to_bits(), Ordering::Release);
         assert!(sender.try_send(AudioMessage::VolumeChanged).is_err());
         assert!(matches!(receiver.try_recv().unwrap(), AudioMessage::Clear));

@@ -204,6 +204,11 @@ fn gap_age_at(log: &[u8], now: SystemTime) -> Option<Duration> {
     now.duration_since(began).ok()
 }
 
+fn fresh_gap_start_at(log: &[u8], now: SystemTime) -> Option<SystemTime> {
+    let age = gap_age_at(log, now)?;
+    (age <= Duration::from_millis(900)).then(|| now - age)
+}
+
 fn hyprland_json(command: &str) -> Result<serde_json::Value, Box<dyn Error>> {
     let output = Command::new("hyprctl").args(["-j", command]).output()?;
     if !output.status.success() {
@@ -375,17 +380,9 @@ fn run_probe(
         if physical_workspace && !switched_workspace {
             let log_bytes = fs::read(&log_path)?;
             if String::from_utf8_lossy(&log_bytes).contains(GAP_MARKER) {
-                let now = SystemTime::now();
-                let gap_age = gap_age_at(&log_bytes, now);
-                let fresh_gap = gap_age.is_some_and(|age| age <= Duration::from_millis(900));
-                let result = if fresh_gap {
-                    exercise_real_workspace(
-                        child.id(),
-                        &probe_dir,
-                        now - gap_age.unwrap_or_default(),
-                    )
-                } else {
-                    Err("no valid fresh timestamp on the original-window gap marker".into())
+                let result = match fresh_gap_start_at(&log_bytes, SystemTime::now()) {
+                    Some(began) => exercise_real_workspace(child.id(), &probe_dir, began),
+                    None => Err("no valid fresh timestamp on the original-window gap marker".into()),
                 };
                 if let Err(error) = result {
                     let _ = child.kill();
@@ -509,7 +506,10 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{PROBES, gap_age_at, missing_markers, native_client_on_workspace, workspace_id};
+    use super::{
+        PROBES, fresh_gap_start_at, gap_age_at, missing_markers, native_client_on_workspace,
+        workspace_id,
+    };
 
     #[test]
     fn only_explicit_success_markers_pass_a_probe() {
@@ -562,7 +562,24 @@ mod tests {
         );
         assert!(gap_age_at(line, std::time::UNIX_EPOCH).is_none());
         assert!(gap_age_at(b"STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame=42", now).is_none());
-        assert!(gap_age_at(b"STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame=42 started_unix_ms=bad", now).is_none());
+        assert!(
+            gap_age_at(
+                b"STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame=42 started_unix_ms=bad",
+                now
+            )
+            .is_none()
+        );
+        assert_eq!(
+            fresh_gap_start_at(line, now),
+            Some(std::time::UNIX_EPOCH + std::time::Duration::from_millis(3_500))
+        );
+        assert!(
+            fresh_gap_start_at(
+                b"STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame=42 started_unix_ms=2700",
+                now
+            )
+            .is_none()
+        );
     }
 
     #[test]

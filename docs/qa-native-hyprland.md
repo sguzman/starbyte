@@ -37,7 +37,7 @@ This adds a tenth, distinct probe beyond the nine synthetic cases. After the ori
 
 A passed opt-in test is useful **actual workspace-transition evidence for independent video clock behavior** but does not prove sound was heard while the game was off-workspace, active gamepad input, real stream recovery, or production cutover. Even for A-08/D-13, the acceptance decision requires review of the physical compositor, timing records and the complete gate wording. The CI contract only validates the runner's code and synthetic markers; it never performs this physical switch.
 
-**Scope limit:** These are native-host **synthetic** checks. The helper does not switch the real Hyprland workspace, move a physical gamepad, record speaker audibility, unplug a device, exercise commercial ROMs, or authorize the worker as production default. All eight pending hardware/cutover gates remain independently unaccepted until the full table below has direct evidence. The helper's own CI compilation and contract-marker tests do not imply it was executed on physical Hyprland.
+**Scope limit:** The nine default checks are **synthetic**. Only the separately enabled `--physical-workspace` scenario performs a real workspace transition, and it must actually run on a physical Hyprland host before that evidence exists. Neither mode moves a physical gamepad, verifies speaker audibility, unplugs a device, exercises commercial ROMs, or authorizes production-default cutover. All eight pending hardware/cutover gates remain independently unaccepted until their complete requirements have direct evidence. The helper's own CI compilation and contract-marker tests are not evidence of execution on physical Hyprland.
 
 ## Automated native checks
 

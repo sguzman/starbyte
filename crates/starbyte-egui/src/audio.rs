@@ -298,28 +298,25 @@ impl PlaybackDevice {
                 .with_error_callback(on_error.clone())
                 .open_stream_or_fallback()
         });
-        let mut stream = match preferred {
+        let opened = match preferred {
             Ok(stream) => Ok(stream),
             Err(default_error) => {
-                let fallback =
-                    rodio::cpal::default_host()
-                        .output_devices()
-                        .ok()
-                        .and_then(|mut devices| {
-                            devices.find_map(|device| {
-                                OutputStreamBuilder::from_device(device)
-                                    .and_then(|builder| {
-                                        builder
-                                            .with_error_callback(on_error.clone())
-                                            .open_stream_or_fallback()
-                                    })
-                                    .ok()
+                let fallback = match rodio::cpal::default_host().output_devices() {
+                    Ok(mut devices) => devices.find_map(|device| {
+                        OutputStreamBuilder::from_device(device)
+                            .and_then(|builder| {
+                                builder
+                                    .with_error_callback(on_error.clone())
+                                    .open_stream_or_fallback()
                             })
-                        });
+                            .ok()
+                    }),
+                    Err(_) => None,
+                };
                 fallback.ok_or(default_error)
             }
-        }
-        .context("could not open a desktop audio output device")?;
+        };
+        let mut stream = opened.context("could not open a desktop audio output device")?;
         stream.log_on_drop(false);
         let sink = Sink::connect_new(stream.mixer());
         Ok(Self {

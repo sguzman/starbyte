@@ -1,7 +1,15 @@
 # Emulation scheduler migration
 
-**Status: in progress. [`9cab61a`](https://github.com/sguzman/starbyte/commit/9cab61a569698b1e98d9c1946f36800f76d35dc5) adds a source-level opt-in native-workspace transition QA helper, isolated from users' ROM libraries and live config; [CI 40048375872](https://github.com/sguzman/starbyte/actions/runs/40048375872) validates Linux/Weston, Windows, formatting/Clippy and Rust 1.88. Checklist-backed progress remains 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. Full-library worker is opt-in. A source-level QA probe does not complete physical Hyprland, audible-speaker, gamepad, or production-default acceptance.**
+**Status: in progress. Latest code [`d1b950f`](https://github.com/sguzman/starbyte/commit/d1b950f06150d3ee97a1d2f96964e31f06f6e3fb) adds worker-owned pause/resume counters to the original session diagnostics, following the opt-in physical-workspace pause automation; [CI 40052422079](https://github.com/sguzman/starbyte/actions/runs/40052422079) checks the exact code on Linux/Weston, Windows, formatting/Clippy and Rust 1.88. Checklist-backed progress remains 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. Full-library worker stays opt-in; no physical Hyprland, speaker, gamepad or production-default acceptance is inferred from synthetic CI.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
+
+## Session-panel owner transition diagnostics
+
+[`d1b950f`](https://github.com/sguzman/starbyte/commit/d1b950f06150d3ee97a1d2f96964e31f06f6e3fb) displays worker-owned suspension and resumption totals in the original session diagnostics panel, without expanding the small-window performance overlay. [CI 40052422079](https://github.com/sguzman/starbyte/actions/runs/40052422079) verifies the code; real compositor blur, physical speaker and gamepad operation remain separately gated. The accepted ledger stays 69/77.
+
+## Owner-clock suspend/resume receipts and real focus-loss QA
+
+[`e9c0cc5`](https://github.com/sguzman/starbyte/commit/e9c0cc5d7a36e5484949620e52c018361d1daee7) adds monotonic worker-owned suspend/resume transition counters, with tests for manual Pause, compositor heartbeat expiry, and focus policy. The independent no-repaint worker smoke rejects unexpected clock suspensions even when frame totals could otherwise suggest uninterrupted emulation. A second **opt-in physical Hyprland probe** now arms background pause from inside the original window and requires the local compositor to leave and return to its workspace before crediting suspend/resume counts and no-catchup pacing. Nine default synthetic probes remain isolated; the two physically orchestrated cases are never invoked by hosted CI. [CI 40052095971](https://github.com/sguzman/starbyte/actions/runs/40052095971) validates source and virtual Weston, not hardware. All eight hardware/production gates remain **pending** until actual device/workspace observations satisfy their complete task wording.
 
 ## Opt-in real Hyprland workspace QA adjunct
 
@@ -9,7 +17,7 @@
 
 ## Native Hyprland QA runner (source milestone)
 
-[`f6e3890`](https://github.com/sguzman/starbyte/commit/f6e3890316bea574bb401d8b8bd608cd7e16fcc6) adds an opt-in Rust binary that runs nine existing original-window worker demo smoke modes on a local Hyprland host, checks the original CI success markers and writes isolated local receipts. [CI 40046303687](https://github.com/sguzman/starbyte/actions/runs/40046303687) is the exact-revision source verification. No physical Hyprland run is claimed; workspace transitions, gamepads, speaker audibility, actual output-device reconnect and production cutover remain unaccepted. The source ledger remains **69/77**.
+[`f6e3890`](https://github.com/sguzman/starbyte/commit/f6e3890316bea574bb401d8b8bd608cd7e16fcc6) introduced an opt-in Rust binary for nine original-window worker demo checks in a local Hyprland session, with local-only receipts. Its first CI run was superseded during iteration; the subsequent [fully green 40048755437](https://github.com/sguzman/starbyte/actions/runs/40048755437) includes and verifies the runner's source along with native virtual Weston. No physical Hyprland run is claimed; workspace transitions, gamepads, speaker audibility, actual output-device reconnect and production cutover remain unaccepted. The source ledger remains **69/77**.
 
 ## 2026-10-23 stream-fault accounting and candidate isolation
 

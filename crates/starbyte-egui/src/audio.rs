@@ -646,9 +646,9 @@ mod tests {
     };
 
     use super::{
-        AudioDeviceStatus, AudioMessage, AudioOutput, PlaybackContinuity, StreamRecovery, frame_is_fresh,
-        normalize_pitch, normalize_playback_speed, normalize_volume, pcm16_stereo_to_float,
-        retry_ready, set_sink_playback_speed, speaker_test_tone,
+        AudioDeviceStatus, AudioMessage, AudioOutput, PlaybackContinuity, StreamRecovery,
+        frame_is_fresh, normalize_pitch, normalize_playback_speed, normalize_volume,
+        pcm16_stereo_to_float, retry_ready, set_sink_playback_speed, speaker_test_tone,
     };
 
     #[test]
@@ -750,6 +750,8 @@ mod tests {
             producer_dropped_frames: Arc::new(AtomicU64::new(0)),
             worker_dropped_frames: Arc::new(AtomicU64::new(0)),
             sink_empty_on_pcm: Arc::new(AtomicU64::new(0)),
+            stream_failures: Arc::new(AtomicU64::new(0)),
+            stream_recoveries: Arc::new(AtomicU64::new(0)),
         };
         assert!(output.enqueue_live_test_tone());
         match receiver.try_recv().unwrap() {
@@ -775,6 +777,8 @@ mod tests {
             producer_dropped_frames: Arc::new(AtomicU64::new(0)),
             worker_dropped_frames: Arc::new(AtomicU64::new(0)),
             sink_empty_on_pcm: Arc::new(AtomicU64::new(0)),
+            stream_failures: Arc::new(AtomicU64::new(0)),
+            stream_recoveries: Arc::new(AtomicU64::new(0)),
         };
         output.enqueue(&[100, -100], 1.0, 1.0);
         output.enqueue(&[100, -100], 1.0, 1.0);
@@ -813,6 +817,8 @@ mod tests {
             producer_dropped_frames: Arc::new(AtomicU64::new(0)),
             worker_dropped_frames: Arc::new(AtomicU64::new(0)),
             sink_empty_on_pcm: Arc::new(AtomicU64::new(0)),
+            stream_failures: Arc::new(AtomicU64::new(0)),
+            stream_recoveries: Arc::new(AtomicU64::new(0)),
         };
         for speed in [0.5, 1.0, 2.0, 3.0, 4.0] {
             output.enqueue(&[123, -123], speed, 1.0);

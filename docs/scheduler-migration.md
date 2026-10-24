@@ -1,7 +1,11 @@
 # Emulation scheduler migration
 
-**Status: in progress. Latest code [`d1b950f`](https://github.com/sguzman/starbyte/commit/d1b950f06150d3ee97a1d2f96964e31f06f6e3fb) adds worker-owned pause/resume counters to the original session diagnostics, following the opt-in physical-workspace pause automation; [CI 40052422079](https://github.com/sguzman/starbyte/actions/runs/40052422079) checks the exact code on Linux/Weston, Windows, formatting/Clippy and Rust 1.88. Checklist-backed progress remains 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. Full-library worker stays opt-in; no physical Hyprland, speaker, gamepad or production-default acceptance is inferred from synthetic CI.**
+**Status: in progress. Latest code [`f72b672`](https://github.com/sguzman/starbyte/commit/f72b67215de38727e029d02f4da04bc5e2bc5134) fixes idle mixer volume application and adds manual desktop audio route re-selection, following worker-owned pause/resume diagnostics; [CI 40054055103](https://github.com/sguzman/starbyte/actions/runs/40054055103) checks the exact source on Linux/Weston, Windows, formatting/Clippy and Rust 1.88. Checklist-backed progress remains 69/77 (90%): A 7/8, B 18/18, P 18/20, C 15/16, D 11/15. Full-library worker stays opt-in; no physical Hyprland, audible-speaker, gamepad or production-default acceptance is inferred from synthetic CI.**
 **Issue:** [#7](https://github.com/sguzman/starbyte/issues/7).
+
+## Mixer gain during paused play and manual default-route reset
+
+[`f72b672`](https://github.com/sguzman/starbyte/commit/f72b67215de38727e029d02f4da04bc5e2bc5134) fixes the live audio mixer gain so a volume-only action takes effect without waiting for the next PCM buffer, and adds a bounded, asynchronous Sound-panel action to reset a stale default output route even when CPAL did not report a stream fault. The action preserves emulator/SRAM ownership, handles full worker queues, and does not count manual resets as automatic stream-error recoveries. Offline Rodio and real audio-worker message tests cover queueing, idle gain application, and status reset; [CI 40054055103](https://github.com/sguzman/starbyte/actions/runs/40054055103) covers source and virtual Weston only. Physical audible sound, device disconnect/reconnect and hardware acceptance remain pending; **69/77 accepted**.
 
 ## Session-panel owner transition diagnostics
 

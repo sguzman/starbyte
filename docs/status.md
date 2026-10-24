@@ -4,6 +4,12 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## Live mixer volume and desktop route recovery
+
+The Rodio audio worker now applies volume changes to its **existing sink** even when emulation is paused and no new PCM arrives. Muting still clears queued game audio, but repeated already-muted updates do not re-clear the sink. The Sound panel adds **Reselect desktop audio output**: it releases a stale Rodio/CPAL route when changing the default OS output fails to trigger a stream-error callback, without altering the current game or save state. The next fresh game PCM or in-game speaker check attempts to open the current default output. The UI distinguishes an accepted reset request from a successful device reopen; manually selecting a route does not invent a CPAL failure or automatic recovery.
+
+[`f72b672`](https://github.com/sguzman/starbyte/commit/f72b67215de38727e029d02f4da04bc5e2bc5134) is covered by [CI 40054055103](https://github.com/sguzman/starbyte/actions/runs/40054055103) (software and virtual compositor only). Real speaker audibility, actual cable/device unplug/replug and listening quality remain untested here. **Scheduler acceptance remains 69/77 (90%).**
+
 ## Session-panel owner-clock diagnostic receipts
 
 The session diagnostics panel in the opt-in worker-backed original window now shows **suspension** and **resumption** transition totals recorded by the independent worker, not UI paint counts. This keeps the existing small-window performance overlay unchanged while making hardware QA observations inspectable within the application. [`d1b950f`](https://github.com/sguzman/starbyte/commit/d1b950f06150d3ee97a1d2f96964e31f06f6e3fb) is checked by [CI 40052422079](https://github.com/sguzman/starbyte/actions/runs/40052422079). Real speaker/gamepad/workspace execution is still pending; the migration remains at 69/77 accepted.

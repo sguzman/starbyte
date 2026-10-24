@@ -4,6 +4,12 @@
 
 **Evidence rule:** passing synthetic tests is not evidence that a specific commercial title is playable. [GitHub Actions on `main`](https://github.com/sguzman/starbyte/actions/workflows/ci.yml) runs Linux formatting/Clippy and Ubuntu/Windows workspace tests. Confirm that the **latest completed run matches the exact commit** before making verification claims. Hosted CI does not constitute a native Wayland desktop test.
 
+## Verified paused SRAM retries and robust audio-route resets (2026-10-24)
+
+[`af46bc3`](https://github.com/sguzman/starbyte/commit/af46bc34ef509d848daafc85b0a3cf7e224d36e2) repairs a 30-second retry delay after failed battery-SRAM writes. Failed saves retry after 5 seconds while successful writes retain the 30-second cadence; an integration test exercises an actual failed atomic write and subsequent recovery. [`9b62b85`](https://github.com/sguzman/starbyte/commit/9b62b85b862fbcc52f7f3c4414275adb24790f5d) adds a paused-owner maintenance hook so failed SRAM persists without emulating frames or waiting for Wayland redraws; paused retry and idle hook regressions pass [CI 40120984331](https://github.com/sguzman/starbyte/actions/runs/40120984331).
+
+[`2260374`](https://github.com/sguzman/starbyte/commit/22603740d86dd50fe08bc91a5b1027e6d2f467e2) makes manual audio-device re-selection survive a saturated six-message PCM queue via a worker-checked atomic signal and best-effort wakeup. Duplicate resets coalesce, and synthetic queue-saturation tests preserve stream fault/recovery accounting. [Exact-source CI 40121513425](https://github.com/sguzman/starbyte/actions/runs/40121513425) passed all four jobs. These are source/virtual-Wayland results, not real speaker or Hyprland acceptance; scheduler remains **69/77 (90%)**.
+
 ## Verified latest-only live sound controls (2026-10-24)
 
 [`fceb8e1`](https://github.com/sguzman/starbyte/commit/fceb8e1fbd433631e384ca24fcd3890d3d34acc0) coalesces rapid mute/volume-slider updates into a single pending serialized owner-thread command instead of enqueuing unbounded volume mutations behind file/cheat jobs. The new 500-update stress regression confirms the final setting wins and executes once. The existing saturated-file-queue mute test still passes. [Exact-source CI 40119339861](https://github.com/sguzman/starbyte/actions/runs/40119339861) passed all four jobs including virtual-Wayland smoke. It does not measure real speaker mute latency. Remaining scheduler acceptance **69/77 (90%)**.

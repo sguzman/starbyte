@@ -1233,10 +1233,9 @@ mod tests {
 
     #[test]
     fn burst_of_live_volume_changes_coalesces_to_last_pending_setting() {
-        let worker = EmulatorScheduler::spawn(0_u32, Duration::from_millis(20), |volume| {
-            Ok(*volume)
-        })
-        .unwrap();
+        let worker =
+            EmulatorScheduler::spawn(0_u32, Duration::from_millis(20), |volume| Ok(*volume))
+                .unwrap();
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
         worker

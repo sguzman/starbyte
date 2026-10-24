@@ -6,7 +6,7 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
     thread,
@@ -14,7 +14,9 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use rodio::{OutputStream, OutputStreamBuilder, Sink, buffer::SamplesBuffer};
+use rodio::{
+    OutputStream, OutputStreamBuilder, Sink, buffer::SamplesBuffer, cpal::traits::HostTrait,
+};
 use tracing::warn;
 
 use crate::pitch::PitchStretch;
@@ -272,18 +274,60 @@ impl AudioOutput {
 struct PlaybackDevice {
     sink: Sink,
     _stream: OutputStream,
+    /// An OS stream may disconnect after it was successfully opened.
+    /// Its real-time callback sets this flag; only the audio worker rebuilds.
+    stream_failed: Arc<AtomicBool>,
 }
 
 impl PlaybackDevice {
     fn open_default() -> Result<Self> {
-        let mut stream = OutputStreamBuilder::open_default_stream()
-            .context("could not open a desktop audio output device")?;
+        let stream_failed = Arc::new(AtomicBool::new(false));
+        let on_error = {
+            let failed = Arc::clone(&stream_failed);
+            move |_error: rodio::cpal::StreamError| {
+                // Never allocate, log or reopen a device on the CPAL callback.
+                failed.store(true, Ordering::Release);
+            }
+        };
+        // Preserve Rodio's default-device, alternate-configuration and
+        // fallback-output search while exposing stream failures to the worker.
+        let preferred = OutputStreamBuilder::from_default_device().and_then(|builder| {
+            builder
+                .with_error_callback(on_error.clone())
+                .open_stream_or_fallback()
+        });
+        let mut stream = match preferred {
+            Ok(stream) => Ok(stream),
+            Err(default_error) => {
+                let fallback = rodio::cpal::default_host()
+                    .output_devices()
+                    .ok()
+                    .and_then(|devices| {
+                        devices.find_map(|device| {
+                            OutputStreamBuilder::from_device(device)
+                                .and_then(|builder| {
+                                    builder
+                                        .with_error_callback(on_error.clone())
+                                        .open_stream_or_fallback()
+                                })
+                                .ok()
+                        })
+                    });
+                fallback.ok_or(default_error)
+            }
+        }
+        .context("could not open a desktop audio output device")?;
         stream.log_on_drop(false);
         let sink = Sink::connect_new(stream.mixer());
         Ok(Self {
             sink,
             _stream: stream,
+            stream_failed,
         })
+    }
+
+    fn stream_failed(&self) -> bool {
+        self.stream_failed.load(Ordering::Acquire)
     }
 
     fn enqueue(&self, pcm: Vec<f32>, volume: f32, pitch: f32) {
@@ -356,6 +400,18 @@ fn audio_worker(
     let mut stretch = PitchStretch::default();
 
     for message in receiver {
+        // A previously healthy device can fail after unplug/restart. Reopen
+        // here on the dedicated audio worker rather than the real-time CPAL
+        // callback or GUI. Failed attempts still use the existing cooldown.
+        if device.as_ref().is_some_and(PlaybackDevice::stream_failed) {
+            warn!("desktop audio stream failed; reopening an output device");
+            device = None;
+            device_status.store(2, Ordering::Release);
+            retry_after = None;
+            tone_until = None;
+            continuity.reset();
+            stretch.reset();
+        }
         let newest_generation = generation.load(Ordering::Acquire);
         if newest_generation != active_generation {
             if let Some(output) = &device {

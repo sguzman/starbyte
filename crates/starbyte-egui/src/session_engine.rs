@@ -187,6 +187,8 @@ pub struct WorkerAudioDiagnostics {
     pub worker_dropped_frames: u64,
     pub sink_empty_on_pcm: u64,
     pub test_tones_submitted: u64,
+    pub stream_failures: u64,
+    pub stream_recoveries: u64,
 }
 
 /// Read-only latest menu facts. The worker updates this only on explicit
@@ -586,6 +588,8 @@ impl OwnedSession {
             worker_dropped_frames: output.worker_dropped_frames(),
             sink_empty_on_pcm: output.sink_empty_on_pcm(),
             test_tones_submitted: output.test_tones_submitted(),
+            stream_failures: output.stream_failures(),
+            stream_recoveries: output.stream_recoveries(),
         }
     }
 

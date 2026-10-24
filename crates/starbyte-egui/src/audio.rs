@@ -103,6 +103,10 @@ pub struct AudioOutput {
     /// Times the Rodio sink was empty when the next game PCM buffer arrived.
     /// A starvation indicator, not proof of a physically audible underrun.
     sink_empty_on_pcm: Arc<AtomicU64>,
+    /// CPAL callbacks reporting a formerly opened stream as invalid.
+    stream_failures: Arc<AtomicU64>,
+    /// An output opened successfully after at least one detected stream fault.
+    stream_recoveries: Arc<AtomicU64>,
 }
 
 impl AudioOutput {
@@ -125,6 +129,10 @@ impl AudioOutput {
         let shared_worker_drops = Arc::clone(&worker_dropped_frames);
         let sink_empty_on_pcm = Arc::new(AtomicU64::new(0));
         let shared_sink_empty = Arc::clone(&sink_empty_on_pcm);
+        let stream_failures = Arc::new(AtomicU64::new(0));
+        let shared_stream_failures = Arc::clone(&stream_failures);
+        let stream_recoveries = Arc::new(AtomicU64::new(0));
+        let shared_stream_recoveries = Arc::clone(&stream_recoveries);
         // The GUI must not join this thread: the bounded channel owns its
         // lifecycle and disconnects when the last AudioOutput is dropped.
         let _audio_thread = thread::Builder::new()
@@ -140,6 +148,8 @@ impl AudioOutput {
                     shared_test_tones,
                     shared_worker_drops,
                     shared_sink_empty,
+                    shared_stream_failures,
+                    shared_stream_recoveries,
                 )
             })
             .context("could not spawn background audio thread")?;
@@ -154,6 +164,8 @@ impl AudioOutput {
             producer_dropped_frames,
             worker_dropped_frames,
             sink_empty_on_pcm,
+            stream_failures,
+            stream_recoveries,
         })
     }
 
@@ -207,6 +219,18 @@ impl AudioOutput {
     /// Distinct from producer queue overflow or stale-frame discards.
     pub fn sink_empty_on_pcm(&self) -> u64 {
         self.sink_empty_on_pcm.load(Ordering::Acquire)
+    }
+
+    /// CPAL failures observed by the worker after a stream was opened.
+    /// This is diagnostic evidence of a stream error, not speaker audibility.
+    pub fn stream_failures(&self) -> u64 {
+        self.stream_failures.load(Ordering::Acquire)
+    }
+
+    /// OS output streams reopened after a detected CPAL stream failure.
+    /// The speaker can still be muted or routed elsewhere.
+    pub fn stream_recoveries(&self) -> u64 {
+        self.stream_recoveries.load(Ordering::Acquire)
     }
 
     /// Update the mixer level without opening an audio device or waiting
@@ -363,6 +387,26 @@ fn frame_is_fresh(queued_at: Instant, now: Instant) -> bool {
     now.saturating_duration_since(queued_at) <= MAX_FRAME_AGE
 }
 
+/// A failed reopen remains pending across multiple OS retry attempts.
+#[derive(Default)]
+struct StreamRecovery {
+    pending: bool,
+}
+
+impl StreamRecovery {
+    fn on_fault(&mut self, faults: &AtomicU64) {
+        self.pending = true;
+        faults.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn on_open(&mut self, recoveries: &AtomicU64) {
+        if self.pending {
+            self.pending = false;
+            recoveries.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
 /// Keep mixer-continuity accounting independent of actual audio hardware.
 #[derive(Default)]
 struct PlaybackContinuity {
@@ -391,6 +435,8 @@ fn audio_worker(
     test_tones_submitted: Arc<AtomicU64>,
     worker_dropped_frames: Arc<AtomicU64>,
     sink_empty_on_pcm: Arc<AtomicU64>,
+    stream_failures: Arc<AtomicU64>,
+    stream_recoveries: Arc<AtomicU64>,
 ) {
     let mut device: Option<PlaybackDevice> = None;
     let mut retry_after: Option<Instant> = None;
@@ -398,6 +444,7 @@ fn audio_worker(
     let mut tone_until: Option<Instant> = None;
     let mut continuity = PlaybackContinuity::default();
     let mut stretch = PitchStretch::default();
+    let mut recovery = StreamRecovery::default();
 
     for message in receiver {
         // A previously healthy device can fail after unplug/restart. Reopen
@@ -405,6 +452,7 @@ fn audio_worker(
         // callback or GUI. Failed attempts still use the existing cooldown.
         if device.as_ref().is_some_and(PlaybackDevice::stream_failed) {
             warn!("desktop audio stream failed; reopening an output device");
+            recovery.on_fault(&stream_failures);
             device = None;
             device_status.store(2, Ordering::Release);
             retry_after = None;
@@ -463,6 +511,7 @@ fn audio_worker(
                     device_status.store(1, Ordering::Release);
                     device = Some(output);
                     retry_after = None;
+                    recovery.on_open(&stream_recoveries);
                 }
                 Err(error) => {
                     device_status.store(2, Ordering::Release);
@@ -597,7 +646,7 @@ mod tests {
     };
 
     use super::{
-        AudioDeviceStatus, AudioMessage, AudioOutput, PlaybackContinuity, frame_is_fresh,
+        AudioDeviceStatus, AudioMessage, AudioOutput, PlaybackContinuity, StreamRecovery, frame_is_fresh,
         normalize_pitch, normalize_playback_speed, normalize_volume, pcm16_stereo_to_float,
         retry_ready, set_sink_playback_speed, speaker_test_tone,
     };
@@ -824,6 +873,34 @@ mod tests {
         assert!(!failed.load(Ordering::Acquire));
         on_error(rodio::cpal::StreamError::DeviceNotAvailable);
         assert!(failed.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn stream_recovery_receipts_ignore_initial_open_and_failed_retries() {
+        let faults = AtomicU64::new(0);
+        let recoveries = AtomicU64::new(0);
+        let mut tracking = StreamRecovery::default();
+
+        tracking.on_open(&recoveries);
+        assert_eq!(recoveries.load(Ordering::Relaxed), 0);
+
+        tracking.on_fault(&faults);
+        assert_eq!(faults.load(Ordering::Relaxed), 1);
+        assert_eq!(recoveries.load(Ordering::Relaxed), 0);
+        // Several failed OS reopening attempts do not fabricate recovery.
+        assert!(tracking.pending);
+        assert_eq!(recoveries.load(Ordering::Relaxed), 0);
+
+        tracking.on_open(&recoveries);
+        assert_eq!(recoveries.load(Ordering::Relaxed), 1);
+        assert!(!tracking.pending);
+        tracking.on_open(&recoveries);
+        assert_eq!(recoveries.load(Ordering::Relaxed), 1);
+
+        tracking.on_fault(&faults);
+        tracking.on_open(&recoveries);
+        assert_eq!(faults.load(Ordering::Relaxed), 2);
+        assert_eq!(recoveries.load(Ordering::Relaxed), 2);
     }
 
     #[test]

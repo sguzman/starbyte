@@ -3398,6 +3398,23 @@ impl StarbyteApp {
             },
         ));
         ui.label(format!(
+            "OS stream errors: {}; reopened after fault: {} (not proof of audibility)",
+            if self.full_worker.is_some() {
+                self.worker_audio.stream_failures
+            } else {
+                self.audio_output
+                    .as_ref()
+                    .map_or(0, AudioOutput::stream_failures)
+            },
+            if self.full_worker.is_some() {
+                self.worker_audio.stream_recoveries
+            } else {
+                self.audio_output
+                    .as_ref()
+                    .map_or(0, AudioOutput::stream_recoveries)
+            },
+        ));
+        ui.label(format!(
             "Mixer empty before next game PCM: {} (possible playback gaps, not speaker proof)",
             if self.full_worker.is_some() {
                 self.worker_audio.sink_empty_on_pcm

@@ -3272,6 +3272,20 @@ impl StarbyteApp {
             }
         }
         self.refresh_gamepad_buttons_down();
+        if !window_focused {
+            // Transient presses from another workspace must not be replayed
+            // when the player returns to the emulator window.
+            self.queued_gamepad_presses.clear();
+        }
+        if let Some((action, name)) = new_binding {
+            self.config
+                .input
+                .gamepad_bindings
+                .insert(action.clone(), name.clone());
+            self.pending_gamepad_bind = None;
+            self.persist_config();
+            self.status_line = format!("Bound {} to {}.", action_label(&action), name);
+        }
     }
 
     fn refresh_gamepad_buttons_down(&mut self) {
@@ -3294,20 +3308,6 @@ impl StarbyteApp {
         }
         self.gamepad_buttons_down =
             merged_gamepad_buttons_excluding(&by_id, &self.captured_gamepad_inputs);
-        if !window_focused {
-            // Transient presses from another workspace must not be replayed
-            // when the player returns to the emulator window.
-            self.queued_gamepad_presses.clear();
-        }
-        if let Some((action, name)) = new_binding {
-            self.config
-                .input
-                .gamepad_bindings
-                .insert(action.clone(), name.clone());
-            self.pending_gamepad_bind = None;
-            self.persist_config();
-            self.status_line = format!("Bound {} to {}.", action_label(&action), name);
-        }
     }
 
     /// Apply the existing persisted audio preferences to the live mixer.

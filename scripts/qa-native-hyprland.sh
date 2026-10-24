@@ -11,7 +11,7 @@ focused_only=false
 if [[ $# -eq 1 && "${1:-}" == --focused-only ]]; then
   focused_only=true
 elif [[ $# -ne 0 ]]; then
-  printf 'STARBYTE_NATIVE_QA_FAILED usage: qa-native-hyprland.sh [--focused-only]\\n' >&2
+  printf 'STARBYTE_NATIVE_QA_FAILED usage: qa-native-hyprland.sh [--focused-only]\n' >&2
   exit 2
 fi
 
@@ -102,7 +102,7 @@ probe_root="$(sed -n 's/^Local-only logs and context: //p' "$local_root/native-q
 [[ -n "$probe_root" && -r "$probe_root/results.tsv" ]] || fail 'no_probe_receipts'
 
 if [[ "$focused_only" == true ]]; then
-  awk -F '\\t' '
+  awk -F '\t' '
     NR == 1 { if ($1 != "probe" || $2 != "result") exit 1; next }
     $1 != "real-focused-clock" || $2 != "pass" { exit 1 }
     { count++ }
@@ -119,8 +119,8 @@ if [[ "$focused_only" == true ]]; then
     presented_texture_frames: .presented_texture_frame_delta,
     wall_clock_ms: .wall_clock_ms
   }' "$focused_receipt")" || fail 'cannot_sanitize_focused_evidence'
-  printf 'STARBYTE_NATIVE_QA_FOCUSED_OK 1/1 commit=%s\\n' "$revision"
-  printf 'STARBYTE_NATIVE_FOCUSED_EVIDENCE=%s\\n' "$focused_metrics"
+  printf 'STARBYTE_NATIVE_QA_FOCUSED_OK 1/1 commit=%s\n' "$revision"
+  printf 'STARBYTE_NATIVE_FOCUSED_EVIDENCE=%s\n' "$focused_metrics"
   exit 0
 fi
 

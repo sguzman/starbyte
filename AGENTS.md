@@ -60,3 +60,24 @@ Prefer native Wayland and test under a Wayland session, especially resizing, ful
 ## Documentation discipline
 
 `README.md` explains the product and how to use it. `docs/status.md` documents verified facts and uncertainties. `docs/roadmap.md` prioritizes upcoming work. Detailed subsystem documents retain technical history. Do not turn the README into a chronological changelog or inflate milestones by checking boxes for scaffolding only.
+
+## Autonomous native acceptance (coding agent owned)
+
+The remaining scheduler gates require **real** Hyprland, audio and controller
+evidence. Do not ask a human to move workspaces, press keys, test games or
+transcribe logs. If this agent has an interactive terminal in the owner's
+native Wayland session, run `bash scripts/qa-native-hyprland.sh` directly.
+For unattended GitHub job execution from that same session, use
+`bash scripts/qa-runner-ephemeral.sh` with an already authenticated
+repository-admin `gh` CLI. It downloads a checksum-verified official runner,
+dispatches the current main's physical workflow, drains existing pending native
+runs using ephemeral one-job registrations, and exits without installing a
+permanent service. Neither script can attach to a desktop remotely.
+
+Keep raw compositor metadata, device information and save files in the
+isolated private local QA directories. Publish only sanitized results, complete
+task-specific evidence and the exact tested commit. Physical D-12, A-08, D-13
+and D-14 must be evaluated independently; current native automation is an
+adjunct, not an automatic 77/77 acceptance certificate. Speaker audibility,
+real gamepad control, save persistence and production cutover require their
+own observed acceptance before editing the ledger.

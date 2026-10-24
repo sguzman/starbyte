@@ -10,8 +10,8 @@ fail() {
   exit 1
 }
 
-if [[ $# -gt 1 || (${1:-} != '' && ${1:-} != '--two-queued-runs') ]]; then
-  fail 'usage: qa-runner-ephemeral.sh [--two-queued-runs]'
+if [[ $# -ne 0 ]]; then
+  fail 'usage: qa-runner-ephemeral.sh'
 fi
 
 [[ "$(id -u)" != 0 ]] || fail 'must_run_as_desktop_user_not_root'
@@ -60,12 +60,35 @@ fi
 printf '%s  %s\n' "${digest#sha256:}" "$archive" | sha256sum -c --status ||
   fail 'cached_runner_archive_checksum_invalid'
 
-# Isolated, ephemeral runner instances each process exactly one accepted job.
-# Two iterations consume both previous queued attempts, if they still exist.
-# No background daemon remains attached to the user's desktop afterward.
-max_jobs=1
-if [[ "${1:-}" == '--two-queued-runs' ]]; then max_jobs=2; fi
-for ((job = 1; job <= max_jobs; job++)); do
+# Dispatch a fresh acceptance run pinned to the repository's *current*
+# main. Earlier queued revisions can be consumed automatically as well;
+# do not silently accept an obsolete 11-probe build as the latest 12-probe
+# physical evidence. This requires Actions:write on the local gh identity.
+gh api --method POST \
+  repos/sguzman/starbyte/actions/workflows/native-hyprland.yml/dispatches \
+  -f ref=main >/dev/null || fail 'cannot_dispatch_latest_physical_workflow'
+
+# Each ephemeral runner unregisters after exactly one accepted job. Drain up
+# to four pending native QA runs (including previously queued older ones),
+# rechecking GitHub each time rather than making an operator count them.
+# No runner service survives when this process exits.
+for ((job = 1; job <= 4; job++)); do
+  pending="$(gh api 'repos/sguzman/starbyte/actions/runs?per_page=50' --jq '
+    [.workflow_runs[]
+     | select(.name == "native Hyprland acceptance")
+     | select(.status == "queued" or .status == "pending" or .status == "waiting")
+    ] | length
+  ')" || fail 'cannot_query_pending_qa_jobs'
+  [[ "$pending" =~ ^[0-9]+$ ]] || fail 'invalid_pending_qa_count'
+  if (( pending == 0 )); then
+    # GitHub can acknowledge a workflow_dispatch a moment before its run
+    # appears in the run index. Recheck once if this was our first pass.
+    if (( job == 1 )); then
+      sleep 3
+      continue
+    fi
+    break
+  fi
   runner_root="$(mktemp -d "${TMPDIR:-/tmp}/starbyte-actions-ephemeral.XXXXXXXX")"
   chmod 700 "$runner_root"
   tar -xzf "$archive" -C "$runner_root" || fail 'runner_extraction_failed'

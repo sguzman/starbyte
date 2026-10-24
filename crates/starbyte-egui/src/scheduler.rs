@@ -453,10 +453,7 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
         speed_percent: u16,
         update: impl FnOnce(&mut Machine) + Send + 'static,
     ) -> Result<(), String> {
-        self.send_bounded(Command::SpeedAndApply(
-            speed_percent,
-            Box::new(update),
-        ))
+        self.send_bounded(Command::SpeedAndApply(speed_percent, Box::new(update)))
     }
 
     /// Queue a user-initiated operation without blocking the egui event
@@ -1133,12 +1130,9 @@ mod tests {
 
     #[test]
     fn saturated_speed_update_preserves_both_clock_and_machine_state() {
-        let worker = EmulatorScheduler::spawn(
-            100_u16,
-            Duration::from_millis(20),
-            |speed| Ok(*speed),
-        )
-        .unwrap();
+        let worker =
+            EmulatorScheduler::spawn(100_u16, Duration::from_millis(20), |speed| Ok(*speed))
+                .unwrap();
         let (entered_tx, entered_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
         worker

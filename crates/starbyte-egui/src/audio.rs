@@ -746,10 +746,10 @@ mod tests {
     };
 
     use super::{
-        AudioDeviceStatus, AudioMessage, AudioOutput, PlaybackContinuity, StreamRecovery,
-        apply_sink_volume, frame_is_fresh, idle_reopen_due, normalize_pitch, normalize_playback_speed,
-        normalize_volume, pcm16_stereo_to_float, retry_ready, set_sink_playback_speed,
-        speaker_test_tone, StreamRecovery, AUDIO_RETRY_DELAY,
+        AUDIO_RETRY_DELAY, AudioDeviceStatus, AudioMessage, AudioOutput, PlaybackContinuity,
+        StreamRecovery, apply_sink_volume, frame_is_fresh, idle_reopen_due, normalize_pitch,
+        normalize_playback_speed, normalize_volume, pcm16_stereo_to_float, retry_ready,
+        set_sink_playback_speed, speaker_test_tone,
     };
 
     #[test]

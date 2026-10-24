@@ -59,13 +59,14 @@ probe_root="$(sed -n 's/^Local-only logs and context: //p' "$local_root/native-q
 [[ "$probe_status" == 0 ]] || fail 'physical_probe_failed_private_logs_retained'
 [[ -n "$probe_root" && -r "$probe_root/results.tsv" ]] || fail 'no_probe_receipts'
 
-# Nine native smoke probes + two genuine Hyprland workspace transitions.
+# Nine native smokes, one focused presentation check, and two real workspace transitions.
 awk -F '\t' '
   NR == 1 { if ($1 != "probe" || $2 != "result") exit 1; next }
   $2 != "pass" { exit 1 }
   { count++ }
-  END { if (count != 11) exit 1 }
+  END { if (count != 12) exit 1 }
 ' "$probe_root/results.tsv" || fail 'incomplete_11_probe_receipts'
+[[ -f "$probe_root/real-focused-clock/starbyte.log" ]] || fail 'missing_focused_probe_log'
 for physical in real-workspace-progress real-background-pause; do
   receipt="$probe_root/$physical/workspace-transition.json"
   [[ -s "$receipt" ]] || fail "missing_${physical}_receipt"
@@ -79,6 +80,7 @@ cat >"$local_root/summary.json" <<EOF
   "source_commit": "$revision",
   "result": "pass",
   "native_original_window_probes": {"passed": 9, "total": 9},
+  "physical_focused_clock_probe": {"passed": 1, "total": 1},
   "physical_hyprland_workspace_probes": {"passed": 2, "total": 2},
   "speaker_audibility": "not_tested",
   "physical_gamepad": "not_tested",
@@ -88,11 +90,11 @@ cat >"$local_root/summary.json" <<EOF
 EOF
 
 # Only a sanitized, narrowly scoped result reaches the public Actions log.
-printf 'STARBYTE_NATIVE_QA_OK 11/11 commit=%s physical_workspace=2 speaker=not_tested gamepad=not_tested cutover=not_tested\n' "$revision"
+printf 'STARBYTE_NATIVE_QA_OK 12/12 commit=%s physical_workspace=2 speaker=not_tested gamepad=not_tested cutover=not_tested\n' "$revision"
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
   {
     printf '### Starbyte physical Hyprland adjunct\n\n'
-    printf '11/11 probes passed at `%s`; two included genuine workspace transitions.\n\n' "$revision"
+    printf '12/12 probes passed at `%s`; two included genuine workspace transitions and one focused clock measurement.\n\n' "$revision"
     printf '**Not tested:** audible speakers, physical gamepad, production cutover. No physical checklist gate has been automatically accepted. Raw results remain local-only.\n'
   } >>"$GITHUB_STEP_SUMMARY"
 fi

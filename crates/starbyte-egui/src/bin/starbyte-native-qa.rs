@@ -99,6 +99,15 @@ const PHYSICAL_WORKSPACE_PROBE: Probe = Probe {
     ],
 };
 
+const PHYSICAL_FOCUSED_PROBE: Probe = Probe {
+    name: "real-focused-clock",
+    args: &["--exit-after-full-worker-focused-clock"],
+    markers: &[
+        "STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_BEGIN frame=",
+        "STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_OK fps=",
+    ],
+};
+
 const PHYSICAL_PAUSE_PROBE: Probe = Probe {
     name: "real-background-pause",
     args: &["--exit-after-full-worker-physical-pause"],
@@ -381,9 +390,26 @@ fn run_probe(
     let started = Instant::now();
     let timeout = Duration::from_secs(90);
     let mut switched_workspace = false;
+    let mut focused_samples = 0_u32;
     let exited = loop {
         if let Some(status) = child.try_wait()? {
             break status.success();
+        }
+        // The foreground probe must continuously observe the actual
+        // process on the native compositor's active workspace while its
+        // original-window egui callbacks measure frames and texture updates.
+        if probe.name == PHYSICAL_FOCUSED_PROBE.name {
+            let log_bytes = fs::read(&log_path)?;
+            if String::from_utf8_lossy(&log_bytes).contains(PHYSICAL_FOCUSED_PROBE.markers[0]) {
+                let active = workspace_id(&hyprland_json("activeworkspace")?)
+                    .ok_or("focused-clock QA requires a regular active workspace")?;
+                if !native_client_on_workspace(&hyprland_json("clients")?, child.id(), active) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("focused QA window lost the native Hyprland foreground workspace".into());
+                }
+                focused_samples += 1;
+            }
         }
         // The process must still be alive when the physical switch starts.
         // Avoid a false pass when a successful marker was printed *after*
@@ -420,7 +446,10 @@ fn run_probe(
     let output = fs::read_to_string(log_path)?;
     let missing = missing_markers(&output, probe.markers);
     Ok((
-        exited && missing.is_empty() && (!physical_workspace || switched_workspace),
+        exited
+            && missing.is_empty()
+            && (!physical_workspace || switched_workspace)
+            && (probe.name != PHYSICAL_FOCUSED_PROBE.name || focused_samples >= 10),
         started.elapsed().as_millis(),
         missing,
     ))
@@ -476,7 +505,11 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut passed = 0;
     let mut total = 0;
     let supplemental = if physical_workspace {
-        Some([&PHYSICAL_WORKSPACE_PROBE, &PHYSICAL_PAUSE_PROBE])
+        Some([
+            &PHYSICAL_FOCUSED_PROBE,
+            &PHYSICAL_WORKSPACE_PROBE,
+            &PHYSICAL_PAUSE_PROBE,
+        ])
     } else {
         None
     };
@@ -642,7 +675,11 @@ mod tests {
     #[test]
     fn opt_in_physical_pause_receipts_match_real_original_window_messages() {
         let app = include_str!("../app.rs");
-        for marker in super::PHYSICAL_PAUSE_PROBE.markers {
+        for marker in super::PHYSICAL_PAUSE_PROBE
+            .markers
+            .iter()
+            .chain(super::PHYSICAL_FOCUSED_PROBE.markers.iter())
+        {
             assert!(
                 app.contains(marker),
                 "physical pause marker is absent from original egui window: {marker}"

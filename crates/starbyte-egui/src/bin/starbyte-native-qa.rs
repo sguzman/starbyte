@@ -125,6 +125,52 @@ fn missing_markers<'a>(text: &str, markers: &'a [&'a str]) -> Vec<&'a str> {
         .collect()
 }
 
+/// Derive a bounded, reviewable focused-window receipt from the original
+/// application's actual owner frame and texture counters, never from a
+/// synthetic frame estimate or the display refresh rate.
+fn focused_clock_receipt(
+    log: &str,
+    compositor_samples: u32,
+    pid: u32,
+) -> Option<serde_json::Value> {
+    let line = log
+        .lines()
+        .find(|line| line.starts_with("STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_OK "))?;
+    let get = |prefix: &str| {
+        line.split_whitespace()
+            .find_map(|word| word.strip_prefix(prefix))
+    };
+    let fps = get("fps=")?.parse::<f64>().ok()?;
+    let callbacks = get("callbacks=")?.parse::<u64>().ok()?;
+    let presented = get("presented=")?.parse::<u64>().ok()?;
+    let frames = get("frames=")?.parse::<u64>().ok()?;
+    let wall_ms = get("wall_ms=")?.parse::<u64>().ok()?;
+    if !fps.is_finite()
+        || !(55.0..=65.0).contains(&fps)
+        || compositor_samples < 10
+        || callbacks < 30
+        || presented < 90
+        || wall_ms < 3_000
+    {
+        return None;
+    }
+    Some(serde_json::json!({
+        "kind": "physical_focused_clock_observation",
+        "starbyte_process_id": pid,
+        "native_wayland_client": true,
+        "compositor_active_window_observation_samples": compositor_samples,
+        "window_retained_keyboard_focus": true,
+        "emulator_worker_fps": fps,
+        "egui_callback_count": callbacks,
+        "presented_texture_frame_delta": presented,
+        "completed_worker_frames": frames,
+        "wall_clock_ms": wall_ms,
+        "speaker_audibility": "not_tested",
+        "gamepad_input": "not_tested",
+        "production_cutover": "not_tested"
+    }))
+}
+
 fn require_hyprland() -> Result<(), Box<dyn Error>> {
     for key in ["WAYLAND_DISPLAY", "HYPRLAND_INSTANCE_SIGNATURE"] {
         if env::var(key).map_or(true, |value| value.is_empty()) {
@@ -403,7 +449,12 @@ fn run_probe(
             if String::from_utf8_lossy(&log_bytes).contains(PHYSICAL_FOCUSED_PROBE.markers[0]) {
                 let active = workspace_id(&hyprland_json("activeworkspace")?)
                     .ok_or("focused-clock QA requires a regular active workspace")?;
-                if !native_client_on_workspace(&hyprland_json("clients")?, child.id(), active) {
+                let foreground_pid = hyprland_json("activewindow")?
+                    .get("pid")
+                    .and_then(serde_json::Value::as_u64);
+                if foreground_pid != Some(u64::from(child.id()))
+                    || !native_client_on_workspace(&hyprland_json("clients")?, child.id(), active)
+                {
                     let _ = child.kill();
                     let _ = child.wait();
                     return Err(
@@ -447,11 +498,21 @@ fn run_probe(
     };
     let output = fs::read_to_string(log_path)?;
     let missing = missing_markers(&output, probe.markers);
+    let focused_observed = if probe.name == PHYSICAL_FOCUSED_PROBE.name {
+        if let Some(receipt) = focused_clock_receipt(&output, focused_samples, child.id()) {
+            fs::write(
+                probe_dir.join("focused-clock-observation.json"),
+                serde_json::to_vec_pretty(&receipt)?,
+            )?;
+            true
+        } else {
+            false
+        }
+    } else {
+        true
+    };
     Ok((
-        exited
-            && missing.is_empty()
-            && (!physical_workspace || switched_workspace)
-            && (probe.name != PHYSICAL_FOCUSED_PROBE.name || focused_samples >= 10),
+        exited && missing.is_empty() && (!physical_workspace || switched_workspace) && focused_observed,
         started.elapsed().as_millis(),
         missing,
     ))
@@ -672,6 +733,28 @@ mod tests {
         assert!(native_client_on_workspace(&clients, 4321, 6));
         assert!(!native_client_on_workspace(&clients, 5432, 6));
         assert!(!native_client_on_workspace(&clients, 4321, 5));
+    }
+
+    #[test]
+    fn native_focused_clock_evidence_rejects_synthetic_or_incomplete_rates() {
+        let source = "STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_OK fps=60.090 callbacks=180 presented=180 frames=180 wall_ms=3000";
+        let receipt = super::focused_clock_receipt(source, 25, 5432).unwrap();
+        assert_eq!(receipt["emulator_worker_fps"], 60.09);
+        assert_eq!(receipt["completed_worker_frames"], 180);
+        assert_eq!(receipt["starbyte_process_id"], 5432);
+        assert!(super::focused_clock_receipt(source, 3, 5432).is_none());
+        assert!(super::focused_clock_receipt(
+            "STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_OK fps=100.0 callbacks=180 presented=180 frames=300 wall_ms=3000",
+            25,
+            5432
+        )
+        .is_none());
+        assert!(super::focused_clock_receipt(
+            "STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_BEGIN frame=30",
+            25,
+            5432
+        )
+        .is_none());
     }
 
     #[test]

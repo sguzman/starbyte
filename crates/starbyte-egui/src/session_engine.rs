@@ -27,6 +27,18 @@ use crate::{
 };
 
 const FRAME_TIMEOUT: Duration = Duration::from_millis(1_500);
+const SRAM_AUTOSAVE_INTERVAL: Duration = Duration::from_secs(30);
+const SRAM_FAILURE_RETRY_DELAY: Duration = Duration::from_secs(5);
+
+/// A failed write must remain pending for a prompt retry. Only successful
+/// writes (including no-op flushes for unchanged SRAM) earn a full interval.
+fn next_sram_flush_deadline(now: Instant, write_succeeded: bool) -> Instant {
+    now + if write_succeeded {
+        SRAM_AUTOSAVE_INTERVAL
+    } else {
+        SRAM_FAILURE_RETRY_DELAY
+    }
+}
 
 /// Controller bridge updated directly by the GUI. Held state replaces its
 /// predecessor; short press edges are OR-latched until consumed by one SNES
@@ -265,7 +277,7 @@ pub struct OwnedSession {
     input: InputPort,
     render: RenderPort,
     controls_port: ControlsPort,
-    last_sram_flush: Instant,
+    next_sram_flush: Instant,
     next_audio_retry: Instant,
     /// True only after the shutdown hook has finished on the emulation
     /// thread. Returning the owner to the GUI must not flush SRAM again.
@@ -291,7 +303,7 @@ impl OwnedSession {
             input: InputPort::default(),
             render: RenderPort::default(),
             controls_port,
-            last_sram_flush: Instant::now(),
+            next_sram_flush: Instant::now() + SRAM_AUTOSAVE_INTERVAL,
             next_audio_retry: Instant::now(),
             shutdown_finalized: false,
         }
@@ -331,10 +343,11 @@ impl OwnedSession {
         // A long manual/background pause may prevent the normal 30-second
         // frame-driven SRAM flush. Commit cartridge progress at the pause
         // transition, without depending on any Wayland repaint callback.
-        if let Err(error) = self.flush_sram() {
+        let result = self.flush_sram();
+        self.next_sram_flush = next_sram_flush_deadline(Instant::now(), result.is_ok());
+        if let Err(error) = result {
             tracing::warn!("could not persist SRAM while pausing worker: {error}");
         }
-        self.last_sram_flush = Instant::now();
     }
 
     /// Transfer engine ownership while retaining the lock-free input port.
@@ -456,7 +469,6 @@ impl OwnedSession {
             output.clear();
         }
         self.input.clear();
-        self.last_sram_flush = Instant::now();
         let result = match mode {
             SoundSessionMode::Compatibility => self.session.load_rom(path),
             SoundSessionMode::Isolated => self.session.load_rom_with_isolated_audio_probe(path),
@@ -464,6 +476,7 @@ impl OwnedSession {
         };
         if result.is_ok() {
             self.blackout_monitor = BlackScreenMonitor::default();
+            self.next_sram_flush = Instant::now() + SRAM_AUTOSAVE_INTERVAL;
             self.publish_controls();
         }
         result
@@ -478,7 +491,7 @@ impl OwnedSession {
         }
         self.session.launch_game(request)?;
         self.blackout_monitor = BlackScreenMonitor::default();
-        self.last_sram_flush = Instant::now();
+        self.next_sram_flush = Instant::now() + SRAM_AUTOSAVE_INTERVAL;
         self.publish_controls();
         Ok(())
     }
@@ -673,9 +686,10 @@ impl OwnedSession {
 
         // SRAM writes live with the emulator owner, not the egui renderer:
         // active background games keep their 30-second autosave cadence.
-        if self.last_sram_flush.elapsed() >= Duration::from_secs(30) {
-            self.last_sram_flush = Instant::now();
-            if let Err(error) = self.session.flush_save_ram() {
+        if Instant::now() >= self.next_sram_flush {
+            let result = self.session.flush_save_ram();
+            self.next_sram_flush = next_sram_flush_deadline(Instant::now(), result.is_ok());
+            if let Err(error) = result {
                 tracing::warn!("background SRAM autosave failed: {error}");
             }
         }
@@ -977,6 +991,20 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_sram_persistence_retries_soon_without_delaying_successful_saves() {
+        let now = Instant::now();
+        assert_eq!(
+            next_sram_flush_deadline(now, true),
+            now + SRAM_AUTOSAVE_INTERVAL
+        );
+        assert_eq!(
+            next_sram_flush_deadline(now, false),
+            now + SRAM_FAILURE_RETRY_DELAY
+        );
+        assert!(SRAM_FAILURE_RETRY_DELAY < SRAM_AUTOSAVE_INTERVAL);
+    }
 
     #[test]
     fn transient_button_edges_survive_a_quick_release() {

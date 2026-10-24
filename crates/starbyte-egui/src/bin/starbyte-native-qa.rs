@@ -87,6 +87,7 @@ const PROBES: &[Probe] = &[
     },
 ];
 
+const GAP_MARKER: &str = "STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame=";
 const PHYSICAL_WORKSPACE_PROBE: Probe = Probe {
     name: "real-workspace-progress",
     args: &["--exit-after-full-worker-no-redraw"],
@@ -186,6 +187,23 @@ fn isolated_probe_command(
     Ok(command)
 }
 
+/// Detect the actual timestamp published by the original window when its
+/// callback gap started. A stale marker must never authorize a physical
+/// workspace switch or a falsely attributed pacing receipt.
+fn gap_age_at(log: &[u8], now: SystemTime) -> Option<Duration> {
+    let line = String::from_utf8_lossy(log)
+        .lines()
+        .find(|line| line.contains(GAP_MARKER))?
+        .to_owned();
+    let millis = line
+        .split_whitespace()
+        .find_map(|word| word.strip_prefix("started_unix_ms="))?
+        .parse::<u64>()
+        .ok()?;
+    let began = UNIX_EPOCH.checked_add(Duration::from_millis(millis))?;
+    now.duration_since(began).ok()
+}
+
 fn hyprland_json(command: &str) -> Result<serde_json::Value, Box<dyn Error>> {
     let output = Command::new("hyprctl").args(["-j", command]).output()?;
     if !output.status.success() {
@@ -246,7 +264,11 @@ impl Drop for RestoreWorkspace {
     }
 }
 
-fn exercise_real_workspace(pid: u32, probe_dir: &Path) -> Result<(), Box<dyn Error>> {
+fn exercise_real_workspace(
+    pid: u32,
+    probe_dir: &Path,
+    gap_started: SystemTime,
+) -> Result<(), Box<dyn Error>> {
     let original = workspace_id(&hyprland_json("activeworkspace")?)
         .ok_or("native workspace QA needs a regular positive numeric workspace")?;
     if !native_client_on_workspace(&hyprland_json("clients")?, pid, original) {
@@ -264,9 +286,34 @@ fn exercise_real_workspace(pid: u32, probe_dir: &Path) -> Result<(), Box<dyn Err
     if !switched {
         return Err("Hyprland did not switch to the isolated QA workspace".into());
     }
-    // The app has already published the exact worker-frame baseline in the
-    // GAP_BEGIN marker. Remain on a *real other workspace* for the full gap.
-    thread::sleep(Duration::from_millis(2_250));
+    // A process observed late could already have finished its two-second
+    // callback gap before the physical switch actually happened.
+    if SystemTime::now()
+        .duration_since(gap_started)
+        .map_or(true, |age| age > Duration::from_millis(1_200))
+    {
+        return Err("workspace switch began too late for the measured callback gap".into());
+    }
+    // Sample the compositor's *actual* active workspace throughout the
+    // interval; one successful switch followed by an early return is not
+    // evidence of sustained off-workspace scheduling.
+    let off_workspace_at = Instant::now();
+    let mut samples = 0_u32;
+    while off_workspace_at.elapsed() < Duration::from_millis(2_250) {
+        let observed = hyprland_json("activeworkspace")?;
+        let name_now = observed.get("name").and_then(serde_json::Value::as_str);
+        if (name_now != Some(name.as_str()) && name_now != Some(target.as_str()))
+            || observed.get("id").and_then(serde_json::Value::as_i64) == Some(original)
+        {
+            return Err("Hyprland left the QA workspace during the timed gap".into());
+        }
+        samples += 1;
+        thread::sleep(Duration::from_millis(250));
+    }
+    if samples < 5 {
+        return Err("too few compositor samples to substantiate off-workspace duration".into());
+    }
+    let observed_ms = off_workspace_at.elapsed().as_millis();
     // A compositor rule could move the game window along with the newly
     // focused workspace. That would be a false off-workspace success.
     if !native_client_on_workspace(&hyprland_json("clients")?, pid, original) {
@@ -287,7 +334,8 @@ fn exercise_real_workspace(pid: u32, probe_dir: &Path) -> Result<(), Box<dyn Err
         "left_original_workspace": true,
         "starbyte_remained_on_original_workspace": true,
         "returned_to_original_workspace": true,
-        "off_workspace_hold_ms": 2250,
+        "off_workspace_observed_ms": observed_ms,
+        "workspace_observation_samples": samples,
         "speaker_audibility": "not_tested",
         "gamepad_input": "not_tested",
         "production_cutover": "not_tested"
@@ -324,17 +372,28 @@ fn run_probe(
         // The process must still be alive when the physical switch starts.
         // Avoid a false pass when a successful marker was printed *after*
         // the child had already exited without ever being off-workspace.
-        if physical_workspace
-            && !switched_workspace
-            && String::from_utf8_lossy(&fs::read(&log_path)?)
-                .contains("STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame=")
-        {
-            if let Err(error) = exercise_real_workspace(child.id(), &probe_dir) {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(error);
+        if physical_workspace && !switched_workspace {
+            let log_bytes = fs::read(&log_path)?;
+            if String::from_utf8_lossy(&log_bytes).contains(GAP_MARKER) {
+                let now = SystemTime::now();
+                let gap_age = gap_age_at(&log_bytes, now);
+                let fresh_gap = gap_age.is_some_and(|age| age <= Duration::from_millis(900));
+                let result = if fresh_gap {
+                    exercise_real_workspace(
+                        child.id(),
+                        &probe_dir,
+                        now - gap_age.unwrap_or_default(),
+                    )
+                } else {
+                    Err("no valid fresh timestamp on the original-window gap marker".into())
+                };
+                if let Err(error) = result {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(error);
+                }
+                switched_workspace = true;
             }
-            switched_workspace = true;
         }
         if started.elapsed() >= timeout {
             let _ = child.kill();
@@ -450,7 +509,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{PROBES, missing_markers, native_client_on_workspace, workspace_id};
+    use super::{PROBES, gap_age_at, missing_markers, native_client_on_workspace, workspace_id};
 
     #[test]
     fn only_explicit_success_markers_pass_a_probe() {
@@ -491,6 +550,19 @@ mod tests {
                 .any(|(key, value)| key == "DISPLAY" && value.is_none()),
             "a native Wayland smoke must not fall back to X11/XWayland"
         );
+    }
+
+    #[test]
+    fn physical_gap_marker_is_fresh_only_with_a_valid_timestamp() {
+        let now = std::time::UNIX_EPOCH + std::time::Duration::from_millis(4_000);
+        let line = b"STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame=42 started_unix_ms=3500";
+        assert_eq!(
+            gap_age_at(line, now),
+            Some(std::time::Duration::from_millis(500))
+        );
+        assert!(gap_age_at(line, std::time::UNIX_EPOCH).is_none());
+        assert!(gap_age_at(b"STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame=42", now).is_none());
+        assert!(gap_age_at(b"STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame=42 started_unix_ms=bad", now).is_none());
     }
 
     #[test]

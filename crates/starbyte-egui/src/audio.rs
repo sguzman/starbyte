@@ -26,6 +26,9 @@ const CHANNELS: u16 = 2;
 /// A bounded producer backlog; excess frames are discarded, never blocked.
 const MAX_PENDING_FRAMES: usize = 6;
 const AUDIO_RETRY_DELAY: Duration = Duration::from_secs(10);
+/// Check an already-open output for callback failures even without new PCM.
+/// This does not open an unused audio device during silent startup.
+const AUDIO_HEALTH_POLL: Duration = Duration::from_millis(250);
 /// A slow device open must never replay seconds-old game audio.
 const MAX_FRAME_AGE: Duration = Duration::from_millis(150);
 /// The test tone occupies the real game output sink for a quarter second;
@@ -429,6 +432,40 @@ impl StreamRecovery {
     }
 }
 
+/// A paused emulator sends no PCM. Nevertheless, an already-open stream
+/// can fault while idle; retry only that failed output, with the same cooldown
+/// as frame-triggered retries. An unused or manually reset route stays closed.
+fn idle_reopen_due(
+    recovery: &StreamRecovery,
+    device_present: bool,
+    retry_after: Option<Instant>,
+    now: Instant,
+) -> bool {
+    recovery.pending && !device_present && retry_ready(retry_after, now)
+}
+
+fn attempt_device_open(
+    device: &mut Option<PlaybackDevice>,
+    device_status: &AtomicU8,
+    retry_after: &mut Option<Instant>,
+    recovery: &mut StreamRecovery,
+    stream_recoveries: &AtomicU64,
+) {
+    match PlaybackDevice::open_default() {
+        Ok(output) => {
+            device_status.store(1, Ordering::Release);
+            *device = Some(output);
+            *retry_after = None;
+            recovery.on_open(stream_recoveries);
+        }
+        Err(error) => {
+            device_status.store(2, Ordering::Release);
+            warn!("desktop audio unavailable (video remains playable): {error}");
+            *retry_after = Some(Instant::now() + AUDIO_RETRY_DELAY);
+        }
+    }
+}
+
 /// Keep mixer-continuity accounting independent of actual audio hardware.
 #[derive(Default)]
 struct PlaybackContinuity {
@@ -468,7 +505,14 @@ fn audio_worker(
     let mut stretch = PitchStretch::default();
     let mut recovery = StreamRecovery::default();
 
-    for message in receiver {
+    loop {
+        // Device faults must be observed even while the emulator is paused:
+        // a plain receiver iterator would block indefinitely without PCM.
+        let message = match receiver.recv_timeout(AUDIO_HEALTH_POLL) {
+            Ok(message) => Some(message),
+            Err(mpsc::RecvTimeoutError::Timeout) => None,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        };
         // A previously healthy device can fail after unplug/restart. Reopen
         // here on the dedicated audio worker rather than the real-time CPAL
         // callback or GUI. Failed attempts still use the existing cooldown.
@@ -493,6 +537,18 @@ fn audio_worker(
             active_generation = newest_generation;
         }
 
+        let Some(message) = message else {
+            if idle_reopen_due(&recovery, device.is_some(), retry_after, Instant::now()) {
+                attempt_device_open(
+                    &mut device,
+                    &device_status,
+                    &mut retry_after,
+                    &mut recovery,
+                    &stream_recoveries,
+                );
+            }
+            continue;
+        };
         let (frame_generation, queued_at, pcm, speed, pitch, is_test_tone) = match message {
             AudioMessage::Frame {
                 generation,
@@ -548,19 +604,13 @@ fn audio_worker(
             && pcm.iter().any(|&sample| sample != 0)
             && (is_test_tone || retry_ready(retry_after, now))
         {
-            match PlaybackDevice::open_default() {
-                Ok(output) => {
-                    device_status.store(1, Ordering::Release);
-                    device = Some(output);
-                    retry_after = None;
-                    recovery.on_open(&stream_recoveries);
-                }
-                Err(error) => {
-                    device_status.store(2, Ordering::Release);
-                    warn!("desktop audio unavailable (video remains playable): {error}");
-                    retry_after = Some(Instant::now() + AUDIO_RETRY_DELAY);
-                }
-            }
+            attempt_device_open(
+                &mut device,
+                &device_status,
+                &mut retry_after,
+                &mut recovery,
+                &stream_recoveries,
+            );
         }
         if let Some(output) = &device {
             // Device initialization can take time. Drop a frame that became
@@ -697,9 +747,9 @@ mod tests {
 
     use super::{
         AudioDeviceStatus, AudioMessage, AudioOutput, PlaybackContinuity, StreamRecovery,
-        apply_sink_volume, frame_is_fresh, normalize_pitch, normalize_playback_speed,
+        apply_sink_volume, frame_is_fresh, idle_reopen_due, normalize_pitch, normalize_playback_speed,
         normalize_volume, pcm16_stereo_to_float, retry_ready, set_sink_playback_speed,
-        speaker_test_tone,
+        speaker_test_tone, StreamRecovery, AUDIO_RETRY_DELAY,
     };
 
     #[test]
@@ -1092,6 +1142,28 @@ mod tests {
         tracking.on_open(&recoveries);
         assert_eq!(faults.load(Ordering::Relaxed), 2);
         assert_eq!(recoveries.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn faulted_output_retries_while_idle_but_unused_or_manual_routes_do_not() {
+        let now = Instant::now();
+        let faults = AtomicU64::new(0);
+        let recoveries = AtomicU64::new(0);
+        let mut tracking = StreamRecovery::default();
+        // Merely starting a paused game must not initialize audio hardware.
+        assert!(!idle_reopen_due(&tracking, false, None, now));
+        // Nor should an explicit manual reset fabricate a fault retry.
+        assert!(!idle_reopen_due(&tracking, false, None, now));
+        tracking.on_fault(&faults);
+        assert!(idle_reopen_due(&tracking, false, None, now));
+        assert!(!idle_reopen_due(&tracking, true, None, now));
+        let retry_at = now + AUDIO_RETRY_DELAY;
+        assert!(!idle_reopen_due(&tracking, false, Some(retry_at), now));
+        assert!(idle_reopen_due(&tracking, false, Some(retry_at), retry_at));
+        tracking.on_open(&recoveries);
+        assert!(!idle_reopen_due(&tracking, false, None, retry_at));
+        assert_eq!(faults.load(Ordering::Relaxed), 1);
+        assert_eq!(recoveries.load(Ordering::Relaxed), 1);
     }
 
     #[test]

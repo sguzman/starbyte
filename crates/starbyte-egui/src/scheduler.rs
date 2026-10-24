@@ -590,8 +590,8 @@ fn run_owned_clock<Machine, Frame>(
                 Err(TryRecvError::Disconnected) => return finish_on_worker(machine, on_shutdown),
             }
         }
-        let running = policy.should_run()
-            && (!policy.pause_when_unfocused || gui_heartbeat.is_recent());
+        let running =
+            policy.should_run() && (!policy.pause_when_unfocused || gui_heartbeat.is_recent());
         // Keep the previous *effective* clock state until the new timing
         // origin has been selected. A lost Wayland heartbeat can suspend and
         // resume the owner without ever changing ClockPolicy.focused/playing.

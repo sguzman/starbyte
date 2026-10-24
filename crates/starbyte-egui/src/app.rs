@@ -9004,7 +9004,7 @@ mod playback_tests {
     #[test]
     fn resynced_gamepad_buttons_are_only_currently_held_not_queued_taps() {
         use gilrs::Button;
-        let active = std::collections::BTreeSet::from([Button::South, Button::DPadRight]);
+        let active = [Button::South, Button::DPadRight];
         let held = super::cached_button_names(|button| active.contains(&button));
         assert_eq!(held.len(), 2);
         assert!(held.contains("South"));

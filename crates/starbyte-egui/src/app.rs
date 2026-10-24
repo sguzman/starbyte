@@ -1435,7 +1435,9 @@ impl StarbyteApp {
         for (generation, selection, action, reply) in std::mem::take(&mut worker.pending_saves) {
             match reply.try_recv() {
                 Ok(result) => completed_saves.push((generation, selection, action, result)),
-                Err(TryRecvError::Empty) => pending_saves.push((generation, selection, action, reply)),
+                Err(TryRecvError::Empty) => {
+                    pending_saves.push((generation, selection, action, reply))
+                }
                 Err(TryRecvError::Disconnected) => completed_saves.push((
                     generation,
                     selection,
@@ -1450,7 +1452,9 @@ impl StarbyteApp {
         for (generation, selection, response) in std::mem::take(&mut worker.pending_screenshots) {
             match response.try_recv() {
                 Ok(result) => captured.push((generation, selection, result)),
-                Err(TryRecvError::Empty) => captures_pending.push((generation, selection, response)),
+                Err(TryRecvError::Empty) => {
+                    captures_pending.push((generation, selection, response))
+                }
                 Err(TryRecvError::Disconnected) => captured.push((
                     generation,
                     selection,
@@ -1461,7 +1465,9 @@ impl StarbyteApp {
         worker.pending_screenshots = captures_pending;
         let mut screenshot_writes = Vec::new();
         let mut writes_pending = Vec::new();
-        for (generation, selection, response) in std::mem::take(&mut worker.pending_screenshot_writes) {
+        for (generation, selection, response) in
+            std::mem::take(&mut worker.pending_screenshot_writes)
+        {
             match response.try_recv() {
                 Ok(result) => screenshot_writes.push((generation, selection, result)),
                 Err(TryRecvError::Empty) => writes_pending.push((generation, selection, response)),
@@ -1681,7 +1687,9 @@ impl StarbyteApp {
                             SessionSaveAction::QuickSave => "Quick save stored (F5).".to_owned(),
                             SessionSaveAction::QuickLoad => "Quick save restored (F8).".to_owned(),
                             SessionSaveAction::SaveSlot(slot) => format!("Saved disk slot {slot}."),
-                            SessionSaveAction::LoadSlot(slot) => format!("Restored disk slot {slot}."),
+                            SessionSaveAction::LoadSlot(slot) => {
+                                format!("Restored disk slot {slot}.")
+                            }
                             SessionSaveAction::FlushSram => "Cartridge SRAM persisted.".to_owned(),
                         };
                     }
@@ -1763,18 +1771,17 @@ impl StarbyteApp {
         for (generation, selection, result) in captured {
             // The capture payload owns its pixels. Finish writing a valid PNG
             // even if another cartridge was requested or already installed.
-            let show_feedback = worker_screenshot_receipt_is_current(
-                generation,
-                self.worker_active_launch_id,
-            ) && worker_async_feedback_is_current(
-                generation,
-                self.worker_active_launch_id,
-                selection,
-                self.latest_rom_job_id,
-                self.full_worker
-                    .as_ref()
-                    .is_some_and(|worker| !worker.pending_launches.is_empty()),
-            );
+            let show_feedback =
+                worker_screenshot_receipt_is_current(generation, self.worker_active_launch_id)
+                    && worker_async_feedback_is_current(
+                        generation,
+                        self.worker_active_launch_id,
+                        selection,
+                        self.latest_rom_job_id,
+                        self.full_worker
+                            .as_ref()
+                            .is_some_and(|worker| !worker.pending_launches.is_empty()),
+                    );
             match result {
                 Ok(image) => {
                     let stamp = SystemTime::now()
@@ -1788,7 +1795,9 @@ impl StarbyteApp {
                     match spawn_screenshot_writer(path, image) {
                         Ok(reply) => {
                             if let Some(worker) = &mut self.full_worker {
-                                worker.pending_screenshot_writes.push((generation, selection, reply));
+                                worker
+                                    .pending_screenshot_writes
+                                    .push((generation, selection, reply));
                             }
                         }
                         Err(error) => {
@@ -1902,9 +1911,12 @@ impl StarbyteApp {
         }
         match worker.engine.queue_save_action_with_frame(action) {
             Ok(reply) => {
-                worker
-                    .pending_saves
-                    .push((self.worker_active_launch_id, self.latest_rom_job_id, action, reply));
+                worker.pending_saves.push((
+                    self.worker_active_launch_id,
+                    self.latest_rom_job_id,
+                    action,
+                    reply,
+                ));
                 self.status_line = "Saving or restoring on the emulator worker...".to_owned();
             }
             Err(error) => self.status_line = error,
@@ -3396,7 +3408,11 @@ impl StarbyteApp {
             },
         ));
         ui.separator();
-        ui.label("Independent OS speaker check (separate stream):");
+        ui.label(if self.full_worker.is_some() {
+            "Speaker check through game audio owner:"
+        } else {
+            "Independent OS speaker check (separate stream):"
+        });
         let speaker_test_running = matches!(&self.speaker_probe, SpeakerProbeState::Running(_));
         if ui
             .add_enabled(
@@ -5308,9 +5324,11 @@ impl StarbyteApp {
             }
             match worker.engine.queue_screenshot_pixels() {
                 Ok(reply) => {
-                    worker
-                        .pending_screenshots
-                        .push((self.worker_active_launch_id, self.latest_rom_job_id, reply));
+                    worker.pending_screenshots.push((
+                        self.worker_active_launch_id,
+                        self.latest_rom_job_id,
+                        reply,
+                    ));
                     self.status_line = "Capturing screenshot on the emulator worker...".to_owned();
                 }
                 Err(error) => self.status_line = format!("Screenshot failed: {error}"),
@@ -7329,6 +7347,33 @@ mod session_view_bridge_tests {
             Some(4),
             failed_requested_generation,
         ));
+        // A captured image is still valid after a newer ROM is installed:
+        // write the user's screenshot, but do not show obsolete completion.
+        assert!(!worker_async_feedback_is_current(
+            Some(4),
+            Some(5),
+            Some(10),
+            Some(11),
+            false
+        ));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("captured-before-replacement.png");
+        let screenshot = SessionScreenshot {
+            frame: 3,
+            width: 1,
+            height: 1,
+            rgba: vec![12, 34, 56, 255],
+        };
+        let file = spawn_screenshot_writer(path.clone(), screenshot)
+            .unwrap()
+            .recv_timeout(Duration::from_secs(4))
+            .unwrap()
+            .unwrap();
+        assert_eq!(file, path);
+        assert_eq!(
+            image::open(&file).unwrap().into_rgba8().as_raw().as_slice(),
+            &[12, 34, 56, 255]
+        );
     }
 
     #[test]

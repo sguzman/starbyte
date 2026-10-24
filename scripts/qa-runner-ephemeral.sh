@@ -14,6 +14,12 @@ if [[ $# -ne 0 ]]; then
   fail 'usage: qa-runner-ephemeral.sh'
 fi
 
+# Owner confirmed that workspace-based QA steals keyboard focus even when
+# the test window is on a different workspace. Never attach a live desktop
+# to a workflow that would attempt GUI QA until an independent compositor
+# and input seat have been verified as non-interfering.
+fail 'desktop_focus_safety_gate; independent_compositor_and_seat_required'
+
 [[ "$(id -u)" != 0 ]] || fail 'must_run_as_desktop_user_not_root'
 [[ "${XDG_SESSION_TYPE:-}" == wayland ]] || fail 'must_be_in_interactive_wayland_session'
 [[ -n "${WAYLAND_DISPLAY:-}" && -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]] ||

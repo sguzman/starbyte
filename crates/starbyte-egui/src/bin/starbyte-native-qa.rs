@@ -246,13 +246,11 @@ impl Drop for RestoreWorkspace {
     }
 }
 
-fn exercise_real_workspace(pid: u32) -> Result<(), Box<dyn Error>> {
+fn exercise_real_workspace(pid: u32, probe_dir: &Path) -> Result<(), Box<dyn Error>> {
     let original = workspace_id(&hyprland_json("activeworkspace")?)
         .ok_or("native workspace QA needs a regular positive numeric workspace")?;
     if !native_client_on_workspace(&hyprland_json("clients")?, pid, original) {
-        return Err(
-            "test window is not a native Wayland client on the active workspace".into()
-        );
+        return Err("test window is not a native Wayland client on the active workspace".into());
     }
     let name = format!("starbyte-qa-{pid}");
     let target = format!("name:{name}");
@@ -261,8 +259,7 @@ fn exercise_real_workspace(pid: u32) -> Result<(), Box<dyn Error>> {
     let active = hyprland_json("activeworkspace")?;
     let observed_name = active.get("name").and_then(serde_json::Value::as_str);
     // Some Hyprland versions return named workspaces with a prefix.
-    let switched = (observed_name == Some(name.as_str())
-        || observed_name == Some(target.as_str()))
+    let switched = (observed_name == Some(name.as_str()) || observed_name == Some(target.as_str()))
         && active.get("id").and_then(serde_json::Value::as_i64) != Some(original);
     if !switched {
         return Err("Hyprland did not switch to the isolated QA workspace".into());
@@ -274,6 +271,25 @@ fn exercise_real_workspace(pid: u32) -> Result<(), Box<dyn Error>> {
     if workspace_id(&hyprland_json("activeworkspace")?) != Some(original) {
         return Err("Hyprland did not return to the original workspace".into());
     }
+    // The local QA operator owns this evidence; do not expose other clients'
+    // titles, personal file paths, serial numbers, or full compositor state.
+    let receipt = serde_json::json!({
+        "kind": "physical_workspace_switch_observation",
+        "original_workspace": original,
+        "temporary_workspace": name,
+        "starbyte_process_id": pid,
+        "starbyte_native_wayland_client": true,
+        "left_original_workspace": true,
+        "returned_to_original_workspace": true,
+        "off_workspace_hold_ms": 2250,
+        "speaker_audibility": "not_tested",
+        "gamepad_input": "not_tested",
+        "production_cutover": "not_tested"
+    });
+    fs::write(
+        probe_dir.join("workspace-transition.json"),
+        serde_json::to_vec_pretty(&receipt)?,
+    )?;
     Ok(())
 }
 
@@ -304,11 +320,10 @@ fn run_probe(
         // the child had already exited without ever being off-workspace.
         if physical_workspace
             && !switched_workspace
-            && String::from_utf8_lossy(&fs::read(&log_path)?).contains(
-                "STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame=",
-            )
+            && String::from_utf8_lossy(&fs::read(&log_path)?)
+                .contains("STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame=")
         {
-            if let Err(error) = exercise_real_workspace(child.id()) {
+            if let Err(error) = exercise_real_workspace(child.id(), &probe_dir) {
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(error);
@@ -474,7 +489,10 @@ mod tests {
 
     #[test]
     fn physical_workspace_receipts_require_a_native_client_and_positive_workspace() {
-        assert_eq!(workspace_id(&serde_json::json!({"id": 6, "name": "6"})), Some(6));
+        assert_eq!(
+            workspace_id(&serde_json::json!({"id": 6, "name": "6"})),
+            Some(6)
+        );
         assert_eq!(workspace_id(&serde_json::json!({"id": -99})), None);
         let clients = serde_json::json!([
             {"pid": 4321, "xwayland": false, "workspace": {"id": 6}},
@@ -492,7 +510,10 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap();
-        for probe in PROBES.iter().chain(std::iter::once(&super::PHYSICAL_WORKSPACE_PROBE)) {
+        for probe in PROBES
+            .iter()
+            .chain(std::iter::once(&super::PHYSICAL_WORKSPACE_PROBE))
+        {
             for marker in probe.markers {
                 assert!(
                     ci.contains(marker),

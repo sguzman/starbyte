@@ -23,7 +23,19 @@ cargo build --locked -p starbyte-egui --bins
 target/debug/starbyte-native-qa
 ```
 
-The helper refuses non-Hyprland sessions, records `hyprctl` monitor/workspace metadata and the working-checkout Git revision, and runs nine existing `--demo --native-worker-preview` original-window smoke modes with isolated XDG config, data, cache and per-mode logs. It writes `results.tsv` and raw logs in a new private local temporary directory, exits nonzero on any missing success marker or probe error, and performs no changes to the user's normal Starbyte configuration or saves. Run it through the local QA agent rather than handing these terminal steps to the user. Never publish raw logs or environment context before checking them for private paths and machine identifiers.
+The helper refuses non-Hyprland sessions, records `hyprctl` monitor/workspace metadata and the working-checkout Git revision, and runs nine existing `--demo --native-worker-preview` original-window smoke modes with isolated HOME and XDG config, data, cache and per-mode logs. A child cannot silently fall back to X11 because its `DISPLAY` is unset, while the real Wayland socket is preserved. It writes `results.tsv` and raw logs in a new private local temporary directory, exits nonzero on any missing success marker or probe error, and performs no changes to the user's normal Starbyte configuration or saves. Run it through the local QA agent rather than handing these terminal steps to the user. Never publish raw logs or environment context before checking them for private paths and machine identifiers.
+
+### Opt-in real-workspace progress probe
+
+On Hyprland versions implementing the current Lua dispatcher interface, a local QA agent can additionally run:
+
+```sh
+target/debug/starbyte-native-qa --physical-workspace
+```
+
+This adds a tenth, distinct probe beyond the nine synthetic cases. After the original window announces the start of a two-second **worker-only callback gap**, the operator confirms its process is a native (non-XWayland) Hyprland client on the active workspace, switches to a unique empty named workspace using the compositor's dispatcher, stays away through the gap, and restores the original numeric workspace before checking worker frame-advance and clock-pacing receipts. A local `real-workspace-progress/workspace-transition.json` records the tested process ID, native-client evidence, temporary workspace, confirmed transition and restoration, and explicitly untested audio/gamepad/cutover dimensions without saving other window titles. The original-workspace restoration runs on normal error paths as well. It refuses special/negative original workspaces; on an interrupted or forcibly terminated operator run, explicitly verify the active workspace before continuing. The runner does not turn on this interaction without the `--physical-workspace` option.
+
+A passed opt-in test is useful **actual workspace-transition evidence for independent video clock behavior** but does not prove sound was heard while the game was off-workspace, active gamepad input, real stream recovery, or production cutover. Even for A-08/D-13, the acceptance decision requires review of the physical compositor, timing records and the complete gate wording. The CI contract only validates the runner's code and synthetic markers; it never performs this physical switch.
 
 **Scope limit:** These are native-host **synthetic** checks. The helper does not switch the real Hyprland workspace, move a physical gamepad, record speaker audibility, unplug a device, exercise commercial ROMs, or authorize the worker as production default. All eight pending hardware/cutover gates remain independently unaccepted until the full table below has direct evidence. The helper's own CI compilation and contract-marker tests do not imply it was executed on physical Hyprland.
 

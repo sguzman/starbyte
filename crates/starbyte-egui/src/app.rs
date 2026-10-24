@@ -6994,9 +6994,7 @@ impl eframe::App for StarbyteApp {
                     let start_frame = worker.engine.completed_frames();
                     // A native QA orchestrator can now switch an actual
                     // compositor workspace during this worker-only gap.
-                    println!(
-                        "STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame={start_frame}"
-                    );
+                    println!("STARBYTE_FULL_LIBRARY_NO_REPAINT_GAP_BEGIN frame={start_frame}");
                     self.worker_no_redraw_gap =
                         Some((Instant::now() + Duration::from_secs(2), start_frame));
                     ctx.request_repaint_after(Duration::from_secs(2));

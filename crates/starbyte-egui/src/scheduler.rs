@@ -215,6 +215,9 @@ enum Command<Machine> {
     Focus(bool),
     PauseWhenUnfocused(bool),
     Speed(u16),
+    /// Update the scheduler interval and machine audio settings in one owner
+    /// command. Never allow a frame between clock and pitch/tempo changes.
+    SpeedAndApply(u16, Box<dyn FnOnce(&mut Machine) + Send>),
     Invoke(
         Box<dyn FnOnce(&mut Machine) -> Result<(), String> + Send>,
         Sender<Result<(), String>>,
@@ -265,6 +268,11 @@ fn apply_command<Machine>(
         Command::Focus(focused) => policy.focused = focused,
         Command::PauseWhenUnfocused(enabled) => policy.pause_when_unfocused = enabled,
         Command::Speed(speed) => policy.speed_percent = speed.clamp(1, 1_600),
+        Command::SpeedAndApply(speed, action) => {
+            action(machine);
+            policy.speed_percent = speed.clamp(1, 1_600);
+            pending_posts.fetch_sub(1, Ordering::AcqRel);
+        }
         Command::Invoke(action, response) => {
             let _ = response.send(action(machine));
         }
@@ -417,22 +425,38 @@ impl<Machine: Send + 'static, Frame: Send + 'static> EmulatorScheduler<Machine, 
             .map_err(|_| "emulation worker stopped before acknowledging command".to_owned())?
     }
 
-    /// One-way state/input updates must never block a menu or gamepad read.
-    /// The worker applies each update before its next frame.
-    pub fn post(&self, action: impl FnOnce(&mut Machine) + Send + 'static) -> Result<(), String> {
-        // Do not let repeated F5/cheat/screenshot requests allocate an
-        // unbounded backlog when the worker is busy with disk I/O.
+    /// Reserve one bounded mutation slot before submitting to the owner.
+    /// This also makes speed+pitch updates reject atomically when saturated.
+    fn send_bounded(&self, command: Command<Machine>) -> Result<(), String> {
         self.pending_posts
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |pending| {
                 (pending < MAX_PENDING_POSTS).then_some(pending + 1)
             })
             .map_err(|_| "emulation worker operation queue is full".to_owned())?;
-        self.commands
-            .send(Command::Post(Box::new(action)))
-            .map_err(|_| {
-                self.pending_posts.fetch_sub(1, Ordering::AcqRel);
-                "emulation worker is not running".to_owned()
-            })
+        self.commands.send(command).map_err(|_| {
+            self.pending_posts.fetch_sub(1, Ordering::AcqRel);
+            "emulation worker is not running".to_owned()
+        })
+    }
+
+    /// One-way state/input updates must never block a menu or gamepad read.
+    /// The worker applies each update before its next frame.
+    pub fn post(&self, action: impl FnOnce(&mut Machine) + Send + 'static) -> Result<(), String> {
+        self.send_bounded(Command::Post(Box::new(action)))
+    }
+
+    /// Apply a new clock interval and its machine-owned speed/pitch effects
+    /// together, between frames. A busy worker rejects both updates rather
+    /// than advancing at the new FPS while queuing audio at the old speed.
+    pub fn set_speed_with_machine_update(
+        &self,
+        speed_percent: u16,
+        update: impl FnOnce(&mut Machine) + Send + 'static,
+    ) -> Result<(), String> {
+        self.send_bounded(Command::SpeedAndApply(
+            speed_percent,
+            Box::new(update),
+        ))
     }
 
     /// Queue a user-initiated operation without blocking the egui event
@@ -1083,6 +1107,60 @@ mod tests {
         );
         release_tx.send(()).unwrap();
         assert_eq!(worker.shutdown().unwrap(), 0);
+    }
+
+    #[test]
+    fn speed_and_machine_configuration_advance_in_one_ordered_bounded_command() {
+        let mut policy = ClockPolicy::default();
+        let mut machine = (100_u16, 1.0_f32);
+        let pending = AtomicUsize::new(1);
+        let command = Command::SpeedAndApply(
+            150,
+            Box::new(|machine: &mut (u16, f32)| {
+                machine.0 = 150;
+                machine.1 = 0.75;
+            }),
+        );
+        assert!(apply_command(command, &mut machine, &mut policy, &pending));
+        assert_eq!(policy.speed_percent, 150);
+        assert_eq!(machine, (150, 0.75));
+        assert_eq!(pending.load(Ordering::Acquire), 0);
+        assert_eq!(
+            policy.interval(Duration::from_millis(15)),
+            Duration::from_millis(10)
+        );
+    }
+
+    #[test]
+    fn saturated_speed_update_preserves_both_clock_and_machine_state() {
+        let worker = EmulatorScheduler::spawn(
+            100_u16,
+            Duration::from_millis(20),
+            |speed| Ok(*speed),
+        )
+        .unwrap();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        worker
+            .post(move |_| {
+                let _ = entered_tx.send(());
+                let _ = release_rx.recv();
+            })
+            .unwrap();
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        for _ in 1..MAX_PENDING_POSTS {
+            worker.post(|_| {}).unwrap();
+        }
+        let result = worker.set_speed_with_machine_update(200, |speed| *speed = 200);
+        assert_eq!(
+            result.unwrap_err(),
+            "emulation worker operation queue is full"
+        );
+        assert_eq!(worker.outstanding_async_operations(), MAX_PENDING_POSTS);
+        release_tx.send(()).unwrap();
+        assert_eq!(worker.transact(|speed| Ok(*speed)).unwrap(), 100);
+        assert_eq!(worker.outstanding_async_operations(), 0);
+        worker.shutdown().unwrap();
     }
 
     #[test]

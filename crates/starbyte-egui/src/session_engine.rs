@@ -775,8 +775,9 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
         speed_percent: u16,
         pitch_factor: f32,
     ) -> Result<(), String> {
-        self.set_speed_percent(speed_percent);
-        self.post(move |engine| engine.set_speed(speed_percent, pitch_factor))
+        self.set_speed_with_machine_update(speed_percent, move |engine| {
+            engine.set_speed(speed_percent, pitch_factor);
+        })
     }
 
     pub fn load_game(

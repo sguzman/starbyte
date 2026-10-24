@@ -267,6 +267,11 @@ fn exercise_real_workspace(pid: u32, probe_dir: &Path) -> Result<(), Box<dyn Err
     // The app has already published the exact worker-frame baseline in the
     // GAP_BEGIN marker. Remain on a *real other workspace* for the full gap.
     thread::sleep(Duration::from_millis(2_250));
+    // A compositor rule could move the game window along with the newly
+    // focused workspace. That would be a false off-workspace success.
+    if !native_client_on_workspace(&hyprland_json("clients")?, pid, original) {
+        return Err("Starbyte did not remain on its original workspace".into());
+    }
     drop(restore);
     if workspace_id(&hyprland_json("activeworkspace")?) != Some(original) {
         return Err("Hyprland did not return to the original workspace".into());
@@ -280,6 +285,7 @@ fn exercise_real_workspace(pid: u32, probe_dir: &Path) -> Result<(), Box<dyn Err
         "starbyte_process_id": pid,
         "starbyte_native_wayland_client": true,
         "left_original_workspace": true,
+        "starbyte_remained_on_original_workspace": true,
         "returned_to_original_workspace": true,
         "off_workspace_hold_ms": 2250,
         "speaker_audibility": "not_tested",

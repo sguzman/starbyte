@@ -1,5 +1,6 @@
 [package]
 name = "starbyte-egui"
+default-run = "starbyte-egui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

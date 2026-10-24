@@ -5,6 +5,16 @@
 set -Eeuo pipefail
 umask 077
 
+# Rerun only the failed focused-clock physical probe, without reopening the
+# other eleven windows or claiming a full 12/12 acceptance.
+focused_only=false
+if [[ $# -eq 1 && "${1:-}" == --focused-only ]]; then
+  focused_only=true
+elif [[ $# -ne 0 ]]; then
+  printf 'STARBYTE_NATIVE_QA_FAILED usage: qa-native-hyprland.sh [--focused-only]\\n' >&2
+  exit 2
+fi
+
 fail() {
   printf 'STARBYTE_NATIVE_QA_FAILED %s\n' "$1" >&2
   exit 1
@@ -76,8 +86,12 @@ hyprctl dispatch "hl.dsp.focus({ workspace = $qa_workspace })" >/dev/null ||
 [[ "$(hyprctl -j activeworkspace | jq -r '.id // empty')" == "$qa_workspace" ]] ||
   fail 'dedicated_qa_workspace_not_active'
 
+native_args=(--physical-workspace)
+if [[ "$focused_only" == true ]]; then
+  native_args+=(--only real-focused-clock)
+fi
 set +e
-STARBYTE_QA_WORKSPACE_ID="$qa_workspace" target/debug/starbyte-native-qa --physical-workspace >"$local_root/native-qa.log" 2>&1
+STARBYTE_QA_WORKSPACE_ID="$qa_workspace" target/debug/starbyte-native-qa "${native_args[@]}" >"$local_root/native-qa.log" 2>&1
 probe_status=$?
 set -e
 
@@ -86,6 +100,29 @@ set -e
 probe_root="$(sed -n 's/^Local-only logs and context: //p' "$local_root/native-qa.log" | tail -n 1)"
 [[ "$probe_status" == 0 ]] || fail 'physical_probe_failed_private_logs_retained'
 [[ -n "$probe_root" && -r "$probe_root/results.tsv" ]] || fail 'no_probe_receipts'
+
+if [[ "$focused_only" == true ]]; then
+  awk -F '\\t' '
+    NR == 1 { if ($1 != "probe" || $2 != "result") exit 1; next }
+    $1 != "real-focused-clock" || $2 != "pass" { exit 1 }
+    { count++ }
+    END { if (count != 1) exit 1 }
+  ' "$probe_root/results.tsv" || fail 'focused_probe_did_not_pass'
+  focused_receipt="$probe_root/real-focused-clock/focused-clock-observation.json"
+  [[ -s "$focused_receipt" ]] || fail 'missing_focused_clock_receipt'
+  jq -e '.native_wayland_client == true and .window_retained_keyboard_focus == true' "$focused_receipt" >/dev/null ||
+    fail 'focused_window_not_physically_verified'
+  # Publish only selected bounded numeric fields, never PID/client/window data.
+  focused_metrics="$(jq -c '{
+    focused_worker_fps: .emulator_worker_fps,
+    completed_worker_frames: .completed_worker_frames,
+    presented_texture_frames: .presented_texture_frame_delta,
+    wall_clock_ms: .wall_clock_ms
+  }' "$focused_receipt")" || fail 'cannot_sanitize_focused_evidence'
+  printf 'STARBYTE_NATIVE_QA_FOCUSED_OK 1/1 commit=%s\\n' "$revision"
+  printf 'STARBYTE_NATIVE_FOCUSED_EVIDENCE=%s\\n' "$focused_metrics"
+  exit 0
+fi
 
 # Nine native smokes, one focused presentation check, and two real workspace transitions.
 awk -F '\t' '

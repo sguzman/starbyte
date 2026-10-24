@@ -430,6 +430,11 @@ impl StreamRecovery {
             recoveries.fetch_add(1, Ordering::Relaxed);
         }
     }
+
+    fn on_manual_reset(&mut self) {
+        // A manually selected output is not an automatic fault recovery.
+        self.pending = false;
+    }
 }
 
 /// A paused emulator sends no PCM. Nevertheless, an already-open stream
@@ -576,6 +581,7 @@ fn audio_worker(
                 // A default-route change does not always trigger CPAL's
                 // error callback. Explicit re-selection must not fabricate
                 // a stream-fault or successful-recovery receipt.
+                recovery.on_manual_reset();
                 if let Some(output) = device.take() {
                     output.clear();
                 }
@@ -1142,6 +1148,15 @@ mod tests {
         tracking.on_open(&recoveries);
         assert_eq!(faults.load(Ordering::Relaxed), 2);
         assert_eq!(recoveries.load(Ordering::Relaxed), 2);
+
+        // A fault followed by deliberate user output re-selection must not
+        // inflate the count of automatic fault recoveries.
+        tracking.on_fault(&faults);
+        tracking.on_manual_reset();
+        tracking.on_open(&recoveries);
+        assert_eq!(faults.load(Ordering::Relaxed), 3);
+        assert_eq!(recoveries.load(Ordering::Relaxed), 2);
+        assert!(!tracking.pending);
     }
 
     #[test]

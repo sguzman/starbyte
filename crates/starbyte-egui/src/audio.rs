@@ -81,6 +81,9 @@ enum AudioMessage {
     /// Apply a live volume change to already-queued Rodio buffers even when
     /// the emulator is paused and sends no fresh game PCM.
     VolumeChanged,
+    /// Release the current output route, even if CPAL never reported an
+    /// error after a device/default-sink change.
+    Reopen,
 }
 
 /// The UI owns only a bounded nonblocking sender, never a device or mixer.
@@ -246,6 +249,13 @@ impl AudioOutput {
         if self.volume_bits.swap(next, Ordering::AcqRel) != next {
             let _ = self.sender.try_send(AudioMessage::VolumeChanged);
         }
+    }
+
+    /// Ask the existing sound worker to release its current CPAL/Rodio route.
+    /// The next fresh game PCM or speaker check opens the current default
+    /// output again. This is a nonblocking request, not proof of audibility.
+    pub fn request_reopen(&self) -> bool {
+        self.sender.try_send(AudioMessage::Reopen).is_ok()
     }
 
     /// Bounded try-send: full queues lose stale audio rather than blocking
@@ -506,6 +516,20 @@ fn audio_worker(
                 }
                 continue;
             }
+            AudioMessage::Reopen => {
+                // A default-route change does not always trigger CPAL's
+                // error callback. Explicit re-selection must not fabricate
+                // a stream-fault or successful-recovery receipt.
+                if let Some(output) = device.take() {
+                    output.clear();
+                }
+                device_status.store(0, Ordering::Release);
+                retry_after = None;
+                tone_until = None;
+                continuity.reset();
+                stretch.reset();
+                continue;
+            }
         };
         let now = Instant::now();
         if frame_generation != active_generation
@@ -753,6 +777,48 @@ mod tests {
             0.0
         );
         assert_eq!(output.device_status(), AudioDeviceStatus::NotAttempted);
+    }
+
+    #[test]
+    fn manual_audio_route_reopen_is_queued_nonblocking() {
+        let (sender, receiver) = sync_channel(1);
+        let output = AudioOutput {
+            sender,
+            generation: Arc::new(AtomicU64::new(0)),
+            device_status: Arc::new(AtomicU8::new(1)),
+            volume_bits: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+            submitted_frames: Arc::new(AtomicU64::new(0)),
+            submitted_nonzero_frames: Arc::new(AtomicU64::new(0)),
+            test_tones_submitted: Arc::new(AtomicU64::new(0)),
+            producer_dropped_frames: Arc::new(AtomicU64::new(0)),
+            worker_dropped_frames: Arc::new(AtomicU64::new(0)),
+            sink_empty_on_pcm: Arc::new(AtomicU64::new(0)),
+            stream_failures: Arc::new(AtomicU64::new(0)),
+            stream_recoveries: Arc::new(AtomicU64::new(0)),
+        };
+        assert!(output.request_reopen());
+        assert!(!output.request_reopen(), "full channel must refuse without blocking");
+        assert!(matches!(receiver.try_recv().unwrap(), AudioMessage::Reopen));
+        assert_eq!(output.stream_failures(), 0);
+        assert_eq!(output.stream_recoveries(), 0);
+    }
+
+    #[test]
+    fn worker_reopen_clears_stale_route_status_without_fault_credit() {
+        let output = AudioOutput::start().unwrap();
+        // The actual worker loop can reset route selection without opening
+        // an ALSA/PipeWire device or fabricating a stream failure.
+        output.device_status.store(1, Ordering::Release);
+        assert!(output.request_reopen());
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while output.device_status() != AudioDeviceStatus::NotAttempted
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(output.device_status(), AudioDeviceStatus::NotAttempted);
+        assert_eq!(output.stream_failures(), 0);
+        assert_eq!(output.stream_recoveries(), 0);
     }
 
     #[test]

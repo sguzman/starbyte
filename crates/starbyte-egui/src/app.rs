@@ -748,6 +748,7 @@ struct FullLibraryWorker {
     /// a completed older write must not replace the new game's status.
     pending_screenshot_writes: Vec<(Option<u64>, Option<u64>, Receiver<Result<PathBuf, String>>)>,
     pending_speaker_checks: Vec<(Option<u64>, Option<u64>, Receiver<Result<(), String>>)>,
+    pending_audio_reopens: Vec<(Option<u64>, Option<u64>, Receiver<Result<(), String>>)>,
     pending_sound_diagnostics: Option<(
         Option<u64>,
         Receiver<Result<SessionSoundDiagnostics, String>>,
@@ -1364,6 +1365,7 @@ impl StarbyteApp {
                 pending_screenshots: Vec::new(),
                 pending_screenshot_writes: Vec::new(),
                 pending_speaker_checks: Vec::new(),
+                pending_audio_reopens: Vec::new(),
                 pending_sound_diagnostics: None,
                 pending_step: None,
                 last_focus: None,
@@ -1520,6 +1522,20 @@ impl StarbyteApp {
             }
         }
         worker.pending_speaker_checks = waiting_tones;
+        let mut completed_reopens = Vec::new();
+        let mut waiting_reopens = Vec::new();
+        for (generation, selection, reply) in std::mem::take(&mut worker.pending_audio_reopens) {
+            match reply.try_recv() {
+                Ok(result) => completed_reopens.push((generation, selection, result)),
+                Err(TryRecvError::Empty) => waiting_reopens.push((generation, selection, reply)),
+                Err(TryRecvError::Disconnected) => completed_reopens.push((
+                    generation,
+                    selection,
+                    Err("Audio route request worker stopped".to_owned()),
+                )),
+            }
+        }
+        worker.pending_audio_reopens = waiting_reopens;
         let completed_sound =
             if let Some((generation, response)) = worker.pending_sound_diagnostics.take() {
                 match response.try_recv() {
@@ -1856,6 +1872,24 @@ impl StarbyteApp {
             self.status_line = match result {
                 Ok(()) => "440 Hz worker tone submitted (audibility unverified).".to_owned(),
                 Err(error) => format!("Worker speaker check failed: {error}"),
+            };
+        }
+        for (generation, selection, result) in completed_reopens {
+            if !worker_async_feedback_is_current(
+                generation,
+                self.worker_active_launch_id,
+                selection,
+                self.latest_rom_job_id,
+                self.full_worker
+                    .as_ref()
+                    .is_some_and(|worker| !worker.pending_launches.is_empty()),
+            ) {
+                continue;
+            }
+            self.status_line = match result {
+                Ok(()) => "Audio route reset queued; next PCM or speaker check will reopen it."
+                    .to_owned(),
+                Err(error) => format!("Audio route reset failed: {error}"),
             };
         }
         if let Some((generation, Ok(sound))) = completed_sound
@@ -3439,6 +3473,38 @@ impl StarbyteApp {
                     .map_or(0, AudioOutput::stream_recoveries)
             },
         ));
+        let can_reopen = if let Some(worker) = &self.full_worker {
+            self.worker_audio.device_status.is_some() && worker.pending_audio_reopens.is_empty()
+        } else {
+            self.audio_output.is_some()
+        };
+        if ui
+            .add_enabled(can_reopen, egui::Button::new("Reselect desktop audio output"))
+            .on_hover_text(
+                "Release the existing Rodio/CPAL output route even if the OS never reported a stream fault. The next fresh game PCM or game-worker speaker check will open the current default output. This is not an audibility test.",
+            )
+            .clicked()
+        {
+            if let Some(worker) = &mut self.full_worker {
+                match worker.engine.queue_audio_reopen() {
+                    Ok(reply) => {
+                        worker.pending_audio_reopens.push((
+                            self.worker_active_launch_id,
+                            self.latest_rom_job_id,
+                            reply,
+                        ));
+                        self.status_line = "Requesting desktop audio route reset...".to_owned();
+                    }
+                    Err(error) => self.status_line = format!("Audio route reset failed: {error}"),
+                }
+            } else if let Some(output) = &self.audio_output {
+                self.status_line = if output.request_reopen() {
+                    "Audio route reset queued; next PCM or speaker check will reopen it.".to_owned()
+                } else {
+                    "Audio worker queue busy; output route was not reset.".to_owned()
+                };
+            }
+        }
         ui.label(format!(
             "Mixer empty before next game PCM: {} (possible playback gaps, not speaker proof)",
             if self.full_worker.is_some() {

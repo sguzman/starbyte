@@ -405,6 +405,21 @@ impl OwnedSession {
         }
     }
 
+    /// A CPAL device can be silently left on an obsolete route after a
+    /// default-output change. Reset only the live audio output, without
+    /// touching the emulator, SRAM, or current cartridge.
+    pub fn request_audio_reopen(&mut self) -> Result<(), String> {
+        let audio = self
+            .audio
+            .as_ref()
+            .ok_or_else(|| "No game-audio output has been started yet".to_owned())?;
+        if audio.request_reopen() {
+            Ok(())
+        } else {
+            Err("Audio worker queue is full; try reselecting output again".to_owned())
+        }
+    }
+
     /// Explicitly request the native Rodio speaker check from the same
     /// worker that consumes game PCM. A muted or disabled game must never
     /// produce an unexpected test tone.
@@ -746,6 +761,13 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
 
     pub fn queue_speaker_check(&self) -> Result<Receiver<Result<(), String>>, String> {
         self.submit_transaction(|engine| engine.speaker_check())
+    }
+
+    /// Route re-selection runs asynchronously on the exclusive SNES owner
+    /// and then on the separate audio thread. Receipt means queued only;
+    /// it does not claim that OS opening or speaker audibility succeeded.
+    pub fn queue_audio_reopen(&self) -> Result<Receiver<Result<(), String>>, String> {
+        self.submit_transaction(|engine| engine.request_audio_reopen())
     }
 
     pub fn configure_playback_speed(

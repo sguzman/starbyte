@@ -11,7 +11,7 @@ use gilrs::{Axis, EventType, GamepadId, Gilrs};
 use starbyte_core::input::ControllerState;
 
 use crate::{
-    app::{discard_gamepad_backlog, input_actions, set_controller_flag},
+    app::{cached_connected_gamepads, discard_gamepad_backlog, input_actions, set_controller_flag},
     session_engine::controller_from_bits,
 };
 
@@ -147,6 +147,27 @@ impl PreviewGamepads {
             }
         }
 
+        if discard_backlog && focused {
+            // Freshly resynchronize physical held state after consuming all
+            // old events; never manufacture a press edge from stale traffic.
+            if let Some(gilrs) = &self.gilrs {
+                for state in cached_connected_gamepads(gilrs) {
+                    let axes = ControllerAxes {
+                        left: Stick {
+                            x: state.left.0,
+                            y: state.left.1,
+                        },
+                        dpad: Stick {
+                            x: state.dpad.0,
+                            y: state.dpad.1,
+                        },
+                    };
+                    self.held_by_id.insert(state.id, state.held);
+                    self.virtual_by_id.insert(state.id, axes.virtual_dpad());
+                    self.sticks_by_id.insert(state.id, axes);
+                }
+            }
+        }
         if !focused {
             return (ControllerState::default(), ControllerState::default());
         }

@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::Result;
 use eframe::egui::{self, ColorImage, RichText, TextureHandle, TextureOptions, Vec2};
-use gilrs::{Axis, EventType, GamepadId, Gilrs};
+use gilrs::{Axis, Button, EventType, GamepadId, Gilrs};
 use image::ImageReader;
 use tracing::{debug, info, warn};
 
@@ -77,6 +77,69 @@ pub(crate) fn discard_gamepad_backlog(
     now: Instant,
 ) -> bool {
     !window_focused || now.saturating_duration_since(last_poll) >= GAMEPAD_STALE_POLL_INTERVAL
+}
+
+/// Reconstruct only the controller's *current* state after draining old
+/// Gilrs events on an off-workspace return. An old tap that was also
+/// released while away must not become a fresh press edge.
+#[derive(Clone)]
+pub(crate) struct CachedGamepad {
+    pub id: GamepadId,
+    pub held: BTreeSet<String>,
+    pub left: (f32, f32),
+    pub right: (f32, f32),
+    pub dpad: (f32, f32),
+}
+
+fn cached_button_names(mut is_pressed: impl FnMut(Button) -> bool) -> BTreeSet<String> {
+    // All named Gilrs button variants except Unknown (which panics in
+    // Gamepad::is_pressed). Keep this list independent of per-game bindings.
+    const BUTTONS: [Button; 19] = [
+        Button::South,
+        Button::East,
+        Button::North,
+        Button::West,
+        Button::C,
+        Button::Z,
+        Button::LeftTrigger,
+        Button::LeftTrigger2,
+        Button::RightTrigger,
+        Button::RightTrigger2,
+        Button::Select,
+        Button::Start,
+        Button::Mode,
+        Button::LeftThumb,
+        Button::RightThumb,
+        Button::DPadUp,
+        Button::DPadDown,
+        Button::DPadLeft,
+        Button::DPadRight,
+    ];
+    BUTTONS
+        .into_iter()
+        .filter(|&button| is_pressed(button))
+        .map(|button| format!("{button:?}"))
+        .collect()
+}
+
+pub(crate) fn cached_connected_gamepads(gilrs: &Gilrs) -> Vec<CachedGamepad> {
+    gilrs
+        .gamepads()
+        .filter(|(_, gamepad)| gamepad.is_connected())
+        .map(|(id, gamepad)| CachedGamepad {
+            id,
+            held: cached_button_names(|button| gamepad.is_pressed(button)),
+            left: (
+                gamepad.value(Axis::LeftStickX),
+                gamepad.value(Axis::LeftStickY),
+            ),
+            right: (
+                gamepad.value(Axis::RightStickX),
+                gamepad.value(Axis::RightStickY),
+            ),
+            dpad: (gamepad.value(Axis::DPadX), gamepad.value(Axis::DPadY)),
+        })
+        .collect()
 }
 
 /// Keep short button-press edges separate from physical held state. The
@@ -3040,6 +3103,35 @@ impl StarbyteApp {
             self.gamepad_right_sticks_by_id.clear();
             self.gamepad_hat_axes_by_id.clear();
             self.captured_gamepad_inputs.clear();
+            if window_focused {
+                // A key still physically down on return is held, but it is
+                // not a new press edge. A tap completed while hidden is gone.
+                for state in cached_connected_gamepads(gilrs) {
+                    self.gamepad_buttons_by_id.insert(state.id, state.held);
+                    self.gamepad_sticks_by_id.insert(
+                        state.id,
+                        StickAxes {
+                            x: state.left.0,
+                            y: state.left.1,
+                        },
+                    );
+                    self.gamepad_right_sticks_by_id.insert(
+                        state.id,
+                        StickAxes {
+                            x: state.right.0,
+                            y: state.right.1,
+                        },
+                    );
+                    self.gamepad_hat_axes_by_id.insert(
+                        state.id,
+                        StickAxes {
+                            x: state.dpad.0,
+                            y: state.dpad.1,
+                        },
+                    );
+                }
+                self.refresh_gamepad_buttons_down();
+            }
             return;
         }
         let mut new_binding: Option<(String, String)> = None;
@@ -3179,6 +3271,10 @@ impl StarbyteApp {
                 _ => {}
             }
         }
+        self.refresh_gamepad_buttons_down();
+    }
+
+    fn refresh_gamepad_buttons_down(&mut self) {
         let mut by_id = self.gamepad_buttons_by_id.clone();
         for (id, stick) in &self.gamepad_sticks_by_id {
             by_id.entry(*id).or_default().extend(stick.dpad_buttons());
@@ -8903,6 +8999,27 @@ mod playback_tests {
         assert!(pressed.contains("DPadUp"));
         assert!(pressed.contains("DPadLeft"));
         assert_eq!(pressed.len(), 3);
+    }
+
+    #[test]
+    fn resynced_gamepad_buttons_are_only_currently_held_not_queued_taps() {
+        use gilrs::Button;
+        let active = std::collections::BTreeSet::from([
+            Button::South,
+            Button::DPadRight,
+        ]);
+        let held = super::cached_button_names(|button| active.contains(&button));
+        assert_eq!(
+            held,
+            std::collections::BTreeSet::from([
+                "South".to_owned(),
+                "DPadRight".to_owned(),
+            ])
+        );
+        // A completed hidden-workspace press/release is absent from the
+        // current snapshot, so restoring held state cannot replay it.
+        assert!(!held.contains("Start"));
+        assert!(!held.contains("Unknown"));
     }
 
     #[test]

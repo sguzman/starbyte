@@ -1,0 +1,28 @@
+name: native Hyprland acceptance
+
+# Only an authorized dispatch may use the owner's machine. In particular,
+# public pull requests and arbitrary pushes must NEVER execute on a self-
+# hosted runner attached to an interactive desktop.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: starbyte-native-hyprland
+  cancel-in-progress: false
+
+jobs:
+  physical:
+    if: github.repository == 'sguzman/starbyte'
+    runs-on: [self-hosted, linux, x64, hyprland]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout the requested trusted revision
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build and run physical workspace acceptance
+        shell: bash
+        run: bash scripts/qa-native-hyprland.sh

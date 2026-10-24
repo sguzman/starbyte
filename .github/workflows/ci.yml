@@ -21,6 +21,8 @@ jobs:
       # formatter failures should surface early during rapid main updates.
       - name: Format
         run: cargo fmt --all -- --check
+      - name: Verify unattended physical-QA launcher syntax
+        run: bash -n scripts/qa-native-hyprland.sh
       - name: Install Linux dependencies
         run: sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libudev-dev libasound2-dev
       - uses: Swatinem/rust-cache@v2

@@ -270,6 +270,14 @@ impl AudioOutput {
     }
 }
 
+/// Report callback failures with an atomic flag; the realtime CPAL thread
+/// must never try to reopen devices, block, or allocate diagnostics.
+fn signal_stream_failure(failed: Arc<AtomicBool>) -> impl FnMut(rodio::cpal::StreamError) + Clone {
+    move |_error| {
+        failed.store(true, Ordering::Release);
+    }
+}
+
 /// Keep the mixer sink alive before releasing its backing output stream.
 struct PlaybackDevice {
     sink: Sink,
@@ -282,13 +290,7 @@ struct PlaybackDevice {
 impl PlaybackDevice {
     fn open_default() -> Result<Self> {
         let stream_failed = Arc::new(AtomicBool::new(false));
-        let on_error = {
-            let failed = Arc::clone(&stream_failed);
-            move |_error: rodio::cpal::StreamError| {
-                // Never allocate, log or reopen a device on the CPAL callback.
-                failed.store(true, Ordering::Release);
-            }
-        };
+        let on_error = signal_stream_failure(Arc::clone(&stream_failed));
         // Preserve Rodio's default-device, alternate-configuration and
         // fallback-output search while exposing stream failures to the worker.
         let preferred = OutputStreamBuilder::from_default_device().and_then(|builder| {
@@ -299,20 +301,21 @@ impl PlaybackDevice {
         let mut stream = match preferred {
             Ok(stream) => Ok(stream),
             Err(default_error) => {
-                let fallback = rodio::cpal::default_host()
-                    .output_devices()
-                    .ok()
-                    .and_then(|devices| {
-                        devices.find_map(|device| {
-                            OutputStreamBuilder::from_device(device)
-                                .and_then(|builder| {
-                                    builder
-                                        .with_error_callback(on_error.clone())
-                                        .open_stream_or_fallback()
-                                })
-                                .ok()
-                        })
-                    });
+                let fallback =
+                    rodio::cpal::default_host()
+                        .output_devices()
+                        .ok()
+                        .and_then(|mut devices| {
+                            devices.find_map(|device| {
+                                OutputStreamBuilder::from_device(device)
+                                    .and_then(|builder| {
+                                        builder
+                                            .with_error_callback(on_error.clone())
+                                            .open_stream_or_fallback()
+                                    })
+                                    .ok()
+                            })
+                        });
                 fallback.ok_or(default_error)
             }
         }
@@ -590,7 +593,7 @@ mod tests {
     use std::{
         sync::{
             Arc,
-            atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering},
+            atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering},
             mpsc::sync_channel,
         },
         time::{Duration, Instant},
@@ -815,6 +818,15 @@ mod tests {
         continuity.reset();
         assert!(!continuity.observe_game_pcm(true));
         assert!(continuity.observe_game_pcm(true));
+    }
+
+    #[test]
+    fn stream_failure_callback_signals_recovery_without_a_sound_device() {
+        let failed = Arc::new(AtomicBool::new(false));
+        let mut on_error = super::signal_stream_failure(Arc::clone(&failed));
+        assert!(!failed.load(Ordering::Acquire));
+        on_error(rodio::cpal::StreamError::DeviceNotAvailable);
+        assert!(failed.load(Ordering::Acquire));
     }
 
     #[test]

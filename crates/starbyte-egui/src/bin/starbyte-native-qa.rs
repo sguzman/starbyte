@@ -382,7 +382,9 @@ fn run_probe(
             if String::from_utf8_lossy(&log_bytes).contains(GAP_MARKER) {
                 let result = match fresh_gap_start_at(&log_bytes, SystemTime::now()) {
                     Some(began) => exercise_real_workspace(child.id(), &probe_dir, began),
-                    None => Err("no valid fresh timestamp on the original-window gap marker".into()),
+                    None => {
+                        Err("no valid fresh timestamp on the original-window gap marker".into())
+                    }
                 };
                 if let Err(error) = result {
                     let _ = child.kill();

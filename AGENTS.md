@@ -30,8 +30,9 @@ Starbyte is a **fun-first Rust SNES emulator** targeting **Linux + native Waylan
 When this coding agent runs **inside the owner's actual interactive Hyprland
 session**, run `bash scripts/qa-native-hyprland.sh` itself, without delegating
 terminal, controller or window operations to the owner. It builds the binaries,
-runs the nine synthetic native-window probes plus two genuine physical workspace
-transitions, restores the compositor workspace and keeps raw logs private.
+runs nine isolated native-window smoke probes, one genuine focused-clock
+observation and two real compositor workspace transitions (12/12 total),
+restores the compositor workspace and keeps raw logs private.
 Report actual observed results, not inferred availability.
 
 When orchestrating through GitHub instead, change only

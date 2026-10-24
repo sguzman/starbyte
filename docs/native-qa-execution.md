@@ -10,14 +10,16 @@ physical acceptance workload needs the actual user login session.
 Inside the trusted checkout in the active Hyprland login session, the local
 coding agent runs `bash scripts/qa-native-hyprland.sh`. The script refuses a
 missing Wayland display or Hyprland instance, builds the emulator, tests the QA
-binary itself, then executes all **11** original-window probes, including both
-real compositor workspace transitions. It checks native-Wayland client
+binary itself, then executes **12** probes: nine isolated original-window
+smokes, one focused clock/texture observation and two real compositor
+workspace transitions. It checks native-Wayland client
 identification and restoration to the original workspace.
 
 All raw logs and host information remain in private (0700) local temporary
 directories. There is no public artifact upload and no mutation of the owner's
 normal game configuration or saves. The GitHub Actions log receives only a
-redacted success/failure marker. A failed probe is a failure; it does not
+redacted success/failure marker and identity-free numeric clock/pause receipt
+on full success. A failed probe is a failure; it does not
 authorize production cutover.
 
 ## GitHub dispatch path
@@ -45,16 +47,18 @@ job or generic CI success.
 
 ## Acceptance boundaries
 
-The 11-probe native collector can establish original-window synthetic
-behavior and, when a real local run succeeds, two compositor transitions.
+The 12-probe native collector establishes nine isolated original-window smoke
+results, a focused-clock observation and two compositor transitions, only when
+executed successfully inside the actual local Hyprland session.
 Those do not independently prove that real speakers are audible, that a real
 gamepad's controls reach the SNES port, that a USB/audio device physically
 disconnects and reconnects, or that the production default has safely changed.
 Treat these gate components as **not tested** until evidence has actually
 been collected by dedicated on-host automation.
 
-A successful run publishes only the narrow
-`STARBYTE_NATIVE_QA_OK 11/11` marker in the workflow log; private
+A successful run publishes the narrow
+`STARBYTE_NATIVE_QA_OK 12/12` marker plus a sanitized numeric evidence receipt
+in the workflow log; private
 `results.tsv`, `summary.json`, and compositor receipts remain local. Verify
 the job's Git SHA matches the checkout before attributing anything to a
 commit. The authoritative gate wording and task ledger remain in

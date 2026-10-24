@@ -142,7 +142,11 @@ fn capture_host(root: &Path) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn isolated_probe_command(binary: &Path, probe_dir: &Path, probe: &Probe) -> std::io::Result<Command> {
+fn isolated_probe_command(
+    binary: &Path,
+    probe_dir: &Path,
+    probe: &Probe,
+) -> std::io::Result<Command> {
     let cache = probe_dir.join("cache");
     let xdg_config = probe_dir.join("xdg-config");
     let xdg_cache = probe_dir.join("xdg-cache");
@@ -161,6 +165,9 @@ fn isolated_probe_command(binary: &Path, probe_dir: &Path, probe: &Probe) -> std
         .arg(probe_dir.join("settings.toml"))
         .arg("--cache-dir")
         .arg(&cache)
+        // Disallow an accidental XWayland/X11 fallback. The launcher
+        // inherits the compositor's real Wayland socket but no X display.
+        .env_remove("DISPLAY")
         .env("WINIT_UNIX_BACKEND", "wayland")
         .env("HOME", &isolated_home)
         .env("XDG_CONFIG_HOME", &xdg_config)
@@ -307,12 +314,9 @@ mod tests {
     fn native_runner_isolates_home_as_well_as_xdg_directories() {
         let temp = tempfile::tempdir().unwrap();
         let dir = temp.path().join("synthetic");
-        let command = super::isolated_probe_command(
-            std::path::Path::new("starbyte-egui"),
-            &dir,
-            &PROBES[0],
-        )
-        .unwrap();
+        let command =
+            super::isolated_probe_command(std::path::Path::new("starbyte-egui"), &dir, &PROBES[0])
+                .unwrap();
         let configured: std::collections::HashMap<_, _> = command
             .get_envs()
             .filter_map(|(key, value)| Some((key.to_str()?, value?.to_str()?)))
@@ -327,6 +331,12 @@ mod tests {
             assert!(path.is_dir(), "{key} needs an isolated directory");
         }
         assert_eq!(configured.get("WINIT_UNIX_BACKEND"), Some(&"wayland"));
+        assert!(
+            command
+                .get_envs()
+                .any(|(key, value)| key == "DISPLAY" && value.is_none()),
+            "a native Wayland smoke must not fall back to X11/XWayland"
+        );
     }
 
     #[test]

@@ -79,6 +79,15 @@ for physical in real-workspace-progress real-background-pause; do
   grep -Fq '"starbyte_native_wayland_client": true' "$receipt" || fail "unverified_${physical}_native_client"
 done
 
+# The original-window collector produces a strictly numeric/boolean,
+# identity-free receipt only after every probe succeeds. Raw logs and host
+# metadata remain private; this exact machine-readable line is safe for
+# GitHub job logs and provides the evidence needed to review specific gates.
+[[ -s "$probe_root/public-evidence.json" ]] ||
+  fail 'missing_sanitized_physical_evidence'
+public_evidence="$(sed -n 's/^STARBYTE_NATIVE_PHYSICAL_EVIDENCE=//p' "$local_root/native-qa.log" | tail -n 1)"
+[[ -n "$public_evidence" ]] || fail 'missing_sanitized_physical_evidence_line'
+
 cat >"$local_root/summary.json" <<EOF
 {
   "schema_version": 1,
@@ -96,6 +105,7 @@ EOF
 
 # Only a sanitized, narrowly scoped result reaches the public Actions log.
 printf 'STARBYTE_NATIVE_QA_OK 12/12 commit=%s physical_workspace=2 speaker=not_tested gamepad=not_tested cutover=not_tested\n' "$revision"
+printf 'STARBYTE_NATIVE_PHYSICAL_EVIDENCE=%s\n' "$public_evidence"
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
   {
     printf '### Starbyte physical Hyprland adjunct\n\n'

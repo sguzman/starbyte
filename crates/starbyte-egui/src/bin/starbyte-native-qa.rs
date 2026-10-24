@@ -198,6 +198,115 @@ fn focused_clock_receipt(
     }))
 }
 
+/// Extract only numeric values from the exact original-window success marker.
+/// Never publish arbitrary app log lines or compositor client metadata.
+fn marker_metric<T: std::str::FromStr>(log: &str, marker: &str, key: &str) -> Option<T> {
+    let line = log.lines().find(|line| line.starts_with(marker))?;
+    line.split_whitespace()
+        .find_map(|field| field.strip_prefix(key))?
+        .parse()
+        .ok()
+}
+
+/// A deliberately narrow public result. Full physical evidence, including
+/// local window names, display IDs, device paths and raw logs, remains under
+/// the private output root. This only contains aggregate timing and proof
+/// counters sufficient for an agent to review the clock/pause gates.
+fn sanitized_physical_receipt(root: &Path) -> Result<serde_json::Value, Box<dyn Error>> {
+    let focused: serde_json::Value = serde_json::from_slice(&fs::read(
+        root.join("real-focused-clock/focused-clock-observation.json"),
+    )?)?;
+    let background: serde_json::Value = serde_json::from_slice(&fs::read(
+        root.join("real-workspace-progress/workspace-transition.json"),
+    )?)?;
+    let paused: serde_json::Value = serde_json::from_slice(&fs::read(
+        root.join("real-background-pause/workspace-transition.json"),
+    )?)?;
+    let bg_log = fs::read_to_string(root.join("real-workspace-progress/starbyte.log"))?;
+    let pause_log = fs::read_to_string(root.join("real-background-pause/starbyte.log"))?;
+    let bg_frames: u64 = marker_metric(
+        &bg_log,
+        "STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_OK ",
+        "advanced_frames=",
+    )
+    .ok_or("no physical off-workspace progress receipt")?;
+    let bg_uploaded_frame: u64 = marker_metric(
+        &bg_log,
+        "STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_OK ",
+        "caught_up_frame=",
+    )
+    .ok_or("no post-workspace texture catchup receipt")?;
+    let bg_fps: f64 = marker_metric(
+        &bg_log,
+        "STARBYTE_FULL_LIBRARY_CLOCK_PACING_SMOKE_OK ",
+        "fps=",
+    )
+    .ok_or("no off-workspace owner-clock FPS receipt")?;
+    if !bg_fps.is_finite() || !(48.0..=72.0).contains(&bg_fps) {
+        return Err("invalid off-workspace frame cadence".into());
+    }
+    let pause_metric = |field| {
+        marker_metric::<u64>(
+            &pause_log,
+            "STARBYTE_FULL_LIBRARY_REAL_PAUSE_SMOKE_OK ",
+            field,
+        )
+    };
+    let advanced_away = pause_metric("advanced_away=").ok_or("no paused frame count")?;
+    let suspension_count = pause_metric("suspend_events=").ok_or("no pause event count")?;
+    let resumed_count = pause_metric("resumed_events=").ok_or("no resume event count")?;
+    let resumed_frames = pause_metric("resumed_frames=").ok_or("no resumed frames count")?;
+    let resume_ms = pause_metric("resume_elapsed_ms=").ok_or("no resume elapsed time")?;
+    if suspension_count == 0 || resumed_count == 0 || resumed_frames < 10 || resume_ms < 80 {
+        return Err("insufficient physical pause/resume measurements".into());
+    }
+    for receipt in [&background, &paused] {
+        if receipt["starbyte_native_wayland_client"] != true
+            || receipt["returned_to_original_workspace"] != true
+            || receipt["starbyte_remained_on_original_workspace"] != true
+        {
+            return Err("physical workspace transition evidence incomplete".into());
+        }
+    }
+    if focused["native_wayland_client"] != true
+        || focused["window_retained_keyboard_focus"] != true
+    {
+        return Err("focused window was not confirmed by Hyprland".into());
+    }
+    Ok(serde_json::json!({
+        "schema_version": 1,
+        "kind": "sanitized_physical_hyprland_clock_evidence",
+        "original_window_native_wayland": true,
+        "focused": {
+            "worker_fps": focused["emulator_worker_fps"],
+            "completed_worker_frames": focused["completed_worker_frames"],
+            "texture_frames": focused["presented_texture_frame_delta"],
+            "egui_callbacks": focused["egui_callback_count"],
+            "wall_ms": focused["wall_clock_ms"]
+        },
+        "off_workspace": {
+            "observed_ms": background["off_workspace_observed_ms"],
+            "compositor_samples": background["workspace_observation_samples"],
+            "completed_worker_frames": bg_frames,
+            "owner_fps": bg_fps,
+            "post_return_texture_frame": bg_uploaded_frame
+        },
+        "pause_on_blur": {
+            "observed_ms": paused["off_workspace_observed_ms"],
+            "compositor_samples": paused["workspace_observation_samples"],
+            "advanced_while_away": advanced_away,
+            "suspend_events": suspension_count,
+            "resume_events": resumed_count,
+            "resumed_frames": resumed_frames,
+            "resume_elapsed_ms": resume_ms
+        },
+        "speaker_audibility": "not_tested",
+        "physical_gamepad": "not_tested",
+        "production_cutover": "not_tested",
+        "accepted_gate_updates": "requires_evidence_review"
+    }))
+}
+
 fn require_hyprland() -> Result<(), Box<dyn Error>> {
     for key in ["WAYLAND_DISPLAY", "HYPRLAND_INSTANCE_SIGNATURE"] {
         if env::var(key).map_or(true, |value| value.is_empty()) {
@@ -635,6 +744,20 @@ fn run() -> Result<(), Box<dyn Error>> {
         }
     }
     report.flush()?;
+    // Emit aggregate evidence only after *all* native and physical probes
+    // passed. A local agent can review these metrics through Actions job logs
+    // without revealing physical workspace names, PIDs or personal paths.
+    if physical_workspace && passed == total {
+        let public = sanitized_physical_receipt(&root)?;
+        fs::write(
+            root.join("public-evidence.json"),
+            serde_json::to_vec_pretty(&public)?,
+        )?;
+        println!(
+            "STARBYTE_NATIVE_PHYSICAL_EVIDENCE={}",
+            serde_json::to_string(&public)?
+        );
+    }
     println!(
         "Native Hyprland smoke probes: {passed}/{total} (real workspace opt-in: {physical_workspace})."
     );
@@ -827,6 +950,29 @@ mod tests {
                 "physical pause marker is absent from original egui window: {marker}"
             );
         }
+    }
+
+    #[test]
+    fn sanitized_physical_metrics_only_read_explicit_numeric_success_fields() {
+        let background = "window paths: /home/owner/private-game.sfc\nSTARBYTE_FULL_LIBRARY_CLOCK_PACING_SMOKE_OK advanced_frames=120 fps=60.12 wall_ms=2000\n";
+        let fps: Option<f64> = super::marker_metric(
+            background,
+            "STARBYTE_FULL_LIBRARY_CLOCK_PACING_SMOKE_OK ",
+            "fps=",
+        );
+        assert_eq!(fps, Some(60.12));
+        let invalid: Option<u64> = super::marker_metric(
+            background,
+            "STARBYTE_FULL_LIBRARY_CLOCK_PACING_SMOKE_OK ",
+            "private-game.sfc=",
+        );
+        assert_eq!(invalid, None);
+        let not_ok: Option<f64> = super::marker_metric(
+            "STARBYTE_FULL_LIBRARY_CLOCK_PACING_SMOKE_FAILED fps=60.12",
+            "STARBYTE_FULL_LIBRARY_CLOCK_PACING_SMOKE_OK ",
+            "fps=",
+        );
+        assert_eq!(not_ok, None);
     }
 
     #[test]

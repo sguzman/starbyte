@@ -51,9 +51,7 @@ const PROBES: &[Probe] = &[
     Probe {
         name: "worker-exit",
         args: &["--exit-after-full-worker-panic"],
-        markers: &[
-            "STARBYTE_FULL_LIBRARY_WORKER_EXIT_SMOKE_OK playback_stopped=true",
-        ],
+        markers: &["STARBYTE_FULL_LIBRARY_WORKER_EXIT_SMOKE_OK playback_stopped=true"],
     },
     Probe {
         name: "sram-shutdown",
@@ -135,7 +133,11 @@ fn capture_host(root: &Path) -> Result<(), Box<dyn Error>> {
     if let Ok(output) = Command::new("git").args(["rev-parse", "HEAD"]).output()
         && output.status.success()
     {
-        writeln!(context, "git_commit_of_working_directory={}", String::from_utf8_lossy(&output.stdout).trim())?;
+        writeln!(
+            context,
+            "git_commit_of_working_directory={}",
+            String::from_utf8_lossy(&output.stdout).trim()
+        )?;
     }
     Ok(())
 }
@@ -185,7 +187,11 @@ fn run_probe(
     };
     let output = fs::read_to_string(log_path)?;
     let missing = missing_markers(&output, probe.markers);
-    Ok((exited && missing.is_empty(), started.elapsed().as_millis(), missing))
+    Ok((
+        exited && missing.is_empty(),
+        started.elapsed().as_millis(),
+        missing,
+    ))
 }
 
 fn run() -> Result<(), Box<dyn Error>> {
@@ -217,7 +223,10 @@ fn run() -> Result<(), Box<dyn Error>> {
         .into());
     }
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let root = env::temp_dir().join(format!("starbyte-hyprland-qa-{}-{nonce}", std::process::id()));
+    let root = env::temp_dir().join(format!(
+        "starbyte-hyprland-qa-{}-{nonce}",
+        std::process::id()
+    ));
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
@@ -248,11 +257,12 @@ fn run() -> Result<(), Box<dyn Error>> {
         }
     }
     report.flush()?;
-    println!("Native Hyprland synthetic probes: {passed}/{}.", PROBES.len());
-    println!("Local-only logs and context: {}", root.display());
     println!(
-        "Physical workspace switches, speaker audibility, device unplug/replug,          gamepad movement and production cutover remain NOT TESTED."
+        "Native Hyprland synthetic probes: {passed}/{}.",
+        PROBES.len()
     );
+    println!("Local-only logs and context: {}", root.display());
+    println!("Physical hardware and real workspace acceptance: NOT TESTED.");
     if passed != PROBES.len() {
         return Err("one or more native synthetic probes failed; inspect local logs".into());
     }
@@ -273,9 +283,30 @@ mod tests {
     #[test]
     fn only_explicit_success_markers_pass_a_probe() {
         let markers = &["STARBYTE_FIRST_OK", "STARBYTE_SECOND_OK"];
-        assert_eq!(missing_markers("STARBYTE_FIRST_OK", markers), vec!["STARBYTE_SECOND_OK"]);
+        assert_eq!(
+            missing_markers("STARBYTE_FIRST_OK", markers),
+            vec!["STARBYTE_SECOND_OK"]
+        );
         assert!(missing_markers("STARBYTE_FIRST_OK\nSTARBYTE_SECOND_OK", markers).is_empty());
         assert_eq!(PROBES.len(), 9);
         assert!(PROBES.iter().all(|p| !p.markers.is_empty()));
+    }
+
+    #[test]
+    fn native_probes_require_real_ci_smoke_contract_markers() {
+        let ci = std::fs::read_to_string(format!(
+            "{}/../../.github/workflows/ci.yml",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        for probe in PROBES {
+            for marker in probe.markers {
+                assert!(
+                    ci.contains(marker),
+                    "{} marker is not in the original-window CI contract: {marker}",
+                    probe.name
+                );
+            }
+        }
     }
 }

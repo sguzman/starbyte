@@ -1,5 +1,13 @@
 # Starbyte: current state
 
+## Speaker check distinguishes stopped workers from a full queue (2026-10-24)
+
+A live 440 Hz tone request now reports whether the bounded producer queue is
+full or the playback receiver has exited, instead of describing both as a
+busy queue. The Sound panel directs the user to the existing output
+re-selection action on a stopped worker. Hardware-free channel regressions
+cover both outcomes; no audible speaker verification is claimed.
+
 ## Paused audio output re-selection after playback-thread exit (2026-10-24)
 
 Manual output re-selection now detects a disconnected playback receiver even

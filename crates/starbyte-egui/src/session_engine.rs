@@ -21,7 +21,7 @@ use starbyte_frontend::{
 };
 
 use crate::{
-    audio::{AudioDeviceStatus, AudioOutput},
+    audio::{AudioDeviceStatus, AudioOutput, AudioToneError},
     blackout::BlackScreenMonitor,
     scheduler::{EmulatorScheduler, NTSC_FRAME_INTERVAL},
 };
@@ -477,10 +477,14 @@ impl OwnedSession {
         }
         let audio = self.audio.as_ref().expect("audio initialized above");
         audio.set_volume(self.volume);
-        if audio.enqueue_live_test_tone() {
-            Ok(())
-        } else {
-            Err("Audio worker queue is full; speaker check was not submitted".to_owned())
+        match audio.enqueue_live_test_tone() {
+            Ok(()) => Ok(()),
+            Err(AudioToneError::QueueFull) => {
+                Err("Audio worker queue is full; speaker check was not submitted".to_owned())
+            }
+            Err(AudioToneError::WorkerStopped) => {
+                Err("Audio worker stopped; reselect desktop audio output and retry".to_owned())
+            }
         }
     }
 

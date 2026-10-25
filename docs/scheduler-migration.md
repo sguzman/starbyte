@@ -1,5 +1,15 @@
 # Emulation scheduler migration
 
+## Live speaker-check queue and receiver errors — 2026-10-24
+
+The test-tone enqueue path previously collapsed full producer queues and
+terminated audio-worker receivers into the same false return. Sound UI and
+worker-owned speaker checks now distinguish `QueueFull` from
+`WorkerStopped`, directing a stopped receiver through the already-existing
+manual output re-selection rather than reporting incorrect congestion.
+No hardware audio attempt is made in the new queue regressions. The status
+remains **71/77 (92%)** with physical audio gates pending.
+
 ## Paused manual re-selection after playback-thread exit — 2026-10-24
 
 When a dead receiver left `reopen_pending` set, a second route-change

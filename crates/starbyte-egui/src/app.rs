@@ -13,7 +13,7 @@ use image::ImageReader;
 use tracing::{debug, info, warn};
 
 use crate::{
-    audio::{AudioDeviceStatus, AudioOutput},
+    audio::{AudioDeviceStatus, AudioOutput, AudioToneError},
     blackout::BlackScreenMonitor,
     logging::SharedLogBuffer,
     scheduler::EmulatorScheduler,
@@ -3617,10 +3617,14 @@ impl StarbyteApp {
                     }
                 }
                 if let Some(output) = &self.audio_output {
-                    self.status_line = if output.enqueue_live_test_tone() {
-                        "440 Hz live-worker tone queued. Listen for a short beep.".to_owned()
-                    } else {
-                        "Live-worker audio queue busy; tone not submitted. Try once more.".to_owned()
+                    self.status_line = match output.enqueue_live_test_tone() {
+                        Ok(()) => "440 Hz live-worker tone queued. Listen for a short beep.".to_owned(),
+                        Err(AudioToneError::QueueFull) => {
+                            "Live-worker audio queue busy; tone not submitted. Try once more.".to_owned()
+                        }
+                        Err(AudioToneError::WorkerStopped) => {
+                            "Audio worker stopped; reselect desktop audio output and retry the speaker check.".to_owned()
+                        }
                     };
                 }
             }

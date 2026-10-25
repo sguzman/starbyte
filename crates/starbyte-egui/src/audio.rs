@@ -64,6 +64,14 @@ impl AudioDeviceStatus {
     }
 }
 
+/// Distinguish ordinary bounded backlog from an exited playback receiver.
+/// Neither result proves anything about an OS speaker or audible output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioToneError {
+    QueueFull,
+    WorkerStopped,
+}
+
 enum AudioMessage {
     Frame {
         generation: u64,
@@ -214,13 +222,15 @@ impl AudioOutput {
     /// Request a quarter-second, gentle 440 Hz beep through the same audio
     /// device, stream, sink and volume as the running game. Nonblocking; the
     /// worker briefly suppresses game PCM so queue trimming cannot cut it off.
-    pub fn enqueue_live_test_tone(&self) -> bool {
-        self.sender
-            .try_send(AudioMessage::TestTone {
-                generation: self.generation.load(Ordering::Acquire),
-                queued_at: Instant::now(),
-            })
-            .is_ok()
+    pub fn enqueue_live_test_tone(&self) -> std::result::Result<(), AudioToneError> {
+        match self.sender.try_send(AudioMessage::TestTone {
+            generation: self.generation.load(Ordering::Acquire),
+            queued_at: Instant::now(),
+        }) {
+            Ok(()) => Ok(()),
+            Err(mpsc::TrySendError::Full(_)) => Err(AudioToneError::QueueFull),
+            Err(mpsc::TrySendError::Disconnected(_)) => Err(AudioToneError::WorkerStopped),
+        }
     }
 
     /// Game buffers rejected by the full nonblocking UI-to-worker queue.
@@ -358,10 +368,11 @@ impl AudioOutput {
     pub fn test_speakers() -> Result<()> {
         let output = Self::start()?;
         output.set_volume(1.0);
-        anyhow::ensure!(
-            output.enqueue_live_test_tone(),
-            "speaker-test worker queue is full"
-        );
+        match output.enqueue_live_test_tone() {
+            Ok(()) => {}
+            Err(AudioToneError::QueueFull) => anyhow::bail!("speaker-test worker queue is full"),
+            Err(AudioToneError::WorkerStopped) => anyhow::bail!("speaker-test worker has stopped"),
+        }
         let started = Instant::now();
         loop {
             if output.test_tones_submitted() > 0 {
@@ -1022,6 +1033,10 @@ mod tests {
             stream_recoveries: Arc::new(AtomicU64::new(0)),
         };
         assert!(output.enqueue(&[123, -123], 1.0, 1.0));
+        assert_eq!(
+            output.enqueue_live_test_tone(),
+            Err(super::AudioToneError::QueueFull)
+        );
         assert!(
             output.request_reopen(),
             "route reset must not need a free PCM slot"
@@ -1046,6 +1061,11 @@ mod tests {
         assert!(receiver.try_recv().is_err());
         assert_eq!(output.stream_failures(), 0);
         assert_eq!(output.stream_recoveries(), 0);
+        drop(receiver);
+        assert_eq!(
+            output.enqueue_live_test_tone(),
+            Err(super::AudioToneError::WorkerStopped)
+        );
     }
 
     #[test]
@@ -1178,7 +1198,7 @@ mod tests {
             stream_failures: Arc::new(AtomicU64::new(0)),
             stream_recoveries: Arc::new(AtomicU64::new(0)),
         };
-        assert!(output.enqueue_live_test_tone());
+        assert!(output.enqueue_live_test_tone().is_ok());
         match receiver.try_recv().unwrap() {
             AudioMessage::TestTone { generation, .. } => assert_eq!(generation, 3),
             _ => panic!("the dedicated tone must travel through the live worker"),

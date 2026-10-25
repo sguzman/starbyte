@@ -81,10 +81,21 @@ advertise both `wl_compositor` and `wl_seat` and reports fixed diagnostic
 categories on failure. No raw compositor logs or personal files are
 uploaded, and native physical-QA fail-closed guards are unchanged.
 
-This probe is **not accepted until its hosted CI job passes**. A
-runner-packaged Hyprland version different from the owner's 0.56.2
-cannot establish exact-version parity; a successful virtual compositor
-cannot establish physical focus, audible audio, gamepad input, or the
+This probe is **not accepted until its hosted CI job passes**.
+[Run 40242678493](https://github.com/sguzman/starbyte/actions/runs/40242678493)
+confirmed guest Weston, DRM, udev keyboard and focused Escape, but Hyprland
+exited before publishing a Wayland socket. Its documented root privilege
+override was applied **inside the VM only**.
+[Run 40243105431](https://github.com/sguzman/starbyte/actions/runs/40243105431)
+then observed a live Hyprland process and private Wayland socket, but no
+confirmed `wl_compositor` / `wl_seat` registry roundtrip; a bounded
+configuration-error category was also present. The next test separately
+verifies config parsing and retries protocol registry synchronization.
+Neither failed run is an accepted Hyprland compositor gate.
+
+A runner-packaged Hyprland version different from the owner's 0.56.2
+cannot establish exact-version parity; even a successful virtual compositor
+cannot establish physical focus, audible audio, gamepad input or the
 production-default worker cutover. All six scheduler gates remain open.
 
 ## Safe QA today

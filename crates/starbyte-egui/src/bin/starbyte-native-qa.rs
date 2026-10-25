@@ -1022,6 +1022,8 @@ mod tests {
             "test -z \"${SYSTEMD_EXEC_PID-}\"",
             "test ! -e /tmp/.X11-unix",
             "--hyprland-headless-smoke",
+            "--hyprland-nested-smoke",
+            "--ro-bind "$nested_supervisor" /run/user/qa/nested-supervisor",
             "--setenv HYPRLAND_NO_SD_VARS 1",
             "--setenv HYPRLAND_NO_SD_TARGET 1",
             "--setenv HYPRLAND_NO_RT 1",
@@ -1063,6 +1065,33 @@ mod tests {
         assert!(harness.contains("--setenv STARBYTE_HYPRCTL_BIN"));
         assert!(harness.contains("\"$STARBYTE_HYPRCTL_BIN\""));
         assert!(!harness.contains("XDG_SESSION_BUS_ADDRESS"));
+    }
+
+    #[test]
+    fn nested_hyprland_probe_cannot_reach_owner_session_or_claim_physical_acceptance() {
+        let supervisor = include_str!("../../../../scripts/qa-hyprland-nested-inside.sh");
+        for guard in [
+            "[[ "${XDG_RUNTIME_DIR:-}" == /run/user/qa ]]",
+            "[[ "${WAYLAND_DISPLAY:-}" == starbyte-qa-wayland ]]",
+            "[[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]",
+            "[[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]]",
+            "[[ ! -e /dev/input && ! -e /dev/dri ]]",
+            "STARBYTE_NESTED_PARENT_OK",
+            "hyprland.lua",
+            "--backend=headless --renderer=pixman",
+            "nested_process_identity_mismatch",
+            "nested_wayland_backend_unverified",
+            "private_hyprland_ipc_failed",
+            "STARBYTE_NESTED_HYPRLAND_TORN_DOWN",
+            "trap cleanup EXIT",
+            "stop_child "$hypr_pid"",
+            "stop_child "$weston_pid"",
+        ] {
+            assert!(supervisor.contains(guard), "missing nested isolation guard: {guard}");
+        }
+        assert!(!supervisor.contains("hyprctl dispatch workspace"));
+        assert!(!supervisor.contains("--physical-workspace"));
+        assert!(!supervisor.contains("starbyte-egui --"));
     }
 
     #[test]

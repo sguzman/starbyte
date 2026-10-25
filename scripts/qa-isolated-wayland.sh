@@ -10,8 +10,8 @@ fail() {
 }
 
 mode="${1:-}"
-[[ $# -eq 1 && ( "$mode" == --check-only || "$mode" == --weston-smoke || "$mode" == --hyprland-headless-smoke ) ]] \
-  || fail 'usage: --check-only|--weston-smoke|--hyprland-headless-smoke'
+[[ $# -eq 1 && ( "$mode" == --check-only || "$mode" == --weston-smoke || "$mode" == --hyprland-headless-smoke || "$mode" == --hyprland-nested-smoke ) ]] \
+  || fail 'usage: --check-only|--weston-smoke|--hyprland-headless-smoke|--hyprland-nested-smoke'
 command -v bwrap >/dev/null 2>&1 || fail 'missing_bubblewrap'
 command -v timeout >/dev/null 2>&1 || fail 'missing_timeout'
 command -v realpath >/dev/null 2>&1 || fail 'missing_realpath'
@@ -26,7 +26,7 @@ package_root=''
 weston_module_map=''
 hyprland_bin=''
 hyprctl_bin=''
-if [[ "$mode" == --weston-smoke ]]; then
+if [[ "$mode" == --weston-smoke || "$mode" == --hyprland-nested-smoke ]]; then
   if [[ -n "${STARBYTE_WESTON_PACKAGE_ROOT:-}" ]]; then
     package_root="$(realpath -e -- "$STARBYTE_WESTON_PACKAGE_ROOT")" \
       || fail 'weston_package_root_missing'
@@ -51,7 +51,7 @@ if [[ "$mode" == --weston-smoke ]]; then
       || fail 'weston_binaries_must_be_under_usr'
   fi
 fi
-if [[ "$mode" == --hyprland-headless-smoke ]]; then
+if [[ "$mode" == --hyprland-headless-smoke || "$mode" == --hyprland-nested-smoke ]]; then
   command -v Hyprland >/dev/null 2>&1 || fail 'hyprland_not_installed'
   command -v hyprctl >/dev/null 2>&1 || fail 'hyprctl_not_installed'
   hyprland_bin="$(realpath -e -- "$(command -v Hyprland)")"
@@ -266,6 +266,29 @@ if [[ -n "$weston_module_map" ]]; then
     --setenv LD_LIBRARY_PATH /run/user/qa/package/usr/lib:/run/user/qa/package/usr/lib/weston
     --setenv WESTON_DATA_DIR /run/user/qa/package/usr/share/weston
   )
+fi
+
+if [[ "$mode" == --hyprland-nested-smoke ]]; then
+  # Mount only this reviewed supervisor as a read-only file. No host config,
+  # display socket, input device, DRM node or audio route enters the sandbox.
+  nested_supervisor="$(realpath -e -- "$(dirname -- "${BASH_SOURCE[0]}")/qa-hyprland-nested-inside.sh")" \
+    || fail 'nested_supervisor_missing'
+  : >"$runtime_root/nested-supervisor"
+  timeout --signal=TERM --kill-after=2s 20s \
+    bwrap "${common[@]}" "${weston_bindings[@]}" "${weston_environment[@]}" \
+      --ro-bind "$nested_supervisor" /run/user/qa/nested-supervisor \
+      --setenv STARBYTE_HYPRLAND_BIN "$hyprland_bin" \
+      --setenv STARBYTE_HYPRCTL_BIN "$hyprctl_bin" \
+      --setenv HYPRLAND_NO_SD_VARS 1 \
+      --setenv HYPRLAND_NO_SD_TARGET 1 \
+      --setenv HYPRLAND_NO_RT 1 \
+      --setenv HYPRLAND_NO_CRASHREPORTER 1 \
+      --setenv LIBGL_ALWAYS_SOFTWARE 1 \
+      --setenv MESA_LOADER_DRIVER_OVERRIDE llvmpipe \
+      /usr/bin/bash /run/user/qa/nested-supervisor \
+    || fail 'nested_hyprland_smoke_unverified_or_failed'
+  printf 'STARBYTE_ISOLATED_NESTED_HYPRLAND_SMOKE_OK backend=wayland private_ipc=verified input_seat=not_tested\n'
+  exit 0
 fi
 
 # The compositor and client share only this namespace and socket. They have no

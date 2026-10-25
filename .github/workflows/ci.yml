@@ -23,6 +23,8 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Verify unattended physical-QA launcher syntax
         run: bash -n scripts/qa-native-hyprland.sh
+      - name: Verify isolated and nested QA supervisor syntax
+        run: bash -n scripts/qa-isolated-wayland.sh scripts/qa-hyprland-nested-inside.sh
       - name: Verify unattended GUI QA is fail-closed
         shell: bash
         run: |

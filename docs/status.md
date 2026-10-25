@@ -1,5 +1,19 @@
 # Starbyte: current state
 
+## Private Weston → Hyprland nested-backend QA scaffold (2026-10-25)
+
+The isolated Wayland harness now has a separate opt-in
+`--hyprland-nested-smoke` attempt, adding a Lua-configured Hyprland client
+inside the existing Bubblewrap-only Weston headless/Pixman namespace. A
+second supervisor verifies the complete absence of host input, DRM,
+display and session sockets before launching either compositor; it then
+requires a process-matched private Hyprland lock, private IPC, a Wayland
+backend log receipt, and bounded cleanup. The native GUI collector and
+focus-sensitive wrapper remain deliberately blocked. CI checks shell
+syntax and static isolation/teardown invariants, **not** a real nested
+compositor startup, virtual-keyboard input, or physical Hyprland hardware.
+All six physical/cutover scheduler gates remain open: **71/77 (92%)**.
+
 ## Account for game PCM lost while the output device is unavailable (2026-10-25)
 
 When Rodio had no usable OS output, accepted nonzero SNES game PCM fell

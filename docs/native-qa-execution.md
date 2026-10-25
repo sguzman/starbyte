@@ -22,6 +22,29 @@ leave that user's single-seat interactive session uninterrupted. New
 without a focus change, but that would not satisfy the focused-window
 requirement by itself.
 
+## Private nested Hyprland backend probe (2026-10-25, implementation only)
+
+Added opt-in `bash scripts/qa-isolated-wayland.sh --hyprland-nested-smoke`.
+This starts Weston headless/Pixman inside the existing Bubblewrap sandbox,
+then attempts a nested Hyprland Lua-configured Wayland client, with a wholly
+private Wayland socket, instance lock and IPC namespace. The child supervisor
+rejects inherited desktop/session variables, input/DRM nodes and host
+session sockets before launching either compositor. It requires proof of
+the Wayland backend in startup logs and independently checks private
+Hyprland PID, Wayland socket, IPC and virtual monitor discovery. All child
+processes are reaped on exits, failures or timeouts; the outer run is bounded
+by 20 seconds. A failure cannot fall back to the owner's compositor.
+The old physical QA wrapper and collector remain fail-closed.
+
+**This is source-level preparation, not a successful nested compositor run**:
+there is no host run evidence that Hyprland can render without a visible DRM
+node in this sandbox, no private virtual-keyboard seat has been exercised,
+and no real Starbyte window has been launched. The probe must not be
+treated as a new accepted P-18/P-19/D-12/D-13/D-15/C-16 gate. Only the
+existing trusted Weston package extraction path or installed Weston
+binaries may supply the parent compositor. The nested path does not
+install host packages or change the owner's active session.
+
 ## Safe QA today
 
 An authorized local Codex executor may run:

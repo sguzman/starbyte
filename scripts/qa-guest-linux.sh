@@ -778,13 +778,22 @@ HYPR_CONFIG
       hypr_focus_compositor_alive=0
       hypr_focus_status=not_run
       if [ "$hypr_registry" = 1 ]; then
-        WAYLAND_DISPLAY="$hypr_display" \
+        WAYLAND_DEBUG=client WAYLAND_DISPLAY="$hypr_display" \
           /usr/bin/weston-simple-shm >/tmp/hypr-focus.log 2>/tmp/hypr-focus.err &
         hypr_focus_pid=$!
-        /bin/busybox sleep 3
-        if /bin/busybox kill -0 "$hypr_focus_pid" 2>/dev/null; then
-          hypr_focus_ready=1
-          echo 'STARBYTE_GUEST_HYPR_FOCUS_READY client=weston-simple-shm alive=1' >/dev/console
+        # Only report readiness after wl_keyboard.enter, rather than a
+        # fixed three-second liveness check on an unfocused window.
+        for focus_probe in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+          if /bin/busybox grep -Eq 'wl_keyboard@[0-9]+\.enter\(' /tmp/hypr-focus.err 2>/dev/null &&
+             /bin/busybox kill -0 "$hypr_focus_pid" 2>/dev/null; then
+            hypr_focus_ready=1
+            echo 'STARBYTE_GUEST_HYPR_FOCUS_READY client=weston-simple-shm alive=1' >/dev/console
+            break
+          fi
+          if ! /bin/busybox kill -0 "$hypr_focus_pid" 2>/dev/null; then break; fi
+          /bin/busybox sleep 1
+        done
+        if [ "$hypr_focus_ready" = 1 ]; then
           for focus_wait in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do
             if /bin/busybox grep -Fq 'simple-shm exiting' /tmp/hypr-focus.err; then break; fi
             if ! /bin/busybox kill -0 "$hypr_focus_pid" 2>/dev/null; then break; fi
@@ -808,6 +817,10 @@ HYPR_CONFIG
       hypr_focus_xdg=0
       hypr_focus_shm=0
       hypr_focus_surface=0
+      hypr_focus_keyboard_enter=0
+      hypr_focus_keyboard_requested=0
+      hypr_focus_xdg_configure=0
+      hypr_focus_shm_advertised=0
       if [ -s /tmp/hypr-focus.log ]; then hypr_focus_stdout=1; fi
       if [ -s /tmp/hypr-focus.err ]; then hypr_focus_stderr=1; fi
       for log in /tmp/hypr-focus.log /tmp/hypr-focus.err; do
@@ -818,8 +831,12 @@ HYPR_CONFIG
         if /bin/busybox grep -Eiq 'xdg_wm_base|xdg_surface|xdg_toplevel|xdg-shell' "$log"; then hypr_focus_xdg=1; fi
         if /bin/busybox grep -Eiq 'wl_shm|shared memory|shm.*failed' "$log"; then hypr_focus_shm=1; fi
         if /bin/busybox grep -Eiq 'failed to.*(surface|window)|surface.*failed|failed.*buffer' "$log"; then hypr_focus_surface=1; fi
+        if /bin/busybox grep -Eq 'wl_keyboard@[0-9]+\.enter\(' "$log"; then hypr_focus_keyboard_enter=1; fi
+        if /bin/busybox grep -Eq 'wl_seat@[0-9]+\.get_keyboard\(' "$log"; then hypr_focus_keyboard_requested=1; fi
+        if /bin/busybox grep -Eq 'xdg_toplevel@[0-9]+\.configure\(' "$log"; then hypr_focus_xdg_configure=1; fi
+        if /bin/busybox grep -Eq 'wl_registry@[0-9]+\.global.*wl_shm' "$log"; then hypr_focus_shm_advertised=1; fi
       done
-      echo "STARBYTE_GUEST_HYPR_FOCUS_DIAG status=$hypr_focus_status stdout=$hypr_focus_stdout stderr=$hypr_focus_stderr connect=$hypr_focus_connect library=$hypr_focus_library protocol=$hypr_focus_protocol xdg=$hypr_focus_xdg shm=$hypr_focus_shm surface=$hypr_focus_surface" >/dev/console
+      echo "STARBYTE_GUEST_HYPR_FOCUS_DIAG status=$hypr_focus_status stdout=$hypr_focus_stdout stderr=$hypr_focus_stderr connect=$hypr_focus_connect library=$hypr_focus_library protocol=$hypr_focus_protocol xdg=$hypr_focus_xdg shm=$hypr_focus_shm surface=$hypr_focus_surface keyboard_enter=$hypr_focus_keyboard_enter keyboard_requested=$hypr_focus_keyboard_requested xdg_configure=$hypr_focus_xdg_configure shm_advertised=$hypr_focus_shm_advertised" >/dev/console
       echo "STARBYTE_GUEST_HYPR_FOCUS_RESULT ready=$hypr_focus_ready clean_exit=$hypr_focus_clean exit_message=$hypr_focus_message hyprland_alive=$hypr_focus_compositor_alive" >/dev/console
       if /bin/busybox kill -0 "$hypr_pid" 2>/dev/null; then hypr_alive=1; fi
       for log in /tmp/hyprland.log /tmp/hyprland.err; do
@@ -867,6 +884,13 @@ HYPR_CONFIG
       hypr_app_render=0
       hypr_app_permission=0
       hypr_app_protocol=0
+      hypr_app_stack_eframe=0
+      hypr_app_stack_glutin=0
+      hypr_app_stack_winit=0
+      hypr_app_stack_starbyte=0
+      hypr_app_pixel_format=0
+      hypr_app_surface=0
+      hypr_app_missing_global=0
       if [ -s /tmp/starbyte-hyprland-app.log ]; then hypr_app_stdout=1; fi
       if [ -s /tmp/starbyte-hyprland-app.err ]; then hypr_app_stderr=1; fi
       for log in /tmp/starbyte-hyprland-app.log /tmp/starbyte-hyprland-app.err; do
@@ -882,8 +906,15 @@ HYPR_CONFIG
         if /bin/busybox grep -Eiq 'glutin|OpenGL|surface.*error|renderer.*failed|failed.*renderer' "$log"; then hypr_app_render=1; fi
         if /bin/busybox grep -Eiq 'Permission denied|Operation not permitted' "$log"; then hypr_app_permission=1; fi
         if /bin/busybox grep -Eiq 'protocol error|xdg_wm_base|xdg_surface|xdg_toplevel|wl_display.*error' "$log"; then hypr_app_protocol=1; fi
+        if /bin/busybox grep -Eq '^[[:space:]]*[0-9]+:.*eframe::' "$log"; then hypr_app_stack_eframe=1; fi
+        if /bin/busybox grep -Eq '^[[:space:]]*[0-9]+:.*glutin::' "$log"; then hypr_app_stack_glutin=1; fi
+        if /bin/busybox grep -Eq '^[[:space:]]*[0-9]+:.*winit::' "$log"; then hypr_app_stack_winit=1; fi
+        if /bin/busybox grep -Eq '^[[:space:]]*[0-9]+:.*starbyte' "$log"; then hypr_app_stack_starbyte=1; fi
+        if /bin/busybox grep -Eiq 'pixel.*format|no matching.*config|no EGL.*config|failed to find.*config' "$log"; then hypr_app_pixel_format=1; fi
+        if /bin/busybox grep -Eiq 'EGL_BAD_SURFACE|EGL_BAD_NATIVE_WINDOW|eglCreateWindowSurface|surface.*init.*fail' "$log"; then hypr_app_surface=1; fi
+        if /bin/busybox grep -Eiq 'missing.*(global|extension)|does not support.*(protocol|interface)|required.*(global|extension)' "$log"; then hypr_app_missing_global=1; fi
       done
-      echo "STARBYTE_GUEST_HYPRLAND_APP_DIAG stdout=$hypr_app_stdout stderr=$hypr_app_stderr egl=$hypr_app_egl dri=$hypr_app_dri context=$hypr_app_context wayland=$hypr_app_wayland winit=$hypr_app_winit panic=$hypr_app_panic library=$hypr_app_library config=$hypr_app_config render=$hypr_app_render permission=$hypr_app_permission protocol=$hypr_app_protocol" >/dev/console
+      echo "STARBYTE_GUEST_HYPRLAND_APP_DIAG stdout=$hypr_app_stdout stderr=$hypr_app_stderr egl=$hypr_app_egl dri=$hypr_app_dri context=$hypr_app_context wayland=$hypr_app_wayland winit=$hypr_app_winit panic=$hypr_app_panic library=$hypr_app_library config=$hypr_app_config render=$hypr_app_render permission=$hypr_app_permission protocol=$hypr_app_protocol stack_eframe=$hypr_app_stack_eframe stack_glutin=$hypr_app_stack_glutin stack_winit=$hypr_app_stack_winit stack_starbyte=$hypr_app_stack_starbyte pixel_format=$hypr_app_pixel_format surface=$hypr_app_surface missing_global=$hypr_app_missing_global" >/dev/console
       # kill -0 alone also succeeds for zombies; require a non-zombie
       # Hyprland process after the application has finished.
       hypr_alive=0
@@ -992,10 +1023,15 @@ if [[ "$mode" == --hyprland-smoke ]]; then
   guest_hypr_focus_injector() {
     local ready=false qmp_status=0
     for _ in {1..2900}; do
-      if [[ -S "$root/qmp.sock" && -f "$root/serial.log" ]] \
-        && grep -Fq 'STARBYTE_GUEST_HYPR_FOCUS_READY client=weston-simple-shm alive=1' "$root/serial.log"; then
-        ready=true
-        break
+      if [[ -S "$root/qmp.sock" && -f "$root/serial.log" ]]; then
+        if grep -Fq 'STARBYTE_GUEST_HYPR_FOCUS_READY client=weston-simple-shm alive=1' "$root/serial.log"; then
+          ready=true
+          break
+        fi
+        if grep -Fq 'STARBYTE_GUEST_HYPR_FOCUS_RESULT ' "$root/serial.log"; then
+          echo 'STARBYTE_GUEST_HYPR_FOCUS_QMP_BLOCKED focused_client_never_ready'
+          return 5
+        fi
       fi
       sleep 0.1
     done

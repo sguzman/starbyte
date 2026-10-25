@@ -219,7 +219,7 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     export GBM_BACKEND=dri
     export GBM_BACKENDS_PATH=/usr/lib/x86_64-linux-gnu/gbm
     export LIBGL_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri
-    /usr/bin/weston --backend=drm --renderer=pixman --shell=kiosk --no-config \
+    /usr/bin/weston --backend=drm --renderer=pixman --shell=kiosk-shell.so --no-config \
       --drm-device=card0 --continue-without-input \
       --socket=starbyte-wayland-0 --log=/tmp/weston.log \
       >/tmp/weston.stdout 2>&1 &
@@ -234,11 +234,16 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     compositor=0
     seat=0
     if [ "$socket_ready" = 1 ]; then
-      WAYLAND_DISPLAY=starbyte-wayland-0 \
+      /bin/busybox sleep 1
+      # Require actual wl_registry announcements, even if a distribution
+      # formats wayland-info's human-facing output differently.
+      WAYLAND_DEBUG=client WAYLAND_DISPLAY=starbyte-wayland-0 \
         /usr/bin/wayland-info >/tmp/wayland-info.log 2>/tmp/wayland-info.err
       if [ "$?" = 0 ]; then handshake=1; fi
-      if /bin/busybox grep -q 'wl_compositor' /tmp/wayland-info.log; then compositor=1; fi
-      if /bin/busybox grep -q 'wl_seat' /tmp/wayland-info.log; then seat=1; fi
+      if /bin/busybox grep -q 'wl_compositor' /tmp/wayland-info.log ||
+        /bin/busybox grep -E 'wl_registry.*global.*wl_compositor' /tmp/wayland-info.err >/dev/null; then compositor=1; fi
+      if /bin/busybox grep -q 'wl_seat' /tmp/wayland-info.log ||
+        /bin/busybox grep -E 'wl_registry.*global.*wl_seat' /tmp/wayland-info.err >/dev/null; then seat=1; fi
     fi
     # Diagnose only fixed categories; raw compositor and client logs never
     # leave the disposable VM or appear in public CI.
@@ -248,7 +253,13 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     seat_error=0
     drm_error=0
     compositor_alive=0
+    info_stdout=0
+    info_stderr=0
+    registry_trace=0
     if /bin/busybox kill -0 "$weston_pid" 2>/dev/null; then compositor_alive=1; fi
+    if [ -s /tmp/wayland-info.log ]; then info_stdout=1; fi
+    if [ -s /tmp/wayland-info.err ]; then info_stderr=1; fi
+    if /bin/busybox grep -q 'wl_registry' /tmp/wayland-info.err 2>/dev/null; then registry_trace=1; fi
     for log in /tmp/weston.log /tmp/weston.stdout /tmp/wayland-info.err; do
       [ -f "$log" ] || continue
       if /bin/busybox grep -Eiq 'failed to load module|unable to load module' "$log"; then module_error=1; fi
@@ -258,7 +269,7 @@ if [ -e /etc/starbyte-driver-smoke ]; then
       if /bin/busybox grep -Eiq 'drm|kms|no outputs|no connectors|no usable devices' "$log"; then drm_error=1; fi
     done
     echo "STARBYTE_GUEST_WAYLAND_RESULT socket=$socket_ready handshake=$handshake compositor=$compositor seat=$seat" >/dev/console
-    echo "STARBYTE_GUEST_WAYLAND_DIAG alive=$compositor_alive module=$module_error library=$shared_library_error option=$option_error seat=$seat_error drm=$drm_error" >/dev/console
+    echo "STARBYTE_GUEST_WAYLAND_DIAG alive=$compositor_alive module=$module_error library=$shared_library_error option=$option_error seat=$seat_error drm=$drm_error stdout=$info_stdout stderr=$info_stderr registry=$registry_trace" >/dev/console
     /bin/busybox kill "$weston_pid" 2>/dev/null || :
     wait "$weston_pid" 2>/dev/null || :
   fi

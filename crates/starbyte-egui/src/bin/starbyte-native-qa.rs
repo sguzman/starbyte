@@ -1065,9 +1065,7 @@ mod tests {
             "desktop_session_present",
             "interactive_session_present",
             "q35,accel=tcg",
-            "-nodefaults \"${display_args[@]}\" -vga none -net none",
-            "display_args=(-display none)",
-            "display_args=(-display \"vnc=unix:$root/guest-vnc.sock\")",
+            "-nodefaults -display none -vga none -net none",
             "-monitor none -serial none -parallel none",
             "-device virtio-gpu-pci,id=sb_gpu",
             "-device virtio-keyboard-pci,id=sb_keyboard",
@@ -1098,7 +1096,9 @@ mod tests {
             "graphical_session_present",
             "interactive_session_present",
             "q35,accel=tcg",
-            "-nodefaults -display none -vga none -net none",
+            "-nodefaults \"${display_args[@]}\" -vga none -net none",
+            "display_args=(-display none)",
+            "display_args=(-display \"vnc=unix:$root/guest-vnc.sock\")",
             "-monitor none -parallel none -serial",
             "-device virtio-gpu-pci,id=sb_gpu",
             "-device virtio-keyboard-pci,id=sb_keyboard",
@@ -1115,8 +1115,17 @@ mod tests {
         ] {
             assert!(script.contains(guard), "guest smoke guard missing: {guard}");
         }
-        for forbidden in ["-enable-kvm", "-drive ", "usb-host", "vfio-pci", "vnc=0.0.0.0"] {
-            assert!(!script.contains(forbidden), "forbidden host access: {forbidden}");
+        for forbidden in [
+            "-enable-kvm",
+            "-drive ",
+            "usb-host",
+            "vfio-pci",
+            "vnc=0.0.0.0",
+        ] {
+            assert!(
+                !script.contains(forbidden),
+                "forbidden host access: {forbidden}"
+            );
         }
     }
 

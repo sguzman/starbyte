@@ -1,5 +1,22 @@
 # Emulation scheduler migration
 
+## Dead audio-worker recovery without game interruption — 2026-10-24
+
+The playback sender previously ignored `TrySendError::Disconnected` from
+the bounded PCM queue. If the Rodio audio thread panicked or exited while the
+owner still held its sender, both the legacy GUI and the independent emulator
+owner kept a permanently dead output and silently discarded sound forever.
+The new `AudioOutput::enqueue` receipt distinguishes normal full-queue PCM
+drops from a disconnected receiver. Both GUI implementations now discard the
+dead handle and use a five-second retry window instead of spawning new
+audio threads at frame rate. Emulation, input and saves continue unaffected.
+
+A no-hardware unit regression validates disconnected versus saturated
+channels and malformed PCM. Normal queued audio and bounded overflow retain
+their original semantics. This is **software reliability**, not physical
+speaker/device verification; P-18 and D-13 remain pending at 71/77 (92%).
+
+
 ## Automatic audio-stream fault quarantines queued PCM — 2026-10-24
 
 The audio thread already detected a failed CPAL stream on an independent

@@ -284,18 +284,28 @@ impl AudioOutput {
     /// Bounded try-send: full queues lose stale audio rather than blocking
     /// the UI or accumulating seconds of sound latency. Rodio follows the
     /// emulation rate and shifts pitch with the speed.
-    pub fn enqueue(&self, samples: &[i16], speed: f32, pitch: f32) {
+    ///
+    /// Returns false *only* if the receiver has stopped. A full queue still
+    /// returns true: dropping stale PCM is expected, not a crashed worker.
+    /// The owner can then discard the dead sender and retry initialization
+    /// on its own bounded schedule, without blocking an egui callback.
+    pub fn enqueue(&self, samples: &[i16], speed: f32, pitch: f32) -> bool {
         if samples.is_empty() || samples.len() % 2 != 0 {
-            return;
+            return true;
         }
-        if let Err(mpsc::TrySendError::Full(_)) = self.sender.try_send(AudioMessage::Frame {
+        match self.sender.try_send(AudioMessage::Frame {
             generation: self.generation.load(Ordering::Acquire),
             queued_at: Instant::now(),
             pcm: samples.to_vec(),
             speed: normalize_playback_speed(speed),
             pitch: normalize_pitch(pitch),
         }) {
-            self.producer_dropped_frames.fetch_add(1, Ordering::Relaxed);
+            Ok(()) => true,
+            Err(mpsc::TrySendError::Full(_)) => {
+                self.producer_dropped_frames.fetch_add(1, Ordering::Relaxed);
+                true
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => false,
         }
     }
 
@@ -923,6 +933,11 @@ mod tests {
         drop(receiver);
         assert!(!output.request_reopen());
         assert!(!output.reopen_pending.load(Ordering::Acquire));
+        // The disconnected worker is not a full queue: tell the owning game
+        // to reconstruct output rather than silently dropping every frame.
+        assert!(!output.enqueue(&[123, -123], 1.0, 1.0));
+        assert_eq!(output.producer_dropped_frames(), 0);
+        assert!(output.enqueue(&[123], 1.0, 1.0)); // malformed PCM is ignored
     }
 
     #[test]
@@ -943,7 +958,7 @@ mod tests {
             stream_failures: Arc::new(AtomicU64::new(0)),
             stream_recoveries: Arc::new(AtomicU64::new(0)),
         };
-        output.enqueue(&[123, -123], 1.0, 1.0);
+        assert!(output.enqueue(&[123, -123], 1.0, 1.0));
         assert!(
             output.request_reopen(),
             "route reset must not need a free PCM slot"
@@ -960,7 +975,7 @@ mod tests {
             "a queued old-device PCM frame must be rejected on the new route"
         );
         assert_eq!(active_generation, 1);
-        output.enqueue(&[456, -456], 1.0, 1.0);
+        assert!(output.enqueue(&[456, -456], 1.0, 1.0));
         assert!(matches!(
             receiver.try_recv().unwrap(),
             AudioMessage::Frame { generation, .. } if generation == active_generation

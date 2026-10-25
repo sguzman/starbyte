@@ -742,13 +742,25 @@ impl OwnedSession {
                     }
                 }
             }
-            if let Some(audio) = &self.audio {
+            let stopped = if let Some(audio) = &self.audio {
                 audio.set_volume(self.volume);
-                audio.enqueue(
+                !audio.enqueue(
                     samples,
                     f32::from(self.speed_percent) / 100.0,
                     self.pitch_factor,
-                );
+                )
+            } else {
+                false
+            };
+            if stopped {
+                // A panicked or exited audio thread drops its receiver. A
+                // live sender cannot deliver PCM to it, even if the last OS
+                // device status said Opened. Recreate only on the independent
+                // emulator clock, with a cooldown to avoid 60 spawns/second
+                // if the host sound service remains unhealthy.
+                self.audio.take();
+                self.next_audio_retry = Instant::now() + Duration::from_secs(5);
+                tracing::warn!("background audio worker stopped; retrying output in 5 seconds");
             }
         }
 

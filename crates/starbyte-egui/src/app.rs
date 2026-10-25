@@ -1098,6 +1098,8 @@ pub struct StarbyteApp {
     worker_shell_paints: WorkerShellPaintCounts,
     worker_mode_smoke: Option<WorkerModeSmoke>,
     audio_output: Option<AudioOutput>,
+    /// A crashed desktop audio thread must not be restarted every video frame.
+    next_audio_thread_retry: Instant,
     speaker_probe: SpeakerProbeState,
     /// Session mute defaults from persisted startup preference, then follows
     /// the live in-game Sound menu without rewriting that preference.
@@ -1393,6 +1395,7 @@ impl StarbyteApp {
             worker_shell_paints: WorkerShellPaintCounts::default(),
             worker_mode_smoke: worker_mode_smoke.then_some(WorkerModeSmoke::WaitingForGame),
             audio_output: None,
+            next_audio_thread_retry: Instant::now(),
             speaker_probe: SpeakerProbeState::Idle,
             audio_muted,
             confirm_experimental_audio: false,
@@ -3859,18 +3862,22 @@ impl StarbyteApp {
         if samples.is_empty() || samples.len() % 2 != 0 {
             return;
         }
-        if self.audio_output.is_none() && samples.iter().any(|&sample| sample != 0) {
+        if self.audio_output.is_none()
+            && samples.iter().any(|&sample| sample != 0)
+            && Instant::now() >= self.next_audio_thread_retry
+        {
             match AudioOutput::start() {
                 Ok(output) => {
                     output.set_volume(output_volume);
                     self.audio_output = Some(output);
                 }
                 Err(error) => {
+                    self.next_audio_thread_retry = Instant::now() + Duration::from_secs(5);
                     warn!("could not start desktop audio thread (video remains playable): {error}");
                 }
             }
         }
-        if let Some(output) = &self.audio_output {
+        let disconnected = if let Some(output) = &self.audio_output {
             output.set_volume(output_volume);
             // Per-buffer playback speed travels with DSP PCM into Rodio.
             // Tempo and pitch change together, so the generated game sound
@@ -3881,7 +3888,14 @@ impl StarbyteApp {
                 self.config.audio.pitch_percent,
                 self.last_effective_speed_percent,
             );
-            output.enqueue(samples, speed, pitch);
+            !output.enqueue(samples, speed, pitch)
+        } else {
+            false
+        };
+        if disconnected {
+            self.audio_output.take();
+            self.next_audio_thread_retry = Instant::now() + Duration::from_secs(5);
+            warn!("desktop audio worker stopped; retrying output in 5 seconds");
         }
     }
 

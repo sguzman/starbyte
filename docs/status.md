@@ -1,18 +1,20 @@
 # Starbyte: current state
 
-## Private Weston → Hyprland nested-backend QA scaffold (2026-10-25)
+## Nested Hyprland startup blocked by upstream render-allocator requirement (2026-10-25)
 
-The isolated Wayland harness now has a separate opt-in
-`--hyprland-nested-smoke` attempt, adding a Lua-configured Hyprland client
-inside the existing Bubblewrap-only Weston headless/Pixman namespace. A
-second supervisor verifies the complete absence of host input, DRM,
-display and session sockets before launching either compositor; it then
-requires a process-matched private Hyprland lock, private IPC, a Wayland
-backend log receipt, and bounded cleanup. The native GUI collector and
-focus-sensitive wrapper remain deliberately blocked. CI checks shell
-syntax and static isolation/teardown invariants, **not** a real nested
-compositor startup, virtual-keyboard input, or physical Hyprland hardware.
-All six physical/cutover scheduler gates remain open: **71/77 (92%)**.
+Inspection of Aquamarine v0.15.1 source confirmed that a nested Wayland
+backend still requires a `zwp_linux_dmabuf_v1` connection and DRM-backed
+GBM allocator. The host-device-free Bubblewrap namespace cannot provide
+one, even when private Weston headless/Pixman itself starts successfully.
+The experimental nested supervisor is therefore removed: the explicitly
+requested `--hyprland-nested-smoke` route now fails *before* checking
+installed tools or launching a compositor, with a reason suitable for CI
+assertion. `--weston-smoke` and the physical GUI collector's fail-closed
+guard remain intact. This retires an impossible startup path without
+weakening the user's input/device isolation. The practical next dependency
+is a truly private virtual DRM/render device and input seat; no VM or
+physical run was executed and all six gates remain open **71/77 (92%)**.
+See `docs/native-qa-execution.md` for pinned upstream source evidence.
 
 ## Account for game PCM lost while the output device is unavailable (2026-10-25)
 

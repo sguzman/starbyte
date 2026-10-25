@@ -22,28 +22,40 @@ leave that user's single-seat interactive session uninterrupted. New
 without a focus change, but that would not satisfy the focused-window
 requirement by itself.
 
-## Private nested Hyprland backend probe (2026-10-25, implementation only)
+## Nested Hyprland allocator blocker (2026-10-25, confirmed in pinned source)
 
-Added opt-in `bash scripts/qa-isolated-wayland.sh --hyprland-nested-smoke`.
-This starts Weston headless/Pixman inside the existing Bubblewrap sandbox,
-then attempts a nested Hyprland Lua-configured Wayland client, with a wholly
-private Wayland socket, instance lock and IPC namespace. The child supervisor
-rejects inherited desktop/session variables, input/DRM nodes and host
-session sockets before launching either compositor. It requires proof of
-the Wayland backend in startup logs and independently checks private
-Hyprland PID, Wayland socket, IPC and virtual monitor discovery. All child
-processes are reaped on exits, failures or timeouts; the outer run is bounded
-by 20 seconds. A failure cannot fall back to the owner's compositor.
-The old physical QA wrapper and collector remain fail-closed.
+The previously proposed `--hyprland-nested-smoke` path is now **blocked
+before any launch**, with the explicit receipt
+`STARBYTE_ISOLATED_WAYLAND_BLOCKED nested_hyprland_requires_private_drm_allocator`.
+The experimental nested compositor supervisor was removed rather than
+pretending that a successful parent Weston socket was sufficient.
 
-**This is source-level preparation, not a successful nested compositor run**:
-there is no host run evidence that Hyprland can render without a visible DRM
-node in this sandbox, no private virtual-keyboard seat has been exercised,
-and no real Starbyte window has been launched. The probe must not be
-treated as a new accepted P-18/P-19/D-12/D-13/D-15/C-16 gate. Only the
-existing trusted Weston package extraction path or installed Weston
-binaries may supply the parent compositor. The nested path does not
-install host packages or change the owner's active session.
+This is an upstream *capability incompatibility*, not a flaky startup
+timeout. Aquamarine **v0.15.1** `CWaylandBackend::start()` requires the
+`zwp_linux_dmabuf_v1` protocol and its `initDmabuf()` tries to open
+the advertised DRM device. `CBackend::start()` then rejects any
+non-null backend that does not supply a DRM-backed GBM allocator.
+Starbyte's isolated namespace deliberately hides **all** host
+`/dev/dri` and `/dev/input` devices, and the successful private
+Weston baseline runs with headless/Pixman. A nested Wayland socket or
+software-rendering environment flag does not satisfy Aquamarine's
+render-node requirement.
+
+Source references:
+- [Wayland protocol requirements](https://github.com/hyprwm/aquamarine/blob/v0.15.1/src/backend/Wayland.cpp#L97-L150)
+- [Opening the Wayland feedback DRM node](https://github.com/hyprwm/aquamarine/blob/v0.15.1/src/backend/Wayland.cpp#L370-L468)
+- [GBM allocator hard gate](https://github.com/hyprwm/aquamarine/blob/v0.15.1/src/backend/Backend.cpp#L162-L179)
+
+The next *genuine* prerequisite for an isolated Hyprland runtime is a
+separately provisioned **virtual DRM/render device plus virtual input
+seat** (such as in a fully isolated VM), or a future audited backend
+with a different software allocator. This must never be implemented by
+bind-mounting the owner's DRM devices into Bubblewrap. An isolated VM
+itself still would not prove speaker audibility or physical gamepad
+acceptance; those gates need separate device evidence. The Weston-only
+`--weston-smoke` continues to work independently. CI verifies this
+fail-before-launch path without requiring compositor packages.
+Scheduler acceptance remains **71/77** with all six gates open.
 
 ## Safe QA today
 

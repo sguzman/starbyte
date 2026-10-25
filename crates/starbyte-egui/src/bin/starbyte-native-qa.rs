@@ -1023,7 +1023,7 @@ mod tests {
             "test ! -e /tmp/.X11-unix",
             "--hyprland-headless-smoke",
             "--hyprland-nested-smoke",
-            r#"--ro-bind "$nested_supervisor" /run/user/qa/nested-supervisor"#,
+            "nested_hyprland_requires_private_drm_allocator",
             "--setenv HYPRLAND_NO_SD_VARS 1",
             "--setenv HYPRLAND_NO_SD_TARGET 1",
             "--setenv HYPRLAND_NO_RT 1",
@@ -1068,35 +1068,20 @@ mod tests {
     }
 
     #[test]
-    fn nested_hyprland_probe_cannot_reach_owner_session_or_claim_physical_acceptance() {
-        let supervisor = include_str!("../../../../scripts/qa-hyprland-nested-inside.sh");
-        for guard in [
-            r#"[[ "${XDG_RUNTIME_DIR:-}" == /run/user/qa ]]"#,
-            r#"[[ "${WAYLAND_DISPLAY:-}" == starbyte-qa-wayland ]]"#,
-            r#"[[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]"#,
-            r#"[[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]]"#,
-            "[[ ! -e /dev/input && ! -e /dev/dri ]]",
-            "host_wayland_socket_visible",
-            "host_config_visible",
-            "STARBYTE_NESTED_PARENT_OK",
-            "hyprland.lua",
-            "--backend=headless --renderer=pixman",
-            "nested_process_identity_mismatch",
-            "nested_wayland_backend_unverified",
-            "private_hyprland_ipc_failed",
-            "STARBYTE_NESTED_HYPRLAND_TORN_DOWN",
-            "trap cleanup EXIT",
-            r#"stop_child "$hypr_pid""#,
-            r#"stop_child "$weston_pid""#,
-        ] {
-            assert!(
-                supervisor.contains(guard),
-                "missing nested isolation guard: {guard}"
-            );
-        }
-        assert!(!supervisor.contains("hyprctl dispatch workspace"));
-        assert!(!supervisor.contains("--physical-workspace"));
-        assert!(!supervisor.contains("starbyte-egui --"));
+    fn nested_hyprland_probe_refuses_without_render_allocator_before_any_launch() {
+        let harness = include_str!("../../../../scripts/qa-isolated-wayland.sh");
+        let guard = harness
+            .find("if [[ \"$mode\" == --hyprland-nested-smoke ]]; then")
+            .expect("explicit nested block required");
+        let reason = harness
+            .find("fail 'nested_hyprland_requires_private_drm_allocator'")
+            .expect("must report why the pinned Aquamarine backend cannot start");
+        let first_external_probe = harness
+            .find("command -v bwrap")
+            .expect("must not resolve external launchers before refusing");
+        assert!(guard < reason && reason < first_external_probe);
+        assert!(!harness.contains("nested_supervisor"));
+        assert!(!harness.contains("STARBYTE_ISOLATED_NESTED_HYPRLAND_SMOKE_OK"));
     }
 
     #[test]

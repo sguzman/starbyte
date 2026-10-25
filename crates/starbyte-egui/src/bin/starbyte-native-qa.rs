@@ -1128,6 +1128,8 @@ mod tests {
             "--i-am-really-stupid --config /tmp/starbyte-hyprland.conf",
             "STARBYTE_GUEST_HYPRLAND_RESULT executable=1 socket=1 registry=1 compositor=1 seat=1 alive=1",
             "guest_private_hyprland_registry_or_seat_missing",
+            "STARBYTE_GUEST_HYPR_FOCUS_RESULT ready=1 clean_exit=1 exit_message=1 hyprland_alive=1",
+            "guest_private_hyprland_focused_keyboard_missing",
             "hypr_wire_attempts=$wire_try",
             "hypr_config_valid=$hypr_config_valid",
         ] {

@@ -89,9 +89,13 @@ override was applied **inside the VM only**.
 [Run 40243105431](https://github.com/sguzman/starbyte/actions/runs/40243105431)
 then observed a live Hyprland process and private Wayland socket, but no
 confirmed `wl_compositor` / `wl_seat` registry roundtrip; a bounded
-configuration-error category was also present. The next test separately
-verifies config parsing and retries protocol registry synchronization.
-Neither failed run is an accepted Hyprland compositor gate.
+configuration-error category was also present. [Run 40243529869](https://github.com/sguzman/starbyte/actions/runs/40243529869)
+then **passed**: guest Hyprland remained alive, its configuration
+verified, and the second bounded registry roundtrip saw both
+`wl_compositor` and `wl_seat`. That establishes an isolated Hyprland
+virtual DRM/seat prerequisite. The follow-on test additionally requires
+a real xdg-toplevel to receive private-QMP Escape while Hyprland is
+focused; it remains unaccepted until the matching CI run passes.
 
 A runner-packaged Hyprland version different from the owner's 0.56.2
 cannot establish exact-version parity; even a successful virtual compositor

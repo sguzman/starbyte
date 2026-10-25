@@ -770,6 +770,34 @@ HYPR_CONFIG
           if /bin/busybox grep -Fqx "STARBYTE_GUEST_WAYLAND_WIRE_BLOCKED $reason" /tmp/hyprland-wire.log 2>/dev/null; then hypr_wire_reason=$reason; break; fi
         done
       fi
+      # Distinct from the Weston sample: prove focus under Hyprland itself.
+      hypr_focus_ready=0
+      hypr_focus_clean=0
+      hypr_focus_message=0
+      hypr_focus_compositor_alive=0
+      if [ "$hypr_registry" = 1 ]; then
+        WAYLAND_DISPLAY="$hypr_display" \
+          /usr/bin/weston-simple-shm >/tmp/hypr-focus.log 2>/tmp/hypr-focus.err &
+        hypr_focus_pid=$!
+        /bin/busybox sleep 3
+        if /bin/busybox kill -0 "$hypr_focus_pid" 2>/dev/null; then
+          hypr_focus_ready=1
+          echo 'STARBYTE_GUEST_HYPR_FOCUS_READY client=weston-simple-shm alive=1' >/dev/console
+          for focus_wait in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do
+            if /bin/busybox grep -Fq 'simple-shm exiting' /tmp/hypr-focus.err; then break; fi
+            if ! /bin/busybox kill -0 "$hypr_focus_pid" 2>/dev/null; then break; fi
+            /bin/busybox sleep 1
+          done
+        fi
+        if /bin/busybox kill -0 "$hypr_focus_pid" 2>/dev/null; then
+          /bin/busybox kill "$hypr_focus_pid" 2>/dev/null || :
+        fi
+        wait "$hypr_focus_pid" 2>/dev/null
+        if [ "$?" = 0 ]; then hypr_focus_clean=1; fi
+        if /bin/busybox grep -Fq 'simple-shm exiting' /tmp/hypr-focus.err 2>/dev/null; then hypr_focus_message=1; fi
+        if /bin/busybox kill -0 "$hypr_pid" 2>/dev/null; then hypr_focus_compositor_alive=1; fi
+      fi
+      echo "STARBYTE_GUEST_HYPR_FOCUS_RESULT ready=$hypr_focus_ready clean_exit=$hypr_focus_clean exit_message=$hypr_focus_message hyprland_alive=$hypr_focus_compositor_alive" >/dev/console
       if /bin/busybox kill -0 "$hypr_pid" 2>/dev/null; then hypr_alive=1; fi
       for log in /tmp/hyprland.log /tmp/hyprland.err; do
         [ -f "$log" ] || continue
@@ -874,6 +902,35 @@ if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --
   injector_pid=$!
   trap 'kill "$injector_pid" 2>/dev/null || true; wait "$injector_pid" 2>/dev/null || true; rm -rf -- "$root"' EXIT
 fi
+if [[ "$mode" == --hyprland-smoke ]]; then
+  # A second QMP connection after the Weston Escape test has completed.
+  # The acknowledgement is not enough: the focused client must exit.
+  guest_hypr_focus_injector() {
+    local ready=false qmp_status=0
+    for _ in {1..2900}; do
+      if [[ -S "$root/qmp.sock" && -f "$root/serial.log" ]] \
+        && grep -Fq 'STARBYTE_GUEST_HYPR_FOCUS_READY client=weston-simple-shm alive=1' "$root/serial.log"; then
+        ready=true
+        break
+      fi
+      sleep 0.1
+    done
+    [[ "$ready" == true ]] || { echo 'STARBYTE_GUEST_HYPR_FOCUS_QMP_BLOCKED focused_client_not_ready'; return 5; }
+    {
+      printf '%s\n' '{"execute":"qmp_capabilities","id":"cap"}'
+      printf '%s\n' '{"execute":"input-send-event","arguments":{"events":[{"type":"key","data":{"down":true,"key":{"type":"qcode","data":"esc"}}},{"type":"key","data":{"down":false,"key":{"type":"qcode","data":"esc"}}}]},"id":"escape"}'
+    } | timeout --signal=TERM --kill-after=1s 5s \
+      socat -T 3 STDIO "UNIX-CONNECT:$root/qmp.sock" \
+      >"$root/hypr-focus-qmp.jsonl" 2>/dev/null || qmp_status=$?
+    [[ "$qmp_status" -eq 0 || "$qmp_status" -eq 1 ]] || { echo 'STARBYTE_GUEST_HYPR_FOCUS_QMP_BLOCKED transport'; return 5; }
+    jq -es 'any(.[]; .id == "cap" and .return == {}) and any(.[]; .id == "escape" and .return == {})' \
+      "$root/hypr-focus-qmp.jsonl" >/dev/null || { echo 'STARBYTE_GUEST_HYPR_FOCUS_QMP_BLOCKED injection_rejected'; return 5; }
+    echo 'STARBYTE_GUEST_HYPR_FOCUS_QMP_ACK escape=sent source=private_qmp'
+  }
+  guest_hypr_focus_injector &
+  hypr_injector_pid=$!
+  trap 'kill "$injector_pid" "$hypr_injector_pid" 2>/dev/null || true; wait "$injector_pid" "$hypr_injector_pid" 2>/dev/null || true; rm -rf -- "$root"' EXIT
+fi
 display_args=(-display none)
 if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --hyprland-smoke ]]; then
   # Private Unix-only VNC display emulation advertises a KMS output.
@@ -905,6 +962,11 @@ focus_injector_ok=true
 if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --hyprland-smoke ]]; then
   wait "$injector_pid" || focus_injector_ok=false
   injector_pid=''
+fi
+hypr_injector_ok=true
+if [[ "$mode" == --hyprland-smoke ]]; then
+  wait "$hypr_injector_pid" || hypr_injector_ok=false
+  hypr_injector_pid=''
 fi
 # Never emit raw guest logs. Expose only three bounded diagnostic bits,
 # including on QEMU timeout, to distinguish boot from shutdown failure.
@@ -973,6 +1035,10 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
       grep -Fqx 'STARBYTE_GUEST_HYPRLAND_RESULT executable=1 socket=1 registry=1 compositor=1 seat=1 alive=1' "$root/serial-clean.log" \
         || fail 'guest_private_hyprland_registry_or_seat_missing'
       echo 'STARBYTE_GUEST_HYPRLAND_OK drm=virtio compositor=hyprland seat=virtual guest_only=true'
+      grep -Fqx 'STARBYTE_GUEST_HYPR_FOCUS_RESULT ready=1 clean_exit=1 exit_message=1 hyprland_alive=1' "$root/serial-clean.log" \
+        || fail 'guest_private_hyprland_focused_keyboard_missing'
+      [[ "$hypr_injector_ok" == true ]] || fail 'guest_private_hyprland_focus_injector_failed'
+      echo 'STARBYTE_GUEST_HYPR_FOCUS_OK client=weston-simple-shm escape=received source=private_qmp guest_only=true'
     fi
     if [[ "$mode" == --starbyte-smoke ]]; then
       grep -Fqx 'STARBYTE_GUEST_APP_RESULT launched=1 status=0 frames=1 single_owner=1' "$root/serial-clean.log" \

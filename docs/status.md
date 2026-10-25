@@ -2,12 +2,15 @@
 
 ## Hosted Linux guest PCI boot probe (2026-10-25)
 
-The path-scoped QEMU workflow now boots a minimal Alpine virtual kernel
-with an independently assembled static BusyBox initramfs. Private serial
-receipts verify guest userspace and both virtio PCI device IDs, with
-no host display/input/network/disk/KVM and bounded cleanup. This is
-guest PCI evidence only, not a guest DRM/render-node or input-seat test.
-Physical scheduler acceptance remains **71/77 (92%)**.
+The path-scoped QEMU workflow now attempts to boot a minimal Alpine
+virtual kernel with a static BusyBox initramfs. The first guest run
+**timed out**, without evidence of successful userspace/PCI discovery.
+A follow-up pins the downloaded kernel's SHA-256, uses guest force-reboot
+with QEMU no-reboot, normalizes serial line endings and reports only
+boolean guest boot/PCI/panic diagnostics on failure. Raw console logs
+remain private. No host display/input/network/disk/KVM is used. Guest
+DRM/render-node/input seat and physical QA remain unverified.
+Scheduler acceptance remains **71/77 (92%)**.
 
 ## Hosted-only bootless virtual GPU/input device-model QA (2026-10-25)
 

@@ -172,8 +172,14 @@ Alpine Linux v3.23 virt kernel with an independently built BusyBox
 initramfs. The guest serial console provides receipts that Linux
 started userspace and enumerated the virtio GPU and keyboard PCI IDs.
 QEMU uses TCG and no host display/input, network, disk or KVM.
-The guest powers off and the host deletes all disposable artifacts.
-The kernel SHA-256 is reported for future exact-artifact pinning.
+The guest uses a forced reboot and QEMU no-reboot exit before temporary
+artifacts are deleted. The first CI guest run timed out after 75 seconds.
+The Alpine kernel SHA-256 is now pinned to the observed download:
+`456e0691f095285a82533cc6335280e4b4991d630c5292ddf15e6320e71971c9`.
+The follow-up probe exposes only booleans for userspace boot, PCI
+enumeration and kernel panic rather than publishing raw serial output.
+The guest PCI milestone remains unaccepted until those receipts and
+clean QEMU exit are confirmed.
 
 This is a **guest-kernel PCI enumeration** test, not proof of a loaded
 DRM driver, render node, evdev input seat, guest compositor, or physical

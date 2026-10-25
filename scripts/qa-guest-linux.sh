@@ -214,7 +214,10 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     /bin/busybox mkdir -p /run/user/0 /tmp
     /bin/busybox chmod 700 /run/user/0
     export XDG_RUNTIME_DIR=/run/user/0
+    # No guest VT is attached to the TCG-only serial console; libseat's
+    # builtin backend must not try to bind to a physical terminal.
     export LIBSEAT_BACKEND=builtin
+    export SEATD_VTBOUND=0
     export XDG_SEAT=seat0
     export HOME=/tmp
     export PATH=/usr/bin:/bin

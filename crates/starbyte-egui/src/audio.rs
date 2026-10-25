@@ -1304,12 +1304,7 @@ mod tests {
         // This frame is still inside the normal 150ms freshness window;
         // device reinitialization alone must not make it safe to replay.
         assert!(frame_is_fresh(now, now));
-        record_stream_fault(
-            &mut recovery,
-            &faults,
-            &generation,
-            &mut active_generation,
-        );
+        record_stream_fault(&mut recovery, &faults, &generation, &mut active_generation);
         assert_eq!(active_generation, 8);
         assert_eq!(generation.load(Ordering::Acquire), 8);
         assert_ne!(pre_fault_frame_generation, active_generation);

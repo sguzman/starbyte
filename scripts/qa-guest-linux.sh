@@ -122,10 +122,14 @@ if [[ "$mode" == --input-smoke ]]; then
 fi
 if [[ "$mode" == --wayland-smoke ]]; then
   # Stage a real DRM/KMS Weston compositor, its dynamically loaded modules,
-  # and wayland-info into private guest RAM. This does not launch a host GUI.
+  # and an independent Rust Wayland wire client into private guest RAM.
+  # This does not launch a host GUI.
   for tool in weston wayland-info ldd awk sort; do
     command -v "$tool" >/dev/null 2>&1 || fail "wayland_host_tool_missing_$tool"
   done
+  rustc --edition=2021 -C opt-level=1 -C target-feature=+crt-static \
+    scripts/qa-guest-wayland-wire.rs -o "$root/initfs/bin/wayland-wire" \
+    || fail 'guest_wayland_wire_compilation_failed'
   stage_files=("$(command -v weston)" "$(command -v wayland-info)")
   for pattern in '*/libweston-*/drm-backend.so' '*/weston/kiosk-shell.so'; do
     match="$(find /usr/lib -type f -path "$pattern" -print -quit)"
@@ -233,6 +237,9 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     handshake=0
     compositor=0
     seat=0
+    wire_done=0
+    wire_connected=0
+    wire_attempts=0
     wayland_attempts=0
     if [ "$socket_ready" = 1 ]; then
       # Socket creation can precede global registration. Require a live
@@ -253,6 +260,34 @@ if [ -e /etc/starbyte-driver-smoke ]; then
         /bin/busybox sleep 1
       done
     fi
+    # The Rust wire client uses wl_display.get_registry followed by sync.
+    # Its wl_callback.done is the registry barrier; a clean wayland-info exit
+    # with no output is not proof of any actual protocol messages.
+    if [ "$socket_ready" = 1 ]; then
+      for retry in 1 2 3 4 5 6 7 8; do
+        wire_attempts=$retry
+        WAYLAND_DISPLAY=starbyte-wayland-0 \
+          /bin/busybox timeout 7 /bin/wayland-wire \
+          >/tmp/wayland-wire.log 2>/dev/null
+        if /bin/busybox grep -Fqx \
+          'STARBYTE_GUEST_WAYLAND_WIRE_RESULT connected=1 registry_done=1 compositor=1 seat=1' \
+          /tmp/wayland-wire.log; then
+          wire_connected=1
+          wire_done=1
+          compositor=1
+          seat=1
+          handshake=1
+          break
+        fi
+        if /bin/busybox grep -q '^STARBYTE_GUEST_WAYLAND_WIRE_RESULT connected=1 registry_done=1' \
+          /tmp/wayland-wire.log; then
+          wire_connected=1
+          wire_done=1
+        fi
+        if ! /bin/busybox kill -0 "$weston_pid" 2>/dev/null; then break; fi
+        /bin/busybox sleep 1
+      done
+    fi
     # Diagnose only fixed categories; raw compositor and client logs never
     # leave the disposable VM or appear in public CI.
     module_error=0
@@ -264,6 +299,7 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     info_stdout=0
     info_stderr=0
     registry_trace=0
+    wire_log=0
     weston_log=0
     weston_stdout=0
     weston_zombie=0
@@ -276,6 +312,7 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     fi
     if [ -s /tmp/wayland-info.log ]; then info_stdout=1; fi
     if [ -s /tmp/wayland-info.err ]; then info_stderr=1; fi
+    if [ -s /tmp/wayland-wire.log ]; then wire_log=1; fi
     if /bin/busybox grep -q 'wl_registry' /tmp/wayland-info.err 2>/dev/null; then registry_trace=1; fi
     for log in /tmp/weston.log /tmp/weston.stdout /tmp/wayland-info.err; do
       [ -f "$log" ] || continue
@@ -285,6 +322,7 @@ if [ -e /etc/starbyte-driver-smoke ]; then
       if /bin/busybox grep -Eiq 'failed to open seat|seatd|libseat|session control|cannot get tty|no seat' "$log"; then seat_error=1; fi
       if /bin/busybox grep -Eiq 'drm|kms|no outputs|no connectors|no usable devices' "$log"; then drm_error=1; fi
     done
+    echo "STARBYTE_GUEST_WAYLAND_WIRE_DIAG connected=$wire_connected sync=$wire_done output=$wire_log attempts=$wire_attempts" >/dev/console
     echo "STARBYTE_GUEST_WAYLAND_RESULT socket=$socket_ready handshake=$handshake compositor=$compositor seat=$seat" >/dev/console
     echo "STARBYTE_GUEST_WAYLAND_DIAG alive=$compositor_alive zombie=$weston_zombie weston_log=$weston_log weston_stdout=$weston_stdout module=$module_error library=$shared_library_error option=$option_error seat=$seat_error drm=$drm_error stdout=$info_stdout stderr=$info_stderr registry=$registry_trace attempts=$wayland_attempts" >/dev/console
     /bin/busybox kill "$weston_pid" 2>/dev/null || :
@@ -405,9 +443,61 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
   [[ "$driver" == true ]] || fail 'guest_driver_or_device_nodes_missing'
   if [[ "$mode" == --wayland-smoke ]]; then
     # These two lines are machine-authored, bounded 0/1 receipts.
-    grep -E '^STARBYTE_GUEST_WAYLAND_(RESULT|DIAG) ' "$root/serial-clean.log" || true
+    grep -E '^STARBYTE_GUEST_WAYLAND_(RESULT|DIAG|WIRE_DIAG) ' "$root/serial-clean.log" || true
     grep -Fqx 'STARBYTE_GUEST_WAYLAND_RESULT socket=1 handshake=1 compositor=1 seat=1' "$root/serial-clean.log" \
       || fail 'guest_drm_wayland_handshake_or_seat_missing'
+    grep -Eq '^STARBYTE_GUEST_WAYLAND_WIRE_DIAG connected=1 sync=1 output=1 attempts=[1-8]
+    echo 'STARBYTE_GUEST_WAYLAND_OK drm=virtio compositor=weston client=wayland-info seat=present guest_only=true'
+  elif [[ "$mode" == --gbm-smoke ]]; then
+    render_node=false
+    render_device=false
+    render_buffer=false
+    card_node=false
+    card_device=false
+    card_buffer=false
+    grep -Fqx 'STARBYTE_GUEST_GBM_NODE_OPEN_OK node=render' "$root/serial-clean.log" && render_node=true
+    grep -Fqx 'STARBYTE_GUEST_GBM_NODE_OPEN_OK node=card' "$root/serial-clean.log" && card_node=true
+    grep -Fqx 'STARBYTE_GUEST_GBM_RESULT node=render device=1 buffer=0' "$root/serial-clean.log" && render_device=true
+    grep -Fqx 'STARBYTE_GUEST_GBM_RESULT node=card device=1 buffer=0' "$root/serial-clean.log" && card_device=true
+    if grep -Fqx 'STARBYTE_GUEST_GBM_RESULT node=render device=1 buffer=1' "$root/serial-clean.log"; then
+      render_device=true
+      render_buffer=true
+    fi
+    if grep -Fqx 'STARBYTE_GUEST_GBM_RESULT node=card device=1 buffer=1' "$root/serial-clean.log"; then
+      card_device=true
+      card_buffer=true
+    fi
+    printf 'STARBYTE_GUEST_GBM_DIAG render_open=%s render_device=%s render_buffer=%s card_open=%s card_device=%s card_buffer=%s\n' \
+      "$render_node" "$render_device" "$render_buffer" "$card_node" "$card_device" "$card_buffer"
+    grep -Fqx 'STARBYTE_GUEST_GBM_EXEC render_status=0' "$root/serial-clean.log" \
+      || fail 'guest_gbm_render_probe_failed'
+    grep -Fqx 'STARBYTE_GUEST_GBM_EXEC card_status=0' "$root/serial-clean.log" \
+      || fail 'guest_gbm_card_probe_failed'
+    [[ "$render_node" == true && "$card_node" == true ]] \
+      || fail 'guest_gbm_drm_node_open_failed'
+    if [[ "$render_buffer" == true ]]; then
+      echo 'STARBYTE_GUEST_GBM_OK node=render device=initialized buffer=rendering guest_only=true'
+    elif [[ "$card_buffer" == true ]]; then
+      echo 'STARBYTE_GUEST_GBM_OK node=card device=initialized buffer=rendering guest_only=true'
+    else
+      fail 'guest_gbm_allocator_unavailable'
+    fi
+  elif [[ "$mode" == --input-smoke ]]; then
+    grep -Fqx 'STARBYTE_GUEST_INPUT_READY evdev=present' "$root/serial-clean.log" \
+      || fail 'guest_input_listener_missing'
+    grep -Fqx 'STARBYTE_GUEST_INPUT_RESULT key_a=1' "$root/serial-clean.log" \
+      || fail 'guest_virtual_keypress_missing'
+    grep -Fqx 'STARBYTE_GUEST_INPUT_EXEC status=0' "$root/serial-clean.log" \
+      || fail 'guest_virtual_keypress_reader_failed'
+    echo 'STARBYTE_GUEST_INPUT_OK key_a=received source=private_qmp evdev=guest_only'
+  else
+    echo 'STARBYTE_GUEST_DRM_INPUT_OK drm_render_node=present evdev_input_node=present guest_only=true'
+  fi
+else
+  echo 'STARBYTE_GUEST_LINUX_PCI_OK gpu=virtio keyboard=virtio serial_only=true drm_render_node=not_tested input_seat=not_tested'
+fi
+ "$root/serial-clean.log" \
+      || fail 'guest_wayland_registry_sync_missing'
     echo 'STARBYTE_GUEST_WAYLAND_OK drm=virtio compositor=weston client=wayland-info seat=present guest_only=true'
   elif [[ "$mode" == --gbm-smoke ]]; then
     render_node=false

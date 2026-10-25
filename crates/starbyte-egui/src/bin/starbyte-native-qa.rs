@@ -1111,6 +1111,9 @@ mod tests {
             "guest_driver_or_device_nodes_missing",
             "STARBYTE_GUEST_WAYLAND_DIAG",
             "STARBYTE_GUEST_WAYLAND_RESULT socket=1 handshake=1 compositor=1 seat=1",
+            "STARBYTE_GUEST_WAYLAND_WIRE_DIAG",
+            "guest_wayland_registry_sync_missing",
+            "guest_wayland_wire_compilation_failed",
             "guest_drm_wayland_handshake_or_seat_missing",
         ] {
             assert!(script.contains(guard), "guest smoke guard missing: {guard}");

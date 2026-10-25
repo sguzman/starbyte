@@ -8,6 +8,7 @@ on:
       - "scripts/qa-guest-linux.sh"
       - "scripts/qa-guest-gbm.rs"
       - "scripts/qa-guest-input.rs"
+      - "scripts/qa-guest-wayland-wire.rs"
       - ".github/workflows/qa-virtual-device-models.yml"
   pull_request:
     paths:
@@ -15,6 +16,7 @@ on:
       - "scripts/qa-guest-linux.sh"
       - "scripts/qa-guest-gbm.rs"
       - "scripts/qa-guest-input.rs"
+      - "scripts/qa-guest-wayland-wire.rs"
       - ".github/workflows/qa-virtual-device-models.yml"
 
 # QEMU packages are heavyweight. Never repeat this probe on unrelated
@@ -68,5 +70,5 @@ jobs:
         run: bash scripts/qa-guest-linux.sh --input-smoke
       - name: Install DRM Wayland compositor and protocol probe
         run: sudo apt-get install -y --no-install-recommends weston wayland-utils libseat1 libinput10
-      - name: Validate Wayland DRM compositor and guest client handshake
+      - name: Validate guest Wayland registry barrier and compositor/input globals
         run: bash scripts/qa-guest-linux.sh --wayland-smoke

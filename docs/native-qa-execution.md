@@ -307,7 +307,14 @@ receipt. The VM stages host-runner CPU-only Mesa software EGL plus Wayland
 EGL/cursor libraries loaded at runtime, and never forwards a host GPU,
 keyboard, display or user's files. This is original-app **virtual** acceptance,
 not a physical Hyprland-focused FPS, speaker, gamepad or cutover pass.
-The regression stages following the app step must be checked separately.
+The same [hosted run 40240050599](https://github.com/sguzman/starbyte/actions/runs/40240050599)
+finished **successfully in full**, including the repeated virtual Weston registry,
+focused Escape, guest DRM, GBM rendering-buffer and private QMP-to-evdev input
+regressions. The guest reported
+`STARBYTE_GUEST_APP_OK shell=original_full_library emulator_owner=worker frames=30 guest_only=true`.
+Standard Linux/Windows, Clippy and Rust 1.88 CI also passed on
+[run 40240050619](https://github.com/sguzman/starbyte/actions/runs/40240050619).
+The pending six physical/cutover gates remain open at 71/77 (92%).
 
 ### Virtual rendering/input strategy and remaining limits
 

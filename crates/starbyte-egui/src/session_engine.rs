@@ -449,7 +449,7 @@ impl OwnedSession {
         if audio.request_reopen() {
             Ok(())
         } else {
-            Err("Audio worker queue is full; try reselecting output again".to_owned())
+            Err("Audio worker has stopped; output cannot be reselected".to_owned())
         }
     }
 

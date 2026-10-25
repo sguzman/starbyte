@@ -708,6 +708,11 @@ HYPR_CONFIG
       hypr_seat=0
       hypr_alive=0
       hypr_version=0
+      hypr_config_valid=0
+      hypr_wire_attempts=0
+      hypr_wire_connected=0
+      hypr_wire_sync=0
+      hypr_wire_reason=none
       hypr_egl_error=0
       hypr_gbm_error=0
       hypr_seat_error=0
@@ -717,6 +722,10 @@ HYPR_CONFIG
       if [ -x /usr/bin/Hyprland ]; then hypr_executable=1; fi
       /usr/bin/Hyprland --version >/tmp/hypr-version.log 2>/tmp/hypr-version.err
       if [ "$?" = 0 ]; then hypr_version=1; fi
+      /usr/bin/Hyprland --i-am-really-stupid --verify-config \
+        --config /tmp/starbyte-hyprland.conf \
+        >/tmp/hypr-verify.log 2>/tmp/hypr-verify.err
+      if [ "$?" = 0 ]; then hypr_config_valid=1; fi
       HYPRLAND_NO_RT=1 AQ_DRM_DEVICES=/dev/dri/card0 \
         /usr/bin/Hyprland --i-am-really-stupid --config /tmp/starbyte-hyprland.conf \
         >/tmp/hyprland.log 2>/tmp/hyprland.err &
@@ -734,12 +743,32 @@ HYPR_CONFIG
         /bin/busybox sleep 1
       done
       if [ "$hypr_socket" = 1 ]; then
-        WAYLAND_DISPLAY="$hypr_display" /bin/wayland-wire >/tmp/hyprland-wire.log 2>/tmp/hyprland-wire.err
-        if /bin/busybox grep -Eq '^STARBYTE_GUEST_WAYLAND_WIRE_RESULT connected=1 registry_done=1 compositor=1 seat=1 globals=[1-9][0-9]*$' /tmp/hyprland-wire.log; then
-          hypr_registry=1
-          hypr_compositor=1
-          hypr_seat=1
-        fi
+        # Socket creation can precede global publication, especially under
+        # 1-vCPU software-emulated QEMU. Require wl_callback.done itself.
+        for wire_try in 1 2 3 4 5 6 7 8; do
+          hypr_wire_attempts=$wire_try
+          WAYLAND_DISPLAY="$hypr_display" /bin/wayland-wire \
+            >/tmp/hyprland-wire.log 2>/tmp/hyprland-wire.err
+          if /bin/busybox grep -Eq '^STARBYTE_GUEST_WAYLAND_WIRE_RESULT connected=1 registry_done=1 compositor=1 seat=1 globals=[1-9][0-9]*$' /tmp/hyprland-wire.log; then
+            hypr_registry=1
+            hypr_compositor=1
+            hypr_seat=1
+            hypr_wire_connected=1
+            hypr_wire_sync=1
+            break
+          fi
+          if /bin/busybox grep -Eq '^STARBYTE_GUEST_WAYLAND_WIRE_RESULT connected=1 registry_done=1 compositor=[01] seat=[01] globals=[0-9]+$' /tmp/hyprland-wire.log; then
+            hypr_wire_connected=1
+            hypr_wire_sync=1
+            if /bin/busybox grep -Eq 'compositor=1 seat=[01]' /tmp/hyprland-wire.log; then hypr_compositor=1; fi
+            if /bin/busybox grep -Eq 'compositor=[01] seat=1' /tmp/hyprland-wire.log; then hypr_seat=1; fi
+          fi
+          if ! /bin/busybox kill -0 "$hypr_pid" 2>/dev/null; then break; fi
+          /bin/busybox sleep 1
+        done
+        for reason in missing_runtime missing_display unsafe_display_name connect_failed timeout_setup_failed write_failed read_failed payload_failed invalid_frame_length invalid_registry_global display_protocol_error registry_event_limit; do
+          if /bin/busybox grep -Fqx "STARBYTE_GUEST_WAYLAND_WIRE_BLOCKED $reason" /tmp/hyprland-wire.log 2>/dev/null; then hypr_wire_reason=$reason; break; fi
+        done
       fi
       if /bin/busybox kill -0 "$hypr_pid" 2>/dev/null; then hypr_alive=1; fi
       for log in /tmp/hyprland.log /tmp/hyprland.err; do
@@ -753,7 +782,7 @@ HYPR_CONFIG
       done
       /bin/busybox kill "$hypr_pid" 2>/dev/null || :
       wait "$hypr_pid" 2>/dev/null || :
-      echo "STARBYTE_GUEST_HYPRLAND_DIAG version=$hypr_version egl=$hypr_egl_error gbm=$hypr_gbm_error seat_error=$hypr_seat_error config_error=$hypr_config_error library_error=$hypr_library_error root_guard=$hypr_root_guard" >/dev/console
+      echo "STARBYTE_GUEST_HYPRLAND_DIAG version=$hypr_version config_valid=$hypr_config_valid egl=$hypr_egl_error gbm=$hypr_gbm_error seat_error=$hypr_seat_error config_error=$hypr_config_error library_error=$hypr_library_error root_guard=$hypr_root_guard wire_attempts=$hypr_wire_attempts wire_connected=$hypr_wire_connected wire_sync=$hypr_wire_sync wire_reason=$hypr_wire_reason" >/dev/console
       echo "STARBYTE_GUEST_HYPRLAND_RESULT executable=$hypr_executable socket=$hypr_socket registry=$hypr_registry compositor=$hypr_compositor seat=$hypr_seat alive=$hypr_alive" >/dev/console
     fi
   fi

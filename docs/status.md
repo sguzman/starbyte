@@ -1,5 +1,18 @@
 # Starbyte: current state
 
+## Faulted output retries despite continuous silent PCM (2026-10-25)
+
+An automatically detected CPAL stream failure is now retried on the audio
+worker's regular receive loop, rather than only after a 250ms receive
+timeout. A game supplying silent PCM continuously can previously prevent
+that timeout forever and suppress background recovery. The retry still
+honors the 10-second cooldown, does not open an unused/healthy device,
+and does not require any GUI repaint or physical QA. Regression tests
+model a continuously nonempty silent queue and verify retry eligibility.
+No physical output recovery or audibility is asserted. Scheduler acceptance
+remains **71/77 (92%)**.
+
+
 ## Speaker check distinguishes stopped workers from a full queue (2026-10-24)
 
 A live 440 Hz tone request now reports whether the bounded producer queue is

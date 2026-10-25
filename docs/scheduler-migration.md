@@ -1,5 +1,18 @@
 # Emulation scheduler migration
 
+## Stream-fault retry with continuously active silent PCM — 2026-10-25
+
+Automatic stream recovery is now serviced once per audio-worker receive
+iteration, before message dispatch, not exclusively on `recv_timeout`.
+Continuous silent PCM or frequent control messages formerly prevented the
+250ms timeout and could delay failure recovery indefinitely. The existing
+`StreamRecovery` pending flag, absent-device check and retry deadline still
+bound attempts, including during manual pause. A hardware-free regression
+simulates a constantly nonempty silent PCM queue and asserts retries do not
+require a timeout, do not bypass cooldown and do not open healthy/unused
+output. P-18/D-13 hardware verification remains pending; accepted 71/77.
+
+
 ## Live speaker-check queue and receiver errors — 2026-10-24
 
 The test-tone enqueue path previously collapsed full producer queues and

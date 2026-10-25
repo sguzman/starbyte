@@ -216,9 +216,13 @@ silently accepted. The guest has no host display/DRM/input passthrough,
 network or storage, and the probe cannot operate on the owner's
 compositor. No EGL surface or Hyprland window is tested by this probe.
 
-**Status:** Implemented, *not yet verified*. A positive GBM buffer
-receipt is prerequisite evidence, not proof of a running compositor or
-of native physical speaker/controller behavior.
+**Status:** The first hosted run ([CI 40221293158](https://github.com/sguzman/starbyte/actions/runs/40221293158))
+reached the GBM stage but failed with `device=false buffer=false`;
+the prior guest DRM/input proof still passed. A follow-up prints only
+sanitized flags for whether the guest probe binary began executing,
+opened its render node, exited normally and initialized GBM. The
+allocator gate remains **open** until device and buffer receipts pass;
+even that would not prove compositor or physical host behavior.
 
 ### Next route: independently provisioned virtual rendering and input seat
 

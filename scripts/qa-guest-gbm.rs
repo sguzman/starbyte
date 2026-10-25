@@ -18,6 +18,7 @@ unsafe extern "C" {
 }
 
 fn main() {
+    println!("STARBYTE_GUEST_GBM_PROCESS_STARTED");
     let node = std::env::args().nth(1).unwrap_or_default();
     if !node.starts_with("/dev/dri/renderD") {
         println!("STARBYTE_GUEST_GBM_RESULT device=0 buffer=0");
@@ -27,6 +28,7 @@ fn main() {
         println!("STARBYTE_GUEST_GBM_RESULT device=0 buffer=0");
         return;
     };
+    println!("STARBYTE_GUEST_GBM_NODE_OPEN_OK");
     // SAFETY: The file descriptor outlives the device and any GBM buffer.
     let device = unsafe { gbm_create_device(file.as_raw_fd()) };
     if device.is_null() {

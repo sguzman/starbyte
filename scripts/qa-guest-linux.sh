@@ -201,10 +201,22 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke ]]; then
       gbm_device=true
       gbm_buffer=true
     fi
-    printf 'STARBYTE_GUEST_GBM_DIAG device=%s buffer=%s\n' "$gbm_device" "$gbm_buffer"
+    gbm_started=false
+    gbm_node_open=false
+    gbm_exec_ok=false
+    if grep -Fqx 'STARBYTE_GUEST_GBM_PROCESS_STARTED' "$root/serial-clean.log"; then
+      gbm_started=true
+    fi
+    if grep -Fqx 'STARBYTE_GUEST_GBM_NODE_OPEN_OK' "$root/serial-clean.log"; then
+      gbm_node_open=true
+    fi
+    if grep -Fqx 'STARBYTE_GUEST_GBM_EXEC status=0' "$root/serial-clean.log"; then
+      gbm_exec_ok=true
+    fi
+    printf 'STARBYTE_GUEST_GBM_DIAG started=%s node_open=%s exec_ok=%s device=%s buffer=%s\n' "$gbm_started" "$gbm_node_open" "$gbm_exec_ok" "$gbm_device" "$gbm_buffer"
+    [[ "$gbm_started" == true && "$gbm_exec_ok" == true ]] || fail 'guest_gbm_process_or_loader_failed'
+    [[ "$gbm_node_open" == true ]] || fail 'guest_gbm_node_open_failed'
     [[ "$gbm_device" == true && "$gbm_buffer" == true ]] || fail 'guest_gbm_allocator_unavailable'
-    grep -Fqx 'STARBYTE_GUEST_GBM_EXEC status=0' "$root/serial-clean.log" \
-      || fail 'guest_gbm_probe_failed'
     echo 'STARBYTE_GUEST_GBM_OK device=initialized buffer=rendering guest_only=true'
   else
     echo 'STARBYTE_GUEST_DRM_INPUT_OK drm_render_node=present evdev_input_node=present guest_only=true'

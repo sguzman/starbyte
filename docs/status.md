@@ -8,9 +8,14 @@ guest RAM after the already-verified virtio DRM/input module setup.
 It opens only a guest `/dev/dri/renderD*` node, asks GBM to create a
 device and a 64×64 XRGB8888 **rendering** buffer, then frees both and
 reports bounded pass/fail receipts. The probe does not attach the host
-GPU, open a host window or expose host input. This is **implemented but
-not yet verified in CI**; a driver-created node alone is insufficient
-to assert a working GBM allocator. Guest compositor/rendering and the
+GPU, open a host window or expose host input. **Its first hosted run
+failed**: the guest still booted, loaded virtio DRM/input and exited
+cleanly, but `device=false buffer=false`. This does not yet distinguish
+GBM library load failure, failure to open the render node or a backend
+that cannot initialize the 2D virtio GPU. The follow-up adds strictly
+boolean process-started, render-node-open and executable-exit receipts
+to localize the failure, without leaking a guest serial transcript.
+A driver-created node alone is insufficient to assert GBM readiness. Guest compositor/rendering and the
 six physical acceptance gates remain unverified, **71/77 (92%)**.
 
 ## Verified guest DRM render and evdev input nodes (2026-10-25)

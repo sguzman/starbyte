@@ -233,17 +233,25 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     handshake=0
     compositor=0
     seat=0
+    wayland_attempts=0
     if [ "$socket_ready" = 1 ]; then
-      /bin/busybox sleep 1
-      # Require actual wl_registry announcements, even if a distribution
-      # formats wayland-info's human-facing output differently.
-      WAYLAND_DEBUG=client WAYLAND_DISPLAY=starbyte-wayland-0 \
-        /usr/bin/wayland-info >/tmp/wayland-info.log 2>/tmp/wayland-info.err
-      if [ "$?" = 0 ]; then handshake=1; fi
-      if /bin/busybox grep -q 'wl_compositor' /tmp/wayland-info.log ||
-        /bin/busybox grep -E 'wl_registry.*global.*wl_compositor' /tmp/wayland-info.err >/dev/null; then compositor=1; fi
-      if /bin/busybox grep -q 'wl_seat' /tmp/wayland-info.log ||
-        /bin/busybox grep -E 'wl_registry.*global.*wl_seat' /tmp/wayland-info.err >/dev/null; then seat=1; fi
+      # Socket creation can precede global registration. Require a live
+      # registry on a bounded retry loop; never mistake an empty response
+      # for a functioning graphical session.
+      for retry in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        wayland_attempts=$retry
+        WAYLAND_DEBUG=client WAYLAND_DISPLAY=starbyte-wayland-0 \
+          /bin/busybox timeout 4 /usr/bin/wayland-info \
+          >/tmp/wayland-info.log 2>/tmp/wayland-info.err
+        if [ "$?" = 0 ]; then handshake=1; fi
+        if /bin/busybox grep -q 'wl_compositor' /tmp/wayland-info.log ||
+          /bin/busybox grep -E 'wl_registry.*global.*wl_compositor' /tmp/wayland-info.err >/dev/null; then compositor=1; fi
+        if /bin/busybox grep -q 'wl_seat' /tmp/wayland-info.log ||
+          /bin/busybox grep -E 'wl_registry.*global.*wl_seat' /tmp/wayland-info.err >/dev/null; then seat=1; fi
+        if [ "$handshake" = 1 ] && [ "$compositor" = 1 ] && [ "$seat" = 1 ]; then break; fi
+        if ! /bin/busybox kill -0 "$weston_pid" 2>/dev/null; then break; fi
+        /bin/busybox sleep 1
+      done
     fi
     # Diagnose only fixed categories; raw compositor and client logs never
     # leave the disposable VM or appear in public CI.
@@ -256,7 +264,16 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     info_stdout=0
     info_stderr=0
     registry_trace=0
+    weston_log=0
+    weston_stdout=0
+    weston_zombie=0
     if /bin/busybox kill -0 "$weston_pid" 2>/dev/null; then compositor_alive=1; fi
+    if [ -s /tmp/weston.log ]; then weston_log=1; fi
+    if [ -s /tmp/weston.stdout ]; then weston_stdout=1; fi
+    if [ -r "/proc/$weston_pid/stat" ]; then
+      state="$(/bin/busybox awk '{print $3}' "/proc/$weston_pid/stat")"
+      if [ "$state" = Z ]; then weston_zombie=1; fi
+    fi
     if [ -s /tmp/wayland-info.log ]; then info_stdout=1; fi
     if [ -s /tmp/wayland-info.err ]; then info_stderr=1; fi
     if /bin/busybox grep -q 'wl_registry' /tmp/wayland-info.err 2>/dev/null; then registry_trace=1; fi
@@ -269,7 +286,7 @@ if [ -e /etc/starbyte-driver-smoke ]; then
       if /bin/busybox grep -Eiq 'drm|kms|no outputs|no connectors|no usable devices' "$log"; then drm_error=1; fi
     done
     echo "STARBYTE_GUEST_WAYLAND_RESULT socket=$socket_ready handshake=$handshake compositor=$compositor seat=$seat" >/dev/console
-    echo "STARBYTE_GUEST_WAYLAND_DIAG alive=$compositor_alive module=$module_error library=$shared_library_error option=$option_error seat=$seat_error drm=$drm_error stdout=$info_stdout stderr=$info_stderr registry=$registry_trace" >/dev/console
+    echo "STARBYTE_GUEST_WAYLAND_DIAG alive=$compositor_alive zombie=$weston_zombie weston_log=$weston_log weston_stdout=$weston_stdout module=$module_error library=$shared_library_error option=$option_error seat=$seat_error drm=$drm_error stdout=$info_stdout stderr=$info_stderr registry=$registry_trace attempts=$wayland_attempts" >/dev/console
     /bin/busybox kill "$weston_pid" 2>/dev/null || :
     wait "$weston_pid" 2>/dev/null || :
   fi
@@ -333,9 +350,11 @@ if [[ "$mode" == --wayland-smoke ]]; then
   # No TCP listener, physical display, viewer, or host desktop socket.
   display_args=(-display "vnc=unix:$root/guest-vnc.sock")
 fi
+guest_timeout=125
+if [[ "$mode" == --wayland-smoke ]]; then guest_timeout=200; fi
 set +e
 HOME="$root" XDG_CONFIG_HOME="$root" \
-  timeout --signal=TERM --kill-after=2s 125s qemu-system-x86_64 \
+  timeout --signal=TERM --kill-after=2s "${guest_timeout}s" qemu-system-x86_64 \
     -machine q35,accel=tcg -cpu max -m "$guest_ram" -smp 1 -no-reboot \
     -nodefaults "${display_args[@]}" -vga none -net none \
     -monitor none -parallel none -serial "file:$root/serial.log" \

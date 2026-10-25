@@ -1,5 +1,19 @@
 # Starbyte: current state
 
+## Show expired speaker checks in the live Sound diagnostics (2026-10-25)
+
+The Sound panel now displays both the number of test tones submitted to
+Rodio and the number rejected as expired, for the original library player
+and the independent emulator worker. The latter is carried in the existing
+`WorkerAudioDiagnostics` snapshot; no UI-thread emulator calls were
+introduced. A hardware-free test injects an expired diagnostic into an
+actual playback worker, observes it through the owner's snapshot, and
+confirms no OS audio device was attempted. Worker metrics are the last
+published snapshot and may remain unchanged while the game is paused.
+These counters are not evidence of physical audibility. P-18 and D-13
+remain pending and the scheduler ledger stays **71/77 (92%)**.
+
+
 ## Expired speaker checks now report a precise outcome (2026-10-25)
 
 A stale speaker-check tone is now counted as expired when the real audio

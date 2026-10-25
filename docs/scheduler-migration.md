@@ -1,5 +1,16 @@
 # Emulation scheduler migration
 
+## Expose rejected tone counts in both player UI paths — 2026-10-25
+
+The Sound menu previously showed only successful test-tone submissions.
+It now also displays expired requests for both legacy and worker-backed
+players. The value is copied through the existing owner-published
+diagnostic snapshot and never directly queries the emulator from egui.
+A no-speaker test verifies the counter through `OwnedSession` using an
+expired message on the real audio worker. This does not establish speaker
+audibility, physical recovery or final scheduler acceptance.
+
+
 ## Diagnosing expired speaker checks — 2026-10-25
 
 `AudioOutput` now publishes a separate count of expired live checks.

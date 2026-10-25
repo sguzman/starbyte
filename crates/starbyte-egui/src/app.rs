@@ -3630,13 +3630,20 @@ impl StarbyteApp {
             }
         }
         ui.label(format!(
-            "Live-worker test tones submitted to mixer: {} (hearing is still unverified)",
+            "Live-worker test tones submitted to mixer: {}; expired before playback: {} (hearing is still unverified)",
             if self.full_worker.is_some() {
                 self.worker_audio.test_tones_submitted
             } else {
                 self.audio_output
                     .as_ref()
                     .map_or(0, AudioOutput::test_tones_submitted)
+            },
+            if self.full_worker.is_some() {
+                self.worker_audio.expired_test_tones
+            } else {
+                self.audio_output
+                    .as_ref()
+                    .map_or(0, AudioOutput::expired_test_tones)
             }
         ));
         ui.label(format!(

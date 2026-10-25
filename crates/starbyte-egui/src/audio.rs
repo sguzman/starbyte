@@ -362,6 +362,18 @@ impl AudioOutput {
 
     /// Stop the real receiver without touching audio hardware so higher
     /// level recovery tests can cover paused/reselection paths deterministically.
+    /// Inject a pre-aged diagnostic into the real playback receiver while
+    /// remaining completely disconnected from an OS audio device.
+    #[cfg(test)]
+    pub(crate) fn enqueue_expired_tone_for_test(&self) {
+        self.sender
+            .try_send(AudioMessage::TestTone {
+                generation: self.generation.load(Ordering::Acquire),
+                queued_at: Instant::now() - MAX_TEST_TONE_AGE - Duration::from_millis(1),
+            })
+            .expect("test-only expired tone must fit in the empty worker queue");
+    }
+
     #[cfg(test)]
     pub(crate) fn stop_worker_for_test(&self) {
         self.sender.try_send(AudioMessage::StopForTest).unwrap();

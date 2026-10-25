@@ -199,6 +199,7 @@ pub struct WorkerAudioDiagnostics {
     pub worker_dropped_frames: u64,
     pub sink_empty_on_pcm: u64,
     pub test_tones_submitted: u64,
+    pub expired_test_tones: u64,
     pub stream_failures: u64,
     pub stream_recoveries: u64,
 }
@@ -663,6 +664,7 @@ impl OwnedSession {
             worker_dropped_frames: output.worker_dropped_frames(),
             sink_empty_on_pcm: output.sink_empty_on_pcm(),
             test_tones_submitted: output.test_tones_submitted(),
+            expired_test_tones: output.expired_test_tones(),
             stream_failures: output.stream_failures(),
             stream_recoveries: output.stream_recoveries(),
         }
@@ -1731,6 +1733,22 @@ mod tests {
     fn detached_session_has_no_game_until_loaded() {
         let engine = OwnedSession::create(AssetConfig::default()).unwrap();
         assert!(!engine.snapshot().has_rom);
+    }
+
+    #[test]
+    fn owner_reports_expired_speaker_check_from_real_worker_without_os_audio() {
+        let mut owner = OwnedSession::create(AssetConfig::default()).unwrap();
+        owner.audio = Some(AudioOutput::start().unwrap());
+        let output = owner.audio.as_ref().unwrap();
+        output.enqueue_expired_tone_for_test();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while owner.audio_diagnostics().expired_test_tones == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let diagnostic = owner.audio_diagnostics();
+        assert_eq!(diagnostic.expired_test_tones, 1);
+        assert_eq!(diagnostic.test_tones_submitted, 0);
+        assert_eq!(diagnostic.device_status, Some(AudioDeviceStatus::NotAttempted));
     }
 
     #[test]

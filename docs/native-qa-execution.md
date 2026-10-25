@@ -56,8 +56,16 @@ with a different software allocator. This must never be implemented by
 bind-mounting the owner's DRM devices into Bubblewrap. An isolated VM
 itself still would not prove speaker audibility or physical gamepad
 acceptance; those gates need separate device evidence. The Weston-only
-`--weston-smoke` continues to work independently. CI verifies this
-fail-before-launch path without requiring compositor packages.
+`--weston-smoke` remains independently available and is now bounded
+by a 20-second parent timeout, including compositor startup/teardown.
+Its `wayland-info` protocol handshake is separately limited to four
+seconds; a timed-out handshake cannot hang unattended QA. Bubblewrap's
+private PID namespace and die-with-parent guard remain in force, and
+the outer runtime cleanup continues to remove temporary artifacts.
+These timeout safeguards are CI source/syntax-tested; a live hung
+Weston process was not induced on the owner's machine.
+CI verifies both Hyprland fail-before-launch paths without requiring
+compositor packages.
 Scheduler acceptance remains **71/77** with all six gates open.
 
 ## Safe QA today

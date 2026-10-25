@@ -140,8 +140,11 @@ fi
 
 # The compositor and client share only this namespace and socket. They have no
 # host input/DRM devices, system/session sockets, host DISPLAY, or user config.
-bwrap "${common[@]}" "${weston_bindings[@]}" "${weston_environment[@]}" \
-  /usr/bin/bash -c '
+# A parent-level deadline also covers a stalled compositor/teardown and
+# relies on Bubblewrap's private PID namespace and --die-with-parent.
+if timeout --signal=TERM --kill-after=2s 20s \
+  bwrap "${common[@]}" "${weston_bindings[@]}" "${weston_environment[@]}" \
+    /usr/bin/bash -c '
     set -Eeuo pipefail
     : >"$XDG_RUNTIME_DIR/weston.log"
     : >"$XDG_RUNTIME_DIR/client.log"
@@ -192,8 +195,12 @@ bwrap "${common[@]}" "${weston_bindings[@]}" "${weston_environment[@]}" \
       printf "PRIVATE_WESTON_START_FAILED reason=%s\n" "$(weston_failure_reason)" >&2
       exit 1
     }
-    "$STARBYTE_WAYLAND_INFO" >"$XDG_RUNTIME_DIR/wayland-info.log" 2>&1 || {
-      echo PRIVATE_WAYLAND_INFO_FAILED >&2
+    set +e
+    timeout --signal=TERM --kill-after=1s 4s "$STARBYTE_WAYLAND_INFO" >"$XDG_RUNTIME_DIR/wayland-info.log" 2>&1
+    info_status=$?
+    set -e
+    [[ "$info_status" -eq 0 ]] || {
+      printf "PRIVATE_WAYLAND_INFO_FAILED status=%s\n" "$info_status" >&2
       exit 1
     }
     grep -q "wl_compositor" "$XDG_RUNTIME_DIR/wayland-info.log" || {
@@ -217,5 +224,8 @@ bwrap "${common[@]}" "${weston_bindings[@]}" "${weston_environment[@]}" \
       exit 1
     }
     echo PRIVATE_WESTON_TORN_DOWN
-  '
-printf 'STARBYTE_ISOLATED_WESTON_SMOKE_OK backend=headless renderer=pixman client=weston-simple-shm\n'
+  '; then
+  printf 'STARBYTE_ISOLATED_WESTON_SMOKE_OK backend=headless renderer=pixman client=weston-simple-shm\n'
+else
+  fail 'weston_smoke_failed_or_timed_out'
+fi

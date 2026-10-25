@@ -16,6 +16,9 @@ guard remain intact. This retires an impossible startup path without
 weakening the user's input/device isolation. The practical next dependency
 is a truly private virtual DRM/render device and input seat; no VM or
 physical run was executed and all six gates remain open **71/77 (92%)**.
+The remaining Weston-only smoke also has a four-second `wayland-info`
+handshake timeout and 20-second whole-sandbox deadline, preventing a
+stalled private compositor from hanging unattended QA indefinitely.
 See `docs/native-qa-execution.md` for pinned upstream source evidence.
 
 ## Account for game PCM lost while the output device is unavailable (2026-10-25)

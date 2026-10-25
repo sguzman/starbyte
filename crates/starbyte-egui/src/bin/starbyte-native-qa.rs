@@ -1024,16 +1024,14 @@ mod tests {
             "--hyprland-headless-smoke",
             "--hyprland-nested-smoke",
             "nested_hyprland_requires_private_drm_allocator",
-            "--setenv HYPRLAND_NO_SD_VARS 1",
-            "--setenv HYPRLAND_NO_SD_TARGET 1",
-            "--setenv HYPRLAND_NO_RT 1",
-            "--setenv LIBGL_ALWAYS_SOFTWARE 1",
-            "--setenv MESA_LOADER_DRIVER_OVERRIDE llvmpipe",
             "headless_hyprland_requires_private_drm_allocator",
             "HYPRLAND_INSTANCE_SIGNATURE",
             "--backend=headless --renderer=pixman",
             "--shell=kiosk-shell.so",
             "timeout --signal=TERM --kill-after=1s 2s",
+            "timeout --signal=TERM --kill-after=1s 4s \"$STARBYTE_WAYLAND_INFO\"",
+            "timeout --signal=TERM --kill-after=2s 20s",
+            "weston_smoke_failed_or_timed_out",
             "weston-simple-shm",
             "wayland-info",
             "PRIVATE_WESTON_CLIENT_CONNECTED",
@@ -1052,8 +1050,7 @@ mod tests {
                 "missing isolation guard: {required}"
             );
         }
-        assert!(harness.contains("--setenv STARBYTE_HYPRCTL_BIN"));
-        assert!(harness.contains("\"$STARBYTE_HYPRCTL_BIN\""));
+        assert!(!harness.contains("STARBYTE_HYPRCTL_BIN"));
         assert!(!harness.contains("XDG_SESSION_BUS_ADDRESS"));
     }
 

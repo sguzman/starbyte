@@ -260,9 +260,13 @@ key code 30 (`KEY_A`), and key-down value 1. The guest exits cleanly,
 and the host validates both bounded receipts while keeping its serial
 transcript private.
 
-**Status:** Implemented, awaiting hosted CI evidence. This probe
-uses no host input hardware, desktop display, Wayland socket or
-external session IPC. Passing evdev delivery cannot substitute for a
+**Verified:** [hosted CI 40224443269](https://github.com/sguzman/starbyte/actions/runs/40224443269)
+on `149a003` accepted both distinct receipts:
+`STARBYTE_GUEST_INPUT_QMP_ACK key_a=sent` and
+`STARBYTE_GUEST_INPUT_OK key_a=received source=private_qmp evdev=guest_only`.
+There was no kernel panic, and the previous GBM buffer test remained
+green. No host input hardware, desktop display, Wayland socket or
+external session IPC was used. Evdev delivery cannot substitute for a
 separately proven focused compositor window or native physical testing.
 
 ### Next route: independently provisioned virtual rendering and input seat

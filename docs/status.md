@@ -9,8 +9,13 @@ synthetic A-key press through QEMU's **private Unix QMP socket**.
 The guest must observe Linux `EV_KEY/KEY_A/value=1`, and the host
 must verify both the QMP acknowledgment and a guest serial receipt.
 No physical keyboard, desktop window, host compositor connection, or
-host input device is opened. **Implemented, awaiting CI validation.**
-Even a passing raw evdev test does not prove focused Wayland windows or
+host input device is opened. **Passed** in
+[hosted CI 40224443269](https://github.com/sguzman/starbyte/actions/runs/40224443269)
+on commit `149a003`, including
+`STARBYTE_GUEST_INPUT_QMP_ACK key_a=sent` and
+`STARBYTE_GUEST_INPUT_OK key_a=received source=private_qmp evdev=guest_only`.
+The guest booted without a panic and all previous GBM checks passed.
+Raw evdev delivery still does not prove focused Wayland windows or
 physical controls. Acceptance stays **71/77 (92%)**.
 
 ## Verified isolated GBM render-buffer allocation (2026-10-25)

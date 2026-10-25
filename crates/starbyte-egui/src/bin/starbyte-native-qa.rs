@@ -1155,7 +1155,10 @@ mod tests {
             "guest_virtual_keypress_missing",
             "STARBYTE_GUEST_INPUT_OK key_a=received source=private_qmp evdev=guest_only",
         ] {
-            assert!(harness.contains(required), "missing private input rule: {required}");
+            assert!(
+                harness.contains(required),
+                "missing private input rule: {required}"
+            );
         }
         assert!(reader.contains("STARBYTE_GUEST_INPUT_READY evdev=present"));
         assert!(reader.contains("STARBYTE_GUEST_INPUT_RESULT key_a=1"));

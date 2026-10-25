@@ -4,7 +4,7 @@ set -Eeuo pipefail
 umask 077
 fail() { printf 'STARBYTE_GUEST_LINUX_BLOCKED %s\n' "$1" >&2; exit 3; }
 mode="${1:-}"
-[[ $# -eq 1 && ( "$mode" == --check-only || "$mode" == --smoke || "$mode" == --driver-smoke || "$mode" == --gbm-smoke ) ]] || fail 'usage: --check-only|--smoke|--driver-smoke|--gbm-smoke'
+[[ $# -eq 1 && ( "$mode" == --check-only || "$mode" == --smoke || "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-smoke ) ]] || fail 'usage: --check-only|--smoke|--driver-smoke|--gbm-smoke|--input-smoke'
 [[ "${GITHUB_ACTIONS:-}" == true && "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] || fail 'github_hosted_runner_only'
 [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" && -z "${WAYLAND_SOCKET:-}" ]] || fail 'graphical_session_present'
 [[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" && -z "${DBUS_SESSION_BUS_ADDRESS:-}" && -z "${XDG_SESSION_ID:-}" ]] || fail 'interactive_session_present'
@@ -35,7 +35,7 @@ sha="${sha%% *}"
 printf 'STARBYTE_GUEST_KERNEL_SHA256 %s\n' "$sha"
 
 mkdir -p "$root/initfs/bin" "$root/initfs/dev" "$root/initfs/proc" "$root/initfs/sys"
-if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke ]]; then
+if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-smoke ]]; then
   # The matching official Alpine modloop is a SquashFS module tree, not
   # a host module mount. Extract it only in this disposable runner.
   for tool in unsquashfs depmod; do
@@ -111,6 +111,15 @@ if [[ "$mode" == --gbm-smoke ]]; then
   done < <(awk '$3 ~ /^\// {print $3} $1 ~ /^\// {print $1}' "$root/gbm-dependencies" | sort -u)
   : >"$root/initfs/etc/starbyte-gbm-smoke"
 fi
+if [[ "$mode" == --input-smoke ]]; then
+  for tool in rustc socat jq; do
+    command -v "$tool" >/dev/null 2>&1 || fail "guest_input_missing_$tool"
+  done
+  rustc --edition=2021 -C opt-level=1 -C target-feature=+crt-static \
+    scripts/qa-guest-input.rs -o "$root/initfs/bin/input-probe" \
+    || fail 'guest_input_compilation_failed'
+  : >"$root/initfs/etc/starbyte-input-smoke"
+fi
 cp "$(command -v busybox)" "$root/initfs/bin/busybox"
 ln -s busybox "$root/initfs/bin/sh"
 cat >"$root/initfs/init" <<'GUEST_INIT'
@@ -167,6 +176,10 @@ if [ -e /etc/starbyte-driver-smoke ]; then
       /bin/gbm-probe "$guest_card_node" >/dev/console 2>/dev/null
     echo "STARBYTE_GUEST_GBM_EXEC card_status=$?" >/dev/console
   fi
+  if [ -e /etc/starbyte-input-smoke ]; then
+    /bin/input-probe >/dev/console 2>/dev/null
+    echo "STARBYTE_GUEST_INPUT_EXEC status=$?" >/dev/console
+  fi
 fi
 /bin/busybox reboot -f
 while :; do /bin/busybox sleep 1; done
@@ -180,6 +193,43 @@ guest_ram=384M
 if [[ "$mode" == --gbm-smoke ]]; then guest_ram=768M; fi
 # -cpu max remains TCG-only; QEMU's default qemu64 CPU may lack instructions
 # needed by Ubuntu's x86-64-v3 static BusyBox, killing PID 1 before output.
+# The only synthetic keyboard injection path is this guest's private QMP
+# socket. Host input devices, displays and session IPC remain inaccessible.
+qmp_args=()
+injector_pid=''
+if [[ "$mode" == --input-smoke ]]; then
+  qmp_args=(-qmp "unix:$root/qmp.sock,server=on,wait=off")
+  guest_input_injector() {
+    local ready=false
+    for _ in {1..350}; do
+      if [[ -S "$root/qmp.sock" && -f "$root/serial.log" ]] \
+        && grep -Fq 'STARBYTE_GUEST_INPUT_READY evdev=present' "$root/serial.log"; then
+        ready=true
+        break
+      fi
+      sleep 0.1
+    done
+    [[ "$ready" == true ]] || { echo 'STARBYTE_GUEST_INPUT_QMP_BLOCKED guest_not_ready'; return 5; }
+    local qmp_status=0
+    {
+      printf '%s\n' '{"execute":"qmp_capabilities","id":"cap"}'
+      printf '%s\n' '{"execute":"input-send-event","arguments":{"events":[{"type":"key","data":{"down":true,"key":{"type":"qcode","data":"a"}}},{"type":"key","data":{"down":false,"key":{"type":"qcode","data":"a"}}}]},"id":"key"}'
+    } | timeout --signal=TERM --kill-after=1s 5s \
+      socat -T 3 STDIO "UNIX-CONNECT:$root/qmp.sock" \
+      >"$root/qmp.jsonl" 2>/dev/null || qmp_status=$?
+    [[ "$qmp_status" -eq 0 || "$qmp_status" -eq 1 ]] \
+      || { echo 'STARBYTE_GUEST_INPUT_QMP_BLOCKED transport'; return 5; }
+    jq -es '
+      any(.[]; .id == "cap" and .return == {}) and
+      any(.[]; .id == "key" and .return == {})
+    ' "$root/qmp.jsonl" >/dev/null \
+      || { echo 'STARBYTE_GUEST_INPUT_QMP_BLOCKED event_rejected'; return 5; }
+    echo 'STARBYTE_GUEST_INPUT_QMP_ACK key_a=sent'
+  }
+  guest_input_injector &
+  injector_pid=$!
+  trap 'kill "$injector_pid" 2>/dev/null || true; wait "$injector_pid" 2>/dev/null || true; rm -rf -- "$root"' EXIT
+fi
 set +e
 HOME="$root" XDG_CONFIG_HOME="$root" \
   timeout --signal=TERM --kill-after=2s 75s qemu-system-x86_64 \
@@ -187,11 +237,16 @@ HOME="$root" XDG_CONFIG_HOME="$root" \
     -nodefaults -display none -vga none -net none \
     -monitor none -parallel none -serial "file:$root/serial.log" \
     -device virtio-gpu-pci,id=sb_gpu -device virtio-keyboard-pci,id=sb_keyboard \
+    "${qmp_args[@]}" \
     -kernel "$root/vmlinuz-virt" -initrd "$root/initramfs.gz" \
     -append 'console=ttyS0,115200 loglevel=3 panic=5' \
     >"$root/qemu.log" 2>&1
 result=$?
 set -e
+if [[ "$mode" == --input-smoke ]]; then
+  wait "$injector_pid" || fail 'guest_private_qmp_injection_failed'
+  injector_pid=''
+fi
 # Never emit raw guest logs. Expose only three bounded diagnostic bits,
 # including on QEMU timeout, to distinguish boot from shutdown failure.
 [[ -f "$root/serial.log" ]] || : >"$root/serial.log"
@@ -219,7 +274,7 @@ printf 'STARBYTE_GUEST_LINUX_DIAG boot=%s pci=%s panic=%s cause=%s qemu_status=%
 [[ "$result" -eq 0 ]] || fail "guest_boot_failed_or_timed_out status=$result"
 [[ "$boot" == true ]] || fail 'boot_receipt_missing'
 [[ "$pci" == true ]] || fail 'guest_virtio_pci_devices_missing'
-if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke ]]; then
+if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-smoke ]]; then
   driver=false
   if grep -Fqx 'STARBYTE_GUEST_DRIVER_RESULT render=1 input=1 gpu_load=0 input_load=0 evdev_load=0' "$root/serial-clean.log"; then
     driver=true
@@ -260,6 +315,14 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke ]]; then
     else
       fail 'guest_gbm_allocator_unavailable'
     fi
+  elif [[ "$mode" == --input-smoke ]]; then
+    grep -Fqx 'STARBYTE_GUEST_INPUT_READY evdev=present' "$root/serial-clean.log" \
+      || fail 'guest_input_listener_missing'
+    grep -Fqx 'STARBYTE_GUEST_INPUT_RESULT key_a=1' "$root/serial-clean.log" \
+      || fail 'guest_virtual_keypress_missing'
+    grep -Fqx 'STARBYTE_GUEST_INPUT_EXEC status=0' "$root/serial-clean.log" \
+      || fail 'guest_virtual_keypress_reader_failed'
+    echo 'STARBYTE_GUEST_INPUT_OK key_a=received source=private_qmp evdev=guest_only'
   else
     echo 'STARBYTE_GUEST_DRM_INPUT_OK drm_render_node=present evdev_input_node=present guest_only=true'
   fi

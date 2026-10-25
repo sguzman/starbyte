@@ -4,7 +4,7 @@ set -Eeuo pipefail
 umask 077
 fail() { printf 'STARBYTE_GUEST_LINUX_BLOCKED %s\n' "$1" >&2; exit 3; }
 mode="${1:-}"
-[[ $# -eq 1 && ( "$mode" == --check-only || "$mode" == --smoke || "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-smoke || "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ) ]] || fail 'usage: --check-only|--smoke|--driver-smoke|--gbm-smoke|--input-smoke|--wayland-smoke|--starbyte-smoke'
+[[ $# -eq 1 && ( "$mode" == --check-only || "$mode" == --smoke || "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-smoke || "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --hyprland-smoke ) ]] || fail 'usage: --check-only|--smoke|--driver-smoke|--gbm-smoke|--input-smoke|--wayland-smoke|--starbyte-smoke|--hyprland-smoke'
 [[ "${GITHUB_ACTIONS:-}" == true && "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] || fail 'github_hosted_runner_only'
 [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" && -z "${WAYLAND_SOCKET:-}" ]] || fail 'graphical_session_present'
 [[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" && -z "${DBUS_SESSION_BUS_ADDRESS:-}" && -z "${XDG_SESSION_ID:-}" ]] || fail 'interactive_session_present'
@@ -35,7 +35,7 @@ sha="${sha%% *}"
 printf 'STARBYTE_GUEST_KERNEL_SHA256 %s\n' "$sha"
 
 mkdir -p "$root/initfs/bin" "$root/initfs/dev" "$root/initfs/proc" "$root/initfs/sys"
-if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-smoke || "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ]]; then
+if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-smoke || "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --hyprland-smoke ]]; then
   # The matching official Alpine modloop is a SquashFS module tree, not
   # a host module mount. Extract it only in this disposable runner.
   for tool in unsquashfs depmod; do
@@ -69,7 +69,7 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
   depmod -b "$root/initfs" "$release" || fail 'modloop_depmod_failed'
   : >"$root/initfs/etc/starbyte-driver-smoke"
 fi
-if [[ "$mode" == --gbm-smoke || "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ]]; then
+if [[ "$mode" == --gbm-smoke || "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --hyprland-smoke ]]; then
   # Compile Rust only on the hosted CI runner, then execute inside guest RAM.
   # Copy just the compiled binary's dynamic linker and shared libraries.
   for tool in rustc ldd awk sort; do
@@ -120,7 +120,7 @@ if [[ "$mode" == --input-smoke ]]; then
     || fail 'guest_input_compilation_failed'
   : >"$root/initfs/etc/starbyte-input-smoke"
 fi
-if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ]]; then
+if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --hyprland-smoke ]]; then
   # Stage a real DRM/KMS Weston compositor, its dynamically loaded modules,
   # and an independent Rust Wayland wire client into private guest RAM.
   # This does not launch a host GUI.
@@ -223,6 +223,19 @@ if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ]]; then
     cp -L "$swrast_binary" "$root/initfs$swrast_binary" || fail 'guest_swrast_driver_copy_failed'
     ldd "$swrast_binary" >>"$root/wayland-dependencies" || fail 'guest_swrast_dependency_scan_failed'
     : >"$root/initfs/etc/starbyte-app-smoke"
+  fi
+  if [[ "$mode" == --hyprland-smoke ]]; then
+    # Only distro-packaged binaries and their shared dependencies enter
+    # guest RAM. Host devices, desktop sockets and personal files do not.
+    command -v Hyprland >/dev/null 2>&1 || fail 'hosted_hyprland_binary_missing'
+    hyprland_bin="$(command -v Hyprland)"
+    mkdir -p "$root/initfs$(dirname "$hyprland_bin")"
+    cp -L "$hyprland_bin" "$root/initfs$hyprland_bin" || fail 'guest_hyprland_binary_copy_failed'
+    ldd "$hyprland_bin" >>"$root/wayland-dependencies" || fail 'guest_hyprland_dependencies_failed'
+    if [[ -d /usr/share/hyprland ]]; then
+      cp -a /usr/share/hyprland "$root/initfs/usr/share/" || fail 'guest_hyprland_assets_failed'
+    fi
+    : >"$root/initfs/etc/starbyte-hyprland-smoke"
   fi
   grep -Fq 'not found' "$root/wayland-dependencies" && fail 'wayland_dependency_missing'
   while IFS= read -r dependency; do
@@ -674,6 +687,72 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     echo "STARBYTE_GUEST_WAYLAND_DIAG alive=$compositor_alive zombie=$weston_zombie weston_log=$weston_log weston_stdout=$weston_stdout module=$module_error library=$shared_library_error option=$option_error seat=$seat_error drm=$drm_error stdout=$info_stdout stderr=$info_stderr registry=$registry_trace attempts=$wayland_attempts" >/dev/console
     /bin/busybox kill "$weston_pid" 2>/dev/null || :
     wait "$weston_pid" 2>/dev/null || :
+    if [ -e /etc/starbyte-hyprland-smoke ]; then
+      # Weston has been reaped. The Hyprland compositor uses only this VM's
+      # DRM card and keyboard. Never use the owner's active display.
+      /bin/busybox cat >/tmp/starbyte-hyprland.conf <<'HYPR_CONFIG'
+monitor = , 1024x768@60, auto, 1
+misc {
+    disable_hyprland_logo = true
+    disable_splash_rendering = true
+}
+xwayland {
+    enabled = false
+}
+HYPR_CONFIG
+      hypr_executable=0
+      hypr_socket=0
+      hypr_registry=0
+      hypr_compositor=0
+      hypr_seat=0
+      hypr_alive=0
+      hypr_version=0
+      hypr_egl_error=0
+      hypr_gbm_error=0
+      hypr_seat_error=0
+      hypr_config_error=0
+      hypr_library_error=0
+      if [ -x /usr/bin/Hyprland ]; then hypr_executable=1; fi
+      /usr/bin/Hyprland --version >/tmp/hypr-version.log 2>/tmp/hypr-version.err
+      if [ "$?" = 0 ]; then hypr_version=1; fi
+      HYPRLAND_NO_RT=1 AQ_DRM_DEVICES=/dev/dri/card0 \
+        /usr/bin/Hyprland --config /tmp/starbyte-hyprland.conf \
+        >/tmp/hyprland.log 2>/tmp/hyprland.err &
+      hypr_pid=$!
+      hypr_display=''
+      for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+        for socket in /run/user/0/wayland-*; do
+          [ -S "$socket" ] || continue
+          hypr_display="${socket##*/}"
+          hypr_socket=1
+          break
+        done
+        if [ "$hypr_socket" = 1 ]; then break; fi
+        if ! /bin/busybox kill -0 "$hypr_pid" 2>/dev/null; then break; fi
+        /bin/busybox sleep 1
+      done
+      if [ "$hypr_socket" = 1 ]; then
+        WAYLAND_DISPLAY="$hypr_display" /bin/wayland-wire >/tmp/hyprland-wire.log 2>/tmp/hyprland-wire.err
+        if /bin/busybox grep -Eq '^STARBYTE_GUEST_WAYLAND_WIRE_RESULT connected=1 registry_done=1 compositor=1 seat=1 globals=[1-9][0-9]*$' /tmp/hyprland-wire.log; then
+          hypr_registry=1
+          hypr_compositor=1
+          hypr_seat=1
+        fi
+      fi
+      if /bin/busybox kill -0 "$hypr_pid" 2>/dev/null; then hypr_alive=1; fi
+      for log in /tmp/hyprland.log /tmp/hyprland.err; do
+        [ -f "$log" ] || continue
+        if /bin/busybox grep -Eiq 'egl.*failed|failed.*egl|egl_not_initialized' "$log"; then hypr_egl_error=1; fi
+        if /bin/busybox grep -Eiq 'gbm.*failed|failed.*gbm|no allocator' "$log"; then hypr_gbm_error=1; fi
+        if /bin/busybox grep -Eiq 'libseat.*failed|seat.*failed|session inactive' "$log"; then hypr_seat_error=1; fi
+        if /bin/busybox grep -Eiq 'config.*failed|config.*error|parse.*error' "$log"; then hypr_config_error=1; fi
+        if /bin/busybox grep -Eiq 'error while loading shared libraries|cannot open shared object|failed.*shader' "$log"; then hypr_library_error=1; fi
+      done
+      /bin/busybox kill "$hypr_pid" 2>/dev/null || :
+      wait "$hypr_pid" 2>/dev/null || :
+      echo "STARBYTE_GUEST_HYPRLAND_DIAG version=$hypr_version egl=$hypr_egl_error gbm=$hypr_gbm_error seat_error=$hypr_seat_error config_error=$hypr_config_error library_error=$hypr_library_error" >/dev/console
+      echo "STARBYTE_GUEST_HYPRLAND_RESULT executable=$hypr_executable socket=$hypr_socket registry=$hypr_registry compositor=$hypr_compositor seat=$hypr_seat alive=$hypr_alive" >/dev/console
+    fi
   fi
   if [ -e /etc/starbyte-input-smoke ]; then
     /bin/input-probe >/dev/console 2>/dev/null
@@ -691,7 +770,7 @@ chmod 755 "$root/initfs/init"
 guest_ram=384M
 if [[ "$mode" == --gbm-smoke ]]; then guest_ram=768M; fi
 if [[ "$mode" == --wayland-smoke ]]; then guest_ram=1536M; fi
-if [[ "$mode" == --starbyte-smoke ]]; then guest_ram=2048M; fi
+if [[ "$mode" == --starbyte-smoke || "$mode" == --hyprland-smoke ]]; then guest_ram=2048M; fi
 # -cpu max remains TCG-only; QEMU's default qemu64 CPU may lack instructions
 # needed by Ubuntu's x86-64-v3 static BusyBox, killing PID 1 before output.
 # The only synthetic keyboard injection path is this guest's private QMP
@@ -731,7 +810,7 @@ if [[ "$mode" == --input-smoke ]]; then
   injector_pid=$!
   trap 'kill "$injector_pid" 2>/dev/null || true; wait "$injector_pid" 2>/dev/null || true; rm -rf -- "$root"' EXIT
 fi
-if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ]]; then
+if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --hyprland-smoke ]]; then
   # Entirely virtual keyboard, private guest-only QMP socket.
   qmp_args=(-qmp "unix:$root/qmp.sock,server=on,wait=off")
   guest_focus_injector() {
@@ -764,7 +843,7 @@ if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ]]; then
   trap 'kill "$injector_pid" 2>/dev/null || true; wait "$injector_pid" 2>/dev/null || true; rm -rf -- "$root"' EXIT
 fi
 display_args=(-display none)
-if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ]]; then
+if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --hyprland-smoke ]]; then
   # Private Unix-only VNC display emulation advertises a KMS output.
   # No TCP listener, physical display, viewer, or host desktop socket.
   display_args=(-display "vnc=unix:$root/guest-vnc.sock")
@@ -772,6 +851,7 @@ fi
 guest_timeout=125
 if [[ "$mode" == --wayland-smoke ]]; then guest_timeout=200; fi
 if [[ "$mode" == --starbyte-smoke ]]; then guest_timeout=340; fi
+if [[ "$mode" == --hyprland-smoke ]]; then guest_timeout=300; fi
 set +e
 HOME="$root" XDG_CONFIG_HOME="$root" \
   timeout --signal=TERM --kill-after=2s "${guest_timeout}s" qemu-system-x86_64 \
@@ -790,7 +870,7 @@ if [[ "$mode" == --input-smoke ]]; then
   injector_pid=''
 fi
 focus_injector_ok=true
-if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ]]; then
+if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --hyprland-smoke ]]; then
   wait "$injector_pid" || focus_injector_ok=false
   injector_pid=''
 fi
@@ -821,14 +901,14 @@ printf 'STARBYTE_GUEST_LINUX_DIAG boot=%s pci=%s panic=%s cause=%s qemu_status=%
 [[ "$result" -eq 0 ]] || fail "guest_boot_failed_or_timed_out status=$result"
 [[ "$boot" == true ]] || fail 'boot_receipt_missing'
 [[ "$pci" == true ]] || fail 'guest_virtio_pci_devices_missing'
-if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-smoke || "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ]]; then
+if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-smoke || "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --hyprland-smoke ]]; then
   driver=false
   if grep -Fqx 'STARBYTE_GUEST_DRIVER_RESULT render=1 input=1 gpu_load=0 input_load=0 evdev_load=0' "$root/serial-clean.log"; then
     driver=true
   fi
   printf 'STARBYTE_GUEST_DRIVER_DIAG render_and_input=%s\n' "$driver"
   [[ "$driver" == true ]] || fail 'guest_driver_or_device_nodes_missing'
-  if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ]]; then
+  if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --hyprland-smoke ]]; then
     # All receipts are bounded diagnostics; never disclose raw guest logs.
     grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST|BIN_DIAG|REGISTRY_DIAG)|WESTON_(EXEC|STAGE|EXIT)|TMP_WRITE_OK|TMP_MOUNT|TMP_IO_DIAG|RUN_MOUNT|UDEV_RESULT|XKB_DATA|FOCUS_RESULT|APP_RESULT|APP_DIAG|APP_ROOT_DIAG) ' "$root/serial-clean.log" || true
     grep -Fqx 'STARBYTE_GUEST_TMP_MOUNT status=0' "$root/serial-clean.log" \
@@ -856,6 +936,12 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
     grep -Fqx 'STARBYTE_GUEST_FOCUS_RESULT ready=1 clean_exit=1 exit_message=1 weston_alive=1' "$root/serial-clean.log" \
       || fail 'guest_focused_wayland_keyboard_delivery_missing'
     echo 'STARBYTE_GUEST_FOCUS_OK client=weston-simple-shm escape=received source=private_qmp guest_only=true'
+    if [[ "$mode" == --hyprland-smoke ]]; then
+      grep -E '^STARBYTE_GUEST_HYPRLAND_(RESULT|DIAG) ' "$root/serial-clean.log" || true
+      grep -Fqx 'STARBYTE_GUEST_HYPRLAND_RESULT executable=1 socket=1 registry=1 compositor=1 seat=1 alive=1' "$root/serial-clean.log" \
+        || fail 'guest_private_hyprland_registry_or_seat_missing'
+      echo 'STARBYTE_GUEST_HYPRLAND_OK drm=virtio compositor=hyprland seat=virtual guest_only=true'
+    fi
     if [[ "$mode" == --starbyte-smoke ]]; then
       grep -Fqx 'STARBYTE_GUEST_APP_RESULT launched=1 status=0 frames=1 single_owner=1' "$root/serial-clean.log" \
         || fail 'guest_real_starbyte_window_and_worker_missing'

@@ -46,13 +46,18 @@ if [[ "$mode" == --driver-smoke ]]; then
     --proto '=https' --tlsv1.2 "$modloop_url" --output "$root/modloop-virt" \
     || fail 'modloop_download_failed'
   modloop_sha="$(sha256sum "$root/modloop-virt")"
-  printf 'STARBYTE_GUEST_MODLOOP_SHA256 %s\n' "${modloop_sha%% *}"
+  modloop_sha="${modloop_sha%% *}"
+  [[ "$modloop_sha" == 237f5e31e95071816565ffcc55bc028cbdeed960e8e54efd134c8cf13b101782 ]] \
+    || fail 'modloop_digest_mismatch'
+  printf 'STARBYTE_GUEST_MODLOOP_SHA256 %s\n' "$modloop_sha"
   unsquashfs -d "$root/modloop" "$root/modloop-virt" >/dev/null 2>&1 \
     || fail 'modloop_extract_failed'
   module_base="$root/modloop/modules"
   [[ -d "$module_base" ]] || fail 'modloop_module_tree_missing'
   shopt -s nullglob
-  releases=("$module_base"/*)
+  # Alpine modloop also has a firmware directory. Select only actual
+  # kernel-release module directories, not every sibling directory.
+  releases=("$module_base"/[0-9]*)
   shopt -u nullglob
   [[ "${#releases[@]}" -eq 1 && -d "${releases[0]}" ]] || fail 'modloop_kernel_release_ambiguous'
   release="${releases[0]##*/}"

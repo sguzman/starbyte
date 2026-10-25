@@ -897,6 +897,13 @@ mod tests {
         assert!(output.reopen_pending.load(Ordering::Acquire));
         assert_eq!(output.stream_failures(), 0);
         assert_eq!(output.stream_recoveries(), 0);
+
+        // A disconnected audio worker is not a queue-capacity error:
+        // the output request must fail, rather than pretend it was queued.
+        output.reopen_pending.store(false, Ordering::Release);
+        drop(receiver);
+        assert!(!output.request_reopen());
+        assert!(!output.reopen_pending.load(Ordering::Acquire));
     }
 
     #[test]

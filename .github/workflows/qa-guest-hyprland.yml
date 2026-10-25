@@ -46,6 +46,11 @@ jobs:
             libwayland-egl1 libwayland-cursor0 weston wayland-utils \
             libseat1 libinput10 binutils udev xkb-data hyprland
       - uses: dtolnay/rust-toolchain@stable
-      - name: Validate private Hyprland virtio DRM and keyboard seat
+      - name: Install native GUI build dependencies
+        run: sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install -y --no-install-recommends pkg-config libudev-dev libasound2-dev
+      - uses: Swatinem/rust-cache@v2
+      - name: Build actual native Starbyte GUI for private Hyprland guest
+        run: cargo build --locked -p starbyte-egui
+      - name: Validate private Hyprland seat and original Starbyte worker window
         shell: bash
         run: bash scripts/qa-guest-linux.sh --hyprland-smoke

@@ -192,8 +192,9 @@ if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --
     ldd "$artifact" >>"$root/wayland-dependencies" || fail 'wayland_dependency_scan_failed'
   done
   if [[ "$mode" == --starbyte-smoke || "$mode" == --hyprland-smoke ]]; then
-    if [[ "$mode" == --starbyte-smoke ]]; then
+    if [[ "$mode" == --starbyte-smoke || "$mode" == --hyprland-smoke ]]; then
       # Original application build from the checked-out repository only.
+      # The standalone Hyprland guest runs this same binary after Weston exits.
       app_binary=target/debug/starbyte-egui
       [[ -x "$app_binary" ]] || fail 'hosted_starbyte_binary_missing'
       cp -L "$app_binary" "$root/initfs/bin/starbyte-egui" \
@@ -808,6 +809,37 @@ HYPR_CONFIG
         if /bin/busybox grep -Eiq 'error while loading shared libraries|cannot open shared object|failed.*shader' "$log"; then hypr_library_error=1; fi
         if /bin/busybox grep -Eiq 'superuser privileges|shall not be run as the root|privilege check is not omitted' "$log"; then hypr_root_guard=1; fi
       done
+      # Reuse the original full-library GUI smoke with Hyprland as the
+      # Wayland server, never the owner's display. One exclusive worker
+      # must execute 30 demo frames without a shadow legacy session.
+      hypr_app_status=not_run
+      hypr_app_frames=0
+      hypr_app_single_owner=0
+      if [ "$hypr_registry" = 1 ] && [ "$hypr_seat" = 1 ]; then
+        WAYLAND_DISPLAY="$hypr_display" \
+          RUST_BACKTRACE=1 \
+          WINIT_UNIX_BACKEND=wayland \
+          EGL_PLATFORM=wayland \
+          MESA_LOADER_DRIVER_OVERRIDE=swrast \
+          GALLIUM_DRIVER=llvmpipe \
+          XDG_CONFIG_HOME=/tmp/starbyte-hyprland-app-config \
+          XDG_CACHE_HOME=/tmp/starbyte-hyprland-app-cache \
+          /bin/starbyte-egui --demo --native-worker-preview --exit-after-frames 30 \
+            --config /tmp/starbyte-hyprland-app-config.toml \
+            --cache-dir /tmp/starbyte-hyprland-cache \
+            >/tmp/starbyte-hyprland-app.log 2>/tmp/starbyte-hyprland-app.err
+        hypr_app_status=$?
+        if /bin/busybox grep -Fq 'STARBYTE_FULL_LIBRARY_WORKER_SMOKE_OK frame=' /tmp/starbyte-hyprland-app.log; then hypr_app_frames=1; fi
+        if /bin/busybox grep -Fq 'STARBYTE_FULL_LIBRARY_SINGLE_OWNER_SMOKE_OK legacy_session_absent=true worker_frame=' /tmp/starbyte-hyprland-app.log; then hypr_app_single_owner=1; fi
+      fi
+      # kill -0 alone also succeeds for zombies; require a non-zombie
+      # Hyprland process after the application has finished.
+      hypr_alive=0
+      if /bin/busybox kill -0 "$hypr_pid" 2>/dev/null && [ -r "/proc/$hypr_pid/stat" ]; then
+        hypr_state="$(/bin/busybox awk '{print $3}' "/proc/$hypr_pid/stat")"
+        if [ "$hypr_state" != Z ]; then hypr_alive=1; fi
+      fi
+      echo "STARBYTE_GUEST_HYPRLAND_APP_RESULT status=$hypr_app_status frames=$hypr_app_frames single_owner=$hypr_app_single_owner" >/dev/console
       /bin/busybox kill "$hypr_pid" 2>/dev/null || :
       wait "$hypr_pid" 2>/dev/null || :
       echo "STARBYTE_GUEST_HYPRLAND_DIAG version=$hypr_version config_valid=$hypr_config_valid egl=$hypr_egl_error gbm=$hypr_gbm_error seat_error=$hypr_seat_error config_error=$hypr_config_error library_error=$hypr_library_error root_guard=$hypr_root_guard wire_attempts=$hypr_wire_attempts wire_connected=$hypr_wire_connected wire_sync=$hypr_wire_sync wire_reason=$hypr_wire_reason" >/dev/console
@@ -940,7 +972,7 @@ fi
 guest_timeout=125
 if [[ "$mode" == --wayland-smoke ]]; then guest_timeout=200; fi
 if [[ "$mode" == --starbyte-smoke ]]; then guest_timeout=340; fi
-if [[ "$mode" == --hyprland-smoke ]]; then guest_timeout=300; fi
+if [[ "$mode" == --hyprland-smoke ]]; then guest_timeout=450; fi
 set +e
 HOME="$root" XDG_CONFIG_HOME="$root" \
   timeout --signal=TERM --kill-after=2s "${guest_timeout}s" qemu-system-x86_64 \
@@ -1031,10 +1063,13 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
       || fail 'guest_focused_wayland_keyboard_delivery_missing'
     echo 'STARBYTE_GUEST_FOCUS_OK client=weston-simple-shm escape=received source=private_qmp guest_only=true'
     if [[ "$mode" == --hyprland-smoke ]]; then
-      grep -E '^STARBYTE_GUEST_HYPRLAND_(RESULT|DIAG) ' "$root/serial-clean.log" || true
+      grep -E '^STARBYTE_GUEST_HYPRLAND_(RESULT|DIAG|APP_RESULT) ' "$root/serial-clean.log" || true
       grep -Fqx 'STARBYTE_GUEST_HYPRLAND_RESULT executable=1 socket=1 registry=1 compositor=1 seat=1 alive=1' "$root/serial-clean.log" \
         || fail 'guest_private_hyprland_registry_or_seat_missing'
       echo 'STARBYTE_GUEST_HYPRLAND_OK drm=virtio compositor=hyprland seat=virtual guest_only=true'
+      grep -Fqx 'STARBYTE_GUEST_HYPRLAND_APP_RESULT status=0 frames=1 single_owner=1' "$root/serial-clean.log" \
+        || fail 'guest_real_starbyte_hyprland_window_and_worker_missing'
+      echo 'STARBYTE_GUEST_HYPRLAND_APP_OK shell=original_full_library emulator_owner=worker frames=30 guest_only=true'
       grep -Fqx 'STARBYTE_GUEST_HYPR_FOCUS_RESULT ready=1 clean_exit=1 exit_message=1 hyprland_alive=1' "$root/serial-clean.log" \
         || fail 'guest_private_hyprland_focused_keyboard_missing'
       [[ "$hypr_injector_ok" == true ]] || fail 'guest_private_hyprland_focus_injector_failed'

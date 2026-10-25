@@ -1,5 +1,20 @@
 # Starbyte: current state
 
+## Retry initially unavailable desktop audio even while manually paused (2026-10-25)
+
+When a fresh nonzero game buffer or speaker check first attempted to open
+Rodio output and no OS device was available, the worker previously retried
+only if another game frame arrived. That leaves paused users stuck in a
+failure state after plugging in a device. The audio-thread health loop now
+retries a *previously attempted* initial open after the existing ten-second
+cooldown, without a GUI frame or emulator advancement. Muted output holds
+the retry until sound is enabled; unused workers, manual route resets and
+healthy outputs remain lazy. Initial-open recovery does not increment the
+separate CPAL stream-fault recovery count. Deterministic synthetic tests
+cover the retry deadline, paused/muted behavior and unused-device guard.
+A real speaker was not opened in tests, so P-18 and the other physical
+acceptance gates remain pending: **71/77 (92%)**.
+
 ## Avoid synthesizing expired speaker-check waveforms (2026-10-25)
 
 The dedicated audio worker previously generated every 8,000-frame stereo

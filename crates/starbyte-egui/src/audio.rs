@@ -608,6 +608,38 @@ impl StreamRecovery {
     }
 }
 
+/// An initial OS output-open failure must recover without waiting for another
+/// SNES frame (a manually paused game may send none). Unlike a stream fault,
+/// this must not increment the stream-recovery counter. It becomes armed only
+/// after a real failed device-open attempt, never when a player merely starts.
+#[derive(Default)]
+struct InitialOutputRetry {
+    pending: bool,
+}
+
+impl InitialOutputRetry {
+    fn after_attempt(&mut self, device_present: bool, stream_recovery: &StreamRecovery) {
+        self.pending = !device_present && !stream_recovery.pending;
+    }
+
+    fn reset(&mut self) {
+        self.pending = false;
+    }
+
+    fn due(
+        &self,
+        device_present: bool,
+        retry_after: Option<Instant>,
+        volume_bits: &AtomicU32,
+        now: Instant,
+    ) -> bool {
+        self.pending
+            && !device_present
+            && f32::from_bits(volume_bits.load(Ordering::Acquire)) > 0.0
+            && retry_ready(retry_after, now)
+    }
+}
+
 /// A CPAL stream can fail while the UI is paused or the queue contains
 /// frames from the old output route. Quarantine those frames before any
 /// background retry selects a replacement device. An expired frame timestamp
@@ -737,6 +769,7 @@ fn audio_worker(
     let mut stretch = PitchStretch::default();
     let mut producer_continuity = ProducerDropContinuity::default();
     let mut recovery = StreamRecovery::default();
+    let mut initial_retry = InitialOutputRetry::default();
 
     loop {
         // Device faults must be observed even while the emulator is paused:
@@ -750,6 +783,7 @@ fn audio_worker(
         // and is processed even if the PCM queue rejected its wakeup.
         if reopen_pending.swap(false, Ordering::AcqRel) {
             recovery.on_manual_reset();
+            initial_retry.reset();
             if let Some(output) = device.take() {
                 output.clear();
             }
@@ -764,6 +798,7 @@ fn audio_worker(
         // callback or GUI. Failed attempts still use the existing cooldown.
         if device.as_ref().is_some_and(PlaybackDevice::stream_failed) {
             warn!("desktop audio stream failed; reopening an output device");
+            initial_retry.reset();
             record_stream_fault(
                 &mut recovery,
                 &stream_failures,
@@ -792,7 +827,10 @@ fn audio_worker(
         // recv_timeout. A running game can supply silent frames at 60 Hz,
         // indefinitely preventing a 250ms idle tick. Recovery must continue
         // even while paused, playing silently, or receiving control wakeups.
-        if reopen_due(&recovery, device.is_some(), retry_after, Instant::now()) {
+        let now = Instant::now();
+        if reopen_due(&recovery, device.is_some(), retry_after, now)
+            || initial_retry.due(device.is_some(), retry_after, &volume_bits, now)
+        {
             attempt_device_open(
                 &mut device,
                 &device_status,
@@ -800,6 +838,7 @@ fn audio_worker(
                 &mut recovery,
                 &stream_recoveries,
             );
+            initial_retry.after_attempt(device.is_some(), &recovery);
         }
 
         let Some(message) = message else {
@@ -899,6 +938,7 @@ fn audio_worker(
                 &mut recovery,
                 &stream_recoveries,
             );
+            initial_retry.after_attempt(device.is_some(), &recovery);
         }
         if let Some(output) = &device {
             // Device initialization can take time. Drop a frame that became
@@ -1073,8 +1113,9 @@ mod tests {
     };
 
     use super::{
-        AUDIO_RETRY_DELAY, AudioDeviceStatus, AudioMessage, AudioOutput, MAX_TEST_TONE_AGE,
-        PlaybackContinuity, PostProcessAudioStatus, ProducerDropContinuity, StreamRecovery,
+        AUDIO_RETRY_DELAY, AudioDeviceStatus, AudioMessage, AudioOutput, InitialOutputRetry,
+        MAX_TEST_TONE_AGE, PlaybackContinuity, PostProcessAudioStatus, ProducerDropContinuity,
+        StreamRecovery,
         apply_sink_volume, discard_stale_game_pcm, frame_is_fresh, normalize_pitch,
         normalize_playback_speed, normalize_volume, pcm16_stereo_to_float,
         post_process_audio_status, prepare_test_tone, queued_audio_is_fresh, record_stream_fault,
@@ -1879,6 +1920,41 @@ mod tests {
         assert_eq!(generation.load(Ordering::Acquire), 8);
         recovery.on_open(&recoveries);
         assert_eq!(recoveries.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn failed_initial_device_open_retries_when_paused_and_unmuted() {
+        let now = Instant::now();
+        let next_attempt = now + AUDIO_RETRY_DELAY;
+        let mut retry = InitialOutputRetry::default();
+        let mut stream_recovery = StreamRecovery::default();
+        let volume = AtomicU32::new(0.35_f32.to_bits());
+
+        // Startup alone must never touch hardware, even with audible gain.
+        assert!(!retry.due(false, None, &volume, now));
+        retry.after_attempt(false, &stream_recovery);
+        assert!(!retry.due(false, Some(next_attempt), &volume, now));
+        assert!(retry.due(false, Some(next_attempt), &volume, next_attempt));
+        assert!(!retry.due(true, Some(next_attempt), &volume, next_attempt));
+
+        // A muted or disabled sound session holds the retry until unmuted.
+        volume.store(0.0_f32.to_bits(), Ordering::Release);
+        assert!(!retry.due(false, Some(next_attempt), &volume, next_attempt));
+        volume.store(0.35_f32.to_bits(), Ordering::Release);
+        assert!(retry.due(false, Some(next_attempt), &volume, next_attempt));
+
+        // A successful route open disarms the initial-failure path.
+        retry.after_attempt(true, &stream_recovery);
+        assert!(!retry.due(false, None, &volume, next_attempt));
+
+        // A subsequent stream fault has its own pending/counter state and
+        // must never be misreported as an initial-open recovery.
+        stream_recovery.on_fault(&AtomicU64::new(0));
+        retry.after_attempt(false, &stream_recovery);
+        assert!(!retry.due(false, None, &volume, next_attempt));
+        assert!(reopen_due(&stream_recovery, false, None, next_attempt));
+        retry.reset();
+        assert!(!retry.due(false, None, &volume, next_attempt));
     }
 
     #[test]

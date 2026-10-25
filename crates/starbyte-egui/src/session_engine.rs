@@ -1748,7 +1748,10 @@ mod tests {
         let diagnostic = owner.audio_diagnostics();
         assert_eq!(diagnostic.expired_test_tones, 1);
         assert_eq!(diagnostic.test_tones_submitted, 0);
-        assert_eq!(diagnostic.device_status, Some(AudioDeviceStatus::NotAttempted));
+        assert_eq!(
+            diagnostic.device_status,
+            Some(AudioDeviceStatus::NotAttempted)
+        );
     }
 
     #[test]

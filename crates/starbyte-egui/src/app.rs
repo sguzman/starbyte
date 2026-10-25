@@ -855,7 +855,7 @@ struct FullLibraryWorker {
     pending_audio_reopens: Vec<(Option<u64>, Option<u64>, Receiver<Result<(), String>>)>,
     pending_sound_diagnostics: Option<(
         Option<u64>,
-        Receiver<Result<SessionSoundDiagnostics, String>>,
+        Receiver<Result<(SessionSoundDiagnostics, WorkerAudioDiagnostics), String>>,
     )>,
     pending_step: Option<(Option<u64>, Receiver<Result<PublishedGameFrame, String>>)>,
     last_focus: Option<bool>,
@@ -2020,7 +2020,7 @@ impl StarbyteApp {
                 Err(error) => format!("Audio route reset failed: {error}"),
             };
         }
-        if let Some((generation, Ok(sound))) = completed_sound
+        if let Some((generation, Ok((sound, audio)))) = completed_sound
             && generation.is_some()
             && generation == self.worker_active_launch_id
             && self
@@ -2029,6 +2029,7 @@ impl StarbyteApp {
                 .is_some_and(|worker| worker.pending_launches.is_empty())
         {
             self.worker_sound_diagnostics = Some(sound);
+            self.worker_audio = audio;
         }
         for (generation, selection, result) in screenshot_writes {
             // Do not confuse a completed prior PNG with the current game.
@@ -3784,15 +3785,16 @@ impl StarbyteApp {
             }
         }
         if isolated && self.full_worker.is_some() {
-            // The emulator computes detailed APU strings on its owner
-            // thread, at most once per second and only with this panel open.
+            // Query APU details and the latest mixer counters on the owner
+            // thread, at most once per second and only while this panel is
+            // open. Video-frame snapshots remain frozen while paused.
             if self.worker_sound_requested_at.elapsed() >= Duration::from_secs(1) {
                 if let Some(worker) = &mut self.full_worker
                     && worker.pending_sound_diagnostics.is_none()
                     && worker.pending_launches.is_empty()
                     && self.worker_active_launch_id.is_some()
                 {
-                    if let Ok(reply) = worker.engine.queue_sound_diagnostics() {
+                    if let Ok(reply) = worker.engine.queue_sound_panel_diagnostics() {
                         worker.pending_sound_diagnostics =
                             Some((self.worker_active_launch_id, reply));
                         self.worker_sound_requested_at = Instant::now();

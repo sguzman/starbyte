@@ -1029,6 +1029,18 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
         self.submit_transaction(|engine| Ok(engine.session.sound_diagnostics()))
     }
 
+    /// Read the SPC state and live audio-worker counters together on the
+    /// owner thread. A paused game publishes no new video frames, so the Sound
+    /// panel must not rely on the last frame's mixer diagnostics.
+    pub fn queue_sound_panel_diagnostics(
+        &self,
+    ) -> Result<Receiver<Result<(SessionSoundDiagnostics, WorkerAudioDiagnostics), String>>, String>
+    {
+        self.submit_transaction(|engine| {
+            Ok((engine.session.sound_diagnostics(), engine.audio_diagnostics()))
+        })
+    }
+
     /// Synchronous on-demand query for non-GUI diagnostics/tests; never use
     /// this method from an egui redraw callback.
     pub fn read_sound_diagnostics(&self) -> Result<SessionSoundDiagnostics, String> {
@@ -1733,6 +1745,39 @@ mod tests {
     fn detached_session_has_no_game_until_loaded() {
         let engine = OwnedSession::create(AssetConfig::default()).unwrap();
         assert!(!engine.snapshot().has_rom);
+    }
+
+    #[test]
+    fn paused_sound_panel_refreshes_audio_counters_without_game_frames() {
+        let mut owner = OwnedSession::create(AssetConfig::default()).unwrap();
+        owner.audio = Some(AudioOutput::start().unwrap());
+        owner
+            .audio
+            .as_ref()
+            .unwrap()
+            .enqueue_expired_tone_for_test();
+        let worker = owner.spawn().unwrap();
+
+        // No game is running. The normal video mailbox cannot publish updated
+        // diagnostic counters, but the Sound panel's owner query still can.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let audio = loop {
+            let (_, audio) = worker
+                .queue_sound_panel_diagnostics()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .unwrap();
+            if audio.expired_test_tones == 1 {
+                break audio;
+            }
+            assert!(Instant::now() < deadline, "audio counter never advanced");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(audio.test_tones_submitted, 0);
+        assert_eq!(audio.device_status, Some(AudioDeviceStatus::NotAttempted));
+        assert_eq!(worker.completed_frames(), 0);
+        worker.shutdown().unwrap();
     }
 
     #[test]

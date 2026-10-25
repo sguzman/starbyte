@@ -1,3 +1,16 @@
+## Paused Sound panel refreshes live audio-worker counters (2026-10-25)
+
+The full-worker Sound panel now reads its detailed SPC700 diagnostics and
+audio-device/mixer counters together through the existing bounded asynchronous
+owner query once per second while open. Previously, it only refreshed mixer
+counts from completed video frames, so a speaker check or stream failure while
+paused could leave its numbers stale indefinitely. A no-ROM, hardware-free
+regression queries the actual emulation owner after the real playback worker
+expires a test tone, confirms the counter without any game frames, and verifies
+that no OS device was opened. Results remain generation-scoped to the active
+game. This improves observability, **not** speaker audibility or physical
+native-acceptance evidence. The scheduler ledger remains **71/77 (92%)**.
+
 # Starbyte: current state
 
 ## Show expired speaker checks in the live Sound diagnostics (2026-10-25)

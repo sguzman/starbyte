@@ -139,7 +139,8 @@ if [[ "$mode" == --wayland-smoke ]]; then
   elf_interp=0
   if grep -Fq 'INTERP' "$root/wire-elf-programs"; then elf_interp=1; fi
   printf 'STARBYTE_GUEST_WIRE_ELF machine=x86_64 interp=%s\n' "$elf_interp"
-  stage_files=("$(command -v weston)" "$(command -v wayland-info)")
+  command -v weston-simple-shm >/dev/null 2>&1 || fail 'hosted_wayland_sample_client_missing'
+  stage_files=("$(command -v weston)" "$(command -v wayland-info)" "$(command -v weston-simple-shm)")
   for pattern in '*/libweston-*/drm-backend.so' '*/weston/kiosk-shell.so'; do
     match="$(find /usr/lib -type f -path "$pattern" -print -quit)"
     [[ -n "$match" && -f "$match" ]] || fail "wayland_module_missing_${pattern##*/}"
@@ -413,6 +414,38 @@ if [ -e /etc/starbyte-driver-smoke ]; then
         /bin/busybox sleep 1
       done
     fi
+    # Weston kiosk shell focuses its first fullscreen xdg-toplevel window.
+    # This official sample exits on *received* wl_keyboard Escape-down.
+    # Merely injecting QMP commands or seeing evdev events is insufficient.
+    focus_ready=0
+    focus_clean_exit=0
+    focus_exit_message=0
+    focus_weston_alive=0
+    focus_sample_status=unknown
+    if [ "$compositor" = 1 ] && [ "$seat" = 1 ] && [ "$wire_done" = 1 ]; then
+      WAYLAND_DISPLAY=starbyte-wayland-0 \
+        /usr/bin/weston-simple-shm >/tmp/focus-client.log 2>/tmp/focus-client.err &
+      focus_pid=$!
+      /bin/busybox sleep 3
+      if /bin/busybox kill -0 "$focus_pid" 2>/dev/null; then
+        focus_ready=1
+        echo 'STARBYTE_GUEST_FOCUS_READY client=weston-simple-shm alive=1' >/dev/console
+        for focus_retry in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do
+          if /bin/busybox grep -Fq 'simple-shm exiting' /tmp/focus-client.err; then break; fi
+          if ! /bin/busybox kill -0 "$focus_pid" 2>/dev/null; then break; fi
+          /bin/busybox sleep 1
+        done
+      fi
+      if /bin/busybox kill -0 "$focus_pid" 2>/dev/null; then
+        /bin/busybox kill "$focus_pid" 2>/dev/null || :
+      fi
+      wait "$focus_pid" 2>/dev/null
+      focus_sample_status=$?
+      if [ "$focus_sample_status" = 0 ]; then focus_clean_exit=1; fi
+      if /bin/busybox grep -Fq 'simple-shm exiting' /tmp/focus-client.err 2>/dev/null; then focus_exit_message=1; fi
+      if /bin/busybox kill -0 "$weston_pid" 2>/dev/null; then focus_weston_alive=1; fi
+    fi
+    echo "STARBYTE_GUEST_FOCUS_RESULT ready=$focus_ready clean_exit=$focus_clean_exit exit_message=$focus_exit_message weston_alive=$focus_weston_alive" >/dev/console
     # Diagnose only fixed categories; raw compositor and client logs never
     # leave the disposable VM or appear in public CI.
     module_error=0
@@ -576,6 +609,36 @@ if [[ "$mode" == --input-smoke ]]; then
   injector_pid=$!
   trap 'kill "$injector_pid" 2>/dev/null || true; wait "$injector_pid" 2>/dev/null || true; rm -rf -- "$root"' EXIT
 fi
+if [[ "$mode" == --wayland-smoke ]]; then
+  # Entirely virtual keyboard, private guest-only QMP socket.
+  qmp_args=(-qmp "unix:$root/qmp.sock,server=on,wait=off")
+  guest_focus_injector() {
+    local ready=false
+    for _ in {1..700}; do
+      if [[ -S "$root/qmp.sock" && -f "$root/serial.log" ]] \
+        && grep -Fq 'STARBYTE_GUEST_FOCUS_READY client=weston-simple-shm alive=1' "$root/serial.log"; then
+        ready=true
+        break
+      fi
+      sleep 0.1
+    done
+    [[ "$ready" == true ]] || { echo 'STARBYTE_GUEST_FOCUS_QMP_BLOCKED focused_client_not_ready'; return 5; }
+    local qmp_status=0
+    {
+      printf '%s\n' '{"execute":"qmp_capabilities","id":"cap"}'
+      printf '%s\n' '{"execute":"input-send-event","arguments":{"events":[{"type":"key","data":{"down":true,"key":{"type":"qcode","data":"esc"}}},{"type":"key","data":{"down":false,"key":{"type":"qcode","data":"esc"}}}]},"id":"escape"}'
+    } | timeout --signal=TERM --kill-after=1s 5s \
+      socat -T 3 STDIO "UNIX-CONNECT:$root/qmp.sock" \
+      >"$root/focus-qmp.jsonl" 2>/dev/null || qmp_status=$?
+    [[ "$qmp_status" -eq 0 || "$qmp_status" -eq 1 ]] || { echo 'STARBYTE_GUEST_FOCUS_QMP_BLOCKED transport'; return 5; }
+    jq -es 'any(.[]; .id == "cap" and .return == {}) and any(.[]; .id == "escape" and .return == {})' \
+      "$root/focus-qmp.jsonl" >/dev/null || { echo 'STARBYTE_GUEST_FOCUS_QMP_BLOCKED injection_rejected'; return 5; }
+    echo 'STARBYTE_GUEST_FOCUS_QMP_ACK escape=sent source=private_qmp'
+  }
+  guest_focus_injector &
+  injector_pid=$!
+  trap 'kill "$injector_pid" 2>/dev/null || true; wait "$injector_pid" 2>/dev/null || true; rm -rf -- "$root"' EXIT
+fi
 display_args=(-display none)
 if [[ "$mode" == --wayland-smoke ]]; then
   # Private Unix-only VNC display emulation advertises a KMS output.
@@ -599,6 +662,11 @@ result=$?
 set -e
 if [[ "$mode" == --input-smoke ]]; then
   wait "$injector_pid" || fail 'guest_private_qmp_injection_failed'
+  injector_pid=''
+fi
+focus_injector_ok=true
+if [[ "$mode" == --wayland-smoke ]]; then
+  wait "$injector_pid" || focus_injector_ok=false
   injector_pid=''
 fi
 # Never emit raw guest logs. Expose only three bounded diagnostic bits,
@@ -637,7 +705,7 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
   [[ "$driver" == true ]] || fail 'guest_driver_or_device_nodes_missing'
   if [[ "$mode" == --wayland-smoke ]]; then
     # All receipts are bounded diagnostics; never disclose raw guest logs.
-    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST|BIN_DIAG|REGISTRY_DIAG)|WESTON_(EXEC|STAGE|EXIT)|TMP_WRITE_OK|TMP_MOUNT|TMP_IO_DIAG|RUN_MOUNT|UDEV_RESULT|XKB_DATA) ' "$root/serial-clean.log" || true
+    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST|BIN_DIAG|REGISTRY_DIAG)|WESTON_(EXEC|STAGE|EXIT)|TMP_WRITE_OK|TMP_MOUNT|TMP_IO_DIAG|RUN_MOUNT|UDEV_RESULT|XKB_DATA|FOCUS_RESULT) ' "$root/serial-clean.log" || true
     grep -Fqx 'STARBYTE_GUEST_TMP_MOUNT status=0' "$root/serial-clean.log" \
       || fail 'guest_temporary_mount_unavailable'
     grep -Fqx 'STARBYTE_GUEST_RUN_MOUNT status=0' "$root/serial-clean.log" \
@@ -659,6 +727,10 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
     grep -Eq '^STARBYTE_GUEST_WAYLAND_WIRE_DIAG connected=1 sync=1 output=1 attempts=[1-8] status=0 stderr=0 reason=none$' "$root/serial-clean.log" \
       || fail 'guest_wayland_registry_sync_missing'
     echo 'STARBYTE_GUEST_WAYLAND_OK drm=virtio compositor=weston client=rust_wire seat=present guest_only=true'
+    [[ "$focus_injector_ok" == true ]] || fail 'guest_private_focus_qmp_injection_failed'
+    grep -Fqx 'STARBYTE_GUEST_FOCUS_RESULT ready=1 clean_exit=1 exit_message=1 weston_alive=1' "$root/serial-clean.log" \
+      || fail 'guest_focused_wayland_keyboard_delivery_missing'
+    echo 'STARBYTE_GUEST_FOCUS_OK client=weston-simple-shm escape=received source=private_qmp guest_only=true'
   elif [[ "$mode" == --gbm-smoke ]]; then
     render_node=false
     render_device=false

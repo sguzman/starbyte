@@ -212,7 +212,14 @@ was absent from the disposable initramfs; the next CI attempt carries
 the hosted distribution's `dri_gbm.so` and its exact transitive
 dependencies and explicitly sets `GBM_BACKENDS_PATH` in the **guest**.
 This is a concrete missing runtime component, not new host GPU access.
-The actual allocator/result remains to be validated in CI.
+**Confirmed success:** [CI 40223398366](https://github.com/sguzman/starbyte/actions/runs/40223398366)
+on commit `16c6a7b` reported both DRM nodes open, both GBM devices
+initialized, render-node buffer creation unsupported, and primary
+card **rendering-buffer creation successful**. The Rust GBM probe
+created and destroyed the XRGB8888 64×64 guest buffer. It did
+not create an EGL context or Wayland compositor, inject keyboard
+events, or use the owner's GPU/input devices. Host-device isolation
+and all six native/cutover acceptance gates remain enforced.
 
 
 A dedicated `--gbm-smoke` mode builds a small Rust GBM FFI executable

@@ -1,5 +1,23 @@
 # Starbyte: current state
 
+## Verified isolated GBM render-buffer allocation (2026-10-25)
+
+**Hosted QA run 40223398366 passed on `16c6a7b`** after the
+disposable guest received Mesa's separate `dri_gbm.so` plugin and
+transitive dependencies. Both emulated DRM nodes now open and initialize
+GBM successfully; the **virtual primary card** creates and destroys a
+64×64 XRGB8888 rendering buffer, while the render node initializes GBM
+but cannot allocate that particular buffer. The exact CI receipt is
+`STARBYTE_GUEST_GBM_DIAG render_open=true render_device=true
+render_buffer=false card_open=true card_device=true card_buffer=true`,
+followed by `STARBYTE_GUEST_GBM_OK node=card device=initialized
+buffer=rendering guest_only=true`.
+[Hosted evidence](https://github.com/sguzman/starbyte/actions/runs/40223398366).
+The TCG guest still has no host display, device passthrough, physical
+input, KVM, disk, or network. **This is virtual allocator evidence only.**
+Guest EGL/compositor focus, physical sound/controller tests, and the
+six production/native acceptance gates remain unverified **71/77 (92%)**.
+
 ## Isolated guest GBM rendering-buffer probe (2026-10-25)
 
 The next hosted-only QEMU mode, `--gbm-smoke`, carries a tiny Rust

@@ -176,11 +176,19 @@ The guest uses a forced reboot and QEMU no-reboot exit before temporary
 artifacts are deleted. The first CI guest run timed out after 75 seconds.
 The Alpine kernel SHA-256 is now pinned to the observed download:
 `456e0691f095285a82533cc6335280e4b4991d630c5292ddf15e6320e71971c9`.
-The second hosted attempt ended with a kernel panic before the
-userspace marker; a targeted classifier now distinguishes common
-init-exec, root filesystem, init-exit and kernel exception categories
-without publishing raw serial content. The guest PCI milestone remains
-unaccepted until both receipts and clean QEMU exit are confirmed.
+After a panic classified as `init_exited`, changing the TCG CPU from
+default `qemu64` to `max` allowed hosted Ubuntu's static BusyBox to run.
+The guest reached userspace and enumerated both virtio PCI devices,
+then exited successfully, as confirmed by [run 40219493430](https://github.com/sguzman/starbyte/actions/runs/40219493430).
+
+The new next-level `--driver-smoke` downloads Alpine's matching
+`modloop-virt` kernel module SquashFS image into the **hosted** runner's
+private working directory, unpacks it, rebuilds dependencies and embeds
+the modules in the guest initramfs. Guest userspace then attempts to
+load virtio GPU, virtio input and evdev modules and checks only private
+guest DRM render and event character devices. This new probe has
+not yet passed; the modloop SHA-256 should be pinned after verification.
+It does not attach any physical input device or grant host GPU access.
 
 This is a **guest-kernel PCI enumeration** test, not proof of a loaded
 DRM driver, render node, evdev input seat, guest compositor, or physical

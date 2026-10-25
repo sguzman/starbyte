@@ -23,7 +23,7 @@ jobs:
   # Bootless TCG/QMP hardware-model evidence; not guest DRM or native QA.
   virtual-device-models:
     runs-on: ubuntu-latest
-    timeout-minutes: 14
+    timeout-minutes: 18
     steps:
       - uses: actions/checkout@v4
       - name: Verify headless model probe syntax
@@ -48,7 +48,9 @@ jobs:
           if output="$(DISPLAY=:0 bash scripts/qa-guest-linux.sh --check-only 2>&1)"; then exit 1; fi
           grep -Fq 'STARBYTE_GUEST_LINUX_BLOCKED graphical_session_present' <<<"$output"
           bash scripts/qa-guest-linux.sh --check-only
-      - name: Install static BusyBox and initramfs tooling
-        run: sudo apt-get install -y --no-install-recommends busybox-static cpio curl
+      - name: Install static BusyBox, SquashFS and module tools
+        run: sudo apt-get install -y --no-install-recommends busybox-static cpio curl squashfs-tools kmod
       - name: Boot private Linux kernel and validate guest PCI devices
         run: bash scripts/qa-guest-linux.sh --smoke
+      - name: Initialize guest virtio DRM and input devices
+        run: bash scripts/qa-guest-linux.sh --driver-smoke

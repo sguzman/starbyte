@@ -2,15 +2,16 @@
 
 ## Hosted Linux guest PCI boot probe (2026-10-25)
 
-The path-scoped QEMU workflow now attempts to boot a minimal Alpine
-virtual kernel with a static BusyBox initramfs. The first guest run
-**timed out**. The second attempt produced a **kernel panic before
-userspace startup**. Neither run verified guest PCI devices.
-The kernel SHA-256 is pinned, and the guest uses forced reboot with
-QEMU no-reboot. A further diagnostic revision distinguishes init-exec,
-root-filesystem, init-exit and kernel-exception panic categories, exposing
-only a short reason code and never raw serial output. No host display/input/network/disk/KVM is used. Guest
-DRM/render-node/input seat and physical QA remain unverified.
+The hosted QEMU workflow **now passes actual guest Linux userspace
+startup and PCI enumeration** with both virtual GPU and keyboard IDs.
+After diagnosing PID 1's early exit, the VM now uses a TCG `-cpu max`
+model capable of running the hosted static BusyBox. The kernel image
+SHA-256 is pinned, and only machine-readable guest serial receipts
+leave the disposable VM. A new opt-in `--driver-smoke` attempts to
+extract Alpine's matching official modloop, load guest virtio GPU/input
+modules, and require guest render/input device nodes. This driver
+phase is still unverified. No host display/input/network/disk/KVM is
+used; physical host acceptance remains open.
 Scheduler acceptance remains **71/77 (92%)**.
 
 ## Hosted-only bootless virtual GPU/input device-model QA (2026-10-25)

@@ -1103,6 +1103,10 @@ mod tests {
             "STARBYTE_GUEST_LINUX_BOOT_OK",
             "STARBYTE_GUEST_PCI_RESULT",
             "drm_render_node=not_tested",
+            "STARBYTE_GUEST_DRM_INPUT_OK",
+            "modloop-virt",
+            "modloop_module_tree_missing",
+            "guest_driver_or_device_nodes_missing",
         ] {
             assert!(script.contains(guard), "guest smoke guard missing: {guard}");
         }

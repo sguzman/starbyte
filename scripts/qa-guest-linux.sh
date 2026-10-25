@@ -4,7 +4,7 @@ set -Eeuo pipefail
 umask 077
 fail() { printf 'STARBYTE_GUEST_LINUX_BLOCKED %s\n' "$1" >&2; exit 3; }
 mode="${1:-}"
-[[ $# -eq 1 && ( "$mode" == --check-only || "$mode" == --smoke ) ]] || fail 'usage: --check-only|--smoke'
+[[ $# -eq 1 && ( "$mode" == --check-only || "$mode" == --smoke || "$mode" == --driver-smoke ) ]] || fail 'usage: --check-only|--smoke|--driver-smoke'
 [[ "${GITHUB_ACTIONS:-}" == true && "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] || fail 'github_hosted_runner_only'
 [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" && -z "${WAYLAND_SOCKET:-}" ]] || fail 'graphical_session_present'
 [[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" && -z "${DBUS_SESSION_BUS_ADDRESS:-}" && -z "${XDG_SESSION_ID:-}" ]] || fail 'interactive_session_present'
@@ -35,6 +35,35 @@ sha="${sha%% *}"
 printf 'STARBYTE_GUEST_KERNEL_SHA256 %s\n' "$sha"
 
 mkdir -p "$root/initfs/bin" "$root/initfs/dev" "$root/initfs/proc" "$root/initfs/sys"
+if [[ "$mode" == --driver-smoke ]]; then
+  # The matching official Alpine modloop is a SquashFS module tree, not
+  # a host module mount. Extract it only in this disposable runner.
+  for tool in unsquashfs depmod; do
+    command -v "$tool" >/dev/null 2>&1 || fail "missing_$tool"
+  done
+  modloop_url='https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/netboot/modloop-virt'
+  curl --fail --location --silent --show-error --retry 2 --max-time 120 \
+    --proto '=https' --tlsv1.2 "$modloop_url" --output "$root/modloop-virt" \
+    || fail 'modloop_download_failed'
+  modloop_sha="$(sha256sum "$root/modloop-virt")"
+  printf 'STARBYTE_GUEST_MODLOOP_SHA256 %s\n' "${modloop_sha%% *}"
+  unsquashfs -d "$root/modloop" "$root/modloop-virt" >/dev/null 2>&1 \
+    || fail 'modloop_extract_failed'
+  module_base="$root/modloop/modules"
+  [[ -d "$module_base" ]] || fail 'modloop_module_tree_missing'
+  shopt -s nullglob
+  releases=("$module_base"/*)
+  shopt -u nullglob
+  [[ "${#releases[@]}" -eq 1 && -d "${releases[0]}" ]] || fail 'modloop_kernel_release_ambiguous'
+  release="${releases[0]##*/}"
+  mkdir -p "$root/initfs/lib/modules" "$root/initfs/etc"
+  cp -a -- "${releases[0]}" "$root/initfs/lib/modules/$release"
+  while IFS= read -r -d '' module; do
+    gzip -d -- "$module" || fail 'module_decompression_failed'
+  done < <(find "$root/initfs/lib/modules/$release" -type f -name '*.ko.gz' -print0)
+  depmod -b "$root/initfs" "$release" || fail 'modloop_depmod_failed'
+  : >"$root/initfs/etc/starbyte-driver-smoke"
+fi
 cp "$(command -v busybox)" "$root/initfs/bin/busybox"
 ln -s busybox "$root/initfs/bin/sh"
 cat >"$root/initfs/init" <<'GUEST_INIT'
@@ -54,6 +83,24 @@ for device in /sys/bus/pci/devices/*; do
   if [ "$vendor" = 0x1af4 ] && [ "$model" = 0x1052 ]; then keyboard=1; fi
 done
 echo "STARBYTE_GUEST_PCI_RESULT virtio_gpu=$gpu virtio_keyboard=$keyboard" >/dev/console
+if [ -e /etc/starbyte-driver-smoke ]; then
+  /bin/busybox modprobe virtio_gpu >/dev/null 2>&1
+  gpu_load=$?
+  /bin/busybox modprobe virtio_input >/dev/null 2>&1
+  input_load=$?
+  /bin/busybox modprobe evdev >/dev/null 2>&1
+  evdev_load=$?
+  /bin/busybox sleep 1
+  render=0
+  input_event=0
+  for node in /dev/dri/renderD*; do
+    [ -c "$node" ] && render=1
+  done
+  for node in /dev/input/event*; do
+    [ -c "$node" ] && input_event=1
+  done
+  echo "STARBYTE_GUEST_DRIVER_RESULT render=$render input=$input_event gpu_load=$gpu_load input_load=$input_load evdev_load=$evdev_load" >/dev/console
+fi
 /bin/busybox reboot -f
 while :; do /bin/busybox sleep 1; done
 GUEST_INIT
@@ -103,4 +150,14 @@ printf 'STARBYTE_GUEST_LINUX_DIAG boot=%s pci=%s panic=%s cause=%s qemu_status=%
 [[ "$result" -eq 0 ]] || fail "guest_boot_failed_or_timed_out status=$result"
 [[ "$boot" == true ]] || fail 'boot_receipt_missing'
 [[ "$pci" == true ]] || fail 'guest_virtio_pci_devices_missing'
-echo 'STARBYTE_GUEST_LINUX_PCI_OK gpu=virtio keyboard=virtio serial_only=true drm_render_node=not_tested input_seat=not_tested'
+if [[ "$mode" == --driver-smoke ]]; then
+  driver=false
+  if grep -Fqx 'STARBYTE_GUEST_DRIVER_RESULT render=1 input=1 gpu_load=0 input_load=0 evdev_load=0' "$root/serial-clean.log"; then
+    driver=true
+  fi
+  printf 'STARBYTE_GUEST_DRIVER_DIAG render_and_input=%s\n' "$driver"
+  [[ "$driver" == true ]] || fail 'guest_driver_or_device_nodes_missing'
+  echo 'STARBYTE_GUEST_DRM_INPUT_OK drm_render_node=present evdev_input_node=present guest_only=true'
+else
+  echo 'STARBYTE_GUEST_LINUX_PCI_OK gpu=virtio keyboard=virtio serial_only=true drm_render_node=not_tested input_seat=not_tested'
+fi

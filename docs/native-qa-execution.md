@@ -181,14 +181,22 @@ default `qemu64` to `max` allowed hosted Ubuntu's static BusyBox to run.
 The guest reached userspace and enumerated both virtio PCI devices,
 then exited successfully, as confirmed by [run 40219493430](https://github.com/sguzman/starbyte/actions/runs/40219493430).
 
-The new next-level `--driver-smoke` downloads Alpine's matching
+The `--driver-smoke` mode downloads Alpine's matching
 `modloop-virt` kernel module SquashFS image into the **hosted** runner's
-private working directory, unpacks it, rebuilds dependencies and embeds
-the modules in the guest initramfs. Guest userspace then attempts to
-load virtio GPU, virtio input and evdev modules and checks only private
-guest DRM render and event character devices. This new probe has
-not yet passed; the modloop SHA-256 should be pinned after verification.
-It does not attach any physical input device or grant host GPU access.
+private workspace, verifies its SHA-256
+(`237f5e31e95071816565ffcc55bc028cbdeed960e8e54efd134c8cf13b101782`),
+unpacks the kernel-version module tree (excluding firmware), decompresses
+modules and rebuilds dependency metadata before building the disposable
+guest initramfs. Guest userspace loads `virtio_gpu`, `virtio_input`
+and `evdev` with zero module-load errors, then confirms a DRM render
+character device and an evdev event device. **This passed** in
+[hosted run 40220037441](https://github.com/sguzman/starbyte/actions/runs/40220037441)
+at `8e868a8`; the serial-only receipt records
+`STARBYTE_GUEST_DRM_INPUT_OK drm_render_node=present evdev_input_node=present guest_only=true`.
+It never attaches physical input or grants access to the host GPU.
+The next step is proving guest userspace GBM/EGL/Wayland and independent
+focused input; no physical or production cutover claim follows from
+guest-created device nodes.
 
 This is a **guest-kernel PCI enumeration** test, not proof of a loaded
 DRM driver, render node, evdev input seat, guest compositor, or physical

@@ -1,5 +1,28 @@
 # Starbyte: current state
 
+## Verified guest DRM render and evdev input nodes (2026-10-25)
+
+The hosted-only TCG QEMU test **now passes** after extracting the pinned
+Alpine v3.23 `modloop-virt` SquashFS image, rebuilding the matching
+kernel module dependencies and embedding the modules into a disposable
+BusyBox initramfs. The guest successfully loads `virtio_gpu`,
+`virtio_input` and `evdev`; the serial-only acceptance receipt confirms
+both a character-device `/dev/dri/renderD*` and `/dev/input/event*`
+exist **inside the VM**. The guest exits cleanly with no panic.
+[Guest driver CI evidence](https://github.com/sguzman/starbyte/actions/runs/40220037441)
+at commit `8e868a8`, including
+`STARBYTE_GUEST_DRM_INPUT_OK drm_render_node=present
+evdev_input_node=present guest_only=true`.
+Alpine kernel and module archives have pinned SHA-256 digests.
+The model and guest still have no host display, input passthrough,
+network, disk, KVM or connections to the owner's Hyprland compositor.
+
+**Strict boundary:** This proves guest DRM and evdev device creation.
+It does **not** prove GBM/EGL allocator readiness, a running Hyprland
+compositor, actual keyboard event injection/focus, monitor output,
+speaker audibility, real controller behavior or native host cutover.
+All six scheduler gates remain open: **71/77 (92%)**.
+
 ## Hosted Linux guest PCI boot probe (2026-10-25)
 
 The hosted QEMU workflow **now passes actual guest Linux userspace

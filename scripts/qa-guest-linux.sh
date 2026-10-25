@@ -457,66 +457,15 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
   printf 'STARBYTE_GUEST_DRIVER_DIAG render_and_input=%s\n' "$driver"
   [[ "$driver" == true ]] || fail 'guest_driver_or_device_nodes_missing'
   if [[ "$mode" == --wayland-smoke ]]; then
-    # Machine-readable receipts, never unfiltered guest output.
-    grep -E '^STARBYTE_GUEST_WAYLAND_(RESULT|DIAG|WIRE_DIAG) ' "$root/serial-clean.log" || true
+    # All receipts are bounded diagnostics; never disclose raw guest logs.
+    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST)|WESTON_EXEC) ' "$root/serial-clean.log" || true
     grep -Fqx 'STARBYTE_GUEST_WAYLAND_WIRE_SELFTEST status=0 output=1' "$root/serial-clean.log" \
       || fail 'guest_wayland_wire_executable_unavailable'
     grep -Fqx 'STARBYTE_GUEST_WESTON_EXEC status=0 stdout=1 stderr=0' "$root/serial-clean.log" \
       || fail 'guest_weston_executable_unavailable'
     grep -Fqx 'STARBYTE_GUEST_WAYLAND_RESULT socket=1 handshake=1 compositor=1 seat=1' "$root/serial-clean.log" \
       || fail 'guest_drm_wayland_handshake_or_seat_missing'
-    grep -Eq '^STARBYTE_GUEST_WAYLAND_WIRE_DIAG connected=1 sync=1 output=1 attempts=[1-8] status=0 stderr=0 reason=none "$root/serial-clean.log" \
-      || fail 'guest_wayland_registry_sync_missing'
-    echo 'STARBYTE_GUEST_WAYLAND_OK drm=virtio compositor=weston client=rust_wire seat=present guest_only=true'
-  elif [[ "$mode" == --gbm-smoke ]]; then
-    render_node=false
-    render_device=false
-    render_buffer=false
-    card_node=false
-    card_device=false
-    card_buffer=false
-    grep -Fqx 'STARBYTE_GUEST_GBM_NODE_OPEN_OK node=render' "$root/serial-clean.log" && render_node=true
-    grep -Fqx 'STARBYTE_GUEST_GBM_NODE_OPEN_OK node=card' "$root/serial-clean.log" && card_node=true
-    grep -Fqx 'STARBYTE_GUEST_GBM_RESULT node=render device=1 buffer=0' "$root/serial-clean.log" && render_device=true
-    grep -Fqx 'STARBYTE_GUEST_GBM_RESULT node=card device=1 buffer=0' "$root/serial-clean.log" && card_device=true
-    if grep -Fqx 'STARBYTE_GUEST_GBM_RESULT node=render device=1 buffer=1' "$root/serial-clean.log"; then
-      render_device=true
-      render_buffer=true
-    fi
-    if grep -Fqx 'STARBYTE_GUEST_GBM_RESULT node=card device=1 buffer=1' "$root/serial-clean.log"; then
-      card_device=true
-      card_buffer=true
-    fi
-    printf 'STARBYTE_GUEST_GBM_DIAG render_open=%s render_device=%s render_buffer=%s card_open=%s card_device=%s card_buffer=%s\n' \
-      "$render_node" "$render_device" "$render_buffer" "$card_node" "$card_device" "$card_buffer"
-    grep -Fqx 'STARBYTE_GUEST_GBM_EXEC render_status=0' "$root/serial-clean.log" \
-      || fail 'guest_gbm_render_probe_failed'
-    grep -Fqx 'STARBYTE_GUEST_GBM_EXEC card_status=0' "$root/serial-clean.log" \
-      || fail 'guest_gbm_card_probe_failed'
-    [[ "$render_node" == true && "$card_node" == true ]] \
-      || fail 'guest_gbm_drm_node_open_failed'
-    if [[ "$render_buffer" == true ]]; then
-      echo 'STARBYTE_GUEST_GBM_OK node=render device=initialized buffer=rendering guest_only=true'
-    elif [[ "$card_buffer" == true ]]; then
-      echo 'STARBYTE_GUEST_GBM_OK node=card device=initialized buffer=rendering guest_only=true'
-    else
-      fail 'guest_gbm_allocator_unavailable'
-    fi
-  elif [[ "$mode" == --input-smoke ]]; then
-    grep -Fqx 'STARBYTE_GUEST_INPUT_READY evdev=present' "$root/serial-clean.log" \
-      || fail 'guest_input_listener_missing'
-    grep -Fqx 'STARBYTE_GUEST_INPUT_RESULT key_a=1' "$root/serial-clean.log" \
-      || fail 'guest_virtual_keypress_missing'
-    grep -Fqx 'STARBYTE_GUEST_INPUT_EXEC status=0' "$root/serial-clean.log" \
-      || fail 'guest_virtual_keypress_reader_failed'
-    echo 'STARBYTE_GUEST_INPUT_OK key_a=received source=private_qmp evdev=guest_only'
-  else
-    echo 'STARBYTE_GUEST_DRM_INPUT_OK drm_render_node=present evdev_input_node=present guest_only=true'
-  fi
-else
-  echo 'STARBYTE_GUEST_LINUX_PCI_OK gpu=virtio keyboard=virtio serial_only=true drm_render_node=not_tested input_seat=not_tested'
-fi
- "$root/serial-clean.log" \
+    grep -Eq '^STARBYTE_GUEST_WAYLAND_WIRE_DIAG connected=1 sync=1 output=1 attempts=[1-8] status=0 stderr=0 reason=none$' "$root/serial-clean.log" \
       || fail 'guest_wayland_registry_sync_missing'
     echo 'STARBYTE_GUEST_WAYLAND_OK drm=virtio compositor=weston client=rust_wire seat=present guest_only=true'
   elif [[ "$mode" == --gbm-smoke ]]; then

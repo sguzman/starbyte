@@ -203,7 +203,10 @@ if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ]]; then
     # eframe/glutin dynamically load EGL; ldd on the application itself
     # does not discover Mesa's GLVND vendor plugin or its DRM software DRI.
     # These are hosted-runner CPU rendering libraries, never the owner's GPU.
-    for egl_name in libEGL.so.1 libEGL_mesa.so.0 libGLESv2.so.2; do
+    # The glutin/winit Wayland EGL path loads these with dlopen, so
+    # ldd of starbyte-egui cannot find them. Use the host distribution's
+    # matching ABI libraries in guest RAM; not a host Wayland socket.
+    for egl_name in libEGL.so.1 libEGL_mesa.so.0 libGLESv2.so.2 libwayland-egl.so.1 libwayland-cursor.so.0; do
       egl_binary="$(find /usr/lib -name "$egl_name" -print -quit)"
       [[ -n "$egl_binary" && -f "$egl_binary" ]] || fail "guest_egl_library_missing_$egl_name"
       mkdir -p "$root/initfs$(dirname "$egl_binary")"

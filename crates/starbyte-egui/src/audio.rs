@@ -269,12 +269,19 @@ impl AudioOutput {
     /// even when no control message fits in the saturated producer channel.
     /// Success means queued for worker processing, not physical audibility.
     pub fn request_reopen(&self) -> bool {
-        if self.reopen_pending.swap(true, Ordering::AcqRel) {
+        if self.reopen_pending.load(Ordering::Acquire) {
             return true;
         }
-        // Without this generation boundary the worker can reopen a device
-        // and replay an old-route frame that was already in its bounded queue.
+        // Publish the invalidation BEFORE the worker can observe the reset
+        // flag. If we set reopen_pending first, a scheduled audio thread
+        // could reset, open and replay a still-fresh old-route frame while
+        // this caller was preempted before advancing the generation.
+        //
+        // Normal GUI requests are serialized on the owner thread. Racing
+        // callers may conservatively advance the generation more than once,
+        // which is safe: every old buffer still fails the epoch check.
         self.generation.fetch_add(1, Ordering::AcqRel);
+        self.reopen_pending.store(true, Ordering::Release);
         match self.sender.try_send(AudioMessage::Reopen) {
             Ok(()) | Err(mpsc::TrySendError::Full(_)) => true,
             Err(mpsc::TrySendError::Disconnected(_)) => {

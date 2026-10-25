@@ -12,28 +12,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Bootless TCG/QMP hardware-model evidence; not guest DRM or native QA.
-  virtual-device-models:
-    runs-on: ubuntu-latest
-    timeout-minutes: 8
-    steps:
-      - uses: actions/checkout@v4
-      - name: Verify headless model probe syntax
-        run: bash -n scripts/qa-virtual-devices.sh
-      - name: Reject interactive and self-hosted execution
-        shell: bash
-        run: |
-          set -euo pipefail
-          if output="$(DISPLAY=:0 bash scripts/qa-virtual-devices.sh --check-only 2>&1)"; then exit 1; fi
-          grep -Fq 'STARBYTE_VIRTUAL_DEVICES_BLOCKED graphical_session_present' <<<"$output"
-          if output="$(RUNNER_ENVIRONMENT=self-hosted bash scripts/qa-virtual-devices.sh --check-only 2>&1)"; then exit 1; fi
-          grep -Fq 'STARBYTE_VIRTUAL_DEVICES_BLOCKED github_hosted_runner_only' <<<"$output"
-          bash scripts/qa-virtual-devices.sh --check-only
-      - name: Install headless QEMU and QMP utilities
-        run: sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends qemu-system-x86 socat jq
-      - name: Instantiate virtual GPU and keyboard PCI device models
-        run: bash scripts/qa-virtual-devices.sh --smoke
-
   lint:
     runs-on: ubuntu-latest
     steps:

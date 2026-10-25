@@ -1081,7 +1081,10 @@ mod tests {
             );
         }
         for forbidden in ["-enable-kvm", "-drive ", "usb-host", "vfio-pci"] {
-            assert!(!probe.contains(forbidden), "forbidden host passthrough: {forbidden}");
+            assert!(
+                !probe.contains(forbidden),
+                "forbidden host passthrough: {forbidden}"
+            );
         }
     }
 

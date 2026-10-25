@@ -145,13 +145,19 @@ packages.
 
 ### Hosted CI virtual GPU and keyboard model smoke (2026-10-25)
 
-A separate Ubuntu-hosted job runs `scripts/qa-virtual-devices.sh --smoke`
+A dedicated, path-scoped GitHub Actions workflow runs
+`scripts/qa-virtual-devices.sh --smoke` only when the QEMU probe or
+its workflow changes (avoiding four-minute package downloads on
+unrelated development commits).
 with QEMU and QMP utilities. It rejects self-hosted and graphical sessions,
 creates a private runtime, configures a **TCG-only, paused, bootless** VM
 with 2D `virtio-gpu-pci` and `virtio-keyboard-pci`, and confirms both
 named devices on the emulated PCI bus through bounded private QMP.
 No host display, network, disk, physical input forwarding, or KVM is used.
-QMP quit and private socket teardown are mandatory. Receipt:
+The QMP exchange validates both actual command acknowledgments, even
+if socat reports the expected socket reset as QEMU quits; transport
+timeouts remain fatal. QMP quit and private socket teardown are mandatory.
+Receipt:
 `STARBYTE_VIRTUAL_DEVICE_MODELS_OK ... guest_booted=false`.
 
 **Scope:** Device *models* exist inside the QEMU process. This is not

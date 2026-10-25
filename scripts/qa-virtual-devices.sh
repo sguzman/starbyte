@@ -58,13 +58,21 @@ for _ in {1..80}; do
   sleep 0.1
 done
 [[ -S "$root/qmp.sock" ]] || fail 'qmp_socket_not_ready'
+# QMP quit may close the socket before socat finishes reading; socat then
+# returns 1 (ECONNRESET) even if complete QMP acknowledgments were delivered.
+# Treat only statuses 0 or 1 as eligible, and require both actual structured
+# acknowledgments below. All timeouts and other transport failures remain fatal.
+set +e
 {
   printf '%s\n' '{"execute":"qmp_capabilities","id":"cap"}'
   printf '%s\n' '{"execute":"query-pci","id":"pci"}'
   printf '%s\n' '{"execute":"quit","id":"quit"}'
 } | timeout --signal=TERM --kill-after=1s 4s \
     socat -T 2 STDIO "UNIX-CONNECT:$root/qmp.sock" \
-    >"$root/qmp.jsonl" || fail 'qmp_exchange_failed_or_timed_out'
+    >"$root/qmp.jsonl" 2>"$root/qmp.err"
+qmp_status=$?
+set -e
+[[ "$qmp_status" -eq 0 || "$qmp_status" -eq 1 ]]   || fail 'qmp_exchange_failed_or_timed_out'
 
 jq -es 'any(.[]; .id == "cap" and (.return == {}))' "$root/qmp.jsonl" >/dev/null \
   || fail 'qmp_capability_ack_missing'

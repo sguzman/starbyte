@@ -296,11 +296,18 @@ the VM's former GBM and evdev checks also passed again.
 Wayland protocol registry and focused Wayland sample input on a disposable
 QEMU keyboard, not physical owner-session Hyprland focus, gamepads, audible
 speaker quality, Starbyte video frames or a production worker cutover.
-The original native/physical QA hard-stops remain untouched. The next
-dedicated proof is running the original worker-backed Starbyte app itself
-inside the isolated VM, rather than treating the Weston sample as Starbyte
-acceptance. On `3281029`, the `--starbyte-smoke` path and its GitHub Actions
-build were introduced, with CI acceptance still required.
+The original native/physical QA hard-stops remain untouched. The
+original worker-backed Starbyte app has now been accepted in this same
+disposable QEMU guest: [hosted run 40240050599](https://github.com/sguzman/starbyte/actions/runs/40240050599)
+on `4302db8` marked the **actual Starbyte window and worker** test successful.
+The `--starbyte-smoke` acceptance requires the original full-library egui
+window, 30 worker-produced frames, and the
+`STARBYTE_FULL_LIBRARY_SINGLE_OWNER_SMOKE_OK legacy_session_absent=true`
+receipt. The VM stages host-runner CPU-only Mesa software EGL plus Wayland
+EGL/cursor libraries loaded at runtime, and never forwards a host GPU,
+keyboard, display or user's files. This is original-app **virtual** acceptance,
+not a physical Hyprland-focused FPS, speaker, gamepad or cutover pass.
+The regression stages following the app step must be checked separately.
 
 ### Virtual rendering/input strategy and remaining limits
 
@@ -312,8 +319,9 @@ from upstream source above; do not retry the old path or bind-mount host
 
 The earlier proposal below is retained as a requirements record. A
 disposable QEMU/virtio GPU and keyboard guest is **now implemented and
-verified with Weston** as described above. The guest Hyprland runtime,
-EGL-backed Starbyte app, physical audio and native cutover remain unverified:
+verified with Weston**, including the original Starbyte worker-backed GUI
+as described above. A guest Hyprland runtime, physical audio/gamepad
+acceptance and the production-default cutover remain unverified:
 
 1. Give a Linux guest its **own** virtual GPU/DRM subsystem, e.g. a QEMU
    `virtio-gpu` 2D device with a guest Mesa software renderer. Verify that
@@ -339,10 +347,10 @@ Require a dedicated supervisor to prove the guest is isolated, its display
 and control channels belong to the guest, and every child/VM is reaped after
 success, timeout or failure. Do not install permanent services, expose host
 input devices, or launch test windows on the user's active desktop.
-The virtual GPU, keyboard seat, DRM-backed Weston and focused sample
-keyboard are verified by hosted CI. A full in-guest Starbyte run requires
-separate proof, and this virtual infrastructure never substitutes for
-physical Hyprland, speaker or gamepad acceptance.
+The virtual GPU, keyboard seat, DRM-backed Weston, focused sample
+keyboard, and original worker-backed Starbyte GUI are verified by hosted
+CI (individual test-step evidence above). This infrastructure never
+substitutes for physical Hyprland, speaker or gamepad acceptance.
 **All six native acceptance gates are still open.**
 
 ### Standalone headless Hyprland blocker (2026-10-24)

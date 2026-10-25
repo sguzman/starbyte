@@ -566,6 +566,23 @@ fn post_process_audio_status(
     }
 }
 
+/// Reject an expired or invalidated speaker check *before* producing its
+/// 8,000-frame sine wave. Under audio queue pressure this prevents discarded
+/// checks from stealing CPU time needed for fresh game PCM. Still revalidate
+/// after synthesis and device initialization, which can each take time.
+fn prepare_test_tone(
+    generation: &AtomicU64,
+    expected_generation: u64,
+    queued_at: Instant,
+    now: Instant,
+    generate: impl FnOnce() -> Vec<i16>,
+) -> Result<Vec<i16>, PostProcessAudioStatus> {
+    match post_process_audio_status(generation, expected_generation, queued_at, now, true) {
+        PostProcessAudioStatus::Ready => Ok(generate()),
+        other => Err(other),
+    }
+}
+
 /// A failed reopen remains pending across multiple OS retry attempts.
 #[derive(Default)]
 struct StreamRecovery {
@@ -812,9 +829,26 @@ fn audio_worker(
                 Some(producer_drop_count),
             ),
             AudioMessage::TestTone {
-                generation,
+                generation: tone_generation,
                 queued_at,
-            } => (generation, queued_at, speaker_test_tone(), 1.0, 1.0, None),
+            } => {
+                let pcm = match prepare_test_tone(
+                    &generation,
+                    tone_generation,
+                    queued_at,
+                    Instant::now(),
+                    speaker_test_tone,
+                ) {
+                    Ok(pcm) => pcm,
+                    Err(PostProcessAudioStatus::Expired) => {
+                        expired_test_tones.fetch_add(1, Ordering::Release);
+                        continue;
+                    }
+                    Err(PostProcessAudioStatus::Superseded) => continue,
+                    Err(PostProcessAudioStatus::Ready) => unreachable!(),
+                };
+                (tone_generation, queued_at, pcm, 1.0, 1.0, None)
+            },
             AudioMessage::Clear => {
                 continuity.reset();
                 stretch.reset();
@@ -1043,7 +1077,7 @@ mod tests {
         PlaybackContinuity, PostProcessAudioStatus, ProducerDropContinuity, StreamRecovery,
         apply_sink_volume, discard_stale_game_pcm, frame_is_fresh, normalize_pitch,
         normalize_playback_speed, normalize_volume, pcm16_stereo_to_float,
-        post_process_audio_status, queued_audio_is_fresh, record_stream_fault, reopen_due,
+        post_process_audio_status, prepare_test_tone, queued_audio_is_fresh, record_stream_fault, reopen_due,
         retry_ready, set_sink_playback_speed, speaker_test_tone,
     };
 
@@ -1602,6 +1636,36 @@ mod tests {
         assert!(frame_is_fresh(t0, t0 + Duration::from_millis(150)));
         assert!(!frame_is_fresh(t0, t0 + Duration::from_millis(151)));
         assert!(!frame_is_fresh(t0, t0 + Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn obsolete_speaker_checks_do_not_synthesize_an_unplayable_tone() {
+        let t0 = Instant::now();
+        let generation = AtomicU64::new(5);
+        let mut generated = 0;
+        let stale = prepare_test_tone(
+            &generation,
+            5,
+            t0,
+            t0 + MAX_TEST_TONE_AGE + Duration::from_millis(1),
+            || {
+                generated += 1;
+                vec![1, 1]
+            },
+        );
+        assert!(matches!(stale, Err(PostProcessAudioStatus::Expired)));
+        let old_epoch = prepare_test_tone(&generation, 4, t0, t0, || {
+            generated += 1;
+            vec![2, 2]
+        });
+        assert!(matches!(old_epoch, Err(PostProcessAudioStatus::Superseded)));
+        assert_eq!(generated, 0, "discarded checks must not spend CPU producing PCM");
+        let fresh = prepare_test_tone(&generation, 5, t0, t0, || {
+            generated += 1;
+            vec![3, 3]
+        });
+        assert_eq!(fresh.unwrap(), vec![3, 3]);
+        assert_eq!(generated, 1, "fresh checks must synthesize exactly once");
     }
 
     #[test]

@@ -1,5 +1,20 @@
 # Starbyte: current state
 
+## Avoid synthesizing expired speaker-check waveforms (2026-10-25)
+
+The dedicated audio worker previously generated every 8,000-frame stereo
+440 Hz diagnostic tone before checking whether its queued request had
+expired or belonged to an earlier audio generation. Under a saturated queue
+the sine-wave work served no purpose and delayed fresh game PCM. Checks now
+reject an expired or superseded tone before synthesis and still retain the
+existing final validity checks after OS output setup and sample conversion.
+A hardware-free regression confirms that rejected requests never invoke
+the sample generator, while one valid request invokes it exactly once.
+Existing expired-tone counters and device-failure behavior remain intact.
+This is playback-thread latency prevention, not evidence of physical audio
+or completed native Hyprland gates. Scheduler acceptance remains
+**71/77 (92%)**.
+
 ## Preserve WSOLA continuity across bounded-queue overflow (2026-10-25)
 
 A producer-side queue overflow formerly incremented diagnostics but supplied

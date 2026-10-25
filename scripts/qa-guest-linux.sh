@@ -325,8 +325,8 @@ if [ -e /etc/starbyte-driver-smoke ]; then
           /bin/wayland-wire \
           >/tmp/wayland-wire.log 2>/tmp/wayland-wire.err
         wire_last_status=$?
-        if /bin/busybox grep -Fqx \
-          'STARBYTE_GUEST_WAYLAND_WIRE_RESULT connected=1 registry_done=1 compositor=1 seat=1' \
+        if /bin/busybox grep -Eq \
+          '^STARBYTE_GUEST_WAYLAND_WIRE_RESULT connected=1 registry_done=1 compositor=1 seat=1 globals=[1-9][0-9]*$' \
           /tmp/wayland-wire.log; then
           wire_connected=1
           wire_done=1
@@ -355,6 +355,15 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     info_stdout=0
     info_stderr=0
     registry_trace=0
+    info_compositor=0
+    info_seat=0
+    wire_globs=0
+    weston_backend=0
+    weston_seat_granted=0
+    weston_card_open=0
+    weston_input_failure=0
+    weston_backend_failure=0
+    weston_input_absent=0
     wire_log=0
     wire_stderr=0
     wire_reason=none
@@ -376,6 +385,12 @@ if [ -e /etc/starbyte-driver-smoke ]; then
       if /bin/busybox grep -Fqx "STARBYTE_GUEST_WAYLAND_WIRE_BLOCKED $reason" /tmp/wayland-wire.log 2>/dev/null; then wire_reason=$reason; break; fi
     done
     if /bin/busybox grep -q 'wl_registry' /tmp/wayland-info.err 2>/dev/null; then registry_trace=1; fi
+    if /bin/busybox grep -q 'wl_compositor' /tmp/wayland-info.log 2>/dev/null ||
+      /bin/busybox grep -q 'wl_compositor' /tmp/wayland-info.err 2>/dev/null; then info_compositor=1; fi
+    if /bin/busybox grep -q 'wl_seat' /tmp/wayland-info.log 2>/dev/null ||
+      /bin/busybox grep -q 'wl_seat' /tmp/wayland-info.err 2>/dev/null; then info_seat=1; fi
+    if /bin/busybox grep -Eq '^STARBYTE_GUEST_WAYLAND_WIRE_RESULT connected=1 registry_done=1 .* globals=[1-9][0-9]*$' /tmp/wayland-wire.log 2>/dev/null; then wire_globs=1; fi
+    echo "STARBYTE_GUEST_WAYLAND_REGISTRY_DIAG info_compositor=$info_compositor info_seat=$info_seat wire_globals=$wire_globs" >/dev/console
     for log in /tmp/weston.log /tmp/weston.stdout /tmp/wayland-info.err; do
       [ -f "$log" ] || continue
       if /bin/busybox grep -Eiq 'failed to load module|unable to load module' "$log"; then module_error=1; fi
@@ -384,6 +399,16 @@ if [ -e /etc/starbyte-driver-smoke ]; then
       if /bin/busybox grep -Eiq 'failed to open seat|seatd|libseat|session control|cannot get tty|no seat' "$log"; then seat_error=1; fi
       if /bin/busybox grep -Eiq 'drm|kms|no outputs|no connectors|no usable devices' "$log"; then drm_error=1; fi
     done
+    for log in /tmp/weston.log /tmp/weston.stdout; do
+      [ -f "$log" ] || continue
+      if /bin/busybox grep -Eiq 'initializing drm backend|drm backend initialized' "$log"; then weston_backend=1; fi
+      if /bin/busybox grep -Eiq 'session control granted|Seat opened with backend' "$log"; then weston_seat_granted=1; fi
+      if /bin/busybox grep -Eq 'using /dev/dri/card[0-9]+' "$log"; then weston_card_open=1; fi
+      if /bin/busybox grep -Eiq 'failed to create input devices|failed to initialize udev|udev_input_init' "$log"; then weston_input_failure=1; fi
+      if /bin/busybox grep -Eiq 'failed to create compositor backend|failed to create backend|fatal:' "$log"; then weston_backend_failure=1; fi
+      if /bin/busybox grep -Eiq 'no input devices found' "$log"; then weston_input_absent=1; fi
+    done
+    echo "STARBYTE_GUEST_WESTON_STAGE backend_entered=$weston_backend seat_granted=$weston_seat_granted card_open=$weston_card_open input_failed=$weston_input_failure backend_failed=$weston_backend_failure input_absent=$weston_input_absent" >/dev/console
     echo "STARBYTE_GUEST_WAYLAND_WIRE_DIAG connected=$wire_connected sync=$wire_done output=$wire_log attempts=$wire_attempts status=$wire_last_status stderr=$wire_stderr reason=$wire_reason" >/dev/console
     echo "STARBYTE_GUEST_WAYLAND_RESULT socket=$socket_ready handshake=$handshake compositor=$compositor seat=$seat" >/dev/console
     echo "STARBYTE_GUEST_WAYLAND_DIAG alive=$compositor_alive zombie=$weston_zombie weston_log=$weston_log weston_stdout=$weston_stdout module=$module_error library=$shared_library_error option=$option_error seat=$seat_error drm=$drm_error stdout=$info_stdout stderr=$info_stderr registry=$registry_trace attempts=$wayland_attempts" >/dev/console
@@ -506,7 +531,7 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
   [[ "$driver" == true ]] || fail 'guest_driver_or_device_nodes_missing'
   if [[ "$mode" == --wayland-smoke ]]; then
     # All receipts are bounded diagnostics; never disclose raw guest logs.
-    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST|BIN_DIAG)|WESTON_EXEC|TMP_WRITE_OK|TMP_MOUNT|TMP_IO_DIAG) ' "$root/serial-clean.log" || true
+    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST|BIN_DIAG|REGISTRY_DIAG)|WESTON_(EXEC|STAGE)|TMP_WRITE_OK|TMP_MOUNT|TMP_IO_DIAG) ' "$root/serial-clean.log" || true
     grep -Fqx 'STARBYTE_GUEST_TMP_MOUNT status=0' "$root/serial-clean.log" \
       || fail 'guest_temporary_mount_unavailable'
     grep -Fqx 'STARBYTE_GUEST_TMP_IO_DIAG write_status=0' "$root/serial-clean.log" \

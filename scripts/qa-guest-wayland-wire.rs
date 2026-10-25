@@ -18,7 +18,7 @@ fn request(object: u32, opcode: u16, new_id: u32) -> [u8; 12] {
     bytes
 }
 
-fn run() -> Result<(bool, bool), &'static str> {
+fn run() -> Result<(bool, bool, u32), &'static str> {
     let runtime = env::var_os("XDG_RUNTIME_DIR").ok_or("missing_runtime")?;
     let display = env::var("WAYLAND_DISPLAY").map_err(|_| "missing_display")?;
     if display.contains('/') || display.contains("..") || display.is_empty() {
@@ -40,6 +40,7 @@ fn run() -> Result<(bool, bool), &'static str> {
 
     let mut compositor = false;
     let mut seat = false;
+    let mut globals = 0_u32;
     for _ in 0..256 {
         let mut header = [0_u8; 8];
         stream.read_exact(&mut header).map_err(|_| "read_failed")?;
@@ -57,6 +58,7 @@ fn run() -> Result<(bool, bool), &'static str> {
             return Err("display_protocol_error");
         }
         if sender == REGISTRY_ID && opcode == 0 && payload.len() >= 8 {
+            globals = globals.saturating_add(1);
             let interface_length =
                 u32::from_ne_bytes(payload[4..8].try_into().unwrap()) as usize;
             if interface_length == 0 || interface_length > payload.len() - 8 {
@@ -67,7 +69,7 @@ fn run() -> Result<(bool, bool), &'static str> {
             seat |= name == b"wl_seat\0";
         }
         if sender == SYNC_ID && opcode == 0 {
-            return Ok((compositor, seat));
+            return Ok((compositor, seat, globals));
         }
     }
     Err("registry_event_limit")
@@ -86,11 +88,12 @@ fn main() {
         std::process::exit(2);
     }
     match run() {
-        Ok((compositor, seat)) => {
+        Ok((compositor, seat, globals)) => {
             println!(
-                "STARBYTE_GUEST_WAYLAND_WIRE_RESULT connected=1 registry_done=1 compositor={} seat={}",
+                "STARBYTE_GUEST_WAYLAND_WIRE_RESULT connected=1 registry_done=1 compositor={} seat={} globals={}",
                 u8::from(compositor),
-                u8::from(seat)
+                u8::from(seat),
+                globals
             );
             if !compositor || !seat {
                 std::process::exit(2);

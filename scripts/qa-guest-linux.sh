@@ -124,12 +124,21 @@ if [[ "$mode" == --wayland-smoke ]]; then
   # Stage a real DRM/KMS Weston compositor, its dynamically loaded modules,
   # and an independent Rust Wayland wire client into private guest RAM.
   # This does not launch a host GUI.
-  for tool in weston wayland-info ldd awk sort; do
+  for tool in weston wayland-info ldd awk sort readelf; do
     command -v "$tool" >/dev/null 2>&1 || fail "wayland_host_tool_missing_$tool"
   done
   rustc --edition=2021 -C opt-level=1 -C target-feature=+crt-static \
     scripts/qa-guest-wayland-wire.rs -o "$root/initfs/bin/wayland-wire" \
     || fail 'guest_wayland_wire_compilation_failed'
+  readelf -h "$root/initfs/bin/wayland-wire" >"$root/wire-elf-header" \
+    || fail 'guest_wire_invalid_elf'
+  readelf -l "$root/initfs/bin/wayland-wire" >"$root/wire-elf-programs" \
+    || fail 'guest_wire_invalid_elf'
+  grep -Fq 'Advanced Micro Devices X86-64' "$root/wire-elf-header" \
+    || fail 'guest_wire_wrong_architecture'
+  elf_interp=0
+  if grep -Fq 'INTERP' "$root/wire-elf-programs"; then elf_interp=1; fi
+  printf 'STARBYTE_GUEST_WIRE_ELF machine=x86_64 interp=%s\n' "$elf_interp"
   stage_files=("$(command -v weston)" "$(command -v wayland-info)")
   for pattern in '*/libweston-*/drm-backend.so' '*/weston/kiosk-shell.so'; do
     match="$(find /usr/lib -type f -path "$pattern" -print -quit)"
@@ -228,6 +237,10 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     export LIBGL_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri
     # Prove both actual binaries execute before interpreting compositor
     # startup or protocol silence. No raw program output leaves guest RAM.
+    echo guest-private-write >/tmp/starbyte-write-check
+    guest_tmp=0
+    if [ -s /tmp/starbyte-write-check ]; then guest_tmp=1; fi
+    echo "STARBYTE_GUEST_TMP_WRITE_OK result=$guest_tmp" >/dev/console
     wire_executable=0
     weston_executable=0
     [ -x /bin/wayland-wire ] && wire_executable=1
@@ -239,7 +252,22 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     wire_self_status=$?
     wire_self_output=0
     if /bin/busybox grep -Fqx 'STARBYTE_GUEST_WAYLAND_WIRE_SELFTEST_OK frames=valid' /tmp/wayland-selfcheck.log; then wire_self_output=1; fi
-    echo "STARBYTE_GUEST_WAYLAND_WIRE_SELFTEST status=$wire_self_status output=$wire_self_output" >/dev/console
+    wire_self_stderr=0
+    wire_self_reason=none
+    if [ -s /tmp/wayland-selfcheck.err ]; then wire_self_stderr=1; fi
+    if /bin/busybox grep -Eiq 'Permission denied|Operation not permitted' /tmp/wayland-selfcheck.err; then
+      wire_self_reason=permission
+    elif /bin/busybox grep -Eiq 'Exec format error' /tmp/wayland-selfcheck.err; then
+      wire_self_reason=exec_format
+    elif /bin/busybox grep -Eiq 'No such file|not found' /tmp/wayland-selfcheck.err; then
+      wire_self_reason=missing_interpreter
+    elif /bin/busybox grep -Eiq 'error while loading shared libraries|cannot open shared object' /tmp/wayland-selfcheck.err; then
+      wire_self_reason=library
+    fi
+    echo "STARBYTE_GUEST_WAYLAND_WIRE_SELFTEST status=$wire_self_status output=$wire_self_output stderr=$wire_self_stderr reason=$wire_self_reason" >/dev/console
+    if [ "$wire_self_status" != 0 ] || [ "$wire_self_output" != 1 ]; then
+      /bin/busybox reboot -f
+    fi
     /usr/bin/weston --version >/tmp/weston-version.log 2>/tmp/weston-version.err
     weston_version_status=$?
     weston_version_output=0
@@ -247,6 +275,9 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     if [ -s /tmp/weston-version.log ]; then weston_version_output=1; fi
     if [ -s /tmp/weston-version.err ]; then weston_version_stderr=1; fi
     echo "STARBYTE_GUEST_WESTON_EXEC status=$weston_version_status stdout=$weston_version_output stderr=$weston_version_stderr" >/dev/console
+    if [ "$weston_version_status" != 0 ]; then
+      /bin/busybox reboot -f
+    fi
     /usr/bin/weston --backend=drm --renderer=pixman --shell=kiosk-shell.so --no-config \
       --drm-device=card0 --continue-without-input \
       --socket=starbyte-wayland-0 --log=/tmp/weston.log \
@@ -465,8 +496,10 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
   [[ "$driver" == true ]] || fail 'guest_driver_or_device_nodes_missing'
   if [[ "$mode" == --wayland-smoke ]]; then
     # All receipts are bounded diagnostics; never disclose raw guest logs.
-    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST|BIN_DIAG)|WESTON_EXEC) ' "$root/serial-clean.log" || true
-    grep -Fqx 'STARBYTE_GUEST_WAYLAND_WIRE_SELFTEST status=0 output=1' "$root/serial-clean.log" \
+    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST|BIN_DIAG)|WESTON_EXEC|TMP_WRITE_OK) ' "$root/serial-clean.log" || true
+    grep -Fqx 'STARBYTE_GUEST_TMP_WRITE_OK result=1' "$root/serial-clean.log" \
+      || fail 'guest_temporary_file_io_unavailable'
+    grep -Fqx 'STARBYTE_GUEST_WAYLAND_WIRE_SELFTEST status=0 output=1 stderr=0 reason=none' "$root/serial-clean.log" \
       || fail 'guest_wayland_wire_executable_unavailable'
     grep -Fqx 'STARBYTE_GUEST_WESTON_EXEC status=0 stdout=1 stderr=0' "$root/serial-clean.log" \
       || fail 'guest_weston_executable_unavailable'

@@ -56,19 +56,19 @@ jobs:
         run: bash scripts/qa-virtual-devices.sh --smoke
       - name: Install static BusyBox, SquashFS and module tools
         run: sudo apt-get install -y --no-install-recommends busybox-static cpio curl squashfs-tools kmod
-      - name: Boot private Linux kernel and validate guest PCI devices
-        run: bash scripts/qa-guest-linux.sh --smoke
-      - name: Initialize guest virtio DRM and input devices
-        run: bash scripts/qa-guest-linux.sh --driver-smoke
       - name: Install Rust and GBM host-side compilation dependencies
         uses: dtolnay/rust-toolchain@stable
       - name: Install GBM and CPU-only Mesa software renderer
         run: sudo apt-get install -y --no-install-recommends libgbm-dev libdrm-dev libgl1-mesa-dri
+      - name: Install DRM Wayland compositor and ELF diagnostics
+        run: sudo apt-get install -y --no-install-recommends weston wayland-utils libseat1 libinput10 binutils
+      - name: Validate guest Wayland registry barrier and compositor/input globals
+        run: bash scripts/qa-guest-linux.sh --wayland-smoke
+      - name: Boot private Linux kernel and validate guest PCI devices
+        run: bash scripts/qa-guest-linux.sh --smoke
+      - name: Initialize guest virtio DRM and input devices
+        run: bash scripts/qa-guest-linux.sh --driver-smoke
       - name: Probe guest GBM allocator and rendering buffer
         run: bash scripts/qa-guest-linux.sh --gbm-smoke
       - name: Inject private QMP key and verify guest evdev delivery
         run: bash scripts/qa-guest-linux.sh --input-smoke
-      - name: Install DRM Wayland compositor and protocol probe
-        run: sudo apt-get install -y --no-install-recommends weston wayland-utils libseat1 libinput10
-      - name: Validate guest Wayland registry barrier and compositor/input globals
-        run: bash scripts/qa-guest-linux.sh --wayland-smoke

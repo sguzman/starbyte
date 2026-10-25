@@ -4,7 +4,7 @@ set -Eeuo pipefail
 umask 077
 fail() { printf 'STARBYTE_GUEST_LINUX_BLOCKED %s\n' "$1" >&2; exit 3; }
 mode="${1:-}"
-[[ $# -eq 1 && ( "$mode" == --check-only || "$mode" == --smoke || "$mode" == --driver-smoke ) ]] || fail 'usage: --check-only|--smoke|--driver-smoke'
+[[ $# -eq 1 && ( "$mode" == --check-only || "$mode" == --smoke || "$mode" == --driver-smoke || "$mode" == --gbm-smoke ) ]] || fail 'usage: --check-only|--smoke|--driver-smoke|--gbm-smoke'
 [[ "${GITHUB_ACTIONS:-}" == true && "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] || fail 'github_hosted_runner_only'
 [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" && -z "${WAYLAND_SOCKET:-}" ]] || fail 'graphical_session_present'
 [[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" && -z "${DBUS_SESSION_BUS_ADDRESS:-}" && -z "${XDG_SESSION_ID:-}" ]] || fail 'interactive_session_present'
@@ -35,7 +35,7 @@ sha="${sha%% *}"
 printf 'STARBYTE_GUEST_KERNEL_SHA256 %s\n' "$sha"
 
 mkdir -p "$root/initfs/bin" "$root/initfs/dev" "$root/initfs/proc" "$root/initfs/sys"
-if [[ "$mode" == --driver-smoke ]]; then
+if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke ]]; then
   # The matching official Alpine modloop is a SquashFS module tree, not
   # a host module mount. Extract it only in this disposable runner.
   for tool in unsquashfs depmod; do
@@ -68,6 +68,27 @@ if [[ "$mode" == --driver-smoke ]]; then
   done < <(find "$root/initfs/lib/modules/$release" -type f -name '*.ko.gz' -print0)
   depmod -b "$root/initfs" "$release" || fail 'modloop_depmod_failed'
   : >"$root/initfs/etc/starbyte-driver-smoke"
+fi
+if [[ "$mode" == --gbm-smoke ]]; then
+  # Compile Rust only on the hosted CI runner, then execute inside guest RAM.
+  # Copy just the compiled binary's dynamic linker and shared libraries.
+  for tool in rustc ldd awk sort; do
+    command -v "$tool" >/dev/null 2>&1 || fail "missing_$tool"
+  done
+  rustc --edition=2021 -C opt-level=1 scripts/qa-guest-gbm.rs \
+    -o "$root/initfs/bin/gbm-probe" || fail 'gbm_probe_compilation_failed'
+  ldd "$root/initfs/bin/gbm-probe" >"$root/gbm-dependencies" \
+    || fail 'gbm_dependency_scan_failed'
+  if grep -Fq 'not found' "$root/gbm-dependencies"; then
+    fail 'gbm_dependency_missing'
+  fi
+  while IFS= read -r dependency; do
+    [[ "$dependency" == /* ]] || fail 'gbm_dependency_untrusted_path'
+    mkdir -p "$root/initfs$(dirname "$dependency")"
+    cp -L -- "$dependency" "$root/initfs$dependency" \
+      || fail 'gbm_dependency_copy_failed'
+  done < <(awk '$3 ~ /^\// {print $3} $1 ~ /^\// {print $1}' "$root/gbm-dependencies" | sort -u)
+  : >"$root/initfs/etc/starbyte-gbm-smoke"
 fi
 cp "$(command -v busybox)" "$root/initfs/bin/busybox"
 ln -s busybox "$root/initfs/bin/sh"
@@ -105,6 +126,14 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     [ -c "$node" ] && input_event=1
   done
   echo "STARBYTE_GUEST_DRIVER_RESULT render=$render input=$input_event gpu_load=$gpu_load input_load=$input_load evdev_load=$evdev_load" >/dev/console
+  if [ -e /etc/starbyte-gbm-smoke ]; then
+    guest_render_node=''
+    for node in /dev/dri/renderD*; do
+      if [ -c "$node" ]; then guest_render_node="$node"; break; fi
+    done
+    /bin/gbm-probe "$guest_render_node" >/dev/console 2>/dev/null
+    echo "STARBYTE_GUEST_GBM_EXEC status=$?" >/dev/console
+  fi
 fi
 /bin/busybox reboot -f
 while :; do /bin/busybox sleep 1; done
@@ -155,14 +184,31 @@ printf 'STARBYTE_GUEST_LINUX_DIAG boot=%s pci=%s panic=%s cause=%s qemu_status=%
 [[ "$result" -eq 0 ]] || fail "guest_boot_failed_or_timed_out status=$result"
 [[ "$boot" == true ]] || fail 'boot_receipt_missing'
 [[ "$pci" == true ]] || fail 'guest_virtio_pci_devices_missing'
-if [[ "$mode" == --driver-smoke ]]; then
+if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke ]]; then
   driver=false
   if grep -Fqx 'STARBYTE_GUEST_DRIVER_RESULT render=1 input=1 gpu_load=0 input_load=0 evdev_load=0' "$root/serial-clean.log"; then
     driver=true
   fi
   printf 'STARBYTE_GUEST_DRIVER_DIAG render_and_input=%s\n' "$driver"
   [[ "$driver" == true ]] || fail 'guest_driver_or_device_nodes_missing'
-  echo 'STARBYTE_GUEST_DRM_INPUT_OK drm_render_node=present evdev_input_node=present guest_only=true'
+  if [[ "$mode" == --gbm-smoke ]]; then
+    gbm_device=false
+    gbm_buffer=false
+    if grep -Fqx 'STARBYTE_GUEST_GBM_RESULT device=1 buffer=0' "$root/serial-clean.log"; then
+      gbm_device=true
+    fi
+    if grep -Fqx 'STARBYTE_GUEST_GBM_RESULT device=1 buffer=1' "$root/serial-clean.log"; then
+      gbm_device=true
+      gbm_buffer=true
+    fi
+    printf 'STARBYTE_GUEST_GBM_DIAG device=%s buffer=%s\n' "$gbm_device" "$gbm_buffer"
+    [[ "$gbm_device" == true && "$gbm_buffer" == true ]] || fail 'guest_gbm_allocator_unavailable'
+    grep -Fqx 'STARBYTE_GUEST_GBM_EXEC status=0' "$root/serial-clean.log" \
+      || fail 'guest_gbm_probe_failed'
+    echo 'STARBYTE_GUEST_GBM_OK device=initialized buffer=rendering guest_only=true'
+  else
+    echo 'STARBYTE_GUEST_DRM_INPUT_OK drm_render_node=present evdev_input_node=present guest_only=true'
+  fi
 else
   echo 'STARBYTE_GUEST_LINUX_PCI_OK gpu=virtio keyboard=virtio serial_only=true drm_render_node=not_tested input_seat=not_tested'
 fi

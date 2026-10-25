@@ -3,11 +3,12 @@
 ## Paused audio output re-selection after playback-thread exit (2026-10-24)
 
 Manual output re-selection now detects a disconnected playback receiver even
-when a previous reset was still pending. The worker-backed player replaces the
-dead software audio thread when the player is paused, without waiting for a
-new emulation frame or opening an OS audio device. A hardware-free regression
-terminates the real playback receiver and exercises paused recovery; queue
-saturation still behaves as a nonblocking, nonfatal drop. This is *not* a
+when a previous reset was still pending. Both the worker-backed player and
+the original library UI replace the dead software audio thread on explicit
+re-selection, without waiting for a new emulation frame or opening an OS
+audio device. Hardware-free regressions terminate real playback receivers,
+exercise paused recovery and verify the legacy menu request; queue saturation
+still behaves as a nonblocking, nonfatal drop. This is *not* a
 physical speaker-recovery acceptance. The six open scheduler gates, including
 P-18 and D-13, remain pending at **71/77 (92%)**.
 

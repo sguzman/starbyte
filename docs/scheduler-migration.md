@@ -4,10 +4,11 @@
 
 When a dead receiver left `reopen_pending` set, a second route-change
 request used to return success without verifying that a worker remained.
-Now even coalesced requests check for a disconnected receiver. On the
-worker-backed player, an explicit user route change can reconstruct the
-software playback worker while manually paused, without advancing SNES
-frames, forcing GUI repaints or opening a physical audio device. Failure
+Now even coalesced requests check for a disconnected receiver. Both
+the worker-backed player and the legacy Sound menu can reconstruct their
+software playback workers on explicit user re-selection, including while
+manually paused, without advancing SNES frames, forcing GUI repaints or
+opening a physical audio device. Failure
 to spawn the replacement sets a bounded retry deadline for the next
 available gameplay PCM; successful recreation preserves the current
 audible/mute setting.

@@ -3693,12 +3693,23 @@ impl StarbyteApp {
                     }
                     Err(error) => self.status_line = format!("Audio route reset failed: {error}"),
                 }
-            } else if let Some(output) = &self.audio_output {
-                self.status_line = if output.request_reopen() {
-                    "Audio route reset queued; next PCM or speaker check will reopen it.".to_owned()
-                } else {
-                    "Audio worker queue busy; output route was not reset.".to_owned()
-                };
+            } else if self.audio_output.is_some() {
+                let volume = audible_output_volume(
+                    self.config.audio.enabled,
+                    self.audio_muted,
+                    self.config.audio.volume,
+                );
+                self.status_line =
+                    match reselect_legacy_audio_output(&mut self.audio_output, volume) {
+                        Ok(false) => "Audio route reset queued; next PCM or speaker check will reopen it.".to_owned(),
+                        Ok(true) => "Stopped audio worker restarted; next PCM or speaker check will select the output.".to_owned(),
+                        Err(error) => {
+                            if self.audio_output.is_none() {
+                                self.next_audio_thread_retry = Instant::now() + Duration::from_secs(5);
+                            }
+                            format!("Audio route reset failed: {error}")
+                        }
+                    };
             }
         }
         ui.label(format!(
@@ -9578,6 +9589,27 @@ fn audio_playback_status(
     }
 }
 
+/// Re-select output without confusing an exited audio receiver with a full
+/// queue. Software-worker reconstruction is lazy: no OS speaker is opened
+/// before the next real PCM frame or explicitly requested speaker check.
+fn reselect_legacy_audio_output(
+    output: &mut Option<AudioOutput>,
+    volume: f32,
+) -> Result<bool, String> {
+    let current = output
+        .as_ref()
+        .ok_or_else(|| "No game-audio output has been started yet".to_owned())?;
+    if current.request_reopen() {
+        return Ok(false);
+    }
+    output.take();
+    let replacement = AudioOutput::start()
+        .map_err(|error| format!("could not restart stopped audio worker: {error}"))?;
+    replacement.set_volume(volume);
+    *output = Some(replacement);
+    Ok(true)
+}
+
 fn audible_output_volume(enabled: bool, muted: bool, volume: f32) -> f32 {
     if !enabled || muted || !volume.is_finite() {
         0.0
@@ -10238,5 +10270,32 @@ mod menu_hover_switch_tests {
             root_menu_to_switch([true, false, false, false, false], None),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod legacy_audio_reselection_tests {
+    use super::{AudioDeviceStatus, AudioOutput, reselect_legacy_audio_output};
+
+    #[test]
+    fn dead_receiver_reselection_restarts_software_worker_without_speakers() {
+        let mut output = Some(AudioOutput::start().unwrap());
+        output.as_ref().unwrap().stop_worker_for_test();
+        assert_eq!(
+            output.as_ref().unwrap().device_status(),
+            AudioDeviceStatus::NotAttempted
+        );
+        assert!(reselect_legacy_audio_output(&mut output, 0.25).unwrap());
+        let recovered = output.as_ref().unwrap();
+        assert_eq!(recovered.device_status(), AudioDeviceStatus::NotAttempted);
+        assert_eq!(recovered.submitted_frames(), 0);
+        assert!(!reselect_legacy_audio_output(&mut output, 0.25).unwrap());
+    }
+
+    #[test]
+    fn missing_audio_worker_does_not_claim_an_output_reset() {
+        let mut output = None;
+        assert!(reselect_legacy_audio_output(&mut output, 0.25).is_err());
+        assert!(output.is_none());
     }
 }

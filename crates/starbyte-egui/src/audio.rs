@@ -536,6 +536,32 @@ fn queued_audio_is_fresh(queued_at: Instant, now: Instant, is_test_tone: bool) -
     }
 }
 
+/// PCM conversion and time stretching can run while another thread pauses,
+/// mutes, closes a game or changes the default output. Check the epoch and
+/// freshness again immediately before handing the processed buffer to Rodio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PostProcessAudioStatus {
+    Ready,
+    Superseded,
+    Expired,
+}
+
+fn post_process_audio_status(
+    generation: &AtomicU64,
+    expected_generation: u64,
+    queued_at: Instant,
+    now: Instant,
+    is_test_tone: bool,
+) -> PostProcessAudioStatus {
+    if generation.load(Ordering::Acquire) != expected_generation {
+        PostProcessAudioStatus::Superseded
+    } else if !queued_audio_is_fresh(queued_at, now, is_test_tone) {
+        PostProcessAudioStatus::Expired
+    } else {
+        PostProcessAudioStatus::Ready
+    }
+}
+
 /// A failed reopen remains pending across multiple OS retry attempts.
 #[derive(Default)]
 struct StreamRecovery {
@@ -794,33 +820,63 @@ fn audio_worker(
                     worker_dropped_frames.fetch_add(1, Ordering::Relaxed);
                 }
             } else if queued_audio_is_fresh(queued_at, Instant::now(), is_test_tone) {
-                // The beep tolerates a longer but bounded device-open delay.
-                // Never play a stale tone after a hung output becomes ready.
-                let volume = normalize_volume(f32::from_bits(volume_bits.load(Ordering::Acquire)));
-                if is_test_tone {
-                    // Remove queued gameplay sources and protect this short
-                    // check from frame-pruning while it plays. Video and
-                    // emulation continue at full speed.
-                    output.clear();
-                    output.enqueue(pcm16_stereo_to_float(&pcm).unwrap_or_default(), volume, 1.0);
-                    continuity.reset();
-                    stretch.reset();
-                    tone_until = Some(Instant::now() + TEST_TONE_EXCLUSIVE);
-                    test_tones_submitted.fetch_add(1, Ordering::Release);
+                // Work done here can outlast a concurrent mute/pause or route
+                // reset. The earlier generation check alone is insufficient.
+                let float_pcm = pcm16_stereo_to_float(&pcm).unwrap_or_default();
+                let processed = if is_test_tone {
+                    float_pcm
                 } else {
-                    // Tempo and pitch are independent. WSOLA outputs fewer
-                    // frames for faster play, while Rodio applies only the
-                    // desired pitch multiplier to that output.
-                    let float_pcm = pcm16_stereo_to_float(&pcm).unwrap_or_default();
-                    let stretched = stretch.process(&float_pcm, speed / pitch);
-                    if !stretched.is_empty() {
-                        if continuity.observe_game_pcm(output.sink.empty()) {
-                            sink_empty_on_pcm.fetch_add(1, Ordering::Relaxed);
+                    // WSOLA changes tempo without changing pitch. Processing
+                    // can take time even after the device was initialized.
+                    stretch.process(&float_pcm, speed / pitch)
+                };
+                match post_process_audio_status(
+                    &generation,
+                    frame_generation,
+                    queued_at,
+                    Instant::now(),
+                    is_test_tone,
+                ) {
+                    PostProcessAudioStatus::Superseded => {
+                        output.clear();
+                        active_generation = generation.load(Ordering::Acquire);
+                        tone_until = None;
+                        continuity.reset();
+                        stretch.reset();
+                        if !is_test_tone {
+                            worker_dropped_frames.fetch_add(1, Ordering::Relaxed);
                         }
-                        output.enqueue(stretched, volume, pitch);
-                        submitted_frames.fetch_add(1, Ordering::Release);
-                        if pcm.iter().any(|&sample| sample != 0) {
-                            submitted_nonzero_frames.fetch_add(1, Ordering::Release);
+                    }
+                    PostProcessAudioStatus::Expired => {
+                        stretch.reset();
+                        if is_test_tone {
+                            expired_test_tones.fetch_add(1, Ordering::Release);
+                        } else {
+                            worker_dropped_frames.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    PostProcessAudioStatus::Ready => {
+                        // Sample live gain as late as possible too. A volume
+                        // adjustment must not be overwritten by a prior value
+                        // captured before time stretching.
+                        let volume =
+                            normalize_volume(f32::from_bits(volume_bits.load(Ordering::Acquire)));
+                        if is_test_tone {
+                            output.clear();
+                            output.enqueue(processed, volume, 1.0);
+                            continuity.reset();
+                            stretch.reset();
+                            tone_until = Some(Instant::now() + TEST_TONE_EXCLUSIVE);
+                            test_tones_submitted.fetch_add(1, Ordering::Release);
+                        } else if !processed.is_empty() {
+                            if continuity.observe_game_pcm(output.sink.empty()) {
+                                sink_empty_on_pcm.fetch_add(1, Ordering::Relaxed);
+                            }
+                            output.enqueue(processed, volume, pitch);
+                            submitted_frames.fetch_add(1, Ordering::Release);
+                            if pcm.iter().any(|&sample| sample != 0) {
+                                submitted_nonzero_frames.fetch_add(1, Ordering::Release);
+                            }
                         }
                     }
                 }
@@ -921,9 +977,10 @@ mod tests {
 
     use super::{
         AUDIO_RETRY_DELAY, AudioDeviceStatus, AudioMessage, AudioOutput, MAX_TEST_TONE_AGE,
-        PlaybackContinuity, StreamRecovery, apply_sink_volume, frame_is_fresh, normalize_pitch,
-        normalize_playback_speed, normalize_volume, pcm16_stereo_to_float, queued_audio_is_fresh,
-        record_stream_fault, reopen_due, retry_ready, set_sink_playback_speed, speaker_test_tone,
+        PlaybackContinuity, PostProcessAudioStatus, StreamRecovery, apply_sink_volume,
+        frame_is_fresh, normalize_pitch, normalize_playback_speed, normalize_volume,
+        pcm16_stereo_to_float, post_process_audio_status, queued_audio_is_fresh, record_stream_fault,
+        reopen_due, retry_ready, set_sink_playback_speed, speaker_test_tone,
     };
 
     #[test]
@@ -1447,6 +1504,50 @@ mod tests {
         assert!(frame_is_fresh(t0, t0 + Duration::from_millis(150)));
         assert!(!frame_is_fresh(t0, t0 + Duration::from_millis(151)));
         assert!(!frame_is_fresh(t0, t0 + Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn post_processing_rechecks_generation_and_ttl_before_mixer_submission() {
+        let queued_at = Instant::now();
+        let generation = AtomicU64::new(7);
+        for is_tone in [false, true] {
+            assert_eq!(
+                post_process_audio_status(&generation, 7, queued_at, queued_at, is_tone),
+                PostProcessAudioStatus::Ready
+            );
+        }
+
+        // The producer can invalidate the epoch while WSOLA or tone
+        // conversion is still processing the previously accepted frame.
+        generation.fetch_add(1, Ordering::AcqRel);
+        for is_tone in [false, true] {
+            assert_eq!(
+                post_process_audio_status(&generation, 7, queued_at, queued_at, is_tone),
+                PostProcessAudioStatus::Superseded
+            );
+        }
+
+        generation.store(7, Ordering::Release);
+        assert_eq!(
+            post_process_audio_status(
+                &generation,
+                7,
+                queued_at,
+                queued_at + super::MAX_FRAME_AGE + Duration::from_millis(1),
+                false,
+            ),
+            PostProcessAudioStatus::Expired
+        );
+        assert_eq!(
+            post_process_audio_status(
+                &generation,
+                7,
+                queued_at,
+                queued_at + MAX_TEST_TONE_AGE + Duration::from_millis(1),
+                true,
+            ),
+            PostProcessAudioStatus::Expired
+        );
     }
 
     #[test]

@@ -1,3 +1,21 @@
+# Starbyte: current state
+
+## Final mixer-entry checkpoint after audio processing (2026-10-25)
+
+A game pause, mute, save restore, cartridge change or output route reset can
+invalidate an audio generation while the worker is still converting PCM or
+running WSOLA pitch/tempo processing. The worker now rechecks both the live
+audio generation and the 150ms gameplay / two-second diagnostic freshness
+limits immediately before sending processed samples to the Rodio mixer.
+Superseded buffers clear the old sink and reset time stretching; expired
+buffers are discarded and counted without a stale append. Mixer gain is also
+read after processing rather than before it. A deterministic hardware-free
+regression covers a generation change and both age limits at the second
+checkpoint. This narrows the in-flight audio race but does not prove
+hardware-level silence or cancel audio that the OS has already accepted.
+Physical audio and background gates remain pending; accepted scheduler
+completion is **71/77 (92%)**.
+
 ## Paused Sound panel refreshes live audio-worker counters (2026-10-25)
 
 The full-worker Sound panel now reads its detailed SPC700 diagnostics and
@@ -10,8 +28,6 @@ expires a test tone, confirms the counter without any game frames, and verifies
 that no OS device was opened. Results remain generation-scoped to the active
 game. This improves observability, **not** speaker audibility or physical
 native-acceptance evidence. The scheduler ledger remains **71/77 (92%)**.
-
-# Starbyte: current state
 
 ## Show expired speaker checks in the live Sound diagnostics (2026-10-25)
 

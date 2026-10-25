@@ -1,5 +1,15 @@
 # Starbyte: current state
 
+## Audio owner shutdown invalidates pending PCM and test tones (2026-10-25)
+
+Releasing the last `AudioOutput` handle now mutes shared gain and advances
+the PCM generation before dropping the bounded sender. Otherwise, queued
+frames or a speaker-check tone might be drained while the audio thread
+shuts down. A no-device regression verifies that queued tone and PCM epochs
+are invalidated on owner drop, without claiming that hardware speaker
+shutdown timing was physically measured.
+
+
 ## Faulted output retries despite continuous silent PCM (2026-10-25)
 
 An automatically detected CPAL stream failure is now retried on the audio

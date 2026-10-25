@@ -391,6 +391,16 @@ impl AudioOutput {
     }
 }
 
+/// Invalidates queued PCM and test tones before the audio owner releases its
+/// last sender. The receiver may still be draining a bounded backlog; those
+/// old-generation messages must not reopen a device or play after shutdown.
+impl Drop for AudioOutput {
+    fn drop(&mut self) {
+        self.volume_bits.store(0.0_f32.to_bits(), Ordering::Release);
+        self.generation.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
 /// Report callback failures with an atomic flag; the realtime CPAL thread
 /// must never try to reopen devices, block, or allocate diagnostics.
 fn signal_stream_failure(failed: Arc<AtomicBool>) -> impl FnMut(rodio::cpal::StreamError) + Clone {
@@ -531,7 +541,7 @@ fn record_stream_fault(
 /// silent PCM or receives control messages more frequently than the health
 /// timeout. Retry only an observed stream fault, respecting its cooldown.
 /// An unused, manually reset or healthy route stays closed.
-fn stream_reopen_due(
+fn reopen_due(
     recovery: &StreamRecovery,
     device_present: bool,
     retry_after: Option<Instant>,
@@ -656,7 +666,7 @@ fn audio_worker(
         // recv_timeout. A running game can supply silent frames at 60 Hz,
         // indefinitely preventing a 250ms idle tick. Recovery must continue
         // even while paused, playing silently, or receiving control wakeups.
-        if stream_reopen_due(&recovery, device.is_some(), retry_after, Instant::now()) {
+        if reopen_due(&recovery, device.is_some(), retry_after, Instant::now()) {
             attempt_device_open(
                 &mut device,
                 &device_status,
@@ -869,7 +879,7 @@ mod tests {
         AUDIO_RETRY_DELAY, AudioDeviceStatus, AudioMessage, AudioOutput, PlaybackContinuity,
         StreamRecovery, apply_sink_volume, frame_is_fresh, normalize_pitch,
         normalize_playback_speed, normalize_volume, pcm16_stereo_to_float, record_stream_fault,
-        retry_ready, set_sink_playback_speed, speaker_test_tone, stream_reopen_due,
+        reopen_due, retry_ready, set_sink_playback_speed, speaker_test_tone,
     };
 
     #[test]
@@ -1212,6 +1222,26 @@ mod tests {
         assert_eq!(output.submitted_frames(), 0);
         assert_eq!(output.submitted_nonzero_frames(), 0);
         assert_eq!(output.test_tones_submitted(), 0);
+
+        // Dropping the game owner must immediately quarantine both queued
+        // PCM and a pending test tone, without opening any OS sound device.
+        let generation = Arc::clone(&output.generation);
+        let volume_bits = Arc::clone(&output.volume_bits);
+        assert!(output.enqueue_live_test_tone().is_ok());
+        assert!(output.enqueue(&[123, -123], 1.0, 1.0));
+        drop(output);
+        let shutdown_generation = generation.load(Ordering::Acquire);
+        assert_eq!(shutdown_generation, 4);
+        assert_eq!(f32::from_bits(volume_bits.load(Ordering::Acquire)), 0.0);
+        for queued in receiver.try_iter() {
+            match queued {
+                AudioMessage::Frame { generation, .. }
+                | AudioMessage::TestTone { generation, .. } => {
+                    assert_ne!(generation, shutdown_generation);
+                }
+                _ => panic!("unexpected queued control message during shutdown"),
+            }
+        }
     }
 
     #[test]
@@ -1421,13 +1451,13 @@ mod tests {
                 receiver.try_recv(),
                 Ok(AudioMessage::Frame { pcm, .. }) if pcm.as_slice() == [0, 0]
             ));
-            assert!(!stream_reopen_due(&recovery, false, Some(retry_at), earlier));
-            assert!(stream_reopen_due(&recovery, false, Some(retry_at), retry_at));
+            assert!(!reopen_due(&recovery, false, Some(retry_at), earlier));
+            assert!(reopen_due(&recovery, false, Some(retry_at), retry_at));
         }
         // Healthy and unused routes must never be opened by a health tick.
-        assert!(!stream_reopen_due(&recovery, true, Some(retry_at), retry_at));
+        assert!(!reopen_due(&recovery, true, Some(retry_at), retry_at));
         recovery.on_manual_reset();
-        assert!(!stream_reopen_due(&recovery, false, None, retry_at));
+        assert!(!reopen_due(&recovery, false, None, retry_at));
     }
 
     #[test]
@@ -1452,17 +1482,17 @@ mod tests {
 
         // A paused/off-workspace session has no frame callback; retry still
         // becomes due on the audio thread's independent health tick.
-        assert!(stream_reopen_due(&recovery, false, None, now));
+        assert!(reopen_due(&recovery, false, None, now));
         let retry_at = now + AUDIO_RETRY_DELAY;
-        assert!(!stream_reopen_due(&recovery, false, Some(retry_at), now));
-        assert!(stream_reopen_due(&recovery, false, Some(retry_at), retry_at));
+        assert!(!reopen_due(&recovery, false, Some(retry_at), now));
+        assert!(reopen_due(&recovery, false, Some(retry_at), retry_at));
 
         // Failed retries have no recovery credit; successful reopening
         // credits exactly once, and only newly generated PCM is eligible.
         assert_eq!(recoveries.load(Ordering::Relaxed), 0);
         recovery.on_open(&recoveries);
         assert_eq!(recoveries.load(Ordering::Relaxed), 1);
-        assert!(!stream_reopen_due(&recovery, false, None, retry_at));
+        assert!(!reopen_due(&recovery, false, None, retry_at));
         assert_eq!(generation.load(Ordering::Acquire), active_generation);
         assert_eq!(generation.load(Ordering::Acquire), 8);
         recovery.on_open(&recoveries);
@@ -1476,17 +1506,17 @@ mod tests {
         let recoveries = AtomicU64::new(0);
         let mut tracking = StreamRecovery::default();
         // Merely starting a paused game must not initialize audio hardware.
-        assert!(!stream_reopen_due(&tracking, false, None, now));
+        assert!(!reopen_due(&tracking, false, None, now));
         // Nor should an explicit manual reset fabricate a fault retry.
-        assert!(!stream_reopen_due(&tracking, false, None, now));
+        assert!(!reopen_due(&tracking, false, None, now));
         tracking.on_fault(&faults);
-        assert!(stream_reopen_due(&tracking, false, None, now));
-        assert!(!stream_reopen_due(&tracking, true, None, now));
+        assert!(reopen_due(&tracking, false, None, now));
+        assert!(!reopen_due(&tracking, true, None, now));
         let retry_at = now + AUDIO_RETRY_DELAY;
-        assert!(!stream_reopen_due(&tracking, false, Some(retry_at), now));
-        assert!(stream_reopen_due(&tracking, false, Some(retry_at), retry_at));
+        assert!(!reopen_due(&tracking, false, Some(retry_at), now));
+        assert!(reopen_due(&tracking, false, Some(retry_at), retry_at));
         tracking.on_open(&recoveries);
-        assert!(!stream_reopen_due(&tracking, false, None, retry_at));
+        assert!(!reopen_due(&tracking, false, None, retry_at));
         assert_eq!(faults.load(Ordering::Relaxed), 1);
         assert_eq!(recoveries.load(Ordering::Relaxed), 1);
     }

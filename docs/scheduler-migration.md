@@ -1,5 +1,16 @@
 # Emulation scheduler migration
 
+## Audio-owner teardown invalidates queued output — 2026-10-25
+
+Dropping the owner now atomically publishes zero gain and advances the
+audio generation before its final bounded sender is destroyed. Frames and
+speaker-check tones still in the receiver backlog fail the worker's
+generation check rather than reopening audio after shutdown; already-
+enqueued Rodio output is also cleared by the worker's epoch reconciliation.
+No hardware-device timing or speaker audibility was tested. A synthetic
+two-message queue regression verifies the old epochs and zeroed gain.
+
+
 ## Stream-fault retry with continuously active silent PCM — 2026-10-25
 
 Automatic stream recovery is now serviced once per audio-worker receive

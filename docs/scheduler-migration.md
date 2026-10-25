@@ -1,5 +1,17 @@
 # Emulation scheduler migration
 
+## Diagnosing expired speaker checks — 2026-10-25
+
+`AudioOutput` now publishes a separate count of expired live checks.
+The audio worker records a tone that exceeded its bounded request lifetime,
+including when an attempted OS device open took too long. The standalone
+speaker check treats that receipt as a specific expiration error rather
+than claiming a played beep or waiting for a generic timeout. The real
+audio-worker regression uses a pre-aged message and asserts device
+initialization was never attempted; physical audio remains unverified.
+No scheduler acceptance gate is closed.
+
+
 ## Expiring stale live speaker checks — 2026-10-25
 
 The diagnostic 440 Hz tone used to bypass PCM frame freshness indefinitely.

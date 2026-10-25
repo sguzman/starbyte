@@ -1,5 +1,17 @@
 # Starbyte: current state
 
+## Expired speaker checks now report a precise outcome (2026-10-25)
+
+A stale speaker-check tone is now counted as expired when the real audio
+worker rejects it either before attempting device initialization or after
+a slow successful device open. The standalone speaker diagnostic reports
+the expiration rather than waiting for an ambiguous five-second timeout.
+A hardware-free test injects an already-expired tone into the real worker
+and verifies no OS device was opened, no tone was submitted, and the
+expiration count increased. A receiver-channel acceptance is **not**
+physical speaker verification; the scheduler stays at 71/77 (92%).
+
+
 ## Expire speaker checks after delayed device initialization (2026-10-25)
 
 Unlike 150ms gameplay PCM, pending 440 Hz checks previously had no freshness

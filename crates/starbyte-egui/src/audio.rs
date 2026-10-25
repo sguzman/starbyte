@@ -121,6 +121,9 @@ pub struct AudioOutput {
     /// Number of separate test-tone bursts actually submitted to the same
     /// Rodio sink. Never included in game-PCM counters.
     test_tones_submitted: Arc<AtomicU64>,
+    /// Diagnostic beeps dropped because they spent too long queued or
+    /// awaiting an OS device. Does not measure physical speaker output.
+    expired_test_tones: Arc<AtomicU64>,
     /// Game buffers discarded at the bounded producer queue.
     producer_dropped_frames: Arc<AtomicU64>,
     /// Game buffers discarded as stale or superseded by the worker.
@@ -151,6 +154,8 @@ impl AudioOutput {
         let shared_nonzero_frames = Arc::clone(&submitted_nonzero_frames);
         let test_tones_submitted = Arc::new(AtomicU64::new(0));
         let shared_test_tones = Arc::clone(&test_tones_submitted);
+        let expired_test_tones = Arc::new(AtomicU64::new(0));
+        let shared_expired_tones = Arc::clone(&expired_test_tones);
         let producer_dropped_frames = Arc::new(AtomicU64::new(0));
         let worker_dropped_frames = Arc::new(AtomicU64::new(0));
         let shared_worker_drops = Arc::clone(&worker_dropped_frames);
@@ -174,6 +179,7 @@ impl AudioOutput {
                     shared_submitted_frames,
                     shared_nonzero_frames,
                     shared_test_tones,
+                    shared_expired_tones,
                     shared_worker_drops,
                     shared_sink_empty,
                     shared_stream_failures,
@@ -190,6 +196,7 @@ impl AudioOutput {
             submitted_frames,
             submitted_nonzero_frames,
             test_tones_submitted,
+            expired_test_tones,
             producer_dropped_frames,
             worker_dropped_frames,
             sink_empty_on_pcm,
@@ -220,6 +227,11 @@ impl AudioOutput {
     /// A counter increase confirms software delivery, not physical audibility.
     pub fn test_tones_submitted(&self) -> u64 {
         self.test_tones_submitted.load(Ordering::Acquire)
+    }
+
+    /// Expired live speaker checks never reach the OS output sink.
+    pub fn expired_test_tones(&self) -> u64 {
+        self.expired_test_tones.load(Ordering::Acquire)
     }
 
     /// Request a quarter-second, gentle 440 Hz beep through the same audio
@@ -381,6 +393,9 @@ impl AudioOutput {
             if output.test_tones_submitted() > 0 {
                 thread::sleep(Duration::from_millis(350));
                 return Ok(());
+            }
+            if output.expired_test_tones() > 0 {
+                anyhow::bail!("live speaker check expired before audio output became ready");
             }
             if output.device_status() == AudioDeviceStatus::OpenFailed {
                 anyhow::bail!("live speaker-test worker could not open an OS audio device");
@@ -610,6 +625,7 @@ fn audio_worker(
     submitted_frames: Arc<AtomicU64>,
     submitted_nonzero_frames: Arc<AtomicU64>,
     test_tones_submitted: Arc<AtomicU64>,
+    expired_test_tones: Arc<AtomicU64>,
     worker_dropped_frames: Arc<AtomicU64>,
     sink_empty_on_pcm: Arc<AtomicU64>,
     stream_failures: Arc<AtomicU64>,
@@ -729,10 +745,11 @@ fn audio_worker(
             AudioMessage::StopForTest => break,
         };
         let now = Instant::now();
-        if frame_generation != active_generation
-            || !queued_audio_is_fresh(queued_at, now, is_test_tone)
-        {
-            if !is_test_tone {
+        let expired = !queued_audio_is_fresh(queued_at, now, is_test_tone);
+        if frame_generation != active_generation || expired {
+            if is_test_tone && expired && frame_generation == active_generation {
+                expired_test_tones.fetch_add(1, Ordering::Release);
+            } else if !is_test_tone {
                 worker_dropped_frames.fetch_add(1, Ordering::Relaxed);
             }
             continue;
@@ -795,6 +812,10 @@ fn audio_worker(
                         }
                     }
                 }
+            } else if is_test_tone {
+                // A slow OS device open can outlast the user's request.
+                // Report the expired tone rather than playing a late beep.
+                expired_test_tones.fetch_add(1, Ordering::Release);
             } else {
                 worker_dropped_frames.fetch_add(1, Ordering::Relaxed);
             }
@@ -945,6 +966,7 @@ mod tests {
             submitted_frames: Arc::new(AtomicU64::new(0)),
             submitted_nonzero_frames: Arc::new(AtomicU64::new(0)),
             test_tones_submitted: Arc::new(AtomicU64::new(0)),
+            expired_test_tones: Arc::new(AtomicU64::new(0)),
             producer_dropped_frames: Arc::new(AtomicU64::new(0)),
             worker_dropped_frames: Arc::new(AtomicU64::new(0)),
             sink_empty_on_pcm: Arc::new(AtomicU64::new(0)),
@@ -983,6 +1005,7 @@ mod tests {
             submitted_frames: Arc::new(AtomicU64::new(0)),
             submitted_nonzero_frames: Arc::new(AtomicU64::new(0)),
             test_tones_submitted: Arc::new(AtomicU64::new(0)),
+            expired_test_tones: Arc::new(AtomicU64::new(0)),
             producer_dropped_frames: Arc::new(AtomicU64::new(0)),
             worker_dropped_frames: Arc::new(AtomicU64::new(0)),
             sink_empty_on_pcm: Arc::new(AtomicU64::new(0)),
@@ -1053,6 +1076,7 @@ mod tests {
             submitted_frames: Arc::new(AtomicU64::new(0)),
             submitted_nonzero_frames: Arc::new(AtomicU64::new(0)),
             test_tones_submitted: Arc::new(AtomicU64::new(0)),
+            expired_test_tones: Arc::new(AtomicU64::new(0)),
             producer_dropped_frames: Arc::new(AtomicU64::new(0)),
             worker_dropped_frames: Arc::new(AtomicU64::new(0)),
             sink_empty_on_pcm: Arc::new(AtomicU64::new(0)),
@@ -1124,6 +1148,7 @@ mod tests {
             submitted_frames: Arc::new(AtomicU64::new(0)),
             submitted_nonzero_frames: Arc::new(AtomicU64::new(0)),
             test_tones_submitted: Arc::new(AtomicU64::new(0)),
+            expired_test_tones: Arc::new(AtomicU64::new(0)),
             producer_dropped_frames: Arc::new(AtomicU64::new(0)),
             worker_dropped_frames: Arc::new(AtomicU64::new(0)),
             sink_empty_on_pcm: Arc::new(AtomicU64::new(0)),
@@ -1219,6 +1244,7 @@ mod tests {
             submitted_frames: Arc::new(AtomicU64::new(0)),
             submitted_nonzero_frames: Arc::new(AtomicU64::new(0)),
             test_tones_submitted: Arc::new(AtomicU64::new(0)),
+            expired_test_tones: Arc::new(AtomicU64::new(0)),
             producer_dropped_frames: Arc::new(AtomicU64::new(0)),
             worker_dropped_frames: Arc::new(AtomicU64::new(0)),
             sink_empty_on_pcm: Arc::new(AtomicU64::new(0)),
@@ -1267,6 +1293,7 @@ mod tests {
             submitted_frames: Arc::new(AtomicU64::new(0)),
             submitted_nonzero_frames: Arc::new(AtomicU64::new(0)),
             test_tones_submitted: Arc::new(AtomicU64::new(0)),
+            expired_test_tones: Arc::new(AtomicU64::new(0)),
             producer_dropped_frames: Arc::new(AtomicU64::new(0)),
             worker_dropped_frames: Arc::new(AtomicU64::new(0)),
             sink_empty_on_pcm: Arc::new(AtomicU64::new(0)),
@@ -1322,6 +1349,7 @@ mod tests {
             submitted_frames: Arc::new(AtomicU64::new(0)),
             submitted_nonzero_frames: Arc::new(AtomicU64::new(0)),
             test_tones_submitted: Arc::new(AtomicU64::new(0)),
+            expired_test_tones: Arc::new(AtomicU64::new(0)),
             producer_dropped_frames: Arc::new(AtomicU64::new(0)),
             worker_dropped_frames: Arc::new(AtomicU64::new(0)),
             sink_empty_on_pcm: Arc::new(AtomicU64::new(0)),
@@ -1354,6 +1382,23 @@ mod tests {
         assert_eq!(normalize_pitch(10.0), 4.0);
         assert_eq!(normalize_pitch(0.1), 0.5);
         assert_eq!(normalize_pitch(f32::NAN), 1.0);
+    }
+
+    #[test]
+    fn real_audio_worker_discards_expired_beep_without_opening_os_device() {
+        let output = AudioOutput::start().unwrap();
+        let old_tone = AudioMessage::TestTone {
+            generation: output.generation.load(Ordering::Acquire),
+            queued_at: Instant::now() - MAX_TEST_TONE_AGE - Duration::from_millis(1),
+        };
+        output.sender.try_send(old_tone).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while output.expired_test_tones() == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(output.expired_test_tones(), 1);
+        assert_eq!(output.test_tones_submitted(), 0);
+        assert_eq!(output.device_status(), AudioDeviceStatus::NotAttempted);
     }
 
     #[test]

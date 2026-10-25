@@ -31,6 +31,9 @@ const AUDIO_RETRY_DELAY: Duration = Duration::from_secs(10);
 const AUDIO_HEALTH_POLL: Duration = Duration::from_millis(250);
 /// A slow device open must never replay seconds-old game audio.
 const MAX_FRAME_AGE: Duration = Duration::from_millis(150);
+/// A speaker check may wait for a slow OS output to initialize, but must
+/// never play unexpectedly several seconds after the user requested it.
+const MAX_TEST_TONE_AGE: Duration = Duration::from_secs(2);
 /// The test tone occupies the real game output sink for a quarter second;
 /// suppress regular emulated PCM until it has completed playing.
 const TEST_TONE_EXCLUSIVE: Duration = Duration::from_millis(300);
@@ -498,6 +501,14 @@ fn frame_is_fresh(queued_at: Instant, now: Instant) -> bool {
     now.saturating_duration_since(queued_at) <= MAX_FRAME_AGE
 }
 
+fn queued_audio_is_fresh(queued_at: Instant, now: Instant, is_test_tone: bool) -> bool {
+    if is_test_tone {
+        now.saturating_duration_since(queued_at) <= MAX_TEST_TONE_AGE
+    } else {
+        frame_is_fresh(queued_at, now)
+    }
+}
+
 /// A failed reopen remains pending across multiple OS retry attempts.
 #[derive(Default)]
 struct StreamRecovery {
@@ -719,7 +730,7 @@ fn audio_worker(
         };
         let now = Instant::now();
         if frame_generation != active_generation
-            || (!is_test_tone && !frame_is_fresh(queued_at, now))
+            || !queued_audio_is_fresh(queued_at, now, is_test_tone)
         {
             if !is_test_tone {
                 worker_dropped_frames.fetch_add(1, Ordering::Relaxed);
@@ -753,9 +764,9 @@ fn audio_worker(
                 if !is_test_tone {
                     worker_dropped_frames.fetch_add(1, Ordering::Relaxed);
                 }
-            } else if is_test_tone || frame_is_fresh(queued_at, Instant::now()) {
-                // A manually requested beep is still useful after a slow
-                // initial device open; only game PCM has strict freshness.
+            } else if queued_audio_is_fresh(queued_at, Instant::now(), is_test_tone) {
+                // The beep tolerates a longer but bounded device-open delay.
+                // Never play a stale tone after a hung output becomes ready.
                 let volume = normalize_volume(f32::from_bits(volume_bits.load(Ordering::Acquire)));
                 if is_test_tone {
                     // Remove queued gameplay sources and protect this short
@@ -876,10 +887,10 @@ mod tests {
     };
 
     use super::{
-        AUDIO_RETRY_DELAY, AudioDeviceStatus, AudioMessage, AudioOutput, PlaybackContinuity,
-        StreamRecovery, apply_sink_volume, frame_is_fresh, normalize_pitch,
-        normalize_playback_speed, normalize_volume, pcm16_stereo_to_float, record_stream_fault,
-        reopen_due, retry_ready, set_sink_playback_speed, speaker_test_tone,
+        AUDIO_RETRY_DELAY, MAX_TEST_TONE_AGE, AudioDeviceStatus, AudioMessage, AudioOutput,
+        PlaybackContinuity, StreamRecovery, apply_sink_volume, frame_is_fresh, normalize_pitch,
+        normalize_playback_speed, normalize_volume, pcm16_stereo_to_float, queued_audio_is_fresh,
+        record_stream_fault, reopen_due, retry_ready, set_sink_playback_speed, speaker_test_tone,
     };
 
     #[test]
@@ -1343,6 +1354,33 @@ mod tests {
         assert_eq!(normalize_pitch(10.0), 4.0);
         assert_eq!(normalize_pitch(0.1), 0.5);
         assert_eq!(normalize_pitch(f32::NAN), 1.0);
+    }
+
+    #[test]
+    fn speaker_check_expires_even_if_a_slow_device_later_opens() {
+        let queued_at = Instant::now();
+        assert!(queued_audio_is_fresh(queued_at, queued_at, true));
+        assert!(queued_audio_is_fresh(
+            queued_at,
+            queued_at + MAX_TEST_TONE_AGE,
+            true
+        ));
+        assert!(!queued_audio_is_fresh(
+            queued_at,
+            queued_at + MAX_TEST_TONE_AGE + Duration::from_millis(1),
+            true
+        ));
+        // Normal game PCM remains far stricter than a diagnostic beep.
+        assert!(!queued_audio_is_fresh(
+            queued_at,
+            queued_at + Duration::from_millis(151),
+            false
+        ));
+        assert!(queued_audio_is_fresh(
+            queued_at,
+            queued_at + Duration::from_millis(150),
+            false
+        ));
     }
 
     #[test]

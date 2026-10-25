@@ -1,5 +1,16 @@
 # Emulation scheduler migration
 
+## Expiring stale live speaker checks — 2026-10-25
+
+The diagnostic 440 Hz tone used to bypass PCM frame freshness indefinitely.
+That permitted an eventual beep after a slow or stuck default-device open,
+even after the speaker-check timeout. The sound worker now uses a separate
+two-second test-tone age limit and applies it both before opening the output
+and after the potentially blocking initialization. Normal game PCM keeps
+its 150ms limit. Pure timing tests verify both thresholds without physical
+audio. This does **not** close P-18, D-13 or other acceptance gates.
+
+
 ## Audio-owner teardown invalidates queued output — 2026-10-25
 
 Dropping the owner now atomically publishes zero gain and advances the

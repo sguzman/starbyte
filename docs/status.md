@@ -1,5 +1,18 @@
 # Starbyte: current state
 
+## Expire speaker checks after delayed device initialization (2026-10-25)
+
+Unlike 150ms gameplay PCM, pending 440 Hz checks previously had no freshness
+limit. A blocked device-open operation could eventually deliver a long-stale
+beep after its user-visible five-second diagnostic had already timed out.
+Speaker-check messages now have a separate two-second lifetime, verified
+both before attempting an OS device open and again before appending sound
+to Rodio. Fresh checks still tolerate slower startup than game PCM. A
+hardware-free regression verifies the exact age boundaries. This is not
+evidence of speaker audibility or physical route recovery. **P-18 and D-13
+remain pending, 71/77 scheduler gates accepted (92%).**
+
+
 ## Audio owner shutdown invalidates pending PCM and test tones (2026-10-25)
 
 Releasing the last `AudioOutput` handle now mutes shared gain and advances

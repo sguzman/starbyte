@@ -1117,6 +1117,8 @@ mod tests {
             "STARBYTE_GUEST_FOCUS_RESULT ready=1 clean_exit=1 exit_message=1 weston_alive=1",
             "STARBYTE_GUEST_FOCUS_QMP_ACK escape=sent source=private_qmp",
             "guest_focused_wayland_keyboard_delivery_missing",
+            "STARBYTE_GUEST_APP_RESULT launched=1 status=0 frames=1 single_owner=1",
+            "guest_real_starbyte_window_and_worker_missing",
             "guest_wayland_wire_executable_unavailable",
             "guest_weston_executable_unavailable",
             "guest_drm_wayland_handshake_or_seat_missing",

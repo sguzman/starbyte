@@ -4,7 +4,7 @@ set -Eeuo pipefail
 umask 077
 fail() { printf 'STARBYTE_GUEST_LINUX_BLOCKED %s\n' "$1" >&2; exit 3; }
 mode="${1:-}"
-[[ $# -eq 1 && ( "$mode" == --check-only || "$mode" == --smoke || "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-smoke || "$mode" == --wayland-smoke ) ]] || fail 'usage: --check-only|--smoke|--driver-smoke|--gbm-smoke|--input-smoke|--wayland-smoke'
+[[ $# -eq 1 && ( "$mode" == --check-only || "$mode" == --smoke || "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-smoke || "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ) ]] || fail 'usage: --check-only|--smoke|--driver-smoke|--gbm-smoke|--input-smoke|--wayland-smoke|--starbyte-smoke'
 [[ "${GITHUB_ACTIONS:-}" == true && "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] || fail 'github_hosted_runner_only'
 [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" && -z "${WAYLAND_SOCKET:-}" ]] || fail 'graphical_session_present'
 [[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" && -z "${DBUS_SESSION_BUS_ADDRESS:-}" && -z "${XDG_SESSION_ID:-}" ]] || fail 'interactive_session_present'
@@ -35,7 +35,7 @@ sha="${sha%% *}"
 printf 'STARBYTE_GUEST_KERNEL_SHA256 %s\n' "$sha"
 
 mkdir -p "$root/initfs/bin" "$root/initfs/dev" "$root/initfs/proc" "$root/initfs/sys"
-if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-smoke || "$mode" == --wayland-smoke ]]; then
+if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-smoke || "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ]]; then
   # The matching official Alpine modloop is a SquashFS module tree, not
   # a host module mount. Extract it only in this disposable runner.
   for tool in unsquashfs depmod; do
@@ -69,7 +69,7 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
   depmod -b "$root/initfs" "$release" || fail 'modloop_depmod_failed'
   : >"$root/initfs/etc/starbyte-driver-smoke"
 fi
-if [[ "$mode" == --gbm-smoke || "$mode" == --wayland-smoke ]]; then
+if [[ "$mode" == --gbm-smoke || "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ]]; then
   # Compile Rust only on the hosted CI runner, then execute inside guest RAM.
   # Copy just the compiled binary's dynamic linker and shared libraries.
   for tool in rustc ldd awk sort; do
@@ -120,7 +120,7 @@ if [[ "$mode" == --input-smoke ]]; then
     || fail 'guest_input_compilation_failed'
   : >"$root/initfs/etc/starbyte-input-smoke"
 fi
-if [[ "$mode" == --wayland-smoke ]]; then
+if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ]]; then
   # Stage a real DRM/KMS Weston compositor, its dynamically loaded modules,
   # and an independent Rust Wayland wire client into private guest RAM.
   # This does not launch a host GUI.
@@ -191,6 +191,17 @@ if [[ "$mode" == --wayland-smoke ]]; then
     cp -L -- "$artifact" "$root/initfs$artifact" || fail 'wayland_stage_failed'
     ldd "$artifact" >>"$root/wayland-dependencies" || fail 'wayland_dependency_scan_failed'
   done
+  if [[ "$mode" == --starbyte-smoke ]]; then
+    # The same binary tested under hosted Weston, copied into guest RAM.
+    # Explicit repository-local artifact; no host home or device passthrough.
+    app_binary=target/debug/starbyte-egui
+    [[ -x "$app_binary" ]] || fail 'hosted_starbyte_binary_missing'
+    cp -L "$app_binary" "$root/initfs/bin/starbyte-egui" \
+      || fail 'guest_starbyte_binary_stage_failed'
+    ldd "$app_binary" >>"$root/wayland-dependencies" \
+      || fail 'guest_starbyte_dependencies_scan_failed'
+    : >"$root/initfs/etc/starbyte-app-smoke"
+  fi
   grep -Fq 'not found' "$root/wayland-dependencies" && fail 'wayland_dependency_missing'
   while IFS= read -r dependency; do
     [[ "$dependency" == /* ]] || fail 'wayland_dependency_untrusted_path'
@@ -446,6 +457,26 @@ if [ -e /etc/starbyte-driver-smoke ]; then
       if /bin/busybox kill -0 "$weston_pid" 2>/dev/null; then focus_weston_alive=1; fi
     fi
     echo "STARBYTE_GUEST_FOCUS_RESULT ready=$focus_ready clean_exit=$focus_clean_exit exit_message=$focus_exit_message weston_alive=$focus_weston_alive" >/dev/console
+    if [ -e /etc/starbyte-app-smoke ]; then
+      # The real original egui library + exclusive SNES worker, in the VM.
+      # The built-in demo needs no copyrighted ROM or private user files.
+      app_exit=unknown
+      app_frames=0
+      app_single_owner=0
+      app_launcher=1
+      WAYLAND_DISPLAY=starbyte-wayland-0 \
+        WINIT_UNIX_BACKEND=wayland \
+        XDG_CONFIG_HOME=/tmp/starbyte-config \
+        XDG_CACHE_HOME=/tmp/starbyte-xdg-cache \
+        /bin/starbyte-egui --demo --native-worker-preview --exit-after-frames 30 \
+          --config /tmp/starbyte-app-config.toml \
+          --cache-dir /tmp/starbyte-app-cache \
+          >/tmp/starbyte-app.log 2>/tmp/starbyte-app.err
+      app_exit=$?
+      if /bin/busybox grep -Fq 'STARBYTE_FULL_LIBRARY_WORKER_SMOKE_OK frame=' /tmp/starbyte-app.log; then app_frames=1; fi
+      if /bin/busybox grep -Fq 'STARBYTE_FULL_LIBRARY_SINGLE_OWNER_SMOKE_OK legacy_session_absent=true worker_frame=' /tmp/starbyte-app.log; then app_single_owner=1; fi
+      echo "STARBYTE_GUEST_APP_RESULT launched=$app_launcher status=$app_exit frames=$app_frames single_owner=$app_single_owner" >/dev/console
+    fi
     # Diagnose only fixed categories; raw compositor and client logs never
     # leave the disposable VM or appear in public CI.
     module_error=0
@@ -570,6 +601,7 @@ chmod 755 "$root/initfs/init"
 guest_ram=384M
 if [[ "$mode" == --gbm-smoke ]]; then guest_ram=768M; fi
 if [[ "$mode" == --wayland-smoke ]]; then guest_ram=1536M; fi
+if [[ "$mode" == --starbyte-smoke ]]; then guest_ram=2048M; fi
 # -cpu max remains TCG-only; QEMU's default qemu64 CPU may lack instructions
 # needed by Ubuntu's x86-64-v3 static BusyBox, killing PID 1 before output.
 # The only synthetic keyboard injection path is this guest's private QMP
@@ -609,7 +641,7 @@ if [[ "$mode" == --input-smoke ]]; then
   injector_pid=$!
   trap 'kill "$injector_pid" 2>/dev/null || true; wait "$injector_pid" 2>/dev/null || true; rm -rf -- "$root"' EXIT
 fi
-if [[ "$mode" == --wayland-smoke ]]; then
+if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ]]; then
   # Entirely virtual keyboard, private guest-only QMP socket.
   qmp_args=(-qmp "unix:$root/qmp.sock,server=on,wait=off")
   guest_focus_injector() {
@@ -642,13 +674,14 @@ if [[ "$mode" == --wayland-smoke ]]; then
   trap 'kill "$injector_pid" 2>/dev/null || true; wait "$injector_pid" 2>/dev/null || true; rm -rf -- "$root"' EXIT
 fi
 display_args=(-display none)
-if [[ "$mode" == --wayland-smoke ]]; then
+if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ]]; then
   # Private Unix-only VNC display emulation advertises a KMS output.
   # No TCP listener, physical display, viewer, or host desktop socket.
   display_args=(-display "vnc=unix:$root/guest-vnc.sock")
 fi
 guest_timeout=125
 if [[ "$mode" == --wayland-smoke ]]; then guest_timeout=200; fi
+if [[ "$mode" == --starbyte-smoke ]]; then guest_timeout=340; fi
 set +e
 HOME="$root" XDG_CONFIG_HOME="$root" \
   timeout --signal=TERM --kill-after=2s "${guest_timeout}s" qemu-system-x86_64 \
@@ -667,7 +700,7 @@ if [[ "$mode" == --input-smoke ]]; then
   injector_pid=''
 fi
 focus_injector_ok=true
-if [[ "$mode" == --wayland-smoke ]]; then
+if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ]]; then
   wait "$injector_pid" || focus_injector_ok=false
   injector_pid=''
 fi
@@ -698,16 +731,16 @@ printf 'STARBYTE_GUEST_LINUX_DIAG boot=%s pci=%s panic=%s cause=%s qemu_status=%
 [[ "$result" -eq 0 ]] || fail "guest_boot_failed_or_timed_out status=$result"
 [[ "$boot" == true ]] || fail 'boot_receipt_missing'
 [[ "$pci" == true ]] || fail 'guest_virtio_pci_devices_missing'
-if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-smoke || "$mode" == --wayland-smoke ]]; then
+if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-smoke || "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ]]; then
   driver=false
   if grep -Fqx 'STARBYTE_GUEST_DRIVER_RESULT render=1 input=1 gpu_load=0 input_load=0 evdev_load=0' "$root/serial-clean.log"; then
     driver=true
   fi
   printf 'STARBYTE_GUEST_DRIVER_DIAG render_and_input=%s\n' "$driver"
   [[ "$driver" == true ]] || fail 'guest_driver_or_device_nodes_missing'
-  if [[ "$mode" == --wayland-smoke ]]; then
+  if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ]]; then
     # All receipts are bounded diagnostics; never disclose raw guest logs.
-    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST|BIN_DIAG|REGISTRY_DIAG)|WESTON_(EXEC|STAGE|EXIT)|TMP_WRITE_OK|TMP_MOUNT|TMP_IO_DIAG|RUN_MOUNT|UDEV_RESULT|XKB_DATA|FOCUS_RESULT) ' "$root/serial-clean.log" || true
+    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST|BIN_DIAG|REGISTRY_DIAG)|WESTON_(EXEC|STAGE|EXIT)|TMP_WRITE_OK|TMP_MOUNT|TMP_IO_DIAG|RUN_MOUNT|UDEV_RESULT|XKB_DATA|FOCUS_RESULT|APP_RESULT) ' "$root/serial-clean.log" || true
     grep -Fqx 'STARBYTE_GUEST_TMP_MOUNT status=0' "$root/serial-clean.log" \
       || fail 'guest_temporary_mount_unavailable'
     grep -Fqx 'STARBYTE_GUEST_RUN_MOUNT status=0' "$root/serial-clean.log" \
@@ -733,6 +766,11 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
     grep -Fqx 'STARBYTE_GUEST_FOCUS_RESULT ready=1 clean_exit=1 exit_message=1 weston_alive=1' "$root/serial-clean.log" \
       || fail 'guest_focused_wayland_keyboard_delivery_missing'
     echo 'STARBYTE_GUEST_FOCUS_OK client=weston-simple-shm escape=received source=private_qmp guest_only=true'
+    if [[ "$mode" == --starbyte-smoke ]]; then
+      grep -Fqx 'STARBYTE_GUEST_APP_RESULT launched=1 status=0 frames=1 single_owner=1' "$root/serial-clean.log" \
+        || fail 'guest_real_starbyte_window_and_worker_missing'
+      echo 'STARBYTE_GUEST_APP_OK shell=original_full_library emulator_owner=worker frames=30 guest_only=true'
+    fi
   elif [[ "$mode" == --gbm-smoke ]]; then
     render_node=false
     render_device=false

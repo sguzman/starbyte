@@ -210,9 +210,14 @@ jobs:
             }
           cat "$RUNNER_TEMP/starbyte-full-worker-exit.log"
           grep -F "STARBYTE_FULL_LIBRARY_WORKER_EXIT_SMOKE_OK playback_stopped=true" "$RUNNER_TEMP/starbyte-full-worker-exit.log"
-          # This uses a synthetic battery-backed ROM and an actual normal
-          # eframe window close. After Drop joins the owner, the executable
-          # reopens the cartridge and validates the persisted SRAM byte.
+          # Keep every user-data namespace disposable, then close the actual
+          # full-library app process after its worker writes battery SRAM.
+          export HOME="$RUNNER_TEMP/starbyte-sram-home"
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/starbyte-sram-config"
+          export XDG_DATA_HOME="$RUNNER_TEMP/starbyte-sram-data"
+          export XDG_STATE_HOME="$RUNNER_TEMP/starbyte-sram-state"
+          export XDG_CACHE_HOME="$RUNNER_TEMP/starbyte-sram-xdg-cache"
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
           timeout 90s target/debug/starbyte-egui --demo --native-worker-preview --exit-after-full-worker-sram \
             --config "$RUNNER_TEMP/starbyte-full-sram-config.toml" \
             --cache-dir "$RUNNER_TEMP/starbyte-full-sram-cache" \
@@ -224,6 +229,18 @@ jobs:
           cat "$RUNNER_TEMP/starbyte-full-sram.log"
           grep -F "STARBYTE_FULL_LIBRARY_SRAM_SMOKE_OK persisted_byte=5A" "$RUNNER_TEMP/starbyte-full-sram.log"
           grep -F "STARBYTE_FULL_LIBRARY_OWNER_SHUTDOWN_SMOKE_OK finalized=true audio_released=true" "$RUNNER_TEMP/starbyte-full-sram.log"
+          # Start a fresh starbyte-egui process with the same isolated XDG
+          # data root. It reconstructs the battery demo and independently
+          # verifies SRAM after the writer process and owner have exited.
+          timeout 30s target/debug/starbyte-egui --demo --verify-demo-sram-restart \
+            --config "$RUNNER_TEMP/starbyte-full-sram-config.toml" \
+            --cache-dir "$RUNNER_TEMP/starbyte-full-sram-cache" \
+            > "$RUNNER_TEMP/starbyte-full-sram-restart.log" 2>&1 || {
+              cat "$RUNNER_TEMP/starbyte-full-sram-restart.log"
+              exit 1
+            }
+          cat "$RUNNER_TEMP/starbyte-full-sram-restart.log"
+          grep -F "STARBYTE_FULL_LIBRARY_SRAM_RESTART_OK persisted_byte=5A" "$RUNNER_TEMP/starbyte-full-sram-restart.log"
           # A broken replacement request must report its error while keeping
           # the previous installed cartridge, generation and clock alive in
           # the original full-library window, not only in a worker unit test.

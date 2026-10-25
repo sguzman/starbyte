@@ -215,6 +215,10 @@ struct Args {
     )]
     exit_after_full_worker_sram: bool,
 
+    /// CI only: reopen the built-in battery demo's SRAM in a fresh process.
+    #[arg(long, requires = "demo", hide = true)]
+    verify_demo_sram_restart: bool,
+
     /// CI only: a broken replacement cartridge must not eject the active
     /// full-library game's owner or stop its independent frame clock.
     #[arg(
@@ -332,7 +336,7 @@ fn main() -> Result<()> {
         std::fs::create_dir_all(&demo_dir)?;
         let path = demo_dir.join("starbyte-display-demo.sfc");
         let mut demo = starbyte_core::testing::demo::demo_rom_bytes();
-        if args.exit_after_full_worker_sram {
+        if args.exit_after_full_worker_sram || args.verify_demo_sram_restart {
             // Unlike the normal display fixture, this synthetic cartridge
             // has battery RAM and can prove owner-thread shutdown persistence.
             demo[0x7FD8] = 0x01;
@@ -342,6 +346,17 @@ fn main() -> Result<()> {
     } else {
         args.rom.clone()
     };
+    if args.verify_demo_sram_restart {
+        let rom_path = rom.expect("--demo generates a built-in ROM");
+        let mut reopened = starbyte_frontend::FrontendSession::new(assets)?;
+        reopened.load_rom_with_persistent_audio(&rom_path)?;
+        anyhow::ensure!(
+            reopened.host_read_u8(0x700000) == 0x5A,
+            "full library worker process did not persist battery SRAM across restart"
+        );
+        println!("STARBYTE_FULL_LIBRARY_SRAM_RESTART_OK persisted_byte=5A");
+        return Ok(());
+    }
     let rom_dirs = args.rom_dirs.clone();
     // The existing library receives these directories through StarbyteApp,
     // but the independent preview needs them before its own worker scan.
@@ -713,6 +728,10 @@ mod speaker_cli_tests {
         ])
         .unwrap();
         assert!(battery_check.exit_after_full_worker_sram);
+        let restarted_reader =
+            Args::try_parse_from(["starbyte-egui", "--demo", "--verify-demo-sram-restart"])
+                .unwrap();
+        assert!(restarted_reader.verify_demo_sram_restart);
         let replacement_check = Args::try_parse_from([
             "starbyte-egui",
             "--demo",

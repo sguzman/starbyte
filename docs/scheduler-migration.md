@@ -1,5 +1,17 @@
 # Emulation scheduler migration
 
+## Battery SRAM verified across separate application processes — 2026-10-24
+
+The original-window Weston SRAM smoke previously closed `StarbyteApp`, joined
+the emulation owner, and reopened the battery cartridge in the same executable
+process. The Linux CI smoke now uses isolated temporary `HOME` and XDG roots,
+closes that writer application process, then starts a second `starbyte-egui`
+process to reload the copyright-free battery demo and verify persisted byte
+`0x5A`. The reader runs without creating a GUI window. This directly tests
+process-boundary persistence in addition to the existing owner-shutdown and
+SRAM tests. It does not establish physical game SRAM use or close D-15/P-19;
+the evidence-gated acceptance count remains **71/77 (92%)**.
+
 ## 2026-10-24 non-interference safety gate after failed second focused run
 
 Local Codex retested `real-focused-clock` on `fd522d4` and reported 0/1

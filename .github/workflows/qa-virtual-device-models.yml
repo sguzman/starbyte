@@ -66,3 +66,7 @@ jobs:
         run: bash scripts/qa-guest-linux.sh --gbm-smoke
       - name: Inject private QMP key and verify guest evdev delivery
         run: bash scripts/qa-guest-linux.sh --input-smoke
+      - name: Install DRM Wayland compositor and protocol probe
+        run: sudo apt-get install -y --no-install-recommends weston wayland-utils libseat1 libinput10
+      - name: Validate Wayland DRM compositor and guest client handshake
+        run: bash scripts/qa-guest-linux.sh --wayland-smoke

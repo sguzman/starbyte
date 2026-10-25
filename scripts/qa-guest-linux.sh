@@ -4,7 +4,7 @@ set -Eeuo pipefail
 umask 077
 fail() { printf 'STARBYTE_GUEST_LINUX_BLOCKED %s\n' "$1" >&2; exit 3; }
 mode="${1:-}"
-[[ $# -eq 1 && ( "$mode" == --check-only || "$mode" == --smoke || "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-smoke ) ]] || fail 'usage: --check-only|--smoke|--driver-smoke|--gbm-smoke|--input-smoke'
+[[ $# -eq 1 && ( "$mode" == --check-only || "$mode" == --smoke || "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-smoke || "$mode" == --wayland-smoke ) ]] || fail 'usage: --check-only|--smoke|--driver-smoke|--gbm-smoke|--input-smoke|--wayland-smoke'
 [[ "${GITHUB_ACTIONS:-}" == true && "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] || fail 'github_hosted_runner_only'
 [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" && -z "${WAYLAND_SOCKET:-}" ]] || fail 'graphical_session_present'
 [[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" && -z "${DBUS_SESSION_BUS_ADDRESS:-}" && -z "${XDG_SESSION_ID:-}" ]] || fail 'interactive_session_present'
@@ -35,7 +35,7 @@ sha="${sha%% *}"
 printf 'STARBYTE_GUEST_KERNEL_SHA256 %s\n' "$sha"
 
 mkdir -p "$root/initfs/bin" "$root/initfs/dev" "$root/initfs/proc" "$root/initfs/sys"
-if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-smoke ]]; then
+if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-smoke || "$mode" == --wayland-smoke ]]; then
   # The matching official Alpine modloop is a SquashFS module tree, not
   # a host module mount. Extract it only in this disposable runner.
   for tool in unsquashfs depmod; do
@@ -69,7 +69,7 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
   depmod -b "$root/initfs" "$release" || fail 'modloop_depmod_failed'
   : >"$root/initfs/etc/starbyte-driver-smoke"
 fi
-if [[ "$mode" == --gbm-smoke ]]; then
+if [[ "$mode" == --gbm-smoke || "$mode" == --wayland-smoke ]]; then
   # Compile Rust only on the hosted CI runner, then execute inside guest RAM.
   # Copy just the compiled binary's dynamic linker and shared libraries.
   for tool in rustc ldd awk sort; do
@@ -109,7 +109,7 @@ if [[ "$mode" == --gbm-smoke ]]; then
     cp -L -- "$dependency" "$root/initfs$dependency" \
       || fail 'gbm_dependency_copy_failed'
   done < <(awk '$3 ~ /^\// {print $3} $1 ~ /^\// {print $1}' "$root/gbm-dependencies" | sort -u)
-  : >"$root/initfs/etc/starbyte-gbm-smoke"
+  if [[ "$mode" == --gbm-smoke ]]; then : >"$root/initfs/etc/starbyte-gbm-smoke"; fi
 fi
 if [[ "$mode" == --input-smoke ]]; then
   for tool in rustc socat jq; do
@@ -119,6 +119,36 @@ if [[ "$mode" == --input-smoke ]]; then
     scripts/qa-guest-input.rs -o "$root/initfs/bin/input-probe" \
     || fail 'guest_input_compilation_failed'
   : >"$root/initfs/etc/starbyte-input-smoke"
+fi
+if [[ "$mode" == --wayland-smoke ]]; then
+  # Stage a real DRM/KMS Weston compositor, its dynamically loaded modules,
+  # and wayland-info into private guest RAM. This does not launch a host GUI.
+  for tool in weston wayland-info ldd awk sort; do
+    command -v "$tool" >/dev/null 2>&1 || fail "wayland_host_tool_missing_$tool"
+  done
+  stage_files=("$(command -v weston)" "$(command -v wayland-info)")
+  for pattern in '*/libweston-*/drm-backend.so' '*/weston/kiosk-shell.so'; do
+    match="$(find /usr/lib -type f -path "$pattern" -print -quit)"
+    [[ -n "$match" && -f "$match" ]] || fail "wayland_module_missing_${pattern##*/}"
+    stage_files+=("$match")
+  done
+  # Weston releases may load this renderer as a separate plugin.
+  pixman_plugin="$(find /usr/lib -type f -name 'pixman-renderer.so' -print -quit)"
+  if [[ -n "$pixman_plugin" ]]; then stage_files+=("$pixman_plugin"); fi
+  : >"$root/wayland-dependencies"
+  for artifact in "${stage_files[@]}"; do
+    mkdir -p "$root/initfs$(dirname "$artifact")"
+    cp -L -- "$artifact" "$root/initfs$artifact" || fail 'wayland_stage_failed'
+    ldd "$artifact" >>"$root/wayland-dependencies" || fail 'wayland_dependency_scan_failed'
+  done
+  grep -Fq 'not found' "$root/wayland-dependencies" && fail 'wayland_dependency_missing'
+  while IFS= read -r dependency; do
+    [[ "$dependency" == /* ]] || fail 'wayland_dependency_untrusted_path'
+    mkdir -p "$root/initfs$(dirname "$dependency")"
+    cp -L -- "$dependency" "$root/initfs$dependency" || fail 'wayland_dependency_copy_failed'
+  done < <(awk '$3 ~ /^\// {print $3} $1 ~ /^\// {print $1}' "$root/wayland-dependencies" | sort -u)
+  mkdir -p "$root/initfs/run" "$root/initfs/tmp" "$root/initfs/usr/bin"
+  : >"$root/initfs/etc/starbyte-wayland-smoke"
 fi
 cp "$(command -v busybox)" "$root/initfs/bin/busybox"
 ln -s busybox "$root/initfs/bin/sh"
@@ -176,6 +206,44 @@ if [ -e /etc/starbyte-driver-smoke ]; then
       /bin/gbm-probe "$guest_card_node" >/dev/console 2>/dev/null
     echo "STARBYTE_GUEST_GBM_EXEC card_status=$?" >/dev/console
   fi
+  if [ -e /etc/starbyte-wayland-smoke ]; then
+    /bin/busybox mkdir -p /run/user/0 /tmp
+    /bin/busybox chmod 700 /run/user/0
+    export XDG_RUNTIME_DIR=/run/user/0
+    export LIBSEAT_BACKEND=builtin
+    export XDG_SEAT=seat0
+    export HOME=/tmp
+    export PATH=/usr/bin:/bin
+    export MESA_LOADER_DRIVER_OVERRIDE=kms_swrast
+    export LIBGL_ALWAYS_SOFTWARE=1
+    export GBM_BACKEND=dri
+    export GBM_BACKENDS_PATH=/usr/lib/x86_64-linux-gnu/gbm
+    export LIBGL_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri
+    /usr/bin/weston --backend=drm --renderer=pixman --shell=kiosk --no-config \
+      --drm-device=card0 --continue-without-input \
+      --socket=starbyte-wayland-0 --log=/tmp/weston.log \
+      >/tmp/weston.stdout 2>&1 &
+    weston_pid=$!
+    socket_ready=0
+    for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+      if [ -S /run/user/0/starbyte-wayland-0 ]; then socket_ready=1; break; fi
+      if ! /bin/busybox kill -0 "$weston_pid" 2>/dev/null; then break; fi
+      /bin/busybox sleep 1
+    done
+    handshake=0
+    compositor=0
+    seat=0
+    if [ "$socket_ready" = 1 ]; then
+      WAYLAND_DISPLAY=starbyte-wayland-0 \
+        /usr/bin/wayland-info >/tmp/wayland-info.log 2>/tmp/wayland-info.err
+      if [ "$?" = 0 ]; then handshake=1; fi
+      if /bin/busybox grep -q 'wl_compositor' /tmp/wayland-info.log; then compositor=1; fi
+      if /bin/busybox grep -q 'wl_seat' /tmp/wayland-info.log; then seat=1; fi
+    fi
+    echo "STARBYTE_GUEST_WAYLAND_RESULT socket=$socket_ready handshake=$handshake compositor=$compositor seat=$seat" >/dev/console
+    /bin/busybox kill "$weston_pid" 2>/dev/null || :
+    wait "$weston_pid" 2>/dev/null || :
+  fi
   if [ -e /etc/starbyte-input-smoke ]; then
     /bin/input-probe >/dev/console 2>/dev/null
     echo "STARBYTE_GUEST_INPUT_EXEC status=$?" >/dev/console
@@ -190,7 +258,7 @@ chmod 755 "$root/initfs/init"
 
 # Guest devices are entirely emulated. Never expose host DRM/input/files.
 guest_ram=384M
-if [[ "$mode" == --gbm-smoke ]]; then guest_ram=768M; fi
+if [[ "$mode" == --gbm-smoke || "$mode" == --wayland-smoke ]]; then guest_ram=768M; fi
 # -cpu max remains TCG-only; QEMU's default qemu64 CPU may lack instructions
 # needed by Ubuntu's x86-64-v3 static BusyBox, killing PID 1 before output.
 # The only synthetic keyboard injection path is this guest's private QMP
@@ -230,11 +298,17 @@ if [[ "$mode" == --input-smoke ]]; then
   injector_pid=$!
   trap 'kill "$injector_pid" 2>/dev/null || true; wait "$injector_pid" 2>/dev/null || true; rm -rf -- "$root"' EXIT
 fi
+display_args=(-display none)
+if [[ "$mode" == --wayland-smoke ]]; then
+  # Private Unix-only VNC display emulation advertises a KMS output.
+  # No TCP listener, physical display, viewer, or host desktop socket.
+  display_args=(-display "vnc=unix:$root/guest-vnc.sock")
+fi
 set +e
 HOME="$root" XDG_CONFIG_HOME="$root" \
-  timeout --signal=TERM --kill-after=2s 75s qemu-system-x86_64 \
+  timeout --signal=TERM --kill-after=2s 125s qemu-system-x86_64 \
     -machine q35,accel=tcg -cpu max -m "$guest_ram" -smp 1 -no-reboot \
-    -nodefaults -display none -vga none -net none \
+    -nodefaults "${display_args[@]}" -vga none -net none \
     -monitor none -parallel none -serial "file:$root/serial.log" \
     -device virtio-gpu-pci,id=sb_gpu -device virtio-keyboard-pci,id=sb_keyboard \
     "${qmp_args[@]}" \
@@ -274,14 +348,18 @@ printf 'STARBYTE_GUEST_LINUX_DIAG boot=%s pci=%s panic=%s cause=%s qemu_status=%
 [[ "$result" -eq 0 ]] || fail "guest_boot_failed_or_timed_out status=$result"
 [[ "$boot" == true ]] || fail 'boot_receipt_missing'
 [[ "$pci" == true ]] || fail 'guest_virtio_pci_devices_missing'
-if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-smoke ]]; then
+if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-smoke || "$mode" == --wayland-smoke ]]; then
   driver=false
   if grep -Fqx 'STARBYTE_GUEST_DRIVER_RESULT render=1 input=1 gpu_load=0 input_load=0 evdev_load=0' "$root/serial-clean.log"; then
     driver=true
   fi
   printf 'STARBYTE_GUEST_DRIVER_DIAG render_and_input=%s\n' "$driver"
   [[ "$driver" == true ]] || fail 'guest_driver_or_device_nodes_missing'
-  if [[ "$mode" == --gbm-smoke ]]; then
+  if [[ "$mode" == --wayland-smoke ]]; then
+    grep -Fqx 'STARBYTE_GUEST_WAYLAND_RESULT socket=1 handshake=1 compositor=1 seat=1' "$root/serial-clean.log" \
+      || fail 'guest_drm_wayland_handshake_or_seat_missing'
+    echo 'STARBYTE_GUEST_WAYLAND_OK drm=virtio compositor=weston client=wayland-info seat=present guest_only=true'
+  elif [[ "$mode" == --gbm-smoke ]]; then
     render_node=false
     render_device=false
     render_buffer=false

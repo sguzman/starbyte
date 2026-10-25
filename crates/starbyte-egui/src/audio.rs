@@ -87,6 +87,9 @@ enum AudioMessage {
     /// Release the current output route, even if CPAL never reported an
     /// error after a device/default-sink change.
     Reopen,
+    /// Deterministic no-device unit-test exit; not compiled into the player.
+    #[cfg(test)]
+    StopForTest,
 }
 
 /// The UI owns only a bounded nonblocking sender, never a device or mixer.
@@ -652,6 +655,8 @@ fn audio_worker(
                 // Duplicate wakeups cannot reopen the device twice.
                 continue;
             }
+            #[cfg(test)]
+            AudioMessage::StopForTest => break,
         };
         let now = Instant::now();
         if frame_generation != active_generation
@@ -938,6 +943,27 @@ mod tests {
         assert!(!output.enqueue(&[123, -123], 1.0, 1.0));
         assert_eq!(output.producer_dropped_frames(), 0);
         assert!(output.enqueue(&[123], 1.0, 1.0)); // malformed PCM is ignored
+    }
+
+    #[test]
+    fn terminated_real_audio_worker_reports_disconnection_without_opening_speakers() {
+        let output = AudioOutput::start().unwrap();
+        // The worker exits before any audio payload is submitted. This
+        // exercises the real background-thread receiver lifetime, not only
+        // a synthetic sender with a dropped channel.
+        output.sender.try_send(AudioMessage::StopForTest).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut observed_disconnect = false;
+        while Instant::now() < deadline {
+            if !output.enqueue(&[123, -123], 1.0, 1.0) {
+                observed_disconnect = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(observed_disconnect, "exited audio worker was never detected");
+        assert_eq!(output.producer_dropped_frames(), 0);
+        assert!(!output.request_reopen());
     }
 
     #[test]

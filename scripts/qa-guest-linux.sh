@@ -487,6 +487,9 @@ if [ -e /etc/starbyte-driver-smoke ]; then
       # an EGL software rasterizer. Do not force Weston's kms_swrast into
       # the guest application's EGL context.
       WAYLAND_DISPLAY=starbyte-wayland-0 \
+        RUST_BACKTRACE=1 \
+        EGL_LOG_LEVEL=debug \
+        LIBGL_DEBUG=verbose \
         WINIT_UNIX_BACKEND=wayland \
         EGL_PLATFORM=wayland \
         MESA_LOADER_DRIVER_OVERRIDE=swrast \
@@ -508,6 +511,21 @@ if [ -e /etc/starbyte-driver-smoke ]; then
       app_error_config=0
       app_error_render=0
       app_error_panic=0
+      app_egl_initialize=0
+      app_egl_bad_match=0
+      app_egl_bad_alloc=0
+      app_egl_bad_display=0
+      app_egl_unsupported=0
+      app_gl_config=0
+      app_gl_context=0
+      app_wayland_egl=0
+      app_wayland_display=0
+      app_winit_eventloop=0
+      app_gbm_device=0
+      app_dri_driver=0
+      app_panic_eframe=0
+      app_panic_glutin=0
+      app_panic_winit=0
       app_error_egl_init=0
       app_error_dri=0
       app_error_context=0
@@ -522,11 +540,27 @@ if [ -e /etc/starbyte-driver-smoke ]; then
         if /bin/busybox grep -Eiq 'config.*error|config.*failed|permission denied|read.only|no space left' "$log"; then app_error_config=1; fi
         if /bin/busybox grep -Eiq 'glutin|OpenGL|glow|surface.*error|renderer.*failed|failed.*renderer' "$log"; then app_error_render=1; fi
         if /bin/busybox grep -Eiq 'panicked at|thread.*panicked|stack backtrace' "$log"; then app_error_panic=1; fi
+        if /bin/busybox grep -Eiq 'eglInitialize|EGL_NOT_INITIALIZED|Failed to initialize EGL|egl initialization failed' "$log"; then app_egl_initialize=1; fi
+        if /bin/busybox grep -Eiq 'EGL_BAD_MATCH' "$log"; then app_egl_bad_match=1; fi
+        if /bin/busybox grep -Eiq 'EGL_BAD_ALLOC' "$log"; then app_egl_bad_alloc=1; fi
+        if /bin/busybox grep -Eiq 'EGL_BAD_DISPLAY' "$log"; then app_egl_bad_display=1; fi
+        if /bin/busybox grep -Eiq 'EGL_NOT_SUPPORTED|EGL_BAD_CONFIG|EGL_BAD_ATTRIBUTE|EGL_BAD_PARAMETER' "$log"; then app_egl_unsupported=1; fi
+        if /bin/busybox grep -Eiq 'no available pixel format|NoAvailablePixelFormat|no matching config|no suitable.*config|failed to.*config' "$log"; then app_gl_config=1; fi
+        if /bin/busybox grep -Eiq 'eglCreateContext|eglMakeCurrent|failed to create.*context|Failed to make.*current' "$log"; then app_gl_context=1; fi
+        if /bin/busybox grep -Eiq 'libwayland-egl|wayland-egl|wl_egl_window' "$log"; then app_wayland_egl=1; fi
+        if /bin/busybox grep -Eiq 'wayland.*connection|wayland.*display|wayland.*backend|Failed to connect to.*Wayland' "$log"; then app_wayland_display=1; fi
+        if /bin/busybox grep -Eiq 'EventLoopError|failed to create event loop|EventLoop::new' "$log"; then app_winit_eventloop=1; fi
+        if /bin/busybox grep -Eiq 'gbm_create_device|failed to create.*GBM' "$log"; then app_gbm_device=1; fi
+        if /bin/busybox grep -Eiq 'failed to load driver|failed to open.*_dri|MESA-LOADER' "$log"; then app_dri_driver=1; fi
+        if /bin/busybox grep -Eiq '^ *[0-9]+:.*eframe::' "$log"; then app_panic_eframe=1; fi
+        if /bin/busybox grep -Eiq '^ *[0-9]+:.*glutin::' "$log"; then app_panic_glutin=1; fi
+        if /bin/busybox grep -Eiq '^ *[0-9]+:.*winit::' "$log"; then app_panic_winit=1; fi
         if /bin/busybox grep -Eiq 'EGL_NOT_INITIALIZED|EGL_BAD_DISPLAY|failed to initialize EGL|eglInitialize failed' "$log"; then app_error_egl_init=1; fi
         if /bin/busybox grep -Eiq 'failed to load driver|failed to open.*dri|swrast_dri\.so|dri.*not found' "$log"; then app_error_dri=1; fi
         if /bin/busybox grep -Eiq 'NoAvailablePixelFormat|failed to create.*context|could not create.*context|failed to find EGLConfig' "$log"; then app_error_context=1; fi
         if /bin/busybox grep -Eiq 'failed to connect.*wayland|WaylandError|wayland.*connection.*failed' "$log"; then app_error_wayland=1; fi
       done
+      echo "STARBYTE_GUEST_APP_ROOT_DIAG egl_init=$app_egl_initialize egl_match=$app_egl_bad_match egl_alloc=$app_egl_bad_alloc egl_display=$app_egl_bad_display egl_unsupported=$app_egl_unsupported gl_config=$app_gl_config gl_context=$app_gl_context wayland_egl=$app_wayland_egl wayland_display=$app_wayland_display eventloop=$app_winit_eventloop gbm=$app_gbm_device dri=$app_dri_driver stack_eframe=$app_panic_eframe stack_glutin=$app_panic_glutin stack_winit=$app_panic_winit" >/dev/console
       echo "STARBYTE_GUEST_APP_DIAG stdout=$app_stdout stderr=$app_stderr egl=$app_error_egl winit=$app_error_winit loader=$app_error_loader config=$app_error_config render=$app_error_render panic=$app_error_panic egl_init=$app_error_egl_init dri=$app_error_dri context=$app_error_context wayland=$app_error_wayland" >/dev/console
       echo "STARBYTE_GUEST_APP_RESULT launched=$app_launcher status=$app_exit frames=$app_frames single_owner=$app_single_owner" >/dev/console
     fi
@@ -793,7 +827,7 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
   [[ "$driver" == true ]] || fail 'guest_driver_or_device_nodes_missing'
   if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ]]; then
     # All receipts are bounded diagnostics; never disclose raw guest logs.
-    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST|BIN_DIAG|REGISTRY_DIAG)|WESTON_(EXEC|STAGE|EXIT)|TMP_WRITE_OK|TMP_MOUNT|TMP_IO_DIAG|RUN_MOUNT|UDEV_RESULT|XKB_DATA|FOCUS_RESULT|APP_RESULT|APP_DIAG) ' "$root/serial-clean.log" || true
+    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST|BIN_DIAG|REGISTRY_DIAG)|WESTON_(EXEC|STAGE|EXIT)|TMP_WRITE_OK|TMP_MOUNT|TMP_IO_DIAG|RUN_MOUNT|UDEV_RESULT|XKB_DATA|FOCUS_RESULT|APP_RESULT|APP_DIAG|APP_ROOT_DIAG) ' "$root/serial-clean.log" || true
     grep -Fqx 'STARBYTE_GUEST_TMP_MOUNT status=0' "$root/serial-clean.log" \
       || fail 'guest_temporary_mount_unavailable'
     grep -Fqx 'STARBYTE_GUEST_RUN_MOUNT status=0' "$root/serial-clean.log" \

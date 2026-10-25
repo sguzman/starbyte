@@ -240,7 +240,25 @@ if [ -e /etc/starbyte-driver-smoke ]; then
       if /bin/busybox grep -q 'wl_compositor' /tmp/wayland-info.log; then compositor=1; fi
       if /bin/busybox grep -q 'wl_seat' /tmp/wayland-info.log; then seat=1; fi
     fi
+    # Diagnose only fixed categories; raw compositor and client logs never
+    # leave the disposable VM or appear in public CI.
+    module_error=0
+    shared_library_error=0
+    option_error=0
+    seat_error=0
+    drm_error=0
+    compositor_alive=0
+    if /bin/busybox kill -0 "$weston_pid" 2>/dev/null; then compositor_alive=1; fi
+    for log in /tmp/weston.log /tmp/weston.stdout /tmp/wayland-info.err; do
+      [ -f "$log" ] || continue
+      if /bin/busybox grep -Eiq 'failed to load module|unable to load module' "$log"; then module_error=1; fi
+      if /bin/busybox grep -Eiq 'error while loading shared libraries|cannot open shared object file' "$log"; then shared_library_error=1; fi
+      if /bin/busybox grep -Eiq 'unrecognized option|unknown option|invalid option|unknown renderer|unknown shell' "$log"; then option_error=1; fi
+      if /bin/busybox grep -Eiq 'failed to open seat|seatd|libseat|session control|cannot get tty|no seat' "$log"; then seat_error=1; fi
+      if /bin/busybox grep -Eiq 'drm|kms|no outputs|no connectors|no usable devices' "$log"; then drm_error=1; fi
+    done
     echo "STARBYTE_GUEST_WAYLAND_RESULT socket=$socket_ready handshake=$handshake compositor=$compositor seat=$seat" >/dev/console
+    echo "STARBYTE_GUEST_WAYLAND_DIAG alive=$compositor_alive module=$module_error library=$shared_library_error option=$option_error seat=$seat_error drm=$drm_error" >/dev/console
     /bin/busybox kill "$weston_pid" 2>/dev/null || :
     wait "$weston_pid" 2>/dev/null || :
   fi
@@ -356,6 +374,8 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
   printf 'STARBYTE_GUEST_DRIVER_DIAG render_and_input=%s\n' "$driver"
   [[ "$driver" == true ]] || fail 'guest_driver_or_device_nodes_missing'
   if [[ "$mode" == --wayland-smoke ]]; then
+    # These two lines are machine-authored, bounded 0/1 receipts.
+    grep -E '^STARBYTE_GUEST_WAYLAND_(RESULT|DIAG) ' "$root/serial-clean.log" || true
     grep -Fqx 'STARBYTE_GUEST_WAYLAND_RESULT socket=1 handshake=1 compositor=1 seat=1' "$root/serial-clean.log" \
       || fail 'guest_drm_wayland_handshake_or_seat_missing'
     echo 'STARBYTE_GUEST_WAYLAND_OK drm=virtio compositor=weston client=wayland-info seat=present guest_only=true'

@@ -1065,7 +1065,9 @@ mod tests {
             "desktop_session_present",
             "interactive_session_present",
             "q35,accel=tcg",
-            "-nodefaults -display none -vga none -net none",
+            "-nodefaults \"${display_args[@]}\" -vga none -net none",
+            "display_args=(-display none)",
+            "display_args=(-display \"vnc=unix:$root/guest-vnc.sock\")",
             "-monitor none -serial none -parallel none",
             "-device virtio-gpu-pci,id=sb_gpu",
             "-device virtio-keyboard-pci,id=sb_keyboard",
@@ -1107,8 +1109,14 @@ mod tests {
             "modloop-virt",
             "modloop_module_tree_missing",
             "guest_driver_or_device_nodes_missing",
+            "STARBYTE_GUEST_WAYLAND_DIAG",
+            "STARBYTE_GUEST_WAYLAND_RESULT socket=1 handshake=1 compositor=1 seat=1",
+            "guest_drm_wayland_handshake_or_seat_missing",
         ] {
             assert!(script.contains(guard), "guest smoke guard missing: {guard}");
+        }
+        for forbidden in ["-enable-kvm", "-drive ", "usb-host", "vfio-pci", "vnc=0.0.0.0"] {
+            assert!(!script.contains(forbidden), "forbidden host access: {forbidden}");
         }
     }
 

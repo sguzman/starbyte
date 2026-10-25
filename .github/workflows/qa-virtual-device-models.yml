@@ -7,12 +7,14 @@ on:
       - "scripts/qa-virtual-devices.sh"
       - "scripts/qa-guest-linux.sh"
       - "scripts/qa-guest-gbm.rs"
+      - "scripts/qa-guest-input.rs"
       - ".github/workflows/qa-virtual-device-models.yml"
   pull_request:
     paths:
       - "scripts/qa-virtual-devices.sh"
       - "scripts/qa-guest-linux.sh"
       - "scripts/qa-guest-gbm.rs"
+      - "scripts/qa-guest-input.rs"
       - ".github/workflows/qa-virtual-device-models.yml"
 
 # QEMU packages are heavyweight. Never repeat this probe on unrelated
@@ -62,3 +64,5 @@ jobs:
         run: sudo apt-get install -y --no-install-recommends libgbm-dev libdrm-dev libgl1-mesa-dri
       - name: Probe guest GBM allocator and rendering buffer
         run: bash scripts/qa-guest-linux.sh --gbm-smoke
+      - name: Inject private QMP key and verify guest evdev delivery
+        run: bash scripts/qa-guest-linux.sh --input-smoke

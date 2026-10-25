@@ -249,6 +249,22 @@ GBM support. The allocator gate remains open until at least one
 rendering buffer passes;
 even that would not prove compositor or physical host behavior.
 
+### Virtual key injection and guest evdev event proof (2026-10-25)
+
+`--input-smoke` starts a statically linked Rust reader on guest
+`/dev/input/event*` and emits a readiness marker. The hosted runner
+then sends a QMP `input-send-event` A-key press through the VM's
+private Unix socket. A QMP command acknowledgment is necessary but
+insufficient: the guest must independently observe Linux `EV_KEY`,
+key code 30 (`KEY_A`), and key-down value 1. The guest exits cleanly,
+and the host validates both bounded receipts while keeping its serial
+transcript private.
+
+**Status:** Implemented, awaiting hosted CI evidence. This probe
+uses no host input hardware, desktop display, Wayland socket or
+external session IPC. Passing evdev delivery cannot substitute for a
+separately proven focused compositor window or native physical testing.
+
 ### Next route: independently provisioned virtual rendering and input seat
 
 **Superseded:** the earlier two-stage *software-only nested Weston →

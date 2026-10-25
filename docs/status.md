@@ -1,5 +1,18 @@
 # Starbyte: current state
 
+## Private QMP key delivery into guest evdev (2026-10-25)
+
+A new hosted-only `--input-smoke` runs a statically linked Rust
+evdev reader **inside** the disposable Linux VM. After guest userspace
+signals that its reader is ready, the GitHub-hosted runner sends one
+synthetic A-key press through QEMU's **private Unix QMP socket**.
+The guest must observe Linux `EV_KEY/KEY_A/value=1`, and the host
+must verify both the QMP acknowledgment and a guest serial receipt.
+No physical keyboard, desktop window, host compositor connection, or
+host input device is opened. **Implemented, awaiting CI validation.**
+Even a passing raw evdev test does not prove focused Wayland windows or
+physical controls. Acceptance stays **71/77 (92%)**.
+
 ## Verified isolated GBM render-buffer allocation (2026-10-25)
 
 **Hosted QA run 40223398366 passed on `16c6a7b`** after the

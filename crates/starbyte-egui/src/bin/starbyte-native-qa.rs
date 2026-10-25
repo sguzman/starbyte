@@ -1142,6 +1142,29 @@ mod tests {
     }
 
     #[test]
+    fn hosted_input_probe_routes_qmp_to_guest_evdev_only() {
+        let harness = include_str!("../../../../scripts/qa-guest-linux.sh");
+        let reader = include_str!("../../../../scripts/qa-guest-input.rs");
+        for required in [
+            "--input-smoke",
+            "qmp_args=(-qmp",
+            "guest_input_injector",
+            "input-send-event",
+            "guest_private_qmp_injection_failed",
+            "STARBYTE_GUEST_INPUT_QMP_ACK key_a=sent",
+            "guest_virtual_keypress_missing",
+            "STARBYTE_GUEST_INPUT_OK key_a=received source=private_qmp evdev=guest_only",
+        ] {
+            assert!(harness.contains(required), "missing private input rule: {required}");
+        }
+        assert!(reader.contains("STARBYTE_GUEST_INPUT_READY evdev=present"));
+        assert!(reader.contains("STARBYTE_GUEST_INPUT_RESULT key_a=1"));
+        assert!(reader.contains("/dev/input"));
+        assert!(!reader.contains("WAYLAND_DISPLAY"));
+        assert!(!reader.contains("/dev/dri"));
+    }
+
+    #[test]
     fn nested_hyprland_probe_refuses_without_render_allocator_before_any_launch() {
         let harness = include_str!("../../../../scripts/qa-isolated-wayland.sh");
         let guard = harness

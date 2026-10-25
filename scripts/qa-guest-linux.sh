@@ -483,8 +483,14 @@ if [ -e /etc/starbyte-driver-smoke ]; then
       app_frames=0
       app_single_owner=0
       app_launcher=1
+      # Weston needs its DRM GBM backend, but the Wayland client needs
+      # an EGL software rasterizer. Do not force Weston's kms_swrast into
+      # the guest application's EGL context.
       WAYLAND_DISPLAY=starbyte-wayland-0 \
         WINIT_UNIX_BACKEND=wayland \
+        EGL_PLATFORM=wayland \
+        MESA_LOADER_DRIVER_OVERRIDE=swrast \
+        GALLIUM_DRIVER=llvmpipe \
         XDG_CONFIG_HOME=/tmp/starbyte-config \
         XDG_CACHE_HOME=/tmp/starbyte-xdg-cache \
         /bin/starbyte-egui --demo --native-worker-preview --exit-after-frames 30 \
@@ -502,6 +508,10 @@ if [ -e /etc/starbyte-driver-smoke ]; then
       app_error_config=0
       app_error_render=0
       app_error_panic=0
+      app_error_egl_init=0
+      app_error_dri=0
+      app_error_context=0
+      app_error_wayland=0
       if [ -s /tmp/starbyte-app.err ]; then app_stderr=1; fi
       if [ -s /tmp/starbyte-app.log ]; then app_stdout=1; fi
       for log in /tmp/starbyte-app.err /tmp/starbyte-app.log; do
@@ -512,8 +522,12 @@ if [ -e /etc/starbyte-driver-smoke ]; then
         if /bin/busybox grep -Eiq 'config.*error|config.*failed|permission denied|read.only|no space left' "$log"; then app_error_config=1; fi
         if /bin/busybox grep -Eiq 'glutin|OpenGL|glow|surface.*error|renderer.*failed|failed.*renderer' "$log"; then app_error_render=1; fi
         if /bin/busybox grep -Eiq 'panicked at|thread.*panicked|stack backtrace' "$log"; then app_error_panic=1; fi
+        if /bin/busybox grep -Eiq 'EGL_NOT_INITIALIZED|EGL_BAD_DISPLAY|failed to initialize EGL|eglInitialize failed' "$log"; then app_error_egl_init=1; fi
+        if /bin/busybox grep -Eiq 'failed to load driver|failed to open.*dri|swrast_dri\.so|dri.*not found' "$log"; then app_error_dri=1; fi
+        if /bin/busybox grep -Eiq 'NoAvailablePixelFormat|failed to create.*context|could not create.*context|failed to find EGLConfig' "$log"; then app_error_context=1; fi
+        if /bin/busybox grep -Eiq 'failed to connect.*wayland|WaylandError|wayland.*connection.*failed' "$log"; then app_error_wayland=1; fi
       done
-      echo "STARBYTE_GUEST_APP_DIAG stdout=$app_stdout stderr=$app_stderr egl=$app_error_egl winit=$app_error_winit loader=$app_error_loader config=$app_error_config render=$app_error_render panic=$app_error_panic" >/dev/console
+      echo "STARBYTE_GUEST_APP_DIAG stdout=$app_stdout stderr=$app_stderr egl=$app_error_egl winit=$app_error_winit loader=$app_error_loader config=$app_error_config render=$app_error_render panic=$app_error_panic egl_init=$app_error_egl_init dri=$app_error_dri context=$app_error_context wayland=$app_error_wayland" >/dev/console
       echo "STARBYTE_GUEST_APP_RESULT launched=$app_launcher status=$app_exit frames=$app_frames single_owner=$app_single_owner" >/dev/console
     fi
     # Diagnose only fixed categories; raw compositor and client logs never

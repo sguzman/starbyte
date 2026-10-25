@@ -6,11 +6,13 @@ on:
     paths:
       - "scripts/qa-virtual-devices.sh"
       - "scripts/qa-guest-linux.sh"
+      - "scripts/qa-guest-gbm.rs"
       - ".github/workflows/qa-virtual-device-models.yml"
   pull_request:
     paths:
       - "scripts/qa-virtual-devices.sh"
       - "scripts/qa-guest-linux.sh"
+      - "scripts/qa-guest-gbm.rs"
       - ".github/workflows/qa-virtual-device-models.yml"
 
 # QEMU packages are heavyweight. Never repeat this probe on unrelated
@@ -54,3 +56,9 @@ jobs:
         run: bash scripts/qa-guest-linux.sh --smoke
       - name: Initialize guest virtio DRM and input devices
         run: bash scripts/qa-guest-linux.sh --driver-smoke
+      - name: Install Rust and GBM host-side compilation dependencies
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install GBM development library
+        run: sudo apt-get install -y --no-install-recommends libgbm-dev libdrm-dev
+      - name: Probe guest GBM allocator and rendering buffer
+        run: bash scripts/qa-guest-linux.sh --gbm-smoke

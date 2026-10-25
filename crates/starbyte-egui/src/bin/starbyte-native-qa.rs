@@ -1113,6 +1113,27 @@ mod tests {
     }
 
     #[test]
+    fn hosted_gbm_probe_requires_guest_render_buffer_and_no_host_device() {
+        let launcher = include_str!("../../../../scripts/qa-guest-linux.sh");
+        let rust = include_str!("../../../../scripts/qa-guest-gbm.rs");
+        for requirement in [
+            "--gbm-smoke",
+            "gbm_probe_compilation_failed",
+            "gbm_dependency_copy_failed",
+            "STARBYTE_GUEST_GBM_RESULT device=1 buffer=1",
+            "STARBYTE_GUEST_GBM_OK device=initialized buffer=rendering guest_only=true",
+            "guest_gbm_allocator_unavailable",
+        ] {
+            assert!(launcher.contains(requirement));
+        }
+        assert!(rust.contains("gbm_create_device"));
+        assert!(rust.contains("gbm_bo_create"));
+        assert!(rust.contains("/dev/dri/renderD"));
+        assert!(!rust.contains("/dev/input"));
+        assert!(!rust.contains("WAYLAND_DISPLAY"));
+    }
+
+    #[test]
     fn nested_hyprland_probe_refuses_without_render_allocator_before_any_launch() {
         let harness = include_str!("../../../../scripts/qa-isolated-wayland.sh");
         let guard = harness

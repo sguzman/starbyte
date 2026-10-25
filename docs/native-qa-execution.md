@@ -202,6 +202,24 @@ This is a **guest-kernel PCI enumeration** test, not proof of a loaded
 DRM driver, render node, evdev input seat, guest compositor, or physical
 Starbyte acceptance. Those require separate positive checks.
 
+### Guest GBM allocator and rendering-buffer probe (2026-10-25)
+
+A dedicated `--gbm-smoke` mode builds a small Rust GBM FFI executable
+on the disposable GitHub-hosted runner, copies the executable and its
+resolved host-supplied GBM shared libraries into guest RAM, then uses
+the already-verified guest virtio GPU/input drivers. The guest code
+opens its **own** `/dev/dri/renderD*`, calls `gbm_create_device`
+and attempts a 64×64 XRGB8888 `GBM_BO_USE_RENDERING` buffer.
+Device/buffer creation and teardown are checked by explicit serial
+receipts; library/bootstrap and GPU allocation failures are not
+silently accepted. The guest has no host display/DRM/input passthrough,
+network or storage, and the probe cannot operate on the owner's
+compositor. No EGL surface or Hyprland window is tested by this probe.
+
+**Status:** Implemented, *not yet verified*. A positive GBM buffer
+receipt is prerequisite evidence, not proof of a running compositor or
+of native physical speaker/controller behavior.
+
 ### Next route: independently provisioned virtual rendering and input seat
 
 **Superseded:** the earlier two-stage *software-only nested Weston →

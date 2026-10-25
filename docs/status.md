@@ -1,5 +1,18 @@
 # Starbyte: current state
 
+## Isolated guest GBM rendering-buffer probe (2026-10-25)
+
+The next hosted-only QEMU mode, `--gbm-smoke`, carries a tiny Rust
+GBM-FFI executable plus its resolved shared-library dependencies into
+guest RAM after the already-verified virtio DRM/input module setup.
+It opens only a guest `/dev/dri/renderD*` node, asks GBM to create a
+device and a 64×64 XRGB8888 **rendering** buffer, then frees both and
+reports bounded pass/fail receipts. The probe does not attach the host
+GPU, open a host window or expose host input. This is **implemented but
+not yet verified in CI**; a driver-created node alone is insufficient
+to assert a working GBM allocator. Guest compositor/rendering and the
+six physical acceptance gates remain unverified, **71/77 (92%)**.
+
 ## Verified guest DRM render and evdev input nodes (2026-10-25)
 
 The hosted-only TCG QEMU test **now passes** after extracting the pinned

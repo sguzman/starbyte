@@ -961,7 +961,10 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert!(observed_disconnect, "exited audio worker was never detected");
+        assert!(
+            observed_disconnect,
+            "exited audio worker was never detected"
+        );
         assert_eq!(output.producer_dropped_frames(), 0);
         assert!(!output.request_reopen());
     }

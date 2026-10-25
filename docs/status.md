@@ -9,10 +9,13 @@ worker losses while the device-open status showed a failure. The worker
 now counts those lost nonzero buffers as unroutable and resets streaming
 WSOLA overlap, but leaves silent startup PCM and diagnostic speaker
 checks out of the game-loss counter. Both original and full-library
-worker Sound panels label this broader loss category accurately. A
-device-free regression verifies the count exclusions and recovered
-time-stretch state. This fixes software loss accounting, not output
-device availability, physical audibility or native Hyprland acceptance.
+worker Sound panels label this broader loss category accurately. The
+full-worker test-tone command receipt is also now labeled **queued**, not
+**submitted**: it confirms an owner-thread enqueue but cannot certify
+Rodio delivery. A device-free regression verifies the loss count exclusions
+and recovered time-stretch state. This fixes diagnostics and truthful
+feedback, not output device availability, physical audibility or native
+Hyprland acceptance.
 The scheduler ledger remains **71/77 (92%)**.
 
 ## Retry initially unavailable desktop audio even while manually paused (2026-10-25)

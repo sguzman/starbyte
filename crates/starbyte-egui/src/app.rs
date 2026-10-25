@@ -1997,7 +1997,7 @@ impl StarbyteApp {
                 continue;
             }
             self.status_line = match result {
-                Ok(()) => "440 Hz worker tone submitted (audibility unverified).".to_owned(),
+                Ok(()) => "440 Hz worker tone queued; mixer delivery not yet confirmed.".to_owned(),
                 Err(error) => format!("Worker speaker check failed: {error}"),
             };
         }

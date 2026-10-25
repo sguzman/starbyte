@@ -1057,6 +1057,35 @@ mod tests {
     }
 
     #[test]
+    fn hosted_virtual_device_probe_has_no_host_display_or_passthrough() {
+        let probe = include_str!("../../../../scripts/qa-virtual-devices.sh");
+        for expected in [
+            "github_hosted_runner_only",
+            "graphical_session_present",
+            "desktop_session_present",
+            "interactive_session_present",
+            "q35,accel=tcg",
+            "-nodefaults -display none -vga none -net none",
+            "-monitor none -serial none -parallel none",
+            "-device virtio-gpu-pci,id=sb_gpu",
+            "-device virtio-keyboard-pci,id=sb_keyboard",
+            "qmp_capabilities",
+            "query-pci",
+            "virtual_gpu_or_keyboard_missing_from_pci",
+            "guest_booted=false",
+            "trap cleanup EXIT",
+        ] {
+            assert!(
+                probe.contains(expected),
+                "missing QMP hardware-model safety rule: {expected}"
+            );
+        }
+        for forbidden in ["-enable-kvm", "-drive ", "usb-host", "vfio-pci"] {
+            assert!(!probe.contains(forbidden), "forbidden host passthrough: {forbidden}");
+        }
+    }
+
+    #[test]
     fn nested_hyprland_probe_refuses_without_render_allocator_before_any_launch() {
         let harness = include_str!("../../../../scripts/qa-isolated-wayland.sh");
         let guard = harness

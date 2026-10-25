@@ -143,6 +143,22 @@ STARBYTE_WESTON_PACKAGE_ROOT="$private_dir/tree" bash scripts/qa-isolated-waylan
 Remove `private_dir` after the smoke. This does not install or update host
 packages.
 
+### Hosted CI virtual GPU and keyboard model smoke (2026-10-25)
+
+A separate Ubuntu-hosted job runs `scripts/qa-virtual-devices.sh --smoke`
+with QEMU and QMP utilities. It rejects self-hosted and graphical sessions,
+creates a private runtime, configures a **TCG-only, paused, bootless** VM
+with 2D `virtio-gpu-pci` and `virtio-keyboard-pci`, and confirms both
+named devices on the emulated PCI bus through bounded private QMP.
+No host display, network, disk, physical input forwarding, or KVM is used.
+QMP quit and private socket teardown are mandatory. Receipt:
+`STARBYTE_VIRTUAL_DEVICE_MODELS_OK ... guest_booted=false`.
+
+**Scope:** Device *models* exist inside the QEMU process. This is not
+evidence of guest Linux DRM/render nodes, guest input focus, guest Hyprland,
+Starbyte behavior, or real physical equipment. Booting a disposable guest
+and verifying `CONFIG_DRM_VIRTIO_GPU` is the next evidence gate.
+
 ### Next route: independently provisioned virtual rendering and input seat
 
 **Superseded:** the earlier two-stage *software-only nested Weston →

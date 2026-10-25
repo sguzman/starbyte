@@ -1,5 +1,15 @@
 # Starbyte: current state
 
+## Hosted-only bootless virtual GPU/input device-model QA (2026-10-25)
+
+Added a separate GitHub-hosted QEMU smoke that rejects live desktop or
+self-hosted execution, starts paused TCG-only emulation with a private QMP
+socket, and checks that 2D virtio GPU and virtio keyboard PCI devices
+instantiate without host display/input/network/storage or KVM access.
+This is a virtual-device **model** prerequisite; it does not boot Linux
+or prove guest render-node/input-seat initialization. The six physical
+scheduler and production gates remain **71/77 (92%)**.
+
 ## Nested Hyprland startup blocked by upstream render-allocator requirement (2026-10-25)
 
 Inspection of Aquamarine v0.15.1 source confirmed that a nested Wayland

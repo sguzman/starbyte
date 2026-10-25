@@ -1,5 +1,24 @@
 # Emulation scheduler migration
 
+## Automatic audio-stream fault quarantines queued PCM — 2026-10-24
+
+The audio thread already detected a failed CPAL stream on an independent
+250 ms health tick and retried the default output even when emulation was
+paused, but it previously retained the audio generation from the failed
+output. A quick device recovery could therefore enqueue a still-fresh PCM
+frame (or speaker-check tone) captured before the fault into the replacement
+sink. The worker now advances the shared generation on each *detected*
+stream failure before releasing the old device. The existing generation
+validation rejects pre-fault buffers, while newly produced frames may feed
+the new route. The regression covers the still-fresh case, idle retry and
+cooldown, correct fault/recovery counts and no duplicate recovery credit.
+
+This is a tested source-level recovery invariant, **not** evidence of
+audible speaker recovery, successful hardware route selection or a real
+Hyprland workspace transition. P-18 and D-13 remain pending; acceptance
+stays **71/77 (92%)**.
+
+
 ## Output-device re-selection invalidates old-route PCM — 2026-10-24
 
 The worker's explicit default-device re-selection already released the old

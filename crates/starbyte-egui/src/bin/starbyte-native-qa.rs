@@ -1089,7 +1089,10 @@ mod tests {
             r#"stop_child "$hypr_pid""#,
             r#"stop_child "$weston_pid""#,
         ] {
-            assert!(supervisor.contains(guard), "missing nested isolation guard: {guard}");
+            assert!(
+                supervisor.contains(guard),
+                "missing nested isolation guard: {guard}"
+            );
         }
         assert!(!supervisor.contains("hyprctl dispatch workspace"));
         assert!(!supervisor.contains("--physical-workspace"));

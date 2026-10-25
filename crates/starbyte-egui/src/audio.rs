@@ -979,8 +979,8 @@ mod tests {
         AUDIO_RETRY_DELAY, AudioDeviceStatus, AudioMessage, AudioOutput, MAX_TEST_TONE_AGE,
         PlaybackContinuity, PostProcessAudioStatus, StreamRecovery, apply_sink_volume,
         frame_is_fresh, normalize_pitch, normalize_playback_speed, normalize_volume,
-        pcm16_stereo_to_float, post_process_audio_status, queued_audio_is_fresh, record_stream_fault,
-        reopen_due, retry_ready, set_sink_playback_speed, speaker_test_tone,
+        pcm16_stereo_to_float, post_process_audio_status, queued_audio_is_fresh,
+        record_stream_fault, reopen_due, retry_ready, set_sink_playback_speed, speaker_test_tone,
     };
 
     #[test]

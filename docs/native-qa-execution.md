@@ -194,9 +194,10 @@ character device and an evdev event device. **This passed** in
 at `8e868a8`; the serial-only receipt records
 `STARBYTE_GUEST_DRM_INPUT_OK drm_render_node=present evdev_input_node=present guest_only=true`.
 It never attaches physical input or grants access to the host GPU.
-The next step is proving guest userspace GBM/EGL/Wayland and independent
-focused input; no physical or production cutover claim follows from
-guest-created device nodes.
+Subsequent hosted runs separately proved GBM buffer allocation, real Weston
+Wayland protocol globals and focused sample-window keyboard delivery.
+Guest-created device nodes alone were never counted as those proofs.
+EGL-based Starbyte rendering and physical/production cutover remain separate.
 
 This is a **guest-kernel PCI enumeration** test, not proof of a loaded
 DRM driver, render node, evdev input seat, guest compositor, or physical
@@ -269,7 +270,39 @@ green. No host input hardware, desktop display, Wayland socket or
 external session IPC was used. Evdev delivery cannot substitute for a
 separately proven focused compositor window or native physical testing.
 
-### Next route: independently provisioned virtual rendering and input seat
+### Guest Weston compositor and focused-window keyboard proof (2026-10-25)
+
+The hosted QEMU TCG guest now has a virtual DRM/KMS device, a private virtual
+keyboard and an independent Weston DRM compositor. To make the real input
+seat available, its disposable initramfs starts udev, loads packaged udev
+rules and copies libinput quirks and the canonical XKB layouts into guest
+RAM; it uses a guest-only writable `/tmp` and `/run`. The protocol probe
+uses native Wayland `wl_display.get_registry` and `sync` messages and
+accepts only actual `wl_compositor` and `wl_seat` registry announcements.
+
+**Verified hosted acceptance**:
+[CI run 40234758710](https://github.com/sguzman/starbyte/actions/runs/40234758710)
+on `e0224d7` passed the whole isolated workflow, including the compositor
+registry barrier, guest GBM rendering-buffer creation and QMP-to-evdev A-key
+delivery. [CI run 40235518684](https://github.com/sguzman/starbyte/actions/runs/40235518684)
+on `0ae50e7` additionally accepted both
+`STARBYTE_GUEST_FOCUS_QMP_ACK escape=sent source=private_qmp` and
+`STARBYTE_GUEST_FOCUS_RESULT ready=1 clean_exit=1 exit_message=1 weston_alive=1`.
+An official `weston-simple-shm` xdg-toplevel received Escape through the
+guest's keyboard seat and exited cleanly while Weston remained alive;
+the VM's former GBM and evdev checks also passed again.
+
+**Evidence boundaries:** These receipts prove a *virtual* DRM compositor,
+Wayland protocol registry and focused Wayland sample input on a disposable
+QEMU keyboard, not physical owner-session Hyprland focus, gamepads, audible
+speaker quality, Starbyte video frames or a production worker cutover.
+The original native/physical QA hard-stops remain untouched. The next
+dedicated proof is running the original worker-backed Starbyte app itself
+inside the isolated VM, rather than treating the Weston sample as Starbyte
+acceptance. On `3281029`, the `--starbyte-smoke` path and its GitHub Actions
+build were introduced, with CI acceptance still required.
+
+### Virtual rendering/input strategy and remaining limits
 
 **Superseded:** the earlier two-stage *software-only nested Weston →
 Hyprland* proposal. Aquamarine v0.15.1 cannot use a parent Wayland socket
@@ -277,8 +310,10 @@ as a substitute for its required DRM-backed GBM allocator. This is proven
 from upstream source above; do not retry the old path or bind-mount host
 `/dev/dri` or `/dev/input` into its sandbox to make it start.
 
-A possible replacement to **investigate, not yet implemented or verified,**
-is a disposable, headless virtual machine:
+The earlier proposal below is retained as a requirements record. A
+disposable QEMU/virtio GPU and keyboard guest is **now implemented and
+verified with Weston** as described above. The guest Hyprland runtime,
+EGL-backed Starbyte app, physical audio and native cutover remain unverified:
 
 1. Give a Linux guest its **own** virtual GPU/DRM subsystem, e.g. a QEMU
    `virtio-gpu` 2D device with a guest Mesa software renderer. Verify that
@@ -304,8 +339,10 @@ Require a dedicated supervisor to prove the guest is isolated, its display
 and control channels belong to the guest, and every child/VM is reaped after
 success, timeout or failure. Do not install permanent services, expose host
 input devices, or launch test windows on the user's active desktop.
-No virtual GPU, virtual keyboard seat, VM, or Starbyte guest run has yet
-been verified. Weston-only headless/Pixman results remain preliminary.
+The virtual GPU, keyboard seat, DRM-backed Weston and focused sample
+keyboard are verified by hosted CI. A full in-guest Starbyte run requires
+separate proof, and this virtual infrastructure never substitutes for
+physical Hyprland, speaker or gamepad acceptance.
 **All six native acceptance gates are still open.**
 
 ### Standalone headless Hyprland blocker (2026-10-24)

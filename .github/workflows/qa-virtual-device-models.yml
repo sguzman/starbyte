@@ -59,7 +59,7 @@ jobs:
       - name: Install Rust and GBM host-side compilation dependencies
         uses: dtolnay/rust-toolchain@stable
       - name: Install GBM and CPU-only Mesa software renderer
-        run: sudo apt-get install -y --no-install-recommends libgbm-dev libdrm-dev libgl1-mesa-dri
+        run: sudo apt-get install -y --no-install-recommends libgbm-dev libdrm-dev libgl1-mesa-dri libegl1 libegl-mesa0 libgles2
       - name: Install DRM Wayland compositor and ELF diagnostics
         run: sudo apt-get install -y --no-install-recommends weston wayland-utils libseat1 libinput10 binutils udev xkb-data
       - name: Validate guest Wayland registry barrier and compositor/input globals

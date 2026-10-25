@@ -200,6 +200,25 @@ if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ]]; then
       || fail 'guest_starbyte_binary_stage_failed'
     ldd "$app_binary" >>"$root/wayland-dependencies" \
       || fail 'guest_starbyte_dependencies_scan_failed'
+    # eframe/glutin dynamically load EGL; ldd on the application itself
+    # does not discover Mesa's GLVND vendor plugin or its DRM software DRI.
+    # These are hosted-runner CPU rendering libraries, never the owner's GPU.
+    for egl_name in libEGL.so.1 libEGL_mesa.so.0 libGLESv2.so.2; do
+      egl_binary="$(find /usr/lib -name "$egl_name" -print -quit)"
+      [[ -n "$egl_binary" && -f "$egl_binary" ]] || fail "guest_egl_library_missing_$egl_name"
+      mkdir -p "$root/initfs$(dirname "$egl_binary")"
+      cp -L "$egl_binary" "$root/initfs$egl_binary" || fail 'guest_egl_copy_failed'
+      ldd "$egl_binary" >>"$root/wayland-dependencies" || fail 'guest_egl_dependency_scan_failed'
+    done
+    [[ -d /usr/share/glvnd/egl_vendor.d ]] || fail 'guest_egl_vendor_manifest_missing'
+    mkdir -p "$root/initfs/usr/share/glvnd"
+    cp -a -- /usr/share/glvnd/egl_vendor.d "$root/initfs/usr/share/glvnd/" \
+      || fail 'guest_egl_vendor_manifest_stage_failed'
+    swrast_binary="$(find /usr/lib -name 'swrast_dri.so' -print -quit)"
+    [[ -n "$swrast_binary" && -f "$swrast_binary" ]] || fail 'guest_swrast_driver_missing'
+    mkdir -p "$root/initfs$(dirname "$swrast_binary")"
+    cp -L "$swrast_binary" "$root/initfs$swrast_binary" || fail 'guest_swrast_driver_copy_failed'
+    ldd "$swrast_binary" >>"$root/wayland-dependencies" || fail 'guest_swrast_dependency_scan_failed'
     : >"$root/initfs/etc/starbyte-app-smoke"
   fi
   grep -Fq 'not found' "$root/wayland-dependencies" && fail 'wayland_dependency_missing'
@@ -475,6 +494,26 @@ if [ -e /etc/starbyte-driver-smoke ]; then
       app_exit=$?
       if /bin/busybox grep -Fq 'STARBYTE_FULL_LIBRARY_WORKER_SMOKE_OK frame=' /tmp/starbyte-app.log; then app_frames=1; fi
       if /bin/busybox grep -Fq 'STARBYTE_FULL_LIBRARY_SINGLE_OWNER_SMOKE_OK legacy_session_absent=true worker_frame=' /tmp/starbyte-app.log; then app_single_owner=1; fi
+      app_stderr=0
+      app_stdout=0
+      app_error_egl=0
+      app_error_winit=0
+      app_error_loader=0
+      app_error_config=0
+      app_error_render=0
+      app_error_panic=0
+      if [ -s /tmp/starbyte-app.err ]; then app_stderr=1; fi
+      if [ -s /tmp/starbyte-app.log ]; then app_stdout=1; fi
+      for log in /tmp/starbyte-app.err /tmp/starbyte-app.log; do
+        [ -f "$log" ] || continue
+        if /bin/busybox grep -Eiq 'egl|glvnd|libGL|libGLES' "$log"; then app_error_egl=1; fi
+        if /bin/busybox grep -Eiq 'winit|wayland.*error|event loop|display.*failed' "$log"; then app_error_winit=1; fi
+        if /bin/busybox grep -Eiq 'error while loading shared libraries|cannot open shared object|symbol lookup error' "$log"; then app_error_loader=1; fi
+        if /bin/busybox grep -Eiq 'config.*error|config.*failed|permission denied|read.only|no space left' "$log"; then app_error_config=1; fi
+        if /bin/busybox grep -Eiq 'glutin|OpenGL|glow|surface.*error|renderer.*failed|failed.*renderer' "$log"; then app_error_render=1; fi
+        if /bin/busybox grep -Eiq 'panicked at|thread.*panicked|stack backtrace' "$log"; then app_error_panic=1; fi
+      done
+      echo "STARBYTE_GUEST_APP_DIAG stdout=$app_stdout stderr=$app_stderr egl=$app_error_egl winit=$app_error_winit loader=$app_error_loader config=$app_error_config render=$app_error_render panic=$app_error_panic" >/dev/console
       echo "STARBYTE_GUEST_APP_RESULT launched=$app_launcher status=$app_exit frames=$app_frames single_owner=$app_single_owner" >/dev/console
     fi
     # Diagnose only fixed categories; raw compositor and client logs never
@@ -740,7 +779,7 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
   [[ "$driver" == true ]] || fail 'guest_driver_or_device_nodes_missing'
   if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke ]]; then
     # All receipts are bounded diagnostics; never disclose raw guest logs.
-    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST|BIN_DIAG|REGISTRY_DIAG)|WESTON_(EXEC|STAGE|EXIT)|TMP_WRITE_OK|TMP_MOUNT|TMP_IO_DIAG|RUN_MOUNT|UDEV_RESULT|XKB_DATA|FOCUS_RESULT|APP_RESULT) ' "$root/serial-clean.log" || true
+    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST|BIN_DIAG|REGISTRY_DIAG)|WESTON_(EXEC|STAGE|EXIT)|TMP_WRITE_OK|TMP_MOUNT|TMP_IO_DIAG|RUN_MOUNT|UDEV_RESULT|XKB_DATA|FOCUS_RESULT|APP_RESULT|APP_DIAG) ' "$root/serial-clean.log" || true
     grep -Fqx 'STARBYTE_GUEST_TMP_MOUNT status=0' "$root/serial-clean.log" \
       || fail 'guest_temporary_mount_unavailable'
     grep -Fqx 'STARBYTE_GUEST_RUN_MOUNT status=0' "$root/serial-clean.log" \

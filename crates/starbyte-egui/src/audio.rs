@@ -80,6 +80,9 @@ enum AudioMessage {
         generation: u64,
         queued_at: Instant,
         pcm: Vec<i16>,
+        /// Producer-queue drops observed before this accepted frame. A
+        /// change marks a gap in WSOLA input even if all dequeued PCM is fresh.
+        producer_drop_count: u64,
         /// Emulated game speed when the sound was synthesized.
         speed: f32,
         /// Pitch multiplier independent of game tempo; 1.0 keeps SNES pitch.
@@ -341,6 +344,7 @@ impl AudioOutput {
             generation: self.generation.load(Ordering::Acquire),
             queued_at: Instant::now(),
             pcm: samples.to_vec(),
+            producer_drop_count: self.producer_dropped_frames.load(Ordering::Acquire),
             speed: normalize_playback_speed(speed),
             pitch: normalize_pitch(pitch),
         }) {
@@ -668,6 +672,31 @@ fn discard_stale_game_pcm(
     drops.fetch_add(1, Ordering::Relaxed);
 }
 
+/// A saturated producer can discard a frame *before* the worker receives
+/// anything to reject. Mark the next accepted frame with the updated drop
+/// count, so WSOLA cannot overlap across missing game samples.
+#[derive(Default)]
+struct ProducerDropContinuity {
+    last_count: Option<u64>,
+}
+
+impl ProducerDropContinuity {
+    fn observe(
+        &mut self,
+        count: u64,
+        continuity: &mut PlaybackContinuity,
+        stretch: &mut PitchStretch,
+    ) -> bool {
+        let discontinuity = self.last_count.is_some_and(|last| last != count);
+        self.last_count = Some(count);
+        if discontinuity {
+            continuity.reset();
+            stretch.reset();
+        }
+        discontinuity
+    }
+}
+
 fn audio_worker(
     receiver: Receiver<AudioMessage>,
     generation: Arc<AtomicU64>,
@@ -689,6 +718,7 @@ fn audio_worker(
     let mut tone_until: Option<Instant> = None;
     let mut continuity = PlaybackContinuity::default();
     let mut stretch = PitchStretch::default();
+    let mut producer_continuity = ProducerDropContinuity::default();
     let mut recovery = StreamRecovery::default();
 
     loop {
@@ -765,18 +795,26 @@ fn audio_worker(
             }
             continue;
         };
-        let (frame_generation, queued_at, pcm, speed, pitch, is_test_tone) = match message {
+        let (frame_generation, queued_at, pcm, speed, pitch, producer_drops) = match message {
             AudioMessage::Frame {
+                generation,
+                queued_at,
+                pcm,
+                producer_drop_count,
+                speed,
+                pitch,
+            } => (
                 generation,
                 queued_at,
                 pcm,
                 speed,
                 pitch,
-            } => (generation, queued_at, pcm, speed, pitch, false),
+                Some(producer_drop_count),
+            ),
             AudioMessage::TestTone {
                 generation,
                 queued_at,
-            } => (generation, queued_at, speaker_test_tone(), 1.0, 1.0, true),
+            } => (generation, queued_at, speaker_test_tone(), 1.0, 1.0, None),
             AudioMessage::Clear => {
                 continuity.reset();
                 stretch.reset();
@@ -796,6 +834,12 @@ fn audio_worker(
             #[cfg(test)]
             AudioMessage::StopForTest => break,
         };
+        // A queue-full drop has no AudioMessage of its own. Detect the
+        // discontinuity using the counter carried by the next accepted PCM.
+        if let Some(count) = producer_drops {
+            producer_continuity.observe(count, &mut continuity, &mut stretch);
+        }
+        let is_test_tone = producer_drops.is_none();
         let now = Instant::now();
         let expired = !queued_audio_is_fresh(queued_at, now, is_test_tone);
         if frame_generation != active_generation || expired {
@@ -996,7 +1040,8 @@ mod tests {
 
     use super::{
         AUDIO_RETRY_DELAY, AudioDeviceStatus, AudioMessage, AudioOutput, MAX_TEST_TONE_AGE,
-        PlaybackContinuity, PostProcessAudioStatus, StreamRecovery, apply_sink_volume,
+        PlaybackContinuity, PostProcessAudioStatus, ProducerDropContinuity, StreamRecovery,
+        apply_sink_volume,
         discard_stale_game_pcm, frame_is_fresh, normalize_pitch, normalize_playback_speed,
         normalize_volume, pcm16_stereo_to_float, post_process_audio_status, queued_audio_is_fresh,
         record_stream_fault, reopen_due, retry_ready, set_sink_playback_speed, speaker_test_tone,
@@ -1371,7 +1416,7 @@ mod tests {
 
     #[test]
     fn producer_reports_full_queue_without_blocking_or_touching_speakers() {
-        let (sender, _receiver) = sync_channel(1);
+        let (sender, receiver) = sync_channel(1);
         let output = AudioOutput {
             sender,
             generation: Arc::new(AtomicU64::new(0)),
@@ -1394,6 +1439,38 @@ mod tests {
         assert_eq!(output.worker_dropped_frames(), 0);
         assert_eq!(output.submitted_frames(), 0);
         output.enqueue(&[1], 1.0, 1.0); // invalid PCM never enters the queue
+        assert_eq!(output.producer_dropped_frames(), 1);
+
+        let first_drop_count = match receiver.try_recv().unwrap() {
+            AudioMessage::Frame {
+                producer_drop_count, ..
+            } => producer_drop_count,
+            _ => panic!("first accepted PCM must be present"),
+        };
+        assert_eq!(first_drop_count, 0);
+        assert!(output.enqueue(&[200, -200], 0.5, 1.0));
+        let next_drop_count = match receiver.try_recv().unwrap() {
+            AudioMessage::Frame {
+                producer_drop_count, ..
+            } => producer_drop_count,
+            _ => panic!("PCM after overflow must be present"),
+        };
+        assert_eq!(next_drop_count, 1);
+
+        let mut continuity = PlaybackContinuity::default();
+        let mut stretch = crate::pitch::PitchStretch::default();
+        let mut tracking = ProducerDropContinuity::default();
+        let pre_gap = vec![0.7_f32; 1_024];
+        let post_gap = vec![-0.25_f32; 1_024];
+        assert!(!tracking.observe(first_drop_count, &mut continuity, &mut stretch));
+        assert!(!stretch.process(&pre_gap, 0.5).is_empty());
+        assert!(!continuity.observe_game_pcm(true));
+        assert!(tracking.observe(next_drop_count, &mut continuity, &mut stretch));
+        let actual = stretch.process(&post_gap, 0.5);
+        let mut fresh = crate::pitch::PitchStretch::default();
+        assert_eq!(actual, fresh.process(&post_gap, 0.5));
+        assert!(!continuity.observe_game_pcm(true));
+        assert!(!tracking.observe(next_drop_count, &mut continuity, &mut stretch));
         assert_eq!(output.producer_dropped_frames(), 1);
     }
 
@@ -1678,6 +1755,7 @@ mod tests {
                     generation: 0,
                     queued_at: retry_at,
                     pcm: vec![0, 0],
+                    producer_drop_count: 0,
                     speed: 1.0,
                     pitch: 1.0,
                 })

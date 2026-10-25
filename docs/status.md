@@ -1,5 +1,20 @@
 # Starbyte: current state
 
+## Preserve WSOLA continuity across bounded-queue overflow (2026-10-25)
+
+A producer-side queue overflow formerly incremented diagnostics but supplied
+no message to the playback worker, which could continue merging overlapping
+samples across the missing SNES PCM chunk. Each accepted game-audio frame
+now carries the count of *preceding* producer-side drops. The dedicated
+playback worker detects a change in that counter and resets WSOLA and
+mixer-gap continuity before processing the first post-drop frame, without
+blocking the GUI or clearing retained already-queued Rodio samples.
+A no-device bounded-channel regression creates a real producer queue
+overflow, verifies the before/after markers, and shows that the recovered
+WSOLA output matches a fresh processor. A lost sample cannot be recreated;
+this prevents stale blending but does not establish physical speaker or
+Hyprland background acceptance. Ledger: **71/77 (92%)**.
+
 ## Discard obsolete WSOLA overlap after lost game PCM (2026-10-25)
 
 A frame rejected as over-age, superseded or intentionally suppressed during

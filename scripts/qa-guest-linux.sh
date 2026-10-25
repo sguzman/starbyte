@@ -148,7 +148,23 @@ if [[ "$mode" == --wayland-smoke ]]; then
   # Weston releases may load this renderer as a separate plugin.
   pixman_plugin="$(find /usr/lib -type f -name 'pixman-renderer.so' -print -quit)"
   if [[ -n "$pixman_plugin" ]]; then stage_files+=("$pixman_plugin"); fi
+  mkdir -p "$root/initfs/usr/lib/udev"
   : >"$root/wayland-dependencies"
+  # libinput's udev seat requires actual ID_INPUT/ID_INPUT_KEYBOARD
+  # properties. The bare initramfs has devtmpfs nodes but no udev database.
+  # Carry only system tools/rules into private guest RAM; no host devices.
+  udev_daemon='/usr/lib/systemd/systemd-udevd'
+  [[ -f "$udev_daemon" && -x "$udev_daemon" ]] || fail 'hosted_udev_daemon_missing'
+  command -v udevadm >/dev/null 2>&1 || fail 'hosted_udevadm_missing'
+  [[ -d /usr/lib/udev/rules.d ]] || fail 'hosted_udev_rules_missing'
+  cp -a /usr/lib/udev/rules.d "$root/initfs/usr/lib/udev/" \
+    || fail 'guest_udev_rules_stage_failed'
+  for udev_binary in "$udev_daemon" "$(command -v udevadm)"; do
+    mkdir -p "$root/initfs$(dirname "$udev_binary")"
+    cp -L "$udev_binary" "$root/initfs$udev_binary" || fail 'guest_udev_binary_stage_failed'
+    ldd "$udev_binary" >>"$root/wayland-dependencies" \
+      || fail 'guest_udev_dependency_scan_failed'
+  done
   for artifact in "${stage_files[@]}"; do
     mkdir -p "$root/initfs$(dirname "$artifact")"
     cp -L -- "$artifact" "$root/initfs$artifact" || fail 'wayland_stage_failed'
@@ -225,8 +241,13 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     /bin/busybox mkdir -p /tmp /run
     /bin/busybox mount -t tmpfs -o size=64m,mode=1777 tmpfs /tmp
     tmp_mount_status=$?
+    /bin/busybox mount -t tmpfs -o size=32m,mode=0755 tmpfs /run
+    run_mount_status=$?
+    echo "STARBYTE_GUEST_RUN_MOUNT status=$run_mount_status" >/dev/console
     echo "STARBYTE_GUEST_TMP_MOUNT status=$tmp_mount_status" >/dev/console
-    if [ "$tmp_mount_status" != 0 ]; then /bin/busybox reboot -f; fi
+    if [ "$tmp_mount_status" != 0 ] || [ "$run_mount_status" != 0 ]; then
+      /bin/busybox reboot -f
+    fi
     /bin/busybox mkdir -p /run/user/0
     /bin/busybox chmod 700 /run/user/0
     export XDG_RUNTIME_DIR=/run/user/0
@@ -242,6 +263,28 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     export GBM_BACKEND=dri
     export GBM_BACKENDS_PATH=/usr/lib/x86_64-linux-gnu/gbm
     export LIBGL_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri
+    # Load classification rules for the guest's virtual input devices.
+    # Never forward any physical host device or seat.
+    /usr/lib/systemd/systemd-udevd --daemon >/tmp/udevd.log 2>&1
+    udev_daemon_status=$?
+    /usr/bin/udevadm trigger --action=add --subsystem-match=input \
+      >/tmp/udev-trigger.log 2>&1
+    udev_trigger_status=$?
+    /usr/bin/udevadm settle --timeout=8 >/tmp/udev-settle.log 2>&1
+    udev_settle_status=$?
+    udev_keyboard=0
+    udev_event=0
+    for node in /dev/input/event*; do
+      [ -c "$node" ] || continue
+      udev_event=1
+      /usr/bin/udevadm info --query=property --name="$node" \
+        >/tmp/udev-device.log 2>/dev/null
+      if /bin/busybox grep -Fqx 'ID_INPUT=1' /tmp/udev-device.log &&
+        /bin/busybox grep -Fqx 'ID_INPUT_KEYBOARD=1' /tmp/udev-device.log; then
+        udev_keyboard=1
+      fi
+    done
+    echo "STARBYTE_GUEST_UDEV_RESULT daemon=$udev_daemon_status trigger=$udev_trigger_status settle=$udev_settle_status event=$udev_event keyboard=$udev_keyboard" >/dev/console
     # Prove both actual binaries execute before interpreting compositor
     # startup or protocol silence. No raw program output leaves guest RAM.
     guest_tmp_write_status=0
@@ -531,9 +574,13 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
   [[ "$driver" == true ]] || fail 'guest_driver_or_device_nodes_missing'
   if [[ "$mode" == --wayland-smoke ]]; then
     # All receipts are bounded diagnostics; never disclose raw guest logs.
-    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST|BIN_DIAG|REGISTRY_DIAG)|WESTON_(EXEC|STAGE)|TMP_WRITE_OK|TMP_MOUNT|TMP_IO_DIAG) ' "$root/serial-clean.log" || true
+    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST|BIN_DIAG|REGISTRY_DIAG)|WESTON_(EXEC|STAGE)|TMP_WRITE_OK|TMP_MOUNT|TMP_IO_DIAG|RUN_MOUNT|UDEV_RESULT) ' "$root/serial-clean.log" || true
     grep -Fqx 'STARBYTE_GUEST_TMP_MOUNT status=0' "$root/serial-clean.log" \
       || fail 'guest_temporary_mount_unavailable'
+    grep -Fqx 'STARBYTE_GUEST_RUN_MOUNT status=0' "$root/serial-clean.log" \
+      || fail 'guest_run_mount_unavailable'
+    grep -Fqx 'STARBYTE_GUEST_UDEV_RESULT daemon=0 trigger=0 settle=0 event=1 keyboard=1' "$root/serial-clean.log" \
+      || fail 'guest_keyboard_udev_classification_missing'
     grep -Fqx 'STARBYTE_GUEST_TMP_IO_DIAG write_status=0' "$root/serial-clean.log" \
       || fail 'guest_temporary_file_write_failed'
     grep -Fqx 'STARBYTE_GUEST_TMP_WRITE_OK result=1' "$root/serial-clean.log" \

@@ -61,7 +61,7 @@ jobs:
       - name: Install GBM and CPU-only Mesa software renderer
         run: sudo apt-get install -y --no-install-recommends libgbm-dev libdrm-dev libgl1-mesa-dri
       - name: Install DRM Wayland compositor and ELF diagnostics
-        run: sudo apt-get install -y --no-install-recommends weston wayland-utils libseat1 libinput10 binutils
+        run: sudo apt-get install -y --no-install-recommends weston wayland-utils libseat1 libinput10 binutils udev
       - name: Validate guest Wayland registry barrier and compositor/input globals
         run: bash scripts/qa-guest-linux.sh --wayland-smoke
       - name: Boot private Linux kernel and validate guest PCI devices

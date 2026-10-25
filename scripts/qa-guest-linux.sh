@@ -228,12 +228,19 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     export LIBGL_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri
     # Prove both actual binaries execute before interpreting compositor
     # startup or protocol silence. No raw program output leaves guest RAM.
-    /bin/busybox timeout 6 /bin/wayland-wire --self-check >/tmp/wayland-selfcheck.log 2>/tmp/wayland-selfcheck.err
+    wire_executable=0
+    weston_executable=0
+    [ -x /bin/wayland-wire ] && wire_executable=1
+    [ -x /usr/bin/weston ] && weston_executable=1
+    echo "STARBYTE_GUEST_WAYLAND_BIN_DIAG wire=$wire_executable weston=$weston_executable" >/dev/console
+    # An instantaneous self-check should not rely on BusyBox timeout's
+    # process-launch semantics. The outer QEMU host timeout remains active.
+    /bin/wayland-wire --self-check >/tmp/wayland-selfcheck.log 2>/tmp/wayland-selfcheck.err
     wire_self_status=$?
     wire_self_output=0
     if /bin/busybox grep -Fqx 'STARBYTE_GUEST_WAYLAND_WIRE_SELFTEST_OK frames=valid' /tmp/wayland-selfcheck.log; then wire_self_output=1; fi
     echo "STARBYTE_GUEST_WAYLAND_WIRE_SELFTEST status=$wire_self_status output=$wire_self_output" >/dev/console
-    /bin/busybox timeout 6 /usr/bin/weston --version >/tmp/weston-version.log 2>/tmp/weston-version.err
+    /usr/bin/weston --version >/tmp/weston-version.log 2>/tmp/weston-version.err
     weston_version_status=$?
     weston_version_output=0
     weston_version_stderr=0
@@ -275,7 +282,7 @@ if [ -e /etc/starbyte-driver-smoke ]; then
       for retry in 1 2 3 4 5 6 7 8; do
         wire_attempts=$retry
         WAYLAND_DISPLAY=starbyte-wayland-0 \
-          /bin/busybox timeout 7 /bin/wayland-wire \
+          /bin/wayland-wire \
           >/tmp/wayland-wire.log 2>/tmp/wayland-wire.err
         wire_last_status=$?
         if /bin/busybox grep -Fqx \
@@ -458,7 +465,7 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
   [[ "$driver" == true ]] || fail 'guest_driver_or_device_nodes_missing'
   if [[ "$mode" == --wayland-smoke ]]; then
     # All receipts are bounded diagnostics; never disclose raw guest logs.
-    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST)|WESTON_EXEC) ' "$root/serial-clean.log" || true
+    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST|BIN_DIAG)|WESTON_EXEC) ' "$root/serial-clean.log" || true
     grep -Fqx 'STARBYTE_GUEST_WAYLAND_WIRE_SELFTEST status=0 output=1' "$root/serial-clean.log" \
       || fail 'guest_wayland_wire_executable_unavailable'
     grep -Fqx 'STARBYTE_GUEST_WESTON_EXEC status=0 stdout=1 stderr=0' "$root/serial-clean.log" \

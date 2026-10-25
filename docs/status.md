@@ -19,6 +19,10 @@ physical run was executed and all six gates remain open **71/77 (92%)**.
 The remaining Weston-only smoke also has a four-second `wayland-info`
 handshake timeout and 20-second whole-sandbox deadline, preventing a
 stalled private compositor from hanging unattended QA indefinitely.
+The no-GUI namespace `--check-only` audit is capped at ten seconds.
+The obsolete proposal to nest Hyprland without any virtual DRM device
+was replaced in the execution plan with explicit, unverified VM device
+prerequisites: no machine installation or physical test was attempted.
 See `docs/native-qa-execution.md` for pinned upstream source evidence.
 
 ## Account for game PCM lost while the output device is unavailable (2026-10-25)

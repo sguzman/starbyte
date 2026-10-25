@@ -1031,6 +1031,8 @@ mod tests {
             "timeout --signal=TERM --kill-after=1s 2s",
             "timeout --signal=TERM --kill-after=1s 4s \"$STARBYTE_WAYLAND_INFO\"",
             "timeout --signal=TERM --kill-after=2s 20s",
+            "timeout --signal=TERM --kill-after=2s 10s bwrap",
+            "bubblewrap_isolation_check_failed_or_timed_out",
             "weston_smoke_failed_or_timed_out",
             "weston-simple-shm",
             "wayland-info",

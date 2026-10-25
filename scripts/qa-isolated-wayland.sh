@@ -97,7 +97,9 @@ common=(
 )
 
 if [[ "$mode" == --check-only ]]; then
-  bwrap "${common[@]}" /usr/bin/bash -c '
+  # Even the no-GUI namespace audit must not hang unattended if a mount
+  # setup or Bubblewrap initialization stalls.
+  timeout --signal=TERM --kill-after=2s 10s bwrap "${common[@]}" /usr/bin/bash -c '
     test "$XDG_RUNTIME_DIR" = /run/user/qa
     test "$WAYLAND_DISPLAY" = starbyte-qa-wayland
     test -z "${DISPLAY-}"
@@ -120,7 +122,7 @@ if [[ "$mode" == --check-only ]]; then
     test ! -e /tmp/.X11-unix
     test "$HOME" = /home/qa
     echo PRIVATE_NAMESPACE_VIEW_OK
-  ' || fail 'bubblewrap_isolation_check_failed'
+  ' || fail 'bubblewrap_isolation_check_failed_or_timed_out'
   printf 'STARBYTE_ISOLATED_WAYLAND_CHECK_OK display_fallback=disabled host_sockets=hidden devices=hidden\n'
   exit 0
 fi

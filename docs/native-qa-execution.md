@@ -59,7 +59,8 @@ acceptance; those gates need separate device evidence. The Weston-only
 `--weston-smoke` remains independently available and is now bounded
 by a 20-second parent timeout, including compositor startup/teardown.
 Its `wayland-info` protocol handshake is separately limited to four
-seconds; a timed-out handshake cannot hang unattended QA. Bubblewrap's
+seconds; a timed-out handshake cannot hang unattended QA. The no-GUI
+Bubblewrap `--check-only` namespace audit is also capped at ten seconds. Bubblewrap's
 private PID namespace and die-with-parent guard remain in force, and
 the outer runtime cleanup continues to remove temporary artifacts.
 These timeout safeguards are CI source/syntax-tested; a live hung
@@ -142,57 +143,44 @@ STARBYTE_WESTON_PACKAGE_ROOT="$private_dir/tree" bash scripts/qa-isolated-waylan
 Remove `private_dir` after the smoke. This does not install or update host
 packages.
 
-The next design to validate is a two-stage, software-rendered nested setup:
+### Next route: independently provisioned virtual rendering and input seat
 
-1. Start Weston with its documented `headless` backend and Pixman renderer in
-   a dedicated process/mount namespace. Give it a fresh private
-   `XDG_RUNTIME_DIR` and socket name. Do not expose the owner's Wayland socket,
-   `/dev/input`, DRM primary nodes, systemd user-manager socket, or D-Bus
-   sockets to that namespace. Weston documents the headless backend as having
-   no input or output; this is preliminary infrastructure evidence only, not
-   Hyprland or Starbyte acceptance.
-2. Start Hyprland as a nested Wayland client of that private Weston socket,
-   with an ephemeral config and private runtime path. Require startup evidence
-   that Aquamarine selected the Wayland backend. Deny access to all host input
-   and DRM devices. Set `HYPRLAND_NO_SD_VARS=1`, and keep systemd/D-Bus sockets
-   inaccessible, so a child compositor cannot import or unset the owner's
-   activation environment.
-3. Launch Starbyte with only the nested Hyprland socket in its environment.
-   Provide input only through a virtual-keyboard protocol client connected to
-   that private socket. Confirm the focused Starbyte surface and key events
-   through the nested compositor's private IPC, never through the owner's
-   compositor. Ensure all compositor and test processes are reaped on failure.
+**Superseded:** the earlier two-stage *software-only nested Weston →
+Hyprland* proposal. Aquamarine v0.15.1 cannot use a parent Wayland socket
+as a substitute for its required DRM-backed GBM allocator. This is proven
+from upstream source above; do not retry the old path or bind-mount host
+`/dev/dri` or `/dev/input` into its sandbox to make it start.
 
-The DRM kernel documentation says render nodes do not permit modesetting or
-DRM-master operations, but they still share GPU execution resources. If the
-Wayland-nested design cannot start without opening a host DRM or input device,
-stop and require a separately provisioned VM or physically separate seat; do
-not fall back to the owner's compositor. Hyprland's `AQ_DRM_DEVICES` and
-`AQ_NO_KMS_REQUIREMENT` options alone are not an isolation boundary. The
-`HYPRLAND_NO_SD_VARS` guard is necessary but not sufficient without hiding
-session-manager sockets.
+A possible replacement to **investigate, not yet implemented or verified,**
+is a disposable, headless virtual machine:
 
-References for the proposed boundaries: [Weston's backend and renderer
-documentation](https://wayland.pages.freedesktop.org/weston/toc/running-weston.html),
-[Hyprland environment variables](https://wiki.hypr.land/configuring/core/environment-variables/),
-[Aquamarine device selection](https://github.com/hyprwm/aquamarine/blob/main/docs/env.md),
-[Linux DRM render-node guarantees](https://docs.kernel.org/6.11/gpu/drm-uapi.html),
-and [Hyprland's backend and virtual-keyboard protocol registration](https://github.com/hyprwm/Hyprland/blob/main/CMakeLists.txt).
+1. Give a Linux guest its **own** virtual GPU/DRM subsystem, e.g. a QEMU
+   `virtio-gpu` 2D device with a guest Mesa software renderer. Verify that
+   its guest kernel supports `CONFIG_DRM_VIRTIO_GPU`, that it actually
+   exposes a usable DRM/render node inside the guest, and that Hyprland can
+   create its required allocator and renderer. None is assumed or accepted
+   before a measured startup. QEMU's [VirtIO GPU documentation](https://www.qemu.org/docs/master/system/devices/virtio/virtio-gpu.html)
+   describes its 2D software-rendered option and guest prerequisites.
+2. Keep the **entire** guest graphical environment, audio and input seat
+   disconnected from the owner's active desktop: no host Wayland/X11 socket,
+   Hyprland IPC, keyboard/mouse injection, DRM passthrough, home/config mounts,
+   session bus or active-display window. Use a private VM control/input
+   channel and disposable guest filesystem; demonstrate the host's workspace,
+   focus and input remain untouched during a complete start/stop cycle.
+3. Only after the independent render and input devices work, run a bounded
+   in-guest Starbyte demo and verify clock, video, focus, synthetic input
+   and teardown with machine-readable evidence. Keep the existing native
+   QA wrapper and collector hard-stopped on the owner's physical compositor.
+   VM evidence is **virtual**: it cannot by itself satisfy real speaker,
+   physical controller, host Hyprland focus, or GPU scanout acceptance.
 
-Before allowing any GUI probe, a dedicated supervisor and regression tests
-must prove: the socket and environment are private; the sandbox cannot open
-host input or DRM primary nodes; no host Hyprland IPC is reachable; compositor
-startup selects only the nested Wayland backend; a virtual key focuses and
-operates only Starbyte inside that compositor; and all child processes stop
-on success, timeout, and failure. Weston results must remain labeled
-preliminary. Even a verified nested Hyprland run would not establish physical
-monitor, GPU scanout, audible-device, or hardware-gamepad acceptance.
-
-No nested Hyprland compositor or private virtual input seat has been
-verified. In particular, there is no evidence yet that Hyprland can run
-nested under the isolated Weston socket, select only the nested Wayland
-backend, or accept virtual-keyboard input without host session interaction.
-Starbyte GUI probes remain blocked.
+Require a dedicated supervisor to prove the guest is isolated, its display
+and control channels belong to the guest, and every child/VM is reaped after
+success, timeout or failure. Do not install permanent services, expose host
+input devices, or launch test windows on the user's active desktop.
+No virtual GPU, virtual keyboard seat, VM, or Starbyte guest run has yet
+been verified. Weston-only headless/Pixman results remain preliminary.
+**All six native acceptance gates are still open.**
 
 ### Standalone headless Hyprland blocker (2026-10-24)
 

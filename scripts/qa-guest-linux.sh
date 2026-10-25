@@ -693,7 +693,7 @@ if [ -e /etc/starbyte-driver-smoke ]; then
       # Weston has been reaped. The Hyprland compositor uses only this VM's
       # DRM card and keyboard. Never use the owner's active display.
       /bin/busybox cat >/tmp/starbyte-hyprland.conf <<'HYPR_CONFIG'
-monitor = , 1024x768@60, auto, 1
+monitor = , preferred, auto, 1
 misc {
     disable_hyprland_logo = true
     disable_splash_rendering = true
@@ -719,6 +719,7 @@ HYPR_CONFIG
       hypr_seat_error=0
       hypr_config_error=0
       hypr_library_error=0
+      hypr_monitor_error=0
       hypr_root_guard=0
       if [ -x /usr/bin/Hyprland ]; then hypr_executable=1; fi
       /usr/bin/Hyprland --version >/tmp/hypr-version.log 2>/tmp/hypr-version.err
@@ -771,6 +772,21 @@ HYPR_CONFIG
           if /bin/busybox grep -Fqx "STARBYTE_GUEST_WAYLAND_WIRE_BLOCKED $reason" /tmp/hyprland-wire.log 2>/dev/null; then hypr_wire_reason=$reason; break; fi
         done
       fi
+      # Socket and wl_seat presence alone do not establish a configured
+      # DRM output. Classify actual display globals before starting clients.
+      hypr_info_status=not_run
+      hypr_output=0
+      hypr_xdg_shell=0
+      hypr_wl_shm=0
+      if [ "$hypr_registry" = 1 ]; then
+        WAYLAND_DISPLAY="$hypr_display" /bin/busybox timeout 6 /usr/bin/wayland-info \
+          >/tmp/hyprland-info.log 2>/tmp/hyprland-info.err
+        hypr_info_status=$?
+        if /bin/busybox grep -q 'wl_output' /tmp/hyprland-info.log /tmp/hyprland-info.err; then hypr_output=1; fi
+        if /bin/busybox grep -q 'xdg_wm_base' /tmp/hyprland-info.log /tmp/hyprland-info.err; then hypr_xdg_shell=1; fi
+        if /bin/busybox grep -q 'wl_shm' /tmp/hyprland-info.log /tmp/hyprland-info.err; then hypr_wl_shm=1; fi
+      fi
+      echo "STARBYTE_GUEST_HYPR_OUTPUT_DIAG info_status=$hypr_info_status output=$hypr_output xdg_shell=$hypr_xdg_shell shm=$hypr_wl_shm" >/dev/console
       # Distinct from the Weston sample: prove focus under Hyprland itself.
       hypr_focus_ready=0
       hypr_focus_clean=0
@@ -846,6 +862,7 @@ HYPR_CONFIG
         if /bin/busybox grep -Eiq 'libseat.*failed|seat.*failed|session inactive' "$log"; then hypr_seat_error=1; fi
         if /bin/busybox grep -Eiq 'config.*failed|config.*error|parse.*error' "$log"; then hypr_config_error=1; fi
         if /bin/busybox grep -Eiq 'error while loading shared libraries|cannot open shared object|failed.*shader' "$log"; then hypr_library_error=1; fi
+        if /bin/busybox grep -Eiq 'no monitor|no output|no suitable mode|failed to commit.*output|create.*head.*failed|mode.*not available|output.*disabled' "$log"; then hypr_monitor_error=1; fi
         if /bin/busybox grep -Eiq 'superuser privileges|shall not be run as the root|privilege check is not omitted' "$log"; then hypr_root_guard=1; fi
       done
       # Reuse the original full-library GUI smoke with Hyprland as the
@@ -925,7 +942,7 @@ HYPR_CONFIG
       echo "STARBYTE_GUEST_HYPRLAND_APP_RESULT status=$hypr_app_status frames=$hypr_app_frames single_owner=$hypr_app_single_owner" >/dev/console
       /bin/busybox kill "$hypr_pid" 2>/dev/null || :
       wait "$hypr_pid" 2>/dev/null || :
-      echo "STARBYTE_GUEST_HYPRLAND_DIAG version=$hypr_version config_valid=$hypr_config_valid egl=$hypr_egl_error gbm=$hypr_gbm_error seat_error=$hypr_seat_error config_error=$hypr_config_error library_error=$hypr_library_error root_guard=$hypr_root_guard wire_attempts=$hypr_wire_attempts wire_connected=$hypr_wire_connected wire_sync=$hypr_wire_sync wire_reason=$hypr_wire_reason" >/dev/console
+      echo "STARBYTE_GUEST_HYPRLAND_DIAG version=$hypr_version config_valid=$hypr_config_valid egl=$hypr_egl_error gbm=$hypr_gbm_error seat_error=$hypr_seat_error config_error=$hypr_config_error library_error=$hypr_library_error root_guard=$hypr_root_guard wire_attempts=$hypr_wire_attempts wire_connected=$hypr_wire_connected wire_sync=$hypr_wire_sync wire_reason=$hypr_wire_reason monitor_error=$hypr_monitor_error" >/dev/console
       echo "STARBYTE_GUEST_HYPRLAND_RESULT executable=$hypr_executable socket=$hypr_socket registry=$hypr_registry compositor=$hypr_compositor seat=$hypr_seat alive=$hypr_alive" >/dev/console
     fi
   fi
@@ -1151,7 +1168,7 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
       || fail 'guest_focused_wayland_keyboard_delivery_missing'
     echo 'STARBYTE_GUEST_FOCUS_OK client=weston-simple-shm escape=received source=private_qmp guest_only=true'
     if [[ "$mode" == --hyprland-smoke ]]; then
-      grep -E '^STARBYTE_GUEST_(HYPRLAND_(RESULT|DIAG|APP_RESULT|APP_DIAG)|HYPR_FOCUS_(RESULT|DIAG)) ' "$root/serial-clean.log" || true
+      grep -E '^STARBYTE_GUEST_(HYPRLAND_(RESULT|DIAG|APP_RESULT|APP_DIAG)|HYPR_FOCUS_(RESULT|DIAG)|HYPR_OUTPUT_DIAG) ' "$root/serial-clean.log" || true
       grep -Fqx 'STARBYTE_GUEST_HYPRLAND_RESULT executable=1 socket=1 registry=1 compositor=1 seat=1 alive=1' "$root/serial-clean.log" \
         || fail 'guest_private_hyprland_registry_or_seat_missing'
       echo 'STARBYTE_GUEST_HYPRLAND_OK drm=virtio compositor=hyprland seat=virtual guest_only=true'

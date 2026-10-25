@@ -1114,6 +1114,8 @@ mod tests {
             "STARBYTE_GUEST_WAYLAND_WIRE_DIAG",
             "guest_wayland_registry_sync_missing",
             "guest_wayland_wire_compilation_failed",
+            "guest_wayland_wire_executable_unavailable",
+            "guest_weston_executable_unavailable",
             "guest_drm_wayland_handshake_or_seat_missing",
         ] {
             assert!(script.contains(guard), "guest smoke guard missing: {guard}");

@@ -74,6 +74,17 @@ fn run() -> Result<(bool, bool), &'static str> {
 }
 
 fn main() {
+    if env::args().nth(1).as_deref() == Some("--self-check") {
+        let registry = request(1, 1, REGISTRY_ID);
+        let sync = request(1, 0, SYNC_ID);
+        if registry[4..8] == ((12_u32 << 16) | 1_u32).to_ne_bytes()
+            && sync[8..12] == SYNC_ID.to_ne_bytes()
+        {
+            println!("STARBYTE_GUEST_WAYLAND_WIRE_SELFTEST_OK frames=valid");
+            return;
+        }
+        std::process::exit(2);
+    }
     match run() {
         Ok((compositor, seat)) => {
             println!(

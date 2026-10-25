@@ -204,6 +204,17 @@ Starbyte acceptance. Those require separate positive checks.
 
 ### Guest GBM allocator and rendering-buffer probe (2026-10-25)
 
+CI 40223076070 confirmed both guest render and card nodes could be
+opened, but neither could initialize `gbm_create_device`, despite
+staging `kms_swrast_dri.so`. Newer Mesa's `libgbm` dynamically loads
+`dri_gbm.so` from a separate `gbm/` library directory. That backend
+was absent from the disposable initramfs; the next CI attempt carries
+the hosted distribution's `dri_gbm.so` and its exact transitive
+dependencies and explicitly sets `GBM_BACKENDS_PATH` in the **guest**.
+This is a concrete missing runtime component, not new host GPU access.
+The actual allocator/result remains to be validated in CI.
+
+
 A dedicated `--gbm-smoke` mode builds a small Rust GBM FFI executable
 on the disposable GitHub-hosted runner, copies the executable and its
 resolved host-supplied GBM shared libraries into guest RAM, then uses

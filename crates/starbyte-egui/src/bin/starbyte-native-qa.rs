@@ -1127,6 +1127,9 @@ mod tests {
             "STARBYTE_GUEST_GBM_RESULT node=card device=1 buffer=1",
             "STARBYTE_GUEST_GBM_OK node=card device=initialized buffer=rendering guest_only=true",
             "guest_gbm_allocator_unavailable",
+            "dri_gbm.so",
+            "hosted_mesa_gbm_backend_missing",
+            "GBM_BACKENDS_PATH=/usr/lib/x86_64-linux-gnu/gbm",
         ] {
             assert!(launcher.contains(requirement));
         }

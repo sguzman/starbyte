@@ -89,6 +89,17 @@ if [[ "$mode" == --gbm-smoke ]]; then
     || fail 'gbm_software_backend_copy_failed'
   ldd "$dri_driver" >>"$root/gbm-dependencies" \
     || fail 'gbm_software_backend_dependency_scan_failed'
+  # Mesa >=25 loads its GBM implementation from a *separate* plugin.
+  # Copying libgbm.so and kms_swrast_dri.so alone leaves
+  # gbm_create_device() returning NULL even for a valid DRM node.
+  gbm_backend="$(find /usr/lib -path '*/gbm/dri_gbm.so' -print -quit)"
+  [[ -n "$gbm_backend" && -f "$gbm_backend" ]] \
+    || fail 'hosted_mesa_gbm_backend_missing'
+  mkdir -p "$root/initfs$(dirname "$gbm_backend")"
+  cp -L -- "$gbm_backend" "$root/initfs$gbm_backend" \
+    || fail 'gbm_backend_copy_failed'
+  ldd "$gbm_backend" >>"$root/gbm-dependencies" \
+    || fail 'gbm_backend_dependency_scan_failed'
   if grep -Fq 'not found' "$root/gbm-dependencies"; then
     fail 'gbm_dependency_missing'
   fi
@@ -142,6 +153,7 @@ if [ -e /etc/starbyte-driver-smoke ]; then
       if [ -c "$node" ]; then guest_render_node="$node"; break; fi
     done
     MESA_LOADER_DRIVER_OVERRIDE=kms_swrast LIBGL_ALWAYS_SOFTWARE=1 \
+      GBM_BACKEND=dri GBM_BACKENDS_PATH=/usr/lib/x86_64-linux-gnu/gbm \
       LIBGL_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri \
       /bin/gbm-probe "$guest_render_node" >/dev/console 2>/dev/null
     echo "STARBYTE_GUEST_GBM_EXEC render_status=$?" >/dev/console
@@ -150,6 +162,7 @@ if [ -e /etc/starbyte-driver-smoke ]; then
       if [ -c "$node" ]; then guest_card_node="$node"; break; fi
     done
     MESA_LOADER_DRIVER_OVERRIDE=kms_swrast LIBGL_ALWAYS_SOFTWARE=1 \
+      GBM_BACKEND=dri GBM_BACKENDS_PATH=/usr/lib/x86_64-linux-gnu/gbm \
       LIBGL_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri \
       /bin/gbm-probe "$guest_card_node" >/dev/console 2>/dev/null
     echo "STARBYTE_GUEST_GBM_EXEC card_status=$?" >/dev/console

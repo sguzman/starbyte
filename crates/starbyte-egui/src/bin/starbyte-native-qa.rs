@@ -1071,10 +1071,10 @@ mod tests {
     fn nested_hyprland_probe_cannot_reach_owner_session_or_claim_physical_acceptance() {
         let supervisor = include_str!("../../../../scripts/qa-hyprland-nested-inside.sh");
         for guard in [
-            "[[ "${XDG_RUNTIME_DIR:-}" == /run/user/qa ]]",
-            "[[ "${WAYLAND_DISPLAY:-}" == starbyte-qa-wayland ]]",
-            "[[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]",
-            "[[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]]",
+            r#"[[ "${XDG_RUNTIME_DIR:-}" == /run/user/qa ]]"#,
+            r#"[[ "${WAYLAND_DISPLAY:-}" == starbyte-qa-wayland ]]"#,
+            r#"[[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]"#,
+            r#"[[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]]"#,
             "[[ ! -e /dev/input && ! -e /dev/dri ]]",
             "STARBYTE_NESTED_PARENT_OK",
             "hyprland.lua",
@@ -1084,8 +1084,8 @@ mod tests {
             "private_hyprland_ipc_failed",
             "STARBYTE_NESTED_HYPRLAND_TORN_DOWN",
             "trap cleanup EXIT",
-            "stop_child "$hypr_pid"",
-            "stop_child "$weston_pid"",
+            r#"stop_child "$hypr_pid""#,
+            r#"stop_child "$weston_pid""#,
         ] {
             assert!(supervisor.contains(guard), "missing nested isolation guard: {guard}");
         }

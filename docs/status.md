@@ -9,7 +9,9 @@ one, even when private Weston headless/Pixman itself starts successfully.
 The experimental nested supervisor is therefore removed: the explicitly
 requested `--hyprland-nested-smoke` route now fails *before* checking
 installed tools or launching a compositor, with a reason suitable for CI
-assertion. `--weston-smoke` and the physical GUI collector's fail-closed
+assertion. The previously attempted headless Hyprland mode now fails
+early for the same missing allocator instead of repeating its observed
+abort. `--weston-smoke` and the physical GUI collector's fail-closed
 guard remain intact. This retires an impossible startup path without
 weakening the user's input/device isolation. The practical next dependency
 is a truly private virtual DRM/render device and input seat; no VM or

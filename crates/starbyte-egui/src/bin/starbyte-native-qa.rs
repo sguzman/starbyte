@@ -1029,18 +1029,8 @@ mod tests {
             "--setenv HYPRLAND_NO_RT 1",
             "--setenv LIBGL_ALWAYS_SOFTWARE 1",
             "--setenv MESA_LOADER_DRIVER_OVERRIDE llvmpipe",
-            "STARBYTE_HEADLESS_HYPRLAND_BLOCKED reason=no_render_allocator",
-            "STARBYTE_HEADLESS_HYPRLAND_START_TIMEOUT",
-            "STARBYTE_HEADLESS_HYPRLAND_FAILURE_CLEANUP_OK",
-            "STARBYTE_HEADLESS_HYPRLAND_TIMEOUT_CLEANUP_OK",
-            "STARBYTE_HEADLESS_HYPRLAND_FAILURE_SOCKET_REMAINS",
-            "STARBYTE_HEADLESS_HYPRLAND_TIMEOUT_SOCKET_REMAINS",
-            "STARBYTE_HEADLESS_HYPRLAND_TORN_DOWN",
-            "STARBYTE_HEADLESS_HYPRLAND_PRIVATE_SOCKET_MISMATCH",
-            "instance_wayland_socket",
+            "headless_hyprland_requires_private_drm_allocator",
             "HYPRLAND_INSTANCE_SIGNATURE",
-            "HEADLESS-0",
-            "dispatch exit",
             "--backend=headless --renderer=pixman",
             "--shell=kiosk-shell.so",
             "timeout --signal=TERM --kill-after=1s 2s",
@@ -1079,8 +1069,16 @@ mod tests {
         let first_external_probe = harness
             .find("command -v bwrap")
             .expect("must not resolve external launchers before refusing");
-        assert!(guard < reason && reason < first_external_probe);
+        let headless_guard = harness
+            .find("if [[ \"$mode\" == --hyprland-headless-smoke ]]; then")
+            .expect("headless backend cannot start without DRM either");
+        let headless_reason = harness
+            .find("fail 'headless_hyprland_requires_private_drm_allocator'")
+            .expect("must classify the headless allocator blocker too");
+        assert!(guard < reason && reason < headless_guard);
+        assert!(headless_guard < headless_reason && headless_reason < first_external_probe);
         assert!(!harness.contains("nested_supervisor"));
+        assert!(!harness.contains("STARBYTE_HYPRLAND_BIN"));
         assert!(!harness.contains("STARBYTE_ISOLATED_NESTED_HYPRLAND_SMOKE_OK"));
     }
 

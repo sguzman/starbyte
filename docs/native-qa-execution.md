@@ -27,8 +27,11 @@ requirement by itself.
 The previously proposed `--hyprland-nested-smoke` path is now **blocked
 before any launch**, with the explicit receipt
 `STARBYTE_ISOLATED_WAYLAND_BLOCKED nested_hyprland_requires_private_drm_allocator`.
-The experimental nested compositor supervisor was removed rather than
-pretending that a successful parent Weston socket was sufficient.
+The older `--hyprland-headless-smoke` also fails before launching with
+`headless_hyprland_requires_private_drm_allocator`, since the pinned
+headless backend returns no DRM FD. The experimental nested supervisor and
+the obsolete headless-launch code were removed rather than pretending
+that a successful parent Weston socket was sufficient.
 
 This is an upstream *capability incompatibility*, not a flaky startup
 timeout. Aquamarine **v0.15.1** `CWaylandBackend::start()` requires the

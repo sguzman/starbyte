@@ -36,6 +36,11 @@ jobs:
             exit 1
           fi
           grep -Fq 'STARBYTE_ISOLATED_WAYLAND_BLOCKED nested_hyprland_requires_private_drm_allocator' <<<"$output"
+          if output="$(env -u XDG_RUNTIME_DIR bash scripts/qa-isolated-wayland.sh --hyprland-headless-smoke 2>&1)"; then
+            echo "Unsafe headless compositor startup unexpectedly permitted" >&2
+            exit 1
+          fi
+          grep -Fq 'STARBYTE_ISOLATED_WAYLAND_BLOCKED headless_hyprland_requires_private_drm_allocator' <<<"$output"
       - name: Verify unattended GUI QA is fail-closed
         shell: bash
         run: |

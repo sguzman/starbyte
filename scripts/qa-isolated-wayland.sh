@@ -21,6 +21,9 @@ mode="${1:-}"
 if [[ "$mode" == --hyprland-nested-smoke ]]; then
   fail 'nested_hyprland_requires_private_drm_allocator'
 fi
+if [[ "$mode" == --hyprland-headless-smoke ]]; then
+  fail 'headless_hyprland_requires_private_drm_allocator'
+fi
 command -v bwrap >/dev/null 2>&1 || fail 'missing_bubblewrap'
 command -v timeout >/dev/null 2>&1 || fail 'missing_timeout'
 command -v realpath >/dev/null 2>&1 || fail 'missing_realpath'
@@ -33,8 +36,6 @@ weston_client=''
 wayland_info=''
 package_root=''
 weston_module_map=''
-hyprland_bin=''
-hyprctl_bin=''
 if [[ "$mode" == --weston-smoke ]]; then
   if [[ -n "${STARBYTE_WESTON_PACKAGE_ROOT:-}" ]]; then
     package_root="$(realpath -e -- "$STARBYTE_WESTON_PACKAGE_ROOT")" \
@@ -60,15 +61,6 @@ if [[ "$mode" == --weston-smoke ]]; then
       || fail 'weston_binaries_must_be_under_usr'
   fi
 fi
-if [[ "$mode" == --hyprland-headless-smoke ]]; then
-  command -v Hyprland >/dev/null 2>&1 || fail 'hyprland_not_installed'
-  command -v hyprctl >/dev/null 2>&1 || fail 'hyprctl_not_installed'
-  hyprland_bin="$(realpath -e -- "$(command -v Hyprland)")"
-  hyprctl_bin="$(realpath -e -- "$(command -v hyprctl)")"
-  [[ "$hyprland_bin" == /usr/* && "$hyprctl_bin" == /usr/* ]] \
-    || fail 'hyprland_binaries_must_be_under_usr'
-fi
-
 runtime_root="$(mktemp -d "$XDG_RUNTIME_DIR/starbyte-isolated-qa.XXXXXXXX")" \
   || fail 'cannot_create_private_runtime'
 chmod 700 "$runtime_root"
@@ -130,137 +122,6 @@ if [[ "$mode" == --check-only ]]; then
     echo PRIVATE_NAMESPACE_VIEW_OK
   ' || fail 'bubblewrap_isolation_check_failed'
   printf 'STARBYTE_ISOLATED_WAYLAND_CHECK_OK display_fallback=disabled host_sockets=hidden devices=hidden\n'
-  exit 0
-fi
-
-if [[ "$mode" == --hyprland-headless-smoke ]]; then
-  set +e
-  bwrap "${common[@]}" \
-    --setenv STARBYTE_HYPRLAND_BIN "$hyprland_bin" \
-    --setenv STARBYTE_HYPRCTL_BIN "$hyprctl_bin" \
-    --setenv HYPRLAND_NO_SD_VARS 1 \
-    --setenv HYPRLAND_NO_SD_TARGET 1 \
-    --setenv HYPRLAND_NO_RT 1 \
-    --setenv HYPRLAND_NO_CRASHREPORTER 1 \
-    --setenv LIBGL_ALWAYS_SOFTWARE 1 \
-    --setenv MESA_LOADER_DRIVER_OVERRIDE llvmpipe \
-    /usr/bin/bash -c '
-      set -Eeuo pipefail
-      config="$XDG_RUNTIME_DIR/hyprland.conf"
-      log="$XDG_RUNTIME_DIR/hyprland.log"
-      cat >"$config" <<"EOF"
-misc {
-  disable_hyprland_guiutils_check = true
-}
-xwayland {
-  enabled = false
-}
-EOF
-      : >"$log"
-      "$STARBYTE_HYPRLAND_BIN" --config "$config" >"$log" 2>&1 &
-      hyprland_pid=$!
-      cleanup() {
-        kill -TERM "$hyprland_pid" 2>/dev/null || true
-        for _ in {1..40}; do
-          state=""
-          if [[ -r "/proc/$hyprland_pid/stat" ]]; then
-            read -r _ _ state _ <"/proc/$hyprland_pid/stat" || true
-          fi
-          [[ -z "$state" || "$state" == Z ]] && break
-          sleep 0.05
-        done
-        if [[ -n "$state" && "$state" != Z ]]; then
-          kill -KILL "$hyprland_pid" 2>/dev/null || true
-        fi
-        wait "$hyprland_pid" 2>/dev/null || true
-      }
-      trap cleanup EXIT
-      trap "exit 130" INT
-      trap "exit 143" TERM
-      trap "exit 129" HUP
-      for _ in {1..100}; do
-        if ! kill -0 "$hyprland_pid" 2>/dev/null; then
-          set +e
-          wait "$hyprland_pid"
-          status=$?
-          set -e
-          if grep -qi "Cannot open backend: no allocator available" "$log"; then
-            echo STARBYTE_HEADLESS_HYPRLAND_BLOCKED reason=no_render_allocator
-          else
-            printf "STARBYTE_HEADLESS_HYPRLAND_START_FAILED status=%s reason=early_exit\n" "$status"
-          fi
-          cleanup
-          trap - EXIT INT TERM HUP
-          if [[ -d "$XDG_RUNTIME_DIR/hypr" ]] && find "$XDG_RUNTIME_DIR/hypr" -type s -print -quit | grep -q .; then
-            echo STARBYTE_HEADLESS_HYPRLAND_FAILURE_SOCKET_REMAINS
-            exit 6
-          fi
-          echo STARBYTE_HEADLESS_HYPRLAND_FAILURE_CLEANUP_OK
-          exit 4
-        fi
-        instance_dir=""
-        if [[ -d "$XDG_RUNTIME_DIR/hypr" ]]; then
-          for candidate in "$XDG_RUNTIME_DIR"/hypr/*; do
-            [[ -d "$candidate" ]] && instance_dir="$candidate" && break
-          done
-        fi
-        if [[ -n "$instance_dir" && -S "$instance_dir/.socket.sock" ]]; then
-          signature="${instance_dir##*/}"
-          [[ -r "$instance_dir/hyprland.lock" ]] || {
-            echo STARBYTE_HEADLESS_HYPRLAND_IPC_IDENTITY_MISSING
-            exit 5
-          }
-          {
-            read -r instance_pid
-            read -r instance_wayland_socket
-          } <"$instance_dir/hyprland.lock"
-          [[ "$instance_pid" == "$hyprland_pid" && -S "$XDG_RUNTIME_DIR/$instance_wayland_socket" ]] || {
-            echo STARBYTE_HEADLESS_HYPRLAND_PRIVATE_SOCKET_MISMATCH
-            exit 5
-          }
-          export HYPRLAND_INSTANCE_SIGNATURE="$signature"
-          monitors="$("$STARBYTE_HYPRCTL_BIN" -j monitors all 2>/dev/null)" || {
-            echo STARBYTE_HEADLESS_HYPRLAND_IPC_FAILED
-            exit 5
-          }
-          printf "%s" "$monitors" | /usr/bin/jq -e "any(.[]; .name == \"HEADLESS-0\")" >/dev/null || {
-            echo STARBYTE_HEADLESS_HYPRLAND_OUTPUT_MISSING
-            exit 5
-          }
-          grep -Eq "implementation headless|backend.*headless|Headless" "$log" || {
-            echo STARBYTE_HEADLESS_HYPRLAND_BACKEND_UNVERIFIED
-            exit 5
-          }
-          echo STARBYTE_HEADLESS_HYPRLAND_STARTED backend=headless output=HEADLESS-0 private_wayland_socket=present private_ipc=reachable
-          "$STARBYTE_HYPRCTL_BIN" dispatch exit >/dev/null
-          wait "$hyprland_pid"
-          cleanup
-          trap - EXIT INT TERM HUP
-          [[ ! -e "$XDG_RUNTIME_DIR/hypr" ]] || {
-            echo STARBYTE_HEADLESS_HYPRLAND_SOCKET_REMAINS
-            exit 6
-          }
-          echo STARBYTE_HEADLESS_HYPRLAND_TORN_DOWN
-          exit 0
-        fi
-        sleep 0.05
-      done
-      echo STARBYTE_HEADLESS_HYPRLAND_START_TIMEOUT
-      cleanup
-      trap - EXIT INT TERM HUP
-      if [[ -d "$XDG_RUNTIME_DIR/hypr" ]] && find "$XDG_RUNTIME_DIR/hypr" -type s -print -quit | grep -q .; then
-        echo STARBYTE_HEADLESS_HYPRLAND_TIMEOUT_SOCKET_REMAINS
-        exit 6
-      fi
-      echo STARBYTE_HEADLESS_HYPRLAND_TIMEOUT_CLEANUP_OK
-      exit 124
-    '
-  result=$?
-  set -e
-  if [[ "$result" -eq 4 ]]; then
-    exit 4
-  fi
-  [[ "$result" -eq 0 ]] || fail "hyprland_headless_smoke_failed status=$result"
   exit 0
 fi
 

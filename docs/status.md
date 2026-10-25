@@ -1,5 +1,19 @@
 # Starbyte: current state
 
+## Discard obsolete WSOLA overlap after lost game PCM (2026-10-25)
+
+A frame rejected as over-age, superseded or intentionally suppressed during
+a speaker check now resets the streaming WSOLA overlap history and mixer-gap
+continuity. Previously, dropping input without resetting WSOLA could carry
+pre-gap audio into newly accepted buffers, especially at non-unity tempo.
+The second age check now uses the same recovery for expired gameplay PCM.
+The delayed-device-open invalidation path also clears the tone exclusion
+window and mixer continuity. A hardware-free regression feeds real WSOLA
+history, drops a frame, then proves the next output matches a fresh instance
+rather than blended pre-gap samples. This is a source-level stale-audio
+prevention fix; audible output and native background timing are not yet
+physically accepted. Scheduler acceptance remains **71/77 (92%)**.
+
 ## Final mixer-entry checkpoint after audio processing (2026-10-25)
 
 A game pause, mute, save restore, cartridge change or output route reset can

@@ -654,6 +654,20 @@ impl PlaybackContinuity {
     }
 }
 
+/// Once a game buffer is dropped, its WSOLA overlap context is no longer
+/// continuous with the next fresh frame. Forget it instead of blending old
+/// audio across the gap, and do not classify the next sink restart as a
+/// spontaneous underrun.
+fn discard_stale_game_pcm(
+    continuity: &mut PlaybackContinuity,
+    stretch: &mut PitchStretch,
+    drops: &AtomicU64,
+) {
+    continuity.reset();
+    stretch.reset();
+    drops.fetch_add(1, Ordering::Relaxed);
+}
+
 fn audio_worker(
     receiver: Receiver<AudioMessage>,
     generation: Arc<AtomicU64>,
@@ -788,12 +802,12 @@ fn audio_worker(
             if is_test_tone && expired && frame_generation == active_generation {
                 expired_test_tones.fetch_add(1, Ordering::Release);
             } else if !is_test_tone {
-                worker_dropped_frames.fetch_add(1, Ordering::Relaxed);
+                discard_stale_game_pcm(&mut continuity, &mut stretch, &worker_dropped_frames);
             }
             continue;
         }
         if !is_test_tone && tone_until.is_some_and(|end| now < end) {
-            worker_dropped_frames.fetch_add(1, Ordering::Relaxed);
+            discard_stale_game_pcm(&mut continuity, &mut stretch, &worker_dropped_frames);
             continue;
         }
         if device.is_none()
@@ -815,6 +829,8 @@ fn audio_worker(
             if newest_generation != frame_generation {
                 output.clear();
                 active_generation = newest_generation;
+                tone_until = None;
+                continuity.reset();
                 stretch.reset();
                 if !is_test_tone {
                     worker_dropped_frames.fetch_add(1, Ordering::Relaxed);
@@ -848,11 +864,14 @@ fn audio_worker(
                         }
                     }
                     PostProcessAudioStatus::Expired => {
-                        stretch.reset();
                         if is_test_tone {
                             expired_test_tones.fetch_add(1, Ordering::Release);
                         } else {
-                            worker_dropped_frames.fetch_add(1, Ordering::Relaxed);
+                            discard_stale_game_pcm(
+                                &mut continuity,
+                                &mut stretch,
+                                &worker_dropped_frames,
+                            );
                         }
                     }
                     PostProcessAudioStatus::Ready => {
@@ -885,7 +904,7 @@ fn audio_worker(
                 // Report the expired tone rather than playing a late beep.
                 expired_test_tones.fetch_add(1, Ordering::Release);
             } else {
-                worker_dropped_frames.fetch_add(1, Ordering::Relaxed);
+                discard_stale_game_pcm(&mut continuity, &mut stretch, &worker_dropped_frames);
             }
         }
     }
@@ -978,8 +997,8 @@ mod tests {
     use super::{
         AUDIO_RETRY_DELAY, AudioDeviceStatus, AudioMessage, AudioOutput, MAX_TEST_TONE_AGE,
         PlaybackContinuity, PostProcessAudioStatus, StreamRecovery, apply_sink_volume,
-        frame_is_fresh, normalize_pitch, normalize_playback_speed, normalize_volume,
-        pcm16_stereo_to_float, post_process_audio_status, queued_audio_is_fresh,
+        discard_stale_game_pcm, frame_is_fresh, normalize_pitch, normalize_playback_speed,
+        normalize_volume, pcm16_stereo_to_float, post_process_audio_status, queued_audio_is_fresh,
         record_stream_fault, reopen_due, retry_ready, set_sink_playback_speed, speaker_test_tone,
     };
 
@@ -1548,6 +1567,26 @@ mod tests {
             ),
             PostProcessAudioStatus::Expired
         );
+    }
+
+    #[test]
+    fn dropped_pcm_forgets_prior_wsola_overlap_before_fresh_audio() {
+        let mut stretch = crate::pitch::PitchStretch::default();
+        let mut continuity = PlaybackContinuity::default();
+        let drops = AtomicU64::new(0);
+        let old_pcm = vec![0.7_f32; 1_024];
+        let fresh_pcm = vec![-0.25_f32; 1_024];
+
+        // Simulate a non-unity-speed stream with overlapping source history.
+        assert!(!stretch.process(&old_pcm, 0.5).is_empty());
+        assert!(!continuity.observe_game_pcm(true));
+        discard_stale_game_pcm(&mut continuity, &mut stretch, &drops);
+
+        let actual = stretch.process(&fresh_pcm, 0.5);
+        let mut fresh_stretch = crate::pitch::PitchStretch::default();
+        assert_eq!(actual, fresh_stretch.process(&fresh_pcm, 0.5));
+        assert!(!continuity.observe_game_pcm(true));
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
     }
 
     #[test]

@@ -62,10 +62,12 @@ chmod 755 "$root/initfs/init"
 [[ -s "$root/initramfs.gz" ]] || fail 'initramfs_creation_failed'
 
 # Guest devices are entirely emulated. Never expose host DRM/input/files.
+# -cpu max remains TCG-only; QEMU's default qemu64 CPU may lack instructions
+# needed by Ubuntu's x86-64-v3 static BusyBox, killing PID 1 before output.
 set +e
 HOME="$root" XDG_CONFIG_HOME="$root" \
   timeout --signal=TERM --kill-after=2s 75s qemu-system-x86_64 \
-    -machine q35,accel=tcg -m 384M -smp 1 -no-reboot \
+    -machine q35,accel=tcg -cpu max -m 384M -smp 1 -no-reboot \
     -nodefaults -display none -vga none -net none \
     -monitor none -parallel none -serial "file:$root/serial.log" \
     -device virtio-gpu-pci,id=sb_gpu -device virtio-keyboard-pci,id=sb_keyboard \

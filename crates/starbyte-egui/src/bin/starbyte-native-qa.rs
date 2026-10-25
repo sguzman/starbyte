@@ -1122,6 +1122,11 @@ mod tests {
             "guest_wayland_wire_executable_unavailable",
             "guest_weston_executable_unavailable",
             "guest_drm_wayland_handshake_or_seat_missing",
+            "--hyprland-smoke",
+            "hosted_hyprland_binary_missing",
+            "AQ_DRM_DEVICES=/dev/dri/card0",
+            "STARBYTE_GUEST_HYPRLAND_RESULT executable=1 socket=1 registry=1 compositor=1 seat=1 alive=1",
+            "guest_private_hyprland_registry_or_seat_missing",
         ] {
             assert!(script.contains(guard), "guest smoke guard missing: {guard}");
         }

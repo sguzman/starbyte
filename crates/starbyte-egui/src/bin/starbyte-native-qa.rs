@@ -1125,6 +1125,7 @@ mod tests {
             "--hyprland-smoke",
             "hosted_hyprland_binary_missing",
             "AQ_DRM_DEVICES=/dev/dri/card0",
+            "--i-am-really-stupid --config /tmp/starbyte-hyprland.conf",
             "STARBYTE_GUEST_HYPRLAND_RESULT executable=1 socket=1 registry=1 compositor=1 seat=1 alive=1",
             "guest_private_hyprland_registry_or_seat_missing",
         ] {

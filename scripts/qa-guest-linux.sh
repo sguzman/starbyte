@@ -713,11 +713,12 @@ HYPR_CONFIG
       hypr_seat_error=0
       hypr_config_error=0
       hypr_library_error=0
+      hypr_root_guard=0
       if [ -x /usr/bin/Hyprland ]; then hypr_executable=1; fi
       /usr/bin/Hyprland --version >/tmp/hypr-version.log 2>/tmp/hypr-version.err
       if [ "$?" = 0 ]; then hypr_version=1; fi
       HYPRLAND_NO_RT=1 AQ_DRM_DEVICES=/dev/dri/card0 \
-        /usr/bin/Hyprland --config /tmp/starbyte-hyprland.conf \
+        /usr/bin/Hyprland --i-am-really-stupid --config /tmp/starbyte-hyprland.conf \
         >/tmp/hyprland.log 2>/tmp/hyprland.err &
       hypr_pid=$!
       hypr_display=''
@@ -748,10 +749,11 @@ HYPR_CONFIG
         if /bin/busybox grep -Eiq 'libseat.*failed|seat.*failed|session inactive' "$log"; then hypr_seat_error=1; fi
         if /bin/busybox grep -Eiq 'config.*failed|config.*error|parse.*error' "$log"; then hypr_config_error=1; fi
         if /bin/busybox grep -Eiq 'error while loading shared libraries|cannot open shared object|failed.*shader' "$log"; then hypr_library_error=1; fi
+        if /bin/busybox grep -Eiq 'superuser privileges|shall not be run as the root|privilege check is not omitted' "$log"; then hypr_root_guard=1; fi
       done
       /bin/busybox kill "$hypr_pid" 2>/dev/null || :
       wait "$hypr_pid" 2>/dev/null || :
-      echo "STARBYTE_GUEST_HYPRLAND_DIAG version=$hypr_version egl=$hypr_egl_error gbm=$hypr_gbm_error seat_error=$hypr_seat_error config_error=$hypr_config_error library_error=$hypr_library_error" >/dev/console
+      echo "STARBYTE_GUEST_HYPRLAND_DIAG version=$hypr_version egl=$hypr_egl_error gbm=$hypr_gbm_error seat_error=$hypr_seat_error config_error=$hypr_config_error library_error=$hypr_library_error root_guard=$hypr_root_guard" >/dev/console
       echo "STARBYTE_GUEST_HYPRLAND_RESULT executable=$hypr_executable socket=$hypr_socket registry=$hypr_registry compositor=$hypr_compositor seat=$hypr_seat alive=$hypr_alive" >/dev/console
     fi
   fi

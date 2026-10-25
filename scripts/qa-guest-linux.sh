@@ -220,7 +220,14 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     echo "STARBYTE_GUEST_GBM_EXEC card_status=$?" >/dev/console
   fi
   if [ -e /etc/starbyte-wayland-smoke ]; then
-    /bin/busybox mkdir -p /run/user/0 /tmp
+    # Do not rely on free space or permissions in the unpacked initramfs.
+    # All mounts belong solely to this disposable guest.
+    /bin/busybox mkdir -p /tmp /run
+    /bin/busybox mount -t tmpfs -o size=64m,mode=1777 tmpfs /tmp
+    tmp_mount_status=$?
+    echo "STARBYTE_GUEST_TMP_MOUNT status=$tmp_mount_status" >/dev/console
+    if [ "$tmp_mount_status" != 0 ]; then /bin/busybox reboot -f; fi
+    /bin/busybox mkdir -p /run/user/0
     /bin/busybox chmod 700 /run/user/0
     export XDG_RUNTIME_DIR=/run/user/0
     # No guest VT is attached to the TCG-only serial console; libseat's
@@ -237,9 +244,11 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     export LIBGL_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri
     # Prove both actual binaries execute before interpreting compositor
     # startup or protocol silence. No raw program output leaves guest RAM.
-    echo guest-private-write >/tmp/starbyte-write-check
+    guest_tmp_write_status=0
+    echo guest-private-write >/tmp/starbyte-write-check || guest_tmp_write_status=$?
     guest_tmp=0
     if [ -s /tmp/starbyte-write-check ]; then guest_tmp=1; fi
+    echo "STARBYTE_GUEST_TMP_IO_DIAG write_status=$guest_tmp_write_status" >/dev/console
     echo "STARBYTE_GUEST_TMP_WRITE_OK result=$guest_tmp" >/dev/console
     wire_executable=0
     weston_executable=0
@@ -395,7 +404,8 @@ chmod 755 "$root/initfs/init"
 
 # Guest devices are entirely emulated. Never expose host DRM/input/files.
 guest_ram=384M
-if [[ "$mode" == --gbm-smoke || "$mode" == --wayland-smoke ]]; then guest_ram=768M; fi
+if [[ "$mode" == --gbm-smoke ]]; then guest_ram=768M; fi
+if [[ "$mode" == --wayland-smoke ]]; then guest_ram=1536M; fi
 # -cpu max remains TCG-only; QEMU's default qemu64 CPU may lack instructions
 # needed by Ubuntu's x86-64-v3 static BusyBox, killing PID 1 before output.
 # The only synthetic keyboard injection path is this guest's private QMP
@@ -496,7 +506,11 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
   [[ "$driver" == true ]] || fail 'guest_driver_or_device_nodes_missing'
   if [[ "$mode" == --wayland-smoke ]]; then
     # All receipts are bounded diagnostics; never disclose raw guest logs.
-    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST|BIN_DIAG)|WESTON_EXEC|TMP_WRITE_OK) ' "$root/serial-clean.log" || true
+    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST|BIN_DIAG)|WESTON_EXEC|TMP_WRITE_OK|TMP_MOUNT|TMP_IO_DIAG) ' "$root/serial-clean.log" || true
+    grep -Fqx 'STARBYTE_GUEST_TMP_MOUNT status=0' "$root/serial-clean.log" \
+      || fail 'guest_temporary_mount_unavailable'
+    grep -Fqx 'STARBYTE_GUEST_TMP_IO_DIAG write_status=0' "$root/serial-clean.log" \
+      || fail 'guest_temporary_file_write_failed'
     grep -Fqx 'STARBYTE_GUEST_TMP_WRITE_OK result=1' "$root/serial-clean.log" \
       || fail 'guest_temporary_file_io_unavailable'
     grep -Fqx 'STARBYTE_GUEST_WAYLAND_WIRE_SELFTEST status=0 output=1 stderr=0 reason=none' "$root/serial-clean.log" \

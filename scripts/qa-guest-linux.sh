@@ -614,7 +614,9 @@ if [[ "$mode" == --wayland-smoke ]]; then
   qmp_args=(-qmp "unix:$root/qmp.sock,server=on,wait=off")
   guest_focus_injector() {
     local ready=false
-    for _ in {1..700}; do
+    # VM startup under TCG can exceed one minute on hosted runners.
+    # Remain bounded by the outer 200-second guest-QEMU deadline.
+    for _ in {1..2100}; do
       if [[ -S "$root/qmp.sock" && -f "$root/serial.log" ]] \
         && grep -Fq 'STARBYTE_GUEST_FOCUS_READY client=weston-simple-shm alive=1' "$root/serial.log"; then
         ready=true

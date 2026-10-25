@@ -867,9 +867,9 @@ mod tests {
 
     use super::{
         AUDIO_RETRY_DELAY, AudioDeviceStatus, AudioMessage, AudioOutput, PlaybackContinuity,
-        StreamRecovery, apply_sink_volume, frame_is_fresh, idle_reopen_due, normalize_pitch,
+        StreamRecovery, apply_sink_volume, frame_is_fresh, normalize_pitch,
         normalize_playback_speed, normalize_volume, pcm16_stereo_to_float, record_stream_fault,
-        retry_ready, set_sink_playback_speed, speaker_test_tone,
+        retry_ready, set_sink_playback_speed, speaker_test_tone, stream_reopen_due,
     };
 
     #[test]
@@ -1417,7 +1417,10 @@ mod tests {
                     pitch: 1.0,
                 })
                 .unwrap();
-            assert!(matches!(receiver.try_recv(), Ok(AudioMessage::Frame { pcm, .. }) if pcm == [0, 0]));
+            assert!(matches!(
+                receiver.try_recv(),
+                Ok(AudioMessage::Frame { pcm, .. }) if pcm.as_slice() == [0, 0]
+            ));
             assert!(!stream_reopen_due(&recovery, false, Some(retry_at), earlier));
             assert!(stream_reopen_due(&recovery, false, Some(retry_at), retry_at));
         }

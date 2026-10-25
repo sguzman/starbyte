@@ -1,5 +1,14 @@
 # Starbyte: current state
 
+## Hosted Linux guest PCI boot probe (2026-10-25)
+
+The path-scoped QEMU workflow now boots a minimal Alpine virtual kernel
+with an independently assembled static BusyBox initramfs. Private serial
+receipts verify guest userspace and both virtio PCI device IDs, with
+no host display/input/network/disk/KVM and bounded cleanup. This is
+guest PCI evidence only, not a guest DRM/render-node or input-seat test.
+Physical scheduler acceptance remains **71/77 (92%)**.
+
 ## Hosted-only bootless virtual GPU/input device-model QA (2026-10-25)
 
 Added a separate, path-scoped GitHub-hosted QEMU smoke that rejects live desktop or

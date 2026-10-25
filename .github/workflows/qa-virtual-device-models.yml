@@ -5,10 +5,12 @@ on:
     branches: [main]
     paths:
       - "scripts/qa-virtual-devices.sh"
+      - "scripts/qa-guest-linux.sh"
       - ".github/workflows/qa-virtual-device-models.yml"
   pull_request:
     paths:
       - "scripts/qa-virtual-devices.sh"
+      - "scripts/qa-guest-linux.sh"
       - ".github/workflows/qa-virtual-device-models.yml"
 
 # QEMU packages are heavyweight. Never repeat this probe on unrelated
@@ -21,7 +23,7 @@ jobs:
   # Bootless TCG/QMP hardware-model evidence; not guest DRM or native QA.
   virtual-device-models:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 14
     steps:
       - uses: actions/checkout@v4
       - name: Verify headless model probe syntax
@@ -39,3 +41,14 @@ jobs:
         run: sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends qemu-system-x86 socat jq
       - name: Instantiate virtual GPU and keyboard PCI device models
         run: bash scripts/qa-virtual-devices.sh --smoke
+      - name: Check private Linux guest probe safety
+        shell: bash
+        run: |
+          bash -n scripts/qa-guest-linux.sh
+          if output="$(DISPLAY=:0 bash scripts/qa-guest-linux.sh --check-only 2>&1)"; then exit 1; fi
+          grep -Fq 'STARBYTE_GUEST_LINUX_BLOCKED graphical_session_present' <<<"$output"
+          bash scripts/qa-guest-linux.sh --check-only
+      - name: Install static BusyBox and initramfs tooling
+        run: sudo apt-get install -y --no-install-recommends busybox-static cpio curl
+      - name: Boot private Linux kernel and validate guest PCI devices
+        run: bash scripts/qa-guest-linux.sh --smoke

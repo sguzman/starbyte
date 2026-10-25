@@ -1089,6 +1089,26 @@ mod tests {
     }
 
     #[test]
+    fn hosted_guest_probe_forbids_live_desktop_and_hardware_passthrough() {
+        let script = include_str!("../../../../scripts/qa-guest-linux.sh");
+        for guard in [
+            "github_hosted_runner_only",
+            "graphical_session_present",
+            "interactive_session_present",
+            "q35,accel=tcg",
+            "-nodefaults -display none -vga none -net none",
+            "-monitor none -parallel none -serial",
+            "-device virtio-gpu-pci,id=sb_gpu",
+            "-device virtio-keyboard-pci,id=sb_keyboard",
+            "STARBYTE_GUEST_LINUX_BOOT_OK",
+            "STARBYTE_GUEST_PCI_RESULT",
+            "drm_render_node=not_tested",
+        ] {
+            assert!(script.contains(guard), "guest smoke guard missing: {guard}");
+        }
+    }
+
+    #[test]
     fn nested_hyprland_probe_refuses_without_render_allocator_before_any_launch() {
         let harness = include_str!("../../../../scripts/qa-isolated-wayland.sh");
         let guard = harness

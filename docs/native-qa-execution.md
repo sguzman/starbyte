@@ -165,6 +165,20 @@ evidence of guest Linux DRM/render nodes, guest input focus, guest Hyprland,
 Starbyte behavior, or real physical equipment. Booting a disposable guest
 and verifying `CONFIG_DRM_VIRTIO_GPU` is the next evidence gate.
 
+### Hosted private Linux guest PCI boot (2026-10-25)
+
+The existing path-scoped virtual-device workflow now also boots a stock
+Alpine Linux v3.23 virt kernel with an independently built BusyBox
+initramfs. The guest serial console provides receipts that Linux
+started userspace and enumerated the virtio GPU and keyboard PCI IDs.
+QEMU uses TCG and no host display/input, network, disk or KVM.
+The guest powers off and the host deletes all disposable artifacts.
+The kernel SHA-256 is reported for future exact-artifact pinning.
+
+This is a **guest-kernel PCI enumeration** test, not proof of a loaded
+DRM driver, render node, evdev input seat, guest compositor, or physical
+Starbyte acceptance. Those require separate positive checks.
+
 ### Next route: independently provisioned virtual rendering and input seat
 
 **Superseded:** the earlier two-stage *software-only nested Weston →

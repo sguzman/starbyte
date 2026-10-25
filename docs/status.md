@@ -1,5 +1,20 @@
 # Starbyte: current state
 
+## Account for game PCM lost while the output device is unavailable (2026-10-25)
+
+When Rodio had no usable OS output, accepted nonzero SNES game PCM fell
+through the audio-worker loop without reaching the mixer or incrementing
+the worker-drop diagnostic. The Sound panel could therefore report zero
+worker losses while the device-open status showed a failure. The worker
+now counts those lost nonzero buffers as unroutable and resets streaming
+WSOLA overlap, but leaves silent startup PCM and diagnostic speaker
+checks out of the game-loss counter. Both original and full-library
+worker Sound panels label this broader loss category accurately. A
+device-free regression verifies the count exclusions and recovered
+time-stretch state. This fixes software loss accounting, not output
+device availability, physical audibility or native Hyprland acceptance.
+The scheduler ledger remains **71/77 (92%)**.
+
 ## Retry initially unavailable desktop audio even while manually paused (2026-10-25)
 
 When a fresh nonzero game buffer or speaker check first attempted to open

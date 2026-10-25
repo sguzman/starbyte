@@ -3648,7 +3648,7 @@ impl StarbyteApp {
             }
         ));
         ui.label(format!(
-            "Game PCM losses: {} full-queue drops, {} stale/expired worker drops",
+            "Game PCM losses: {} full-queue drops, {} stale/unroutable worker drops",
             if self.full_worker.is_some() {
                 self.worker_audio.producer_dropped_frames
             } else {

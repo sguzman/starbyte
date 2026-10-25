@@ -129,7 +129,7 @@ pub struct AudioOutput {
     expired_test_tones: Arc<AtomicU64>,
     /// Game buffers discarded at the bounded producer queue.
     producer_dropped_frames: Arc<AtomicU64>,
-    /// Game buffers discarded as stale or superseded by the worker.
+    /// Game buffers discarded as stale, superseded, or lacking an OS output.
     worker_dropped_frames: Arc<AtomicU64>,
     /// Times the Rodio sink was empty when the next game PCM buffer arrived.
     /// A starvation indicator, not proof of a physically audible underrun.
@@ -721,6 +721,23 @@ fn discard_stale_game_pcm(
     drops.fetch_add(1, Ordering::Relaxed);
 }
 
+/// No OS output means accepted nonzero game PCM was never sent to Rodio.
+/// Count that loss and forget its WSOLA overlap, but ignore silent startup
+/// frames and diagnostic tones: neither represents lost game sound.
+fn discard_unroutable_game_pcm(
+    pcm: &[i16],
+    is_test_tone: bool,
+    continuity: &mut PlaybackContinuity,
+    stretch: &mut PitchStretch,
+    drops: &AtomicU64,
+) -> bool {
+    if is_test_tone || !pcm.iter().any(|&sample| sample != 0) {
+        return false;
+    }
+    discard_stale_game_pcm(continuity, stretch, drops);
+    true
+}
+
 /// A saturated producer can discard a frame *before* the worker receives
 /// anything to reject. Mark the next accepted frame with the updated drop
 /// count, so WSOLA cannot overlap across missing game samples.
@@ -1024,6 +1041,17 @@ fn audio_worker(
             } else {
                 discard_stale_game_pcm(&mut continuity, &mut stretch, &worker_dropped_frames);
             }
+        } else {
+            // Failed OS output initialization or a cooldown-delayed retry
+            // discards real game sound just as surely as an expired frame.
+            // Don't fabricate losses while the SPC emits only silence.
+            discard_unroutable_game_pcm(
+                &pcm,
+                is_test_tone,
+                &mut continuity,
+                &mut stretch,
+                &worker_dropped_frames,
+            );
         }
     }
 }
@@ -1115,7 +1143,8 @@ mod tests {
     use super::{
         AUDIO_RETRY_DELAY, AudioDeviceStatus, AudioMessage, AudioOutput, InitialOutputRetry,
         MAX_TEST_TONE_AGE, PlaybackContinuity, PostProcessAudioStatus, ProducerDropContinuity,
-        StreamRecovery, apply_sink_volume, discard_stale_game_pcm, frame_is_fresh, normalize_pitch,
+        StreamRecovery, apply_sink_volume, discard_stale_game_pcm, discard_unroutable_game_pcm,
+        frame_is_fresh, normalize_pitch,
         normalize_playback_speed, normalize_volume, pcm16_stereo_to_float,
         post_process_audio_status, prepare_test_tone, queued_audio_is_fresh, record_stream_fault,
         reopen_due, retry_ready, set_sink_playback_speed, speaker_test_tone,
@@ -1753,6 +1782,47 @@ mod tests {
             ),
             PostProcessAudioStatus::Expired
         );
+    }
+
+    #[test]
+    fn missing_output_counts_nonzero_game_pcm_and_resets_overlap_only() {
+        let mut stretch = crate::pitch::PitchStretch::default();
+        let mut continuity = PlaybackContinuity::default();
+        let drops = AtomicU64::new(0);
+        let before_gap = vec![0.6_f32; 1_024];
+        let after_gap = vec![-0.3_f32; 1_024];
+
+        assert!(!stretch.process(&before_gap, 0.5).is_empty());
+        assert!(!continuity.observe_game_pcm(true));
+        assert!(!discard_unroutable_game_pcm(
+            &[0, 0],
+            false,
+            &mut continuity,
+            &mut stretch,
+            &drops,
+        ));
+        assert!(!discard_unroutable_game_pcm(
+            &[1, 1],
+            true,
+            &mut continuity,
+            &mut stretch,
+            &drops,
+        ));
+        assert_eq!(drops.load(Ordering::Relaxed), 0);
+        assert!(discard_unroutable_game_pcm(
+            &[1, -1],
+            false,
+            &mut continuity,
+            &mut stretch,
+            &drops,
+        ));
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+        let mut fresh = crate::pitch::PitchStretch::default();
+        assert_eq!(
+            stretch.process(&after_gap, 0.5),
+            fresh.process(&after_gap, 0.5)
+        );
+        assert!(!continuity.observe_game_pcm(true));
     }
 
     #[test]

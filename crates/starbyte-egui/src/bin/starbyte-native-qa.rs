@@ -1021,6 +1021,24 @@ mod tests {
             "test -z \"${XDG_SESSION_ID-}\"",
             "test -z \"${SYSTEMD_EXEC_PID-}\"",
             "test ! -e /tmp/.X11-unix",
+            "--hyprland-headless-smoke",
+            "--setenv HYPRLAND_NO_SD_VARS 1",
+            "--setenv HYPRLAND_NO_SD_TARGET 1",
+            "--setenv HYPRLAND_NO_RT 1",
+            "--setenv LIBGL_ALWAYS_SOFTWARE 1",
+            "--setenv MESA_LOADER_DRIVER_OVERRIDE llvmpipe",
+            "STARBYTE_HEADLESS_HYPRLAND_BLOCKED reason=no_render_allocator",
+            "STARBYTE_HEADLESS_HYPRLAND_START_TIMEOUT",
+            "STARBYTE_HEADLESS_HYPRLAND_FAILURE_CLEANUP_OK",
+            "STARBYTE_HEADLESS_HYPRLAND_TIMEOUT_CLEANUP_OK",
+            "STARBYTE_HEADLESS_HYPRLAND_FAILURE_SOCKET_REMAINS",
+            "STARBYTE_HEADLESS_HYPRLAND_TIMEOUT_SOCKET_REMAINS",
+            "STARBYTE_HEADLESS_HYPRLAND_TORN_DOWN",
+            "STARBYTE_HEADLESS_HYPRLAND_PRIVATE_SOCKET_MISMATCH",
+            "instance_wayland_socket",
+            "HYPRLAND_INSTANCE_SIGNATURE",
+            "HEADLESS-0",
+            "dispatch exit",
             "--backend=headless --renderer=pixman",
             "--shell=kiosk-shell.so",
             "timeout --signal=TERM --kill-after=1s 2s",
@@ -1042,7 +1060,8 @@ mod tests {
                 "missing isolation guard: {required}"
             );
         }
-        assert!(!harness.contains("hyprctl"));
+        assert!(harness.contains("--setenv STARBYTE_HYPRCTL_BIN"));
+        assert!(harness.contains("\"$STARBYTE_HYPRCTL_BIN\""));
         assert!(!harness.contains("XDG_SESSION_BUS_ADDRESS"));
     }
 

@@ -142,36 +142,48 @@ on success, timeout, and failure. Weston results must remain labeled
 preliminary. Even a verified nested Hyprland run would not establish physical
 monitor, GPU scanout, audible-device, or hardware-gamepad acceptance.
 
-No separate Hyprland compositor or private virtual input seat has been
+No nested Hyprland compositor or private virtual input seat has been
 verified. In particular, there is no evidence yet that Hyprland can run
 nested under the isolated Weston socket, select only the nested Wayland
 backend, or accept virtual-keyboard input without host session interaction.
-Do not start Hyprland or Starbyte until those boundaries have dedicated
-fail-closed tests. The native GUI wrapper and collector remain blocked.
+Starbyte GUI probes remain blocked.
 
-### Nested Hyprland blocker (2026-10-24)
+### Standalone headless Hyprland blocker (2026-10-24)
 
-The installed Hyprland is 0.56.2 (Aquamarine 0.15.1). Its matching upstream
-[`src/Compositor.cpp`](https://github.com/hyprwm/Hyprland/blob/v0.56.2/src/Compositor.cpp#L280-L296)
-orders Aquamarine implementations as **headless, mandatory**, DRM if
-available, then Wayland as fallback. The private sandbox
-has no DRM nodes, so starting this build would select its mandatory headless
-backend before attempting the private Weston socket. Aquamarine 0.15.1's
-[`documented environment variables`](https://github.com/hyprwm/aquamarine/blob/v0.15.1/docs/env.md)
-include DRM device selection and input/debug options, but no
-backend-selection override. Consequently, launching this
-binary here cannot establish a nested Wayland compositor; a successful
-headless startup or a private Hyprland IPC socket would not be acceptable
-evidence. No Hyprland process was started. The next safe step requires an
-upstream or separately built Hyprland/Aquamarine backend-selection mechanism
-that makes Wayland mandatory and fails closed, plus regression coverage for
-that selection before launch.
+Installed Hyprland 0.56.2 / Aquamarine 0.15.1 was attempted once in the
+existing Bubblewrap sandbox with a disposable config, private runtime, no
+host sockets, no `/dev/input` or `/dev/dri`, cleared session variables,
+software-rendering environment, and a bounded startup wait. The process
+aborted during startup (exit status 134); no readiness or private IPC marker
+was produced. The host-side temporary QA runtime directory was removed, and
+no core artifact was left in the checkout. The private raw log was removed
+with that runtime before its cause could be classified, so the exit status
+alone is not treated as proof of a particular runtime error.
+
+The source-level blocker is specific: Aquamarine's
+[`CHeadlessBackend::drmFD()` returns `-1`](https://github.com/hyprwm/aquamarine/blob/v0.15.1/src/backend/Headless.cpp#L112-L128),
+and its
+[`CBackend::start()` requires a render allocator](https://github.com/hyprwm/aquamarine/blob/v0.15.1/src/backend/Backend.cpp#L148-L164)
+unless the first backend is Null. With all DRM nodes excluded and Hyprland
+not requesting Null, the mandatory headless backend alone cannot provide the
+allocator. The same build's OpenGL renderer derives its DRM FD from the
+backend and then attempts EGL-device/GBM initialization from that FD
+([`OpenGL.cpp`](https://github.com/hyprwm/Hyprland/blob/v0.56.2/src/render/OpenGL.cpp#L266-L327)).
+Hyprland's [virtual-GPU documentation](https://wiki.hypr.land/configuring/extra/virtual-gpu/)
+describes a `HEADLESS-0` output, but that output capability does not remove
+the allocator/renderer requirement. No host DRM device may be exposed to
+work around it.
+
+The isolated-harness mode remains fail-closed and reports startup failure,
+timeout, and teardown markers without changing native GUI hard-stops. Because
+the real process aborted before readiness, a successful normal shutdown and
+the timeout cleanup branch were not exercised against a live compositor.
+Neither a private IPC identity nor a headless output was verified.
 
 The isolation preflight now also asserts that the host Hyprland IPC runtime
 and personal config path are unreachable and that session-manager / Hyprland
 instance environment markers are absent. This strengthens namespace
-regression coverage; it does not validate nested compositor or input-seat
-behavior.
+regression coverage; it does not validate compositor or input-seat behavior.
 
 ## Evidence already obtained
 

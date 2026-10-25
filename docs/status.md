@@ -27,14 +27,19 @@ process and runtime directory. No separate Hyprland compositor or virtual
 input seat is verified. The GUI hard-stops remain in force, and scheduler
 acceptance stays **71/77 (92%)**.
 
-Nested Hyprland remains blocked for a specific upstream reason: installed
-Hyprland 0.56.2 (Aquamarine 0.15.1) requests its headless backend as
-mandatory before DRM and Wayland fallback. The isolated environment excludes
-DRM and has no documented Aquamarine backend override, so running this build
-would not exercise the private Weston socket. No nested process was started;
-the next prerequisite is a backend-selection mechanism that requires nested
-Wayland and fails closed. The isolation preflight now also tests that host
-Hyprland IPC, personal config and session-manager environment are inaccessible.
+Standalone isolated Hyprland 0.56.2 / Aquamarine 0.15.1 was attempted once
+with no host DRM/input/session sockets and a private runtime/config. It aborted
+during startup (134) before readiness; the private log was removed with the
+runtime before cause classification, so the status alone is not treated as
+proof of a backend error. Source inspection identifies the blocker: the
+headless backend returns no DRM FD, while Aquamarine's backend startup
+requires a render allocator unless using the Null backend; Hyprland does not
+request Null. Its renderer also initializes EGL through the backend DRM FD.
+The private QA runtime was removed and no checkout core artifact remained.
+No IPC identity, backend readiness, or `HEADLESS-0` output was verified.
+Normal compositor shutdown and timeout cleanup therefore remain untested.
+The isolation preflight also tests that host Hyprland IPC, personal config
+and session-manager environment are inaccessible.
 
 
 ## Targeted focused QA option (2026-10-24)

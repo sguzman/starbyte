@@ -1037,7 +1037,10 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
     ) -> Result<Receiver<Result<(SessionSoundDiagnostics, WorkerAudioDiagnostics), String>>, String>
     {
         self.submit_transaction(|engine| {
-            Ok((engine.session.sound_diagnostics(), engine.audio_diagnostics()))
+            Ok((
+                engine.session.sound_diagnostics(),
+                engine.audio_diagnostics(),
+            ))
         })
     }
 

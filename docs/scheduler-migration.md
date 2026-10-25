@@ -1,5 +1,24 @@
 # Emulation scheduler migration
 
+## Output-device re-selection invalidates old-route PCM — 2026-10-24
+
+The worker's explicit default-device re-selection already released the old
+Rodio stream, but it did not advance the shared audio generation. If the
+bounded channel was full, queued PCM from before the route change could be
+accepted by the freshly opened sink. The audio output now advances its
+generation once per coalesced `request_reopen`, including when the
+nonblocking control wakeup cannot enter a full queue. The existing worker
+generation check discards old-route frames; subsequent frames from the new
+generation remain eligible. The regression asserts both behaviors with a
+saturated queue and checks repeated reset requests do not increment the
+generation again.
+
+This is a source-level correctness improvement only. No playback-device
+failure, audible speaker output, or physical Hyprland background sound was
+verified. **P-18 and D-13 remain pending; acceptance remains 71/77 (92%).**
+CI results for this revision must be checked separately.
+
+
 ## Battery SRAM verified across separate application processes — 2026-10-24
 
 The original-window Weston SRAM smoke previously closed `StarbyteApp`, joined

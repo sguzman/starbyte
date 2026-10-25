@@ -887,7 +887,7 @@ mod tests {
     };
 
     use super::{
-        AUDIO_RETRY_DELAY, MAX_TEST_TONE_AGE, AudioDeviceStatus, AudioMessage, AudioOutput,
+        AUDIO_RETRY_DELAY, AudioDeviceStatus, AudioMessage, AudioOutput, MAX_TEST_TONE_AGE,
         PlaybackContinuity, StreamRecovery, apply_sink_volume, frame_is_fresh, normalize_pitch,
         normalize_playback_speed, normalize_volume, pcm16_stereo_to_float, queued_audio_is_fresh,
         record_stream_fault, reopen_due, retry_ready, set_sink_playback_speed, speaker_test_tone,

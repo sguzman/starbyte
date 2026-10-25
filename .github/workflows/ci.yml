@@ -25,6 +25,16 @@ jobs:
         run: bash -n scripts/qa-native-hyprland.sh
       - name: Verify isolated and nested QA supervisor syntax
         run: bash -n scripts/qa-isolated-wayland.sh scripts/qa-hyprland-nested-inside.sh
+      - name: Reject nested compositor probe outside private sandbox
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This self-check must reject before spawning either compositor.
+          if output="$(bash scripts/qa-hyprland-nested-inside.sh 2>&1)"; then
+            echo "Unsafe unsandboxed nested compositor launch permitted" >&2
+            exit 1
+          fi
+          grep -Fq 'STARBYTE_NESTED_HYPRLAND_BLOCKED reason=outside_private_runtime' <<<"$output"
       - name: Verify unattended GUI QA is fail-closed
         shell: bash
         run: |

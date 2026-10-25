@@ -79,6 +79,16 @@ if [[ "$mode" == --gbm-smoke ]]; then
     -o "$root/initfs/bin/gbm-probe" || fail 'gbm_probe_compilation_failed'
   ldd "$root/initfs/bin/gbm-probe" >"$root/gbm-dependencies" \
     || fail 'gbm_dependency_scan_failed'
+  # The minimal guest has libgbm but initially NO Mesa DRI backend.
+  # Carry only the hosted distribution's CPU-only kms_swrast renderer,
+  # together with its exact dynamic dependencies, into disposable guest RAM.
+  dri_driver="$(find /usr/lib -name 'kms_swrast_dri.so' -print -quit)"
+  [[ -n "$dri_driver" && -f "$dri_driver" ]] || fail 'hosted_kms_swrast_backend_missing'
+  mkdir -p "$root/initfs$(dirname "$dri_driver")"
+  cp -L -- "$dri_driver" "$root/initfs$dri_driver" \
+    || fail 'gbm_software_backend_copy_failed'
+  ldd "$dri_driver" >>"$root/gbm-dependencies" \
+    || fail 'gbm_software_backend_dependency_scan_failed'
   if grep -Fq 'not found' "$root/gbm-dependencies"; then
     fail 'gbm_dependency_missing'
   fi
@@ -131,7 +141,9 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     for node in /dev/dri/renderD*; do
       if [ -c "$node" ]; then guest_render_node="$node"; break; fi
     done
-    /bin/gbm-probe "$guest_render_node" >/dev/console 2>/dev/null
+    MESA_LOADER_DRIVER_OVERRIDE=kms_swrast LIBGL_ALWAYS_SOFTWARE=1 \
+      LIBGL_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri \
+      /bin/gbm-probe "$guest_render_node" >/dev/console 2>/dev/null
     echo "STARBYTE_GUEST_GBM_EXEC status=$?" >/dev/console
   fi
 fi
@@ -143,12 +155,14 @@ chmod 755 "$root/initfs/init"
 [[ -s "$root/initramfs.gz" ]] || fail 'initramfs_creation_failed'
 
 # Guest devices are entirely emulated. Never expose host DRM/input/files.
+guest_ram=384M
+if [[ "$mode" == --gbm-smoke ]]; then guest_ram=768M; fi
 # -cpu max remains TCG-only; QEMU's default qemu64 CPU may lack instructions
 # needed by Ubuntu's x86-64-v3 static BusyBox, killing PID 1 before output.
 set +e
 HOME="$root" XDG_CONFIG_HOME="$root" \
   timeout --signal=TERM --kill-after=2s 75s qemu-system-x86_64 \
-    -machine q35,accel=tcg -cpu max -m 384M -smp 1 -no-reboot \
+    -machine q35,accel=tcg -cpu max -m "$guest_ram" -smp 1 -no-reboot \
     -nodefaults -display none -vga none -net none \
     -monitor none -parallel none -serial "file:$root/serial.log" \
     -device virtio-gpu-pci,id=sb_gpu -device virtio-keyboard-pci,id=sb_keyboard \

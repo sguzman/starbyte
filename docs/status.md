@@ -10,11 +10,13 @@ device and a 64×64 XRGB8888 **rendering** buffer, then frees both and
 reports bounded pass/fail receipts. The probe does not attach the host
 GPU, open a host window or expose host input. **Its first hosted run
 failed**: the guest still booted, loaded virtio DRM/input and exited
-cleanly, but `device=false buffer=false`. This does not yet distinguish
-GBM library load failure, failure to open the render node or a backend
-that cannot initialize the 2D virtio GPU. The follow-up adds strictly
-boolean process-started, render-node-open and executable-exit receipts
-to localize the failure, without leaking a guest serial transcript.
+cleanly, but `device=false buffer=false`. The follow-up established `started=true node_open=true exec_ok=true`
+but `device=false buffer=false`: the guest executable and render node
+work, while GBM fails its device initialization. The next controlled
+test stages the hosted Mesa **kms_swrast CPU rendering backend** and its
+dynamic dependencies inside guest RAM, using only guest virtio DRM and
+without exposing the host GPU, window or input seat. It is not yet
+evidence of GBM success.
 A driver-created node alone is insufficient to assert GBM readiness. Guest compositor/rendering and the
 six physical acceptance gates remain unverified, **71/77 (92%)**.
 

@@ -218,9 +218,12 @@ compositor. No EGL surface or Hyprland window is tested by this probe.
 
 **Status:** The first hosted run ([CI 40221293158](https://github.com/sguzman/starbyte/actions/runs/40221293158))
 reached the GBM stage but failed with `device=false buffer=false`;
-the prior guest DRM/input proof still passed. A follow-up prints only
-sanitized flags for whether the guest probe binary began executing,
-opened its render node, exited normally and initialized GBM. The
+the prior guest DRM/input proof still passed. The next targeted
+diagnostic confirmed `started=true node_open=true exec_ok=true`:
+the Rust process, shared-library loader and guest DRM open worked;
+`gbm_create_device` returned null. A further attempt now stages
+the CPU-only Mesa `kms_swrast_dri.so` backend and its resolved shared
+libraries inside the guest and forces software rendering. The
 allocator gate remains **open** until device and buffer receipts pass;
 even that would not prove compositor or physical host behavior.
 

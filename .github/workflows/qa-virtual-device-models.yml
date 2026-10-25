@@ -58,7 +58,7 @@ jobs:
         run: bash scripts/qa-guest-linux.sh --driver-smoke
       - name: Install Rust and GBM host-side compilation dependencies
         uses: dtolnay/rust-toolchain@stable
-      - name: Install GBM development library
-        run: sudo apt-get install -y --no-install-recommends libgbm-dev libdrm-dev
+      - name: Install GBM and CPU-only Mesa software renderer
+        run: sudo apt-get install -y --no-install-recommends libgbm-dev libdrm-dev libgl1-mesa-dri
       - name: Probe guest GBM allocator and rendering buffer
         run: bash scripts/qa-guest-linux.sh --gbm-smoke

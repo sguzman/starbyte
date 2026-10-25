@@ -191,15 +191,16 @@ if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --
     cp -L -- "$artifact" "$root/initfs$artifact" || fail 'wayland_stage_failed'
     ldd "$artifact" >>"$root/wayland-dependencies" || fail 'wayland_dependency_scan_failed'
   done
-  if [[ "$mode" == --starbyte-smoke ]]; then
-    # The same binary tested under hosted Weston, copied into guest RAM.
-    # Explicit repository-local artifact; no host home or device passthrough.
-    app_binary=target/debug/starbyte-egui
-    [[ -x "$app_binary" ]] || fail 'hosted_starbyte_binary_missing'
-    cp -L "$app_binary" "$root/initfs/bin/starbyte-egui" \
-      || fail 'guest_starbyte_binary_stage_failed'
-    ldd "$app_binary" >>"$root/wayland-dependencies" \
-      || fail 'guest_starbyte_dependencies_scan_failed'
+  if [[ "$mode" == --starbyte-smoke || "$mode" == --hyprland-smoke ]]; then
+    if [[ "$mode" == --starbyte-smoke ]]; then
+      # Original application build from the checked-out repository only.
+      app_binary=target/debug/starbyte-egui
+      [[ -x "$app_binary" ]] || fail 'hosted_starbyte_binary_missing'
+      cp -L "$app_binary" "$root/initfs/bin/starbyte-egui" \
+        || fail 'guest_starbyte_binary_stage_failed'
+      ldd "$app_binary" >>"$root/wayland-dependencies" \
+        || fail 'guest_starbyte_dependencies_scan_failed'
+    fi
     # eframe/glutin dynamically load EGL; ldd on the application itself
     # does not discover Mesa's GLVND vendor plugin or its DRM software DRI.
     # These are hosted-runner CPU rendering libraries, never the owner's GPU.
@@ -222,7 +223,7 @@ if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --
     mkdir -p "$root/initfs$(dirname "$swrast_binary")"
     cp -L "$swrast_binary" "$root/initfs$swrast_binary" || fail 'guest_swrast_driver_copy_failed'
     ldd "$swrast_binary" >>"$root/wayland-dependencies" || fail 'guest_swrast_dependency_scan_failed'
-    : >"$root/initfs/etc/starbyte-app-smoke"
+    if [[ "$mode" == --starbyte-smoke ]]; then : >"$root/initfs/etc/starbyte-app-smoke"; fi
   fi
   if [[ "$mode" == --hyprland-smoke ]]; then
     # Only distro-packaged binaries and their shared dependencies enter

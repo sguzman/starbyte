@@ -79,3 +79,9 @@ jobs:
         run: bash scripts/qa-guest-linux.sh --gbm-smoke
       - name: Inject private QMP key and verify guest evdev delivery
         run: bash scripts/qa-guest-linux.sh --input-smoke
+      # Virtual compositor only; never uses the owner's Hyprland seat.
+      # The hosted Ubuntu package can differ from the owner's 0.56.2.
+      - name: Install packaged Hyprland inside hosted-runner staging
+        run: sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install -y --no-install-recommends hyprland
+      - name: Verify isolated Hyprland guest DRM and keyboard seat
+        run: bash scripts/qa-guest-linux.sh --hyprland-smoke

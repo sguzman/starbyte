@@ -69,6 +69,24 @@ CI verifies both Hyprland fail-before-launch paths without requiring
 compositor packages.
 Scheduler acceptance remains **71/77** with all six gates open.
 
+## Dedicated Hyprland guest prerequisite (2026-10-25)
+
+The virtual QEMU environment now supplies independently emulated DRM, a
+GBM allocation path and a udev-classified keyboard seat. The opt-in
+`--hyprland-smoke` probe stages a packaged Hyprland binary, matching
+runtime libraries and public shaders into guest RAM, shuts down the
+successful Weston baseline, and starts Hyprland using **only** the VM's
+virtio DRM/input devices. It requires the native Wayland protocol to
+advertise both `wl_compositor` and `wl_seat` and reports fixed diagnostic
+categories on failure. No raw compositor logs or personal files are
+uploaded, and native physical-QA fail-closed guards are unchanged.
+
+This probe is **not accepted until its hosted CI job passes**. A
+runner-packaged Hyprland version different from the owner's 0.56.2
+cannot establish exact-version parity; a successful virtual compositor
+cannot establish physical focus, audible audio, gamepad input, or the
+production-default worker cutover. All six scheduler gates remain open.
+
 ## Safe QA today
 
 An authorized local Codex executor may run:

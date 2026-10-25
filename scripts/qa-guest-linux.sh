@@ -145,6 +145,14 @@ if [[ "$mode" == --wayland-smoke ]]; then
     [[ -n "$match" && -f "$match" ]] || fail "wayland_module_missing_${pattern##*/}"
     stage_files+=("$match")
   done
+  # Keyboard handling activates these runtime datasets only after libinput
+  # sees a real guest keyboard. No host keyboard or user configuration is copied.
+  for dataset in /usr/share/X11/xkb /usr/share/libinput; do
+    [[ -d "$dataset" ]] || fail "guest_keyboard_dataset_missing_${dataset##*/}"
+    mkdir -p "$root/initfs$(dirname "$dataset")"
+    cp -a -- "$dataset" "$root/initfs$dataset" \
+      || fail 'guest_keyboard_dataset_stage_failed'
+  done
   # Weston releases may load this renderer as a separate plugin.
   pixman_plugin="$(find /usr/lib -type f -name 'pixman-renderer.so' -print -quit)"
   if [[ -n "$pixman_plugin" ]]; then stage_files+=("$pixman_plugin"); fi
@@ -416,6 +424,9 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     weston_error_input=0
     weston_error_udev=0
     weston_error_libinput=0
+    weston_error_xkb=0
+    weston_error_keymap=0
+    weston_error_quirks=0
     weston_error_fatal=0
     weston_error_crash=0
     wire_log=0
@@ -478,10 +489,13 @@ if [ -e /etc/starbyte-driver-smoke ]; then
       if /bin/busybox grep -Eiq 'failed to create input devices|failed to open /dev/input|libinput.*failed' "$log"; then weston_error_input=1; fi
       if /bin/busybox grep -Eiq 'failed to initialize udev|udev.*failed|failed.*udev' "$log"; then weston_error_udev=1; fi
       if /bin/busybox grep -Eiq 'libinput.*error|libinput.*failed|quirks.*error|quirks.*failed' "$log"; then weston_error_libinput=1; fi
+      if /bin/busybox grep -Eiq 'xkbcommon.*error|xkb.*failed|xkb.*error|keyboard.*rules.*not found' "$log"; then weston_error_xkb=1; fi
+      if /bin/busybox grep -Eiq 'failed to create keymap|failed to compile keymap|keymap.*error|keymap.*failed' "$log"; then weston_error_keymap=1; fi
+      if /bin/busybox grep -Eiq 'quirks.*failed|quirks.*error|failed to load.*quirks' "$log"; then weston_error_quirks=1; fi
       if /bin/busybox grep -Eiq 'fatal:' "$log"; then weston_error_fatal=1; fi
       if /bin/busybox grep -Eiq 'segmentation fault|assertion failed|core dumped' "$log"; then weston_error_crash=1; fi
     done
-    echo "STARBYTE_GUEST_WESTON_EXIT status=$weston_exit_status failed=$weston_failed_any renderer=$weston_error_renderer kms=$weston_error_kms outputs=$weston_error_outputs backend=$weston_error_backend input=$weston_error_input udev=$weston_error_udev libinput=$weston_error_libinput fatal=$weston_error_fatal crash=$weston_error_crash" >/dev/console
+    echo "STARBYTE_GUEST_WESTON_EXIT status=$weston_exit_status failed=$weston_failed_any renderer=$weston_error_renderer kms=$weston_error_kms outputs=$weston_error_outputs backend=$weston_error_backend input=$weston_error_input udev=$weston_error_udev libinput=$weston_error_libinput xkb=$weston_error_xkb keymap=$weston_error_keymap quirks=$weston_error_quirks fatal=$weston_error_fatal crash=$weston_error_crash" >/dev/console
     echo "STARBYTE_GUEST_WESTON_STAGE backend_entered=$weston_backend seat_granted=$weston_seat_granted card_open=$weston_card_open input_failed=$weston_input_failure backend_failed=$weston_backend_failure input_absent=$weston_input_absent" >/dev/console
     echo "STARBYTE_GUEST_WAYLAND_WIRE_DIAG connected=$wire_connected sync=$wire_done output=$wire_log attempts=$wire_attempts status=$wire_last_status stderr=$wire_stderr reason=$wire_reason" >/dev/console
     echo "STARBYTE_GUEST_WAYLAND_RESULT socket=$socket_ready handshake=$handshake compositor=$compositor seat=$seat" >/dev/console

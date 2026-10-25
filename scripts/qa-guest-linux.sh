@@ -407,6 +407,17 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     weston_input_failure=0
     weston_backend_failure=0
     weston_input_absent=0
+    weston_exit_status=unknown
+    weston_failed_any=0
+    weston_error_renderer=0
+    weston_error_kms=0
+    weston_error_outputs=0
+    weston_error_backend=0
+    weston_error_input=0
+    weston_error_udev=0
+    weston_error_libinput=0
+    weston_error_fatal=0
+    weston_error_crash=0
     wire_log=0
     wire_stderr=0
     wire_reason=none
@@ -414,6 +425,10 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     weston_stdout=0
     weston_zombie=0
     if /bin/busybox kill -0 "$weston_pid" 2>/dev/null; then compositor_alive=1; fi
+    if [ "$compositor_alive" = 0 ]; then
+      wait "$weston_pid" 2>/dev/null
+      weston_exit_status=$?
+    fi
     if [ -s /tmp/weston.log ]; then weston_log=1; fi
     if [ -s /tmp/weston.stdout ]; then weston_stdout=1; fi
     if [ -r "/proc/$weston_pid/stat" ]; then
@@ -451,6 +466,22 @@ if [ -e /etc/starbyte-driver-smoke ]; then
       if /bin/busybox grep -Eiq 'failed to create compositor backend|failed to create backend|fatal:' "$log"; then weston_backend_failure=1; fi
       if /bin/busybox grep -Eiq 'no input devices found' "$log"; then weston_input_absent=1; fi
     done
+    for log in /tmp/weston.log /tmp/weston.stdout; do
+      [ -f "$log" ] || continue
+      if /bin/busybox grep -Eiq 'failed|error|fatal|crash|segmentation fault|assertion' "$log"; then weston_failed_any=1; fi
+      if /bin/busybox grep -Eiq 'renderer|pixman|EGL|GBM' "$log" &&
+        /bin/busybox grep -Eiq 'failed|error|fatal' "$log"; then weston_error_renderer=1; fi
+      if /bin/busybox grep -Eiq 'crtc|kms|atomic|page.flip|drmMode' "$log" &&
+        /bin/busybox grep -Eiq 'failed|error|fatal' "$log"; then weston_error_kms=1; fi
+      if /bin/busybox grep -Eiq 'no outputs|no heads|no connectors|failed to create heads|output.*failed|no outputs available' "$log"; then weston_error_outputs=1; fi
+      if /bin/busybox grep -Eiq 'failed to create compositor backend|failed to load backend|backend initialization failed' "$log"; then weston_error_backend=1; fi
+      if /bin/busybox grep -Eiq 'failed to create input devices|failed to open /dev/input|libinput.*failed' "$log"; then weston_error_input=1; fi
+      if /bin/busybox grep -Eiq 'failed to initialize udev|udev.*failed|failed.*udev' "$log"; then weston_error_udev=1; fi
+      if /bin/busybox grep -Eiq 'libinput.*error|libinput.*failed|quirks.*error|quirks.*failed' "$log"; then weston_error_libinput=1; fi
+      if /bin/busybox grep -Eiq 'fatal:' "$log"; then weston_error_fatal=1; fi
+      if /bin/busybox grep -Eiq 'segmentation fault|assertion failed|core dumped' "$log"; then weston_error_crash=1; fi
+    done
+    echo "STARBYTE_GUEST_WESTON_EXIT status=$weston_exit_status failed=$weston_failed_any renderer=$weston_error_renderer kms=$weston_error_kms outputs=$weston_error_outputs backend=$weston_error_backend input=$weston_error_input udev=$weston_error_udev libinput=$weston_error_libinput fatal=$weston_error_fatal crash=$weston_error_crash" >/dev/console
     echo "STARBYTE_GUEST_WESTON_STAGE backend_entered=$weston_backend seat_granted=$weston_seat_granted card_open=$weston_card_open input_failed=$weston_input_failure backend_failed=$weston_backend_failure input_absent=$weston_input_absent" >/dev/console
     echo "STARBYTE_GUEST_WAYLAND_WIRE_DIAG connected=$wire_connected sync=$wire_done output=$wire_log attempts=$wire_attempts status=$wire_last_status stderr=$wire_stderr reason=$wire_reason" >/dev/console
     echo "STARBYTE_GUEST_WAYLAND_RESULT socket=$socket_ready handshake=$handshake compositor=$compositor seat=$seat" >/dev/console
@@ -574,7 +605,7 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
   [[ "$driver" == true ]] || fail 'guest_driver_or_device_nodes_missing'
   if [[ "$mode" == --wayland-smoke ]]; then
     # All receipts are bounded diagnostics; never disclose raw guest logs.
-    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST|BIN_DIAG|REGISTRY_DIAG)|WESTON_(EXEC|STAGE)|TMP_WRITE_OK|TMP_MOUNT|TMP_IO_DIAG|RUN_MOUNT|UDEV_RESULT) ' "$root/serial-clean.log" || true
+    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST|BIN_DIAG|REGISTRY_DIAG)|WESTON_(EXEC|STAGE|EXIT)|TMP_WRITE_OK|TMP_MOUNT|TMP_IO_DIAG|RUN_MOUNT|UDEV_RESULT) ' "$root/serial-clean.log" || true
     grep -Fqx 'STARBYTE_GUEST_TMP_MOUNT status=0' "$root/serial-clean.log" \
       || fail 'guest_temporary_mount_unavailable'
     grep -Fqx 'STARBYTE_GUEST_RUN_MOUNT status=0' "$root/serial-clean.log" \

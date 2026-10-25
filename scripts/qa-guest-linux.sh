@@ -145,14 +145,26 @@ if [[ "$mode" == --wayland-smoke ]]; then
     [[ -n "$match" && -f "$match" ]] || fail "wayland_module_missing_${pattern##*/}"
     stage_files+=("$match")
   done
-  # Keyboard handling activates these runtime datasets only after libinput
-  # sees a real guest keyboard. No host keyboard or user configuration is copied.
-  for dataset in /usr/share/X11/xkb /usr/share/libinput; do
-    [[ -d "$dataset" ]] || fail "guest_keyboard_dataset_missing_${dataset##*/}"
-    mkdir -p "$root/initfs$(dirname "$dataset")"
-    cp -a -- "$dataset" "$root/initfs$dataset" \
-      || fail 'guest_keyboard_dataset_stage_failed'
+  # Ubuntu 26.04 installs keyboard layouts under xkeyboard-config-2.
+  # The older X11/xkb path can be a symlink; copying only that symlink
+  # leaves the actual layout files absent inside the guest.
+  xkb_source=''
+  for candidate in /usr/share/xkeyboard-config-* /usr/share/X11/xkb; do
+    [[ -f "$candidate/rules/evdev" && -f "$candidate/symbols/us" ]] || continue
+    xkb_source="$(readlink -f -- "$candidate")"
+    break
   done
+  [[ -n "$xkb_source" && -d "$xkb_source" ]] || fail 'hosted_xkb_dataset_missing'
+  mkdir -p "$root/initfs/usr/share"
+  cp -a -- "$xkb_source" "$root/initfs/usr/share/starbyte-xkb" \
+    || fail 'guest_xkb_dataset_stage_failed'
+  [[ -f "$root/initfs/usr/share/starbyte-xkb/rules/evdev" ]] \
+    || fail 'guest_xkb_rules_missing'
+  [[ -f "$root/initfs/usr/share/starbyte-xkb/symbols/us" ]] \
+    || fail 'guest_xkb_symbols_missing'
+  [[ -d /usr/share/libinput ]] || fail 'hosted_libinput_quirks_missing'
+  cp -a -- /usr/share/libinput "$root/initfs/usr/share/libinput" \
+    || fail 'guest_libinput_quirks_stage_failed'
   # Weston releases may load this renderer as a separate plugin.
   pixman_plugin="$(find /usr/lib -type f -name 'pixman-renderer.so' -print -quit)"
   if [[ -n "$pixman_plugin" ]]; then stage_files+=("$pixman_plugin"); fi
@@ -271,6 +283,12 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     export GBM_BACKEND=dri
     export GBM_BACKENDS_PATH=/usr/lib/x86_64-linux-gnu/gbm
     export LIBGL_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri
+    export XKB_CONFIG_ROOT=/usr/share/starbyte-xkb
+    xkb_rules=0
+    xkb_symbols=0
+    if [ -f "$XKB_CONFIG_ROOT/rules/evdev" ]; then xkb_rules=1; fi
+    if [ -f "$XKB_CONFIG_ROOT/symbols/us" ]; then xkb_symbols=1; fi
+    echo "STARBYTE_GUEST_XKB_DATA rules=$xkb_rules symbols=$xkb_symbols" >/dev/console
     # Load classification rules for the guest's virtual input devices.
     # Never forward any physical host device or seat.
     /usr/lib/systemd/systemd-udevd --daemon >/tmp/udevd.log 2>&1
@@ -619,13 +637,15 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
   [[ "$driver" == true ]] || fail 'guest_driver_or_device_nodes_missing'
   if [[ "$mode" == --wayland-smoke ]]; then
     # All receipts are bounded diagnostics; never disclose raw guest logs.
-    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST|BIN_DIAG|REGISTRY_DIAG)|WESTON_(EXEC|STAGE|EXIT)|TMP_WRITE_OK|TMP_MOUNT|TMP_IO_DIAG|RUN_MOUNT|UDEV_RESULT) ' "$root/serial-clean.log" || true
+    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST|BIN_DIAG|REGISTRY_DIAG)|WESTON_(EXEC|STAGE|EXIT)|TMP_WRITE_OK|TMP_MOUNT|TMP_IO_DIAG|RUN_MOUNT|UDEV_RESULT|XKB_DATA) ' "$root/serial-clean.log" || true
     grep -Fqx 'STARBYTE_GUEST_TMP_MOUNT status=0' "$root/serial-clean.log" \
       || fail 'guest_temporary_mount_unavailable'
     grep -Fqx 'STARBYTE_GUEST_RUN_MOUNT status=0' "$root/serial-clean.log" \
       || fail 'guest_run_mount_unavailable'
     grep -Fqx 'STARBYTE_GUEST_UDEV_RESULT daemon=0 trigger=0 settle=0 event=1 keyboard=1' "$root/serial-clean.log" \
       || fail 'guest_keyboard_udev_classification_missing'
+    grep -Fqx 'STARBYTE_GUEST_XKB_DATA rules=1 symbols=1' "$root/serial-clean.log" \
+      || fail 'guest_keyboard_xkb_data_unavailable'
     grep -Fqx 'STARBYTE_GUEST_TMP_IO_DIAG write_status=0' "$root/serial-clean.log" \
       || fail 'guest_temporary_file_write_failed'
     grep -Fqx 'STARBYTE_GUEST_TMP_WRITE_OK result=1' "$root/serial-clean.log" \

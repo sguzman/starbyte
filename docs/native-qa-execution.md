@@ -176,10 +176,11 @@ The guest uses a forced reboot and QEMU no-reboot exit before temporary
 artifacts are deleted. The first CI guest run timed out after 75 seconds.
 The Alpine kernel SHA-256 is now pinned to the observed download:
 `456e0691f095285a82533cc6335280e4b4991d630c5292ddf15e6320e71971c9`.
-The follow-up probe exposes only booleans for userspace boot, PCI
-enumeration and kernel panic rather than publishing raw serial output.
-The guest PCI milestone remains unaccepted until those receipts and
-clean QEMU exit are confirmed.
+The second hosted attempt ended with a kernel panic before the
+userspace marker; a targeted classifier now distinguishes common
+init-exec, root filesystem, init-exit and kernel exception categories
+without publishing raw serial content. The guest PCI milestone remains
+unaccepted until both receipts and clean QEMU exit are confirmed.
 
 This is a **guest-kernel PCI enumeration** test, not proof of a loaded
 DRM driver, render node, evdev input seat, guest compositor, or physical

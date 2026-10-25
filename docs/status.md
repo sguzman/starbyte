@@ -4,11 +4,12 @@
 
 The path-scoped QEMU workflow now attempts to boot a minimal Alpine
 virtual kernel with a static BusyBox initramfs. The first guest run
-**timed out**, without evidence of successful userspace/PCI discovery.
-A follow-up pins the downloaded kernel's SHA-256, uses guest force-reboot
-with QEMU no-reboot, normalizes serial line endings and reports only
-boolean guest boot/PCI/panic diagnostics on failure. Raw console logs
-remain private. No host display/input/network/disk/KVM is used. Guest
+**timed out**. The second attempt produced a **kernel panic before
+userspace startup**. Neither run verified guest PCI devices.
+The kernel SHA-256 is pinned, and the guest uses forced reboot with
+QEMU no-reboot. A further diagnostic revision distinguishes init-exec,
+root-filesystem, init-exit and kernel-exception panic categories, exposing
+only a short reason code and never raw serial output. No host display/input/network/disk/KVM is used. Guest
 DRM/render-node/input seat and physical QA remain unverified.
 Scheduler acceptance remains **71/77 (92%)**.
 

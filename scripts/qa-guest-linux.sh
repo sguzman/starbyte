@@ -84,7 +84,20 @@ panic=false
 if grep -Fqx 'STARBYTE_GUEST_LINUX_BOOT_OK initramfs=private console=serial' "$root/serial-clean.log"; then boot=true; fi
 if grep -Fqx 'STARBYTE_GUEST_PCI_RESULT virtio_gpu=1 virtio_keyboard=1' "$root/serial-clean.log"; then pci=true; fi
 if grep -Fq 'Kernel panic' "$root/serial-clean.log"; then panic=true; fi
-printf 'STARBYTE_GUEST_LINUX_DIAG boot=%s pci=%s panic=%s qemu_status=%s\n' "$boot" "$pci" "$panic" "$result"
+cause=none
+if [[ "$panic" == true ]]; then
+  cause=unclassified
+  if grep -Eq 'No working init found|Requested init /init failed|Failed to execute /init' "$root/serial-clean.log"; then
+    cause=init_exec
+  elif grep -Eq 'VFS: Unable to mount root fs|unable to mount root fs' "$root/serial-clean.log"; then
+    cause=root_filesystem
+  elif grep -Fq 'Attempted to kill init' "$root/serial-clean.log"; then
+    cause=init_exited
+  elif grep -Eq 'Fatal exception|Fatal signal' "$root/serial-clean.log"; then
+    cause=kernel_exception
+  fi
+fi
+printf 'STARBYTE_GUEST_LINUX_DIAG boot=%s pci=%s panic=%s cause=%s qemu_status=%s\n' "$boot" "$pci" "$panic" "$cause" "$result"
 [[ "$result" -eq 0 ]] || fail "guest_boot_failed_or_timed_out status=$result"
 [[ "$boot" == true ]] || fail 'boot_receipt_missing'
 [[ "$pci" == true ]] || fail 'guest_virtio_pci_devices_missing'

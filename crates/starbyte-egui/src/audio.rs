@@ -457,6 +457,20 @@ impl StreamRecovery {
     }
 }
 
+/// A CPAL stream can fail while the UI is paused or the queue contains
+/// frames from the old output route. Quarantine those frames before any
+/// background retry selects a replacement device. An expired frame timestamp
+/// alone is insufficient: a quick reopen could replay still-fresh old audio.
+fn record_stream_fault(
+    recovery: &mut StreamRecovery,
+    faults: &AtomicU64,
+    generation: &AtomicU64,
+    active_generation: &mut u64,
+) {
+    recovery.on_fault(faults);
+    *active_generation = generation.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+}
+
 /// A paused emulator sends no PCM. Nevertheless, an already-open stream
 /// can fault while idle; retry only that failed output, with the same cooldown
 /// as frame-triggered retries. An unused or manually reset route stays closed.
@@ -557,7 +571,12 @@ fn audio_worker(
         // callback or GUI. Failed attempts still use the existing cooldown.
         if device.as_ref().is_some_and(PlaybackDevice::stream_failed) {
             warn!("desktop audio stream failed; reopening an output device");
-            recovery.on_fault(&stream_failures);
+            record_stream_fault(
+                &mut recovery,
+                &stream_failures,
+                &generation,
+                &mut active_generation,
+            );
             device = None;
             device_status.store(2, Ordering::Release);
             retry_after = None;
@@ -1270,6 +1289,50 @@ mod tests {
         assert_eq!(faults.load(Ordering::Relaxed), 3);
         assert_eq!(recoveries.load(Ordering::Relaxed), 2);
         assert!(!tracking.pending);
+    }
+
+    #[test]
+    fn automatic_stream_fault_quarantines_old_pcm_before_idle_recovery() {
+        let generation = AtomicU64::new(7);
+        let mut active_generation = generation.load(Ordering::Acquire);
+        let pre_fault_frame_generation = active_generation;
+        let faults = AtomicU64::new(0);
+        let recoveries = AtomicU64::new(0);
+        let mut recovery = StreamRecovery::default();
+        let now = Instant::now();
+
+        // This frame is still inside the normal 150ms freshness window;
+        // device reinitialization alone must not make it safe to replay.
+        assert!(frame_is_fresh(now, now));
+        record_stream_fault(
+            &mut recovery,
+            &faults,
+            &generation,
+            &mut active_generation,
+        );
+        assert_eq!(active_generation, 8);
+        assert_eq!(generation.load(Ordering::Acquire), 8);
+        assert_ne!(pre_fault_frame_generation, active_generation);
+        assert_eq!(faults.load(Ordering::Relaxed), 1);
+        assert_eq!(recoveries.load(Ordering::Relaxed), 0);
+
+        // A paused/off-workspace session has no frame callback; retry still
+        // becomes due on the audio thread's independent health tick.
+        assert!(idle_reopen_due(&recovery, false, None, now));
+        let retry_at = now + AUDIO_RETRY_DELAY;
+        assert!(!idle_reopen_due(&recovery, false, Some(retry_at), now));
+        assert!(idle_reopen_due(&recovery, false, Some(retry_at), retry_at));
+
+        // Failed retries have no recovery credit; successful reopening
+        // credits exactly once, and only newly generated PCM is eligible.
+        assert_eq!(recoveries.load(Ordering::Relaxed), 0);
+        recovery.on_open(&recoveries);
+        assert_eq!(recoveries.load(Ordering::Relaxed), 1);
+        assert!(!idle_reopen_due(&recovery, false, None, retry_at));
+        assert_eq!(generation.load(Ordering::Acquire), active_generation);
+        assert_eq!(generation.load(Ordering::Acquire), 8);
+        recovery.on_open(&recoveries);
+        assert_eq!(recoveries.load(Ordering::Relaxed), 1);
     }
 
     #[test]

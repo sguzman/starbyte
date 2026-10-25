@@ -447,10 +447,22 @@ impl OwnedSession {
             .as_ref()
             .ok_or_else(|| "No game-audio output has been started yet".to_owned())?;
         if audio.request_reopen() {
-            Ok(())
-        } else {
-            Err("Audio worker has stopped; output cannot be reselected".to_owned())
+            return Ok(());
         }
+
+        // A stopped playback receiver cannot process the route selection.
+        // Recreate its software worker on the SNES owner thread, even if the
+        // game is manually paused and no further PCM will arrive. Starting
+        // the worker is lazy: this does not open an OS speaker device until
+        // fresh nonzero game PCM or an explicit speaker check is submitted.
+        self.audio.take();
+        self.next_audio_retry = Instant::now() + Duration::from_secs(5);
+        let replacement = AudioOutput::start()
+            .map_err(|error| format!("Could not restart audio worker: {error}"))?;
+        let audible = self.sound_enabled && !self.muted && self.volume > 0.0;
+        replacement.set_volume(if audible { self.volume } else { 0.0 });
+        self.audio = Some(replacement);
+        Ok(())
     }
 
     /// Explicitly request the native Rodio speaker check from the same
@@ -1715,6 +1727,29 @@ mod tests {
     fn detached_session_has_no_game_until_loaded() {
         let engine = OwnedSession::create(AssetConfig::default()).unwrap();
         assert!(!engine.snapshot().has_rom);
+    }
+
+    #[test]
+    fn paused_owner_reselects_dead_audio_worker_without_starting_speakers() {
+        let mut owner = OwnedSession::create(AssetConfig::default()).unwrap();
+        owner.set_audio(true, false, 0.35);
+        owner.audio = Some(AudioOutput::start().unwrap());
+        owner.audio.as_ref().unwrap().stop_worker_for_test();
+        assert_eq!(
+            owner.audio.as_ref().unwrap().device_status(),
+            AudioDeviceStatus::NotAttempted
+        );
+
+        // No emulation frames are advancing: explicit route selection must
+        // recover a dead receiver without waiting for Play to resume.
+        owner.request_audio_reopen().unwrap();
+        let output = owner.audio.as_ref().expect("recreated playback worker");
+        assert_eq!(output.device_status(), AudioDeviceStatus::NotAttempted);
+        assert!(output.request_reopen());
+        assert_eq!(output.device_status(), AudioDeviceStatus::NotAttempted);
+        assert_eq!(owner.next_audio_retry <= Instant::now(), false);
+        assert_eq!(output.stream_failures(), 0);
+        assert_eq!(output.stream_recoveries(), 0);
     }
 
     #[test]

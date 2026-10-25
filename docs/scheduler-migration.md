@@ -1,5 +1,21 @@
 # Emulation scheduler migration
 
+## Paused manual re-selection after playback-thread exit — 2026-10-24
+
+When a dead receiver left `reopen_pending` set, a second route-change
+request used to return success without verifying that a worker remained.
+Now even coalesced requests check for a disconnected receiver. On the
+worker-backed player, an explicit user route change can reconstruct the
+software playback worker while manually paused, without advancing SNES
+frames, forcing GUI repaints or opening a physical audio device. Failure
+to spawn the replacement sets a bounded retry deadline for the next
+available gameplay PCM; successful recreation preserves the current
+audible/mute setting.
+
+A hardware-free test terminates an actual audio worker and reselects
+the route while paused; the software/physical distinction remains explicit.
+**P-18 / D-13 pending; scheduler remains 71/77 (92%).**
+
 ## Dead audio-worker recovery without game interruption — 2026-10-24
 
 The playback sender previously ignored `TrySendError::Disconnected` from

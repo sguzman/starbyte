@@ -1,5 +1,16 @@
 # Starbyte: current state
 
+## Paused audio output re-selection after playback-thread exit (2026-10-24)
+
+Manual output re-selection now detects a disconnected playback receiver even
+when a previous reset was still pending. The worker-backed player replaces the
+dead software audio thread when the player is paused, without waiting for a
+new emulation frame or opening an OS audio device. A hardware-free regression
+terminates the real playback receiver and exercises paused recovery; queue
+saturation still behaves as a nonblocking, nonfatal drop. This is *not* a
+physical speaker-recovery acceptance. The six open scheduler gates, including
+P-18 and D-13, remain pending at **71/77 (92%)**.
+
 ## Owner desktop focus: physical QA suspended (2026-10-24)
 
 The first run's 11/12 successes did not justify disrupting the owner's

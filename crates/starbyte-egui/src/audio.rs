@@ -270,7 +270,16 @@ impl AudioOutput {
     /// Success means queued for worker processing, not physical audibility.
     pub fn request_reopen(&self) -> bool {
         if self.reopen_pending.load(Ordering::Acquire) {
-            return true;
+            // A worker may have exited while a route reset was still queued.
+            // Probe its receiver even for a coalesced request, otherwise a
+            // stopped worker incorrectly acknowledges every later click.
+            return match self.sender.try_send(AudioMessage::Reopen) {
+                Ok(()) | Err(mpsc::TrySendError::Full(_)) => true,
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    self.reopen_pending.store(false, Ordering::Release);
+                    false
+                }
+            };
         }
         // Publish the invalidation BEFORE the worker can observe the reset
         // flag. If we set reopen_pending first, a scheduled audio thread
@@ -324,6 +333,22 @@ impl AudioOutput {
     pub fn clear(&self) {
         self.generation.fetch_add(1, Ordering::AcqRel);
         let _ = self.sender.try_send(AudioMessage::Clear);
+    }
+
+    /// Stop the real receiver without touching audio hardware so higher
+    /// level recovery tests can cover paused/reselection paths deterministically.
+    #[cfg(test)]
+    pub(crate) fn stop_worker_for_test(&self) {
+        self.sender.try_send(AudioMessage::StopForTest).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match self.sender.try_send(AudioMessage::VolumeChanged) {
+                Err(mpsc::TrySendError::Disconnected(_)) => return,
+                Ok(()) | Err(mpsc::TrySendError::Full(_)) => {}
+            }
+            assert!(Instant::now() < deadline, "test audio worker never exited");
+            thread::sleep(Duration::from_millis(5));
+        }
     }
 
     /// A standalone 440 Hz speaker check using the SAME worker, stream and
@@ -939,10 +964,12 @@ mod tests {
         assert_eq!(output.stream_failures(), 0);
         assert_eq!(output.stream_recoveries(), 0);
 
-        // A disconnected audio worker is not a queue-capacity error:
-        // the output request must fail, rather than pretend it was queued.
-        output.reopen_pending.store(false, Ordering::Release);
+        // A disconnected audio worker is not a queue-capacity error.
+        // In particular, an outstanding coalesced route request must NOT
+        // claim success forever after the receiver has died.
         drop(receiver);
+        assert!(!output.request_reopen());
+        assert!(!output.reopen_pending.load(Ordering::Acquire));
         assert!(!output.request_reopen());
         assert!(!output.reopen_pending.load(Ordering::Acquire));
         // The disconnected worker is not a full queue: tell the owning game

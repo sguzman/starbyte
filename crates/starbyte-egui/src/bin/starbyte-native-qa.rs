@@ -1131,7 +1131,7 @@ mod tests {
             "STARBYTE_GUEST_HYPR_FOCUS_RESULT ready=1 clean_exit=1 exit_message=1 hyprland_alive=1",
             "guest_private_hyprland_focused_keyboard_missing",
             "hypr_wire_attempts=$wire_try",
-            "hypr_config_valid=$hypr_config_valid",
+            "config_valid=$hypr_config_valid",
         ] {
             assert!(script.contains(guard), "guest smoke guard missing: {guard}");
         }

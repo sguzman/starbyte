@@ -262,11 +262,16 @@ impl AudioOutput {
 
     /// Ask the worker to reselect the default output. The shared atomic
     /// survives a full PCM queue; the message is only a best-effort wakeup.
+    /// Invalidate PCM and test tones buffered for the previous output route,
+    /// even when no control message fits in the saturated producer channel.
     /// Success means queued for worker processing, not physical audibility.
     pub fn request_reopen(&self) -> bool {
         if self.reopen_pending.swap(true, Ordering::AcqRel) {
             return true;
         }
+        // Without this generation boundary the worker can reopen a device
+        // and replay an old-route frame that was already in its bounded queue.
+        self.generation.fetch_add(1, Ordering::AcqRel);
         match self.sender.try_send(AudioMessage::Reopen) {
             Ok(()) | Err(mpsc::TrySendError::Full(_)) => true,
             Err(mpsc::TrySendError::Disconnected(_)) => {
@@ -885,8 +890,10 @@ mod tests {
             output.request_reopen(),
             "duplicate output re-selection must coalesce without blocking"
         );
+        assert_eq!(output.generation.load(Ordering::Acquire), 1);
         assert!(matches!(receiver.try_recv().unwrap(), AudioMessage::Reopen));
         assert!(receiver.try_recv().is_err());
+        assert_eq!(output.generation.load(Ordering::Acquire), 1);
         assert!(output.reopen_pending.load(Ordering::Acquire));
         assert_eq!(output.stream_failures(), 0);
         assert_eq!(output.stream_recoveries(), 0);
@@ -917,9 +924,20 @@ mod tests {
         );
         assert!(output.reopen_pending.swap(false, Ordering::AcqRel));
         assert!(!output.reopen_pending.load(Ordering::Acquire));
+        let old_generation = match receiver.try_recv().unwrap() {
+            AudioMessage::Frame { generation, .. } => generation,
+            _ => panic!("queued PCM must not be replaced by a blocked reset"),
+        };
+        let active_generation = output.generation.load(Ordering::Acquire);
+        assert_ne!(
+            old_generation, active_generation,
+            "a queued old-device PCM frame must be rejected on the new route"
+        );
+        assert_eq!(active_generation, 1);
+        output.enqueue(&[456, -456], 1.0, 1.0);
         assert!(matches!(
             receiver.try_recv().unwrap(),
-            AudioMessage::Frame { .. }
+            AudioMessage::Frame { generation, .. } if generation == active_generation
         ));
         assert!(receiver.try_recv().is_err());
         assert_eq!(output.stream_failures(), 0);

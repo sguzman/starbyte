@@ -1115,8 +1115,7 @@ mod tests {
     use super::{
         AUDIO_RETRY_DELAY, AudioDeviceStatus, AudioMessage, AudioOutput, InitialOutputRetry,
         MAX_TEST_TONE_AGE, PlaybackContinuity, PostProcessAudioStatus, ProducerDropContinuity,
-        StreamRecovery,
-        apply_sink_volume, discard_stale_game_pcm, frame_is_fresh, normalize_pitch,
+        StreamRecovery, apply_sink_volume, discard_stale_game_pcm, frame_is_fresh, normalize_pitch,
         normalize_playback_speed, normalize_volume, pcm16_stereo_to_float,
         post_process_audio_status, prepare_test_tone, queued_audio_is_fresh, record_stream_fault,
         reopen_due, retry_ready, set_sink_playback_speed, speaker_test_tone,

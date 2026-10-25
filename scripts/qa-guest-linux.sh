@@ -144,7 +144,15 @@ if [ -e /etc/starbyte-driver-smoke ]; then
     MESA_LOADER_DRIVER_OVERRIDE=kms_swrast LIBGL_ALWAYS_SOFTWARE=1 \
       LIBGL_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri \
       /bin/gbm-probe "$guest_render_node" >/dev/console 2>/dev/null
-    echo "STARBYTE_GUEST_GBM_EXEC status=$?" >/dev/console
+    echo "STARBYTE_GUEST_GBM_EXEC render_status=$?" >/dev/console
+    guest_card_node=''
+    for node in /dev/dri/card*; do
+      if [ -c "$node" ]; then guest_card_node="$node"; break; fi
+    done
+    MESA_LOADER_DRIVER_OVERRIDE=kms_swrast LIBGL_ALWAYS_SOFTWARE=1 \
+      LIBGL_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri \
+      /bin/gbm-probe "$guest_card_node" >/dev/console 2>/dev/null
+    echo "STARBYTE_GUEST_GBM_EXEC card_status=$?" >/dev/console
   fi
 fi
 /bin/busybox reboot -f
@@ -206,32 +214,39 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke ]]; then
   printf 'STARBYTE_GUEST_DRIVER_DIAG render_and_input=%s\n' "$driver"
   [[ "$driver" == true ]] || fail 'guest_driver_or_device_nodes_missing'
   if [[ "$mode" == --gbm-smoke ]]; then
-    gbm_device=false
-    gbm_buffer=false
-    if grep -Fqx 'STARBYTE_GUEST_GBM_RESULT device=1 buffer=0' "$root/serial-clean.log"; then
-      gbm_device=true
+    render_node=false
+    render_device=false
+    render_buffer=false
+    card_node=false
+    card_device=false
+    card_buffer=false
+    grep -Fqx 'STARBYTE_GUEST_GBM_NODE_OPEN_OK node=render' "$root/serial-clean.log" && render_node=true
+    grep -Fqx 'STARBYTE_GUEST_GBM_NODE_OPEN_OK node=card' "$root/serial-clean.log" && card_node=true
+    grep -Fqx 'STARBYTE_GUEST_GBM_RESULT node=render device=1 buffer=0' "$root/serial-clean.log" && render_device=true
+    grep -Fqx 'STARBYTE_GUEST_GBM_RESULT node=card device=1 buffer=0' "$root/serial-clean.log" && card_device=true
+    if grep -Fqx 'STARBYTE_GUEST_GBM_RESULT node=render device=1 buffer=1' "$root/serial-clean.log"; then
+      render_device=true
+      render_buffer=true
     fi
-    if grep -Fqx 'STARBYTE_GUEST_GBM_RESULT device=1 buffer=1' "$root/serial-clean.log"; then
-      gbm_device=true
-      gbm_buffer=true
+    if grep -Fqx 'STARBYTE_GUEST_GBM_RESULT node=card device=1 buffer=1' "$root/serial-clean.log"; then
+      card_device=true
+      card_buffer=true
     fi
-    gbm_started=false
-    gbm_node_open=false
-    gbm_exec_ok=false
-    if grep -Fqx 'STARBYTE_GUEST_GBM_PROCESS_STARTED' "$root/serial-clean.log"; then
-      gbm_started=true
+    printf 'STARBYTE_GUEST_GBM_DIAG render_open=%s render_device=%s render_buffer=%s card_open=%s card_device=%s card_buffer=%s\n' \
+      "$render_node" "$render_device" "$render_buffer" "$card_node" "$card_device" "$card_buffer"
+    grep -Fqx 'STARBYTE_GUEST_GBM_EXEC render_status=0' "$root/serial-clean.log" \
+      || fail 'guest_gbm_render_probe_failed'
+    grep -Fqx 'STARBYTE_GUEST_GBM_EXEC card_status=0' "$root/serial-clean.log" \
+      || fail 'guest_gbm_card_probe_failed'
+    [[ "$render_node" == true && "$card_node" == true ]] \
+      || fail 'guest_gbm_drm_node_open_failed'
+    if [[ "$render_buffer" == true ]]; then
+      echo 'STARBYTE_GUEST_GBM_OK node=render device=initialized buffer=rendering guest_only=true'
+    elif [[ "$card_buffer" == true ]]; then
+      echo 'STARBYTE_GUEST_GBM_OK node=card device=initialized buffer=rendering guest_only=true'
+    else
+      fail 'guest_gbm_allocator_unavailable'
     fi
-    if grep -Fqx 'STARBYTE_GUEST_GBM_NODE_OPEN_OK' "$root/serial-clean.log"; then
-      gbm_node_open=true
-    fi
-    if grep -Fqx 'STARBYTE_GUEST_GBM_EXEC status=0' "$root/serial-clean.log"; then
-      gbm_exec_ok=true
-    fi
-    printf 'STARBYTE_GUEST_GBM_DIAG started=%s node_open=%s exec_ok=%s device=%s buffer=%s\n' "$gbm_started" "$gbm_node_open" "$gbm_exec_ok" "$gbm_device" "$gbm_buffer"
-    [[ "$gbm_started" == true && "$gbm_exec_ok" == true ]] || fail 'guest_gbm_process_or_loader_failed'
-    [[ "$gbm_node_open" == true ]] || fail 'guest_gbm_node_open_failed'
-    [[ "$gbm_device" == true && "$gbm_buffer" == true ]] || fail 'guest_gbm_allocator_unavailable'
-    echo 'STARBYTE_GUEST_GBM_OK device=initialized buffer=rendering guest_only=true'
   else
     echo 'STARBYTE_GUEST_DRM_INPUT_OK drm_render_node=present evdev_input_node=present guest_only=true'
   fi

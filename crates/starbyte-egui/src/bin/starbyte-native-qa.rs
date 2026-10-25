@@ -1123,8 +1123,9 @@ mod tests {
             "hosted_kms_swrast_backend_missing",
             "MESA_LOADER_DRIVER_OVERRIDE=kms_swrast",
             "LIBGL_ALWAYS_SOFTWARE=1",
-            "STARBYTE_GUEST_GBM_RESULT device=1 buffer=1",
-            "STARBYTE_GUEST_GBM_OK device=initialized buffer=rendering guest_only=true",
+            "STARBYTE_GUEST_GBM_RESULT node=render device=1 buffer=1",
+            "STARBYTE_GUEST_GBM_RESULT node=card device=1 buffer=1",
+            "STARBYTE_GUEST_GBM_OK node=card device=initialized buffer=rendering guest_only=true",
             "guest_gbm_allocator_unavailable",
         ] {
             assert!(launcher.contains(requirement));
@@ -1132,6 +1133,7 @@ mod tests {
         assert!(rust.contains("gbm_create_device"));
         assert!(rust.contains("gbm_bo_create"));
         assert!(rust.contains("/dev/dri/renderD"));
+        assert!(rust.contains("/dev/dri/card"));
         assert!(!rust.contains("/dev/input"));
         assert!(!rust.contains("WAYLAND_DISPLAY"));
     }

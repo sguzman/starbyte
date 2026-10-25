@@ -221,10 +221,14 @@ reached the GBM stage but failed with `device=false buffer=false`;
 the prior guest DRM/input proof still passed. The next targeted
 diagnostic confirmed `started=true node_open=true exec_ok=true`:
 the Rust process, shared-library loader and guest DRM open worked;
-`gbm_create_device` returned null. A further attempt now stages
-the CPU-only Mesa `kms_swrast_dri.so` backend and its resolved shared
-libraries inside the guest and forces software rendering. The
-allocator gate remains **open** until device and buffer receipts pass;
+`gbm_create_device` returned null. The Mesa `kms_swrast_dri.so` software backend and dependencies were
+then staged successfully, but `gbm_create_device` still returned null
+for the virtual render node (run 40222606494). The following bounded
+probe tests both the guest render node and guest DRM primary card, with
+separately attributable machine-readable receipts. A primary-only
+success would demonstrate the virtual KMS path, **not** render-node
+GBM support. The allocator gate remains open until at least one
+rendering buffer passes;
 even that would not prove compositor or physical host behavior.
 
 ### Next route: independently provisioned virtual rendering and input seat

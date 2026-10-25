@@ -12,11 +12,13 @@ GPU, open a host window or expose host input. **Its first hosted run
 failed**: the guest still booted, loaded virtio DRM/input and exited
 cleanly, but `device=false buffer=false`. The follow-up established `started=true node_open=true exec_ok=true`
 but `device=false buffer=false`: the guest executable and render node
-work, while GBM fails its device initialization. The next controlled
-test stages the hosted Mesa **kms_swrast CPU rendering backend** and its
-dynamic dependencies inside guest RAM, using only guest virtio DRM and
-without exposing the host GPU, window or input seat. It is not yet
-evidence of GBM success.
+work, while GBM fails its device initialization. The Mesa **kms_swrast** software backend was also staged successfully,
+but `gbm_create_device` still returned null for the guest render node.
+The next diagnostic tests **both** virtual DRM endpoints separately:
+`/dev/dri/renderD*` and the guest's `/dev/dri/card*`. Both use only
+software Mesa and exist within the disposable VM; no host DRM, window
+or user input is exposed. A positive result will identify the exact
+working node rather than claiming all virtual GPU paths work.
 A driver-created node alone is insufficient to assert GBM readiness. Guest compositor/rendering and the
 six physical acceptance gates remain unverified, **71/77 (92%)**.
 

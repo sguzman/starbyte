@@ -848,7 +848,7 @@ fn audio_worker(
                     Err(PostProcessAudioStatus::Ready) => unreachable!(),
                 };
                 (tone_generation, queued_at, pcm, 1.0, 1.0, None)
-            },
+            }
             AudioMessage::Clear => {
                 continuity.reset();
                 stretch.reset();
@@ -1077,8 +1077,8 @@ mod tests {
         PlaybackContinuity, PostProcessAudioStatus, ProducerDropContinuity, StreamRecovery,
         apply_sink_volume, discard_stale_game_pcm, frame_is_fresh, normalize_pitch,
         normalize_playback_speed, normalize_volume, pcm16_stereo_to_float,
-        post_process_audio_status, prepare_test_tone, queued_audio_is_fresh, record_stream_fault, reopen_due,
-        retry_ready, set_sink_playback_speed, speaker_test_tone,
+        post_process_audio_status, prepare_test_tone, queued_audio_is_fresh, record_stream_fault,
+        reopen_due, retry_ready, set_sink_playback_speed, speaker_test_tone,
     };
 
     #[test]
@@ -1659,7 +1659,10 @@ mod tests {
             vec![2, 2]
         });
         assert!(matches!(old_epoch, Err(PostProcessAudioStatus::Superseded)));
-        assert_eq!(generated, 0, "discarded checks must not spend CPU producing PCM");
+        assert_eq!(
+            generated, 0,
+            "discarded checks must not spend CPU producing PCM"
+        );
         let fresh = prepare_test_tone(&generation, 5, t0, t0, || {
             generated += 1;
             vec![3, 3]

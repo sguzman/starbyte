@@ -258,6 +258,8 @@ impl ThreadedPreviewApp {
 
     fn can_modify_running_game(&self) -> bool {
         self.controls.session.has_rom
+            && self.pending_library_rom.is_none()
+            && self.pending_next_launch.is_none()
             && !self
                 .pending
                 .iter()
@@ -346,6 +348,10 @@ impl ThreadedPreviewApp {
         }
         let job_id = self.next_library_job;
         self.next_library_job += 1;
+        // A newly selected ROM supersedes even a previously prepared
+        // replacement waiting behind the active owner's launch. If this
+        // preparation later fails, never install that older queued choice.
+        self.pending_next_launch = None;
         // AppWorker coalesces pending archive jobs; only the latest prepared
         // selection may reach the emulation worker.
         self.pending_library_rom = Some(job_id);
@@ -433,6 +439,8 @@ impl ThreadedPreviewApp {
                         if self.pending_library_rom == Some(job_id) =>
                     {
                         self.pending_library_rom = None;
+                        self.library_status = "ROM preparation failed".to_owned();
+                        self.status_note = None;
                         self.last_error = Some(format!("Library ROM preparation failed: {error}"));
                     }
                     WorkerEvent::JobFailed { label, error, .. } => {
@@ -1274,6 +1282,67 @@ mod pitch_mode_tests {
         assert!(app.controls.session.has_rom);
         assert!(app.pending_next_launch.is_none());
         assert!(app.display.texture().is_some());
+    }
+
+    #[test]
+    fn newer_preparation_cancels_queued_replacement_even_if_preparation_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("first.sfc");
+        let superseded = temp.path().join("superseded.sfc");
+        let missing = temp.path().join("missing.zip");
+        let demo = starbyte_core::testing::demo::demo_rom_bytes();
+        std::fs::write(&first, &demo).unwrap();
+        std::fs::write(&superseded, &demo).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(temp.path().join("saves")),
+            state_dir: Some(temp.path().join("states")),
+            cache_dir: Some(temp.path().join("cache")),
+            config_path: None,
+        };
+        let mut config = RuntimeConfig::default();
+        config.audio.enabled = false;
+        let mut app =
+            ThreadedPreviewApp::new(assets, &config, None, None, true, false, false).unwrap();
+        let request = |rom_path| SessionLaunchRequest {
+            rom_path,
+            sound_mode: SoundSessionMode::Persistent,
+            cheats: Vec::new(),
+        };
+        app.queue_rom_launch(request(first.clone()));
+        app.queue_rom_launch(request(superseded.clone()));
+        assert_eq!(
+            app.pending_next_launch
+                .as_ref()
+                .map(|next| next.rom_path.as_path()),
+            Some(superseded.as_path())
+        );
+        app.queue_rom_load(missing);
+        assert!(app.pending_next_launch.is_none());
+        assert!(app.pending_library_rom.is_some());
+        assert!(!app.can_modify_running_game());
+
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(6);
+        while Instant::now() < deadline {
+            app.poll_library_events();
+            app.poll_operations(&ctx);
+            if app.pending_library_rom.is_none()
+                && app.pending.iter().all(|op| !matches!(op, PendingOperation::LoadRom { .. }))
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(app.pending_library_rom.is_none());
+        assert!(app.pending_next_launch.is_none());
+        assert_eq!(app.loaded_rom_path.as_deref(), Some(first.as_path()));
+        assert!(app.controls.session.has_rom);
+        assert!(app.can_modify_running_game());
+        assert!(app.last_error.as_deref().is_some_and(|error| {
+            error.contains("Library ROM preparation failed")
+        }));
+        assert!(app.status_note.is_none());
     }
 
     #[test]

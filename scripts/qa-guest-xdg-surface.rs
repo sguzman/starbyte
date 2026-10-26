@@ -50,10 +50,9 @@ fn event(socket: &mut UnixStream) -> Result<(u32, u16, Vec<u8>), &'static str> {
     Ok((sender, (word & 0xffff) as u16, payload))
 }
 
-// wl_display.error contains only the failed object ID, protocol code and a
-// message. Do not disclose the freeform message or guest raw Wayland trace.
-fn check_protocol_error(sender: u32, opcode: u16, payload: &[u8]) -> Result<(), &'static str> {
-    if sender != 1 || opcode != 0 { return Ok(()); }
+// wl_display.error contains a failed object ID, numeric protocol code and a
+// freeform message. Only the bounded classification may leave the guest.
+fn classify_protocol_error(payload: &[u8]) -> (&'static str, String) {
     let (interface, code_label) = if payload.len() < 8 {
         ("malformed", "other".to_owned())
     } else {
@@ -72,6 +71,12 @@ fn check_protocol_error(sender: u32, opcode: u16, payload: &[u8]) -> Result<(), 
         };
         (interface, if code <= 16 { code.to_string() } else { "other".to_owned() })
     };
+    (interface, code_label)
+}
+
+fn check_protocol_error(sender: u32, opcode: u16, payload: &[u8]) -> Result<(), &'static str> {
+    if sender != 1 || opcode != 0 { return Ok(()); }
+    let (interface, code_label) = classify_protocol_error(payload);
     println!("STARBYTE_GUEST_XDG_ERROR_DIAG interface={interface} code={code_label}");
     Err("protocol_error")
 }
@@ -233,6 +238,8 @@ mod tests {
         raw.extend_from_slice(&SURFACE.to_ne_bytes());
         raw.extend_from_slice(&99_u32.to_ne_bytes());
         raw.extend_from_slice(b"private guest-only error message\0");
+        assert_eq!(classify_protocol_error(&raw), ("surface", "other".to_owned()));
+        assert_eq!(classify_protocol_error(&raw[..4]), ("malformed", "other".to_owned()));
         assert_eq!(
             check_protocol_error(1, 0, &raw),
             Err("protocol_error")

@@ -111,6 +111,15 @@ common=(
   --unsetenv WAYLAND_SOCKET
 )
 
+# GitHub-hosted runners do not grant CAP_NET_ADMIN in the network namespace:
+# Bubblewrap cannot bring up its private loopback interface (RTM_NEWADDR).
+# Share only the ephemeral runner's network stack there. Never weaken the
+# default local guest's network isolation or expose host Wayland/DBus/input.
+if [[ "${STARBYTE_QA_RUNNER_ENVIRONMENT:-}" == github-hosted ]]; then
+  [[ "${GITHUB_ACTIONS:-}" == true ]] || fail 'hosted_network_fallback_requires_actions'
+  common+=(--share-net)
+fi
+
 if [[ "$mode" == --check-only ]]; then
   # Even the no-GUI namespace audit must not hang unattended if a mount
   # setup or Bubblewrap initialization stalls.

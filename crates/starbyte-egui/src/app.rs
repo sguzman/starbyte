@@ -2090,6 +2090,10 @@ impl StarbyteApp {
             self.status_line = "Load a game before saving or restoring.".to_owned();
             return;
         }
+        if rom_selection_preparing(&self.jobs, self.latest_rom_job_id) {
+            self.status_line = "A new cartridge is still being prepared.".to_owned();
+            return;
+        }
         let Some(worker) = &mut self.full_worker else {
             return;
         };
@@ -5652,8 +5656,9 @@ impl StarbyteApp {
         // Read the immutable session view before borrowing the worker's
         // outstanding commands mutably; no legacy emulator access is needed.
         let has_rom = self.session_snapshot().has_rom;
+        let preparing_rom = rom_selection_preparing(&self.jobs, self.latest_rom_job_id);
         if let Some(worker) = &mut self.full_worker {
-            if !has_rom || !worker.pending_launches.is_empty() {
+            if !has_rom || preparing_rom || !worker.pending_launches.is_empty() {
                 self.status_line = "Wait for a cartridge before taking a screenshot.".to_owned();
                 return;
             }
@@ -9965,9 +9970,26 @@ fn is_superseded_rom_load(latest: Option<u64>, event_job: u64) -> bool {
     latest.is_some_and(|job| job != event_job)
 }
 
+/// Preparing a different cartridge must not route F5/F8, disk saves or
+/// screenshots into the still-installed game's state namespace. A failed
+/// preparation leaves that previous cartridge usable: only queued/running
+/// preparation jobs block these actions, not completed or failed selections.
+fn rom_selection_preparing(jobs: &[JobRecord], latest: Option<u64>) -> bool {
+    latest.is_some_and(|id| {
+        jobs.iter().any(|job| {
+            job.id == id
+                && is_rom_job(&job.label)
+                && matches!(job.state, "queued" | "running")
+        })
+    })
+}
+
 #[cfg(test)]
 mod rom_request_order_tests {
-    use super::{is_rom_job, is_superseded_rom_load, worker_async_feedback_is_current};
+    use super::{
+        JobRecord, is_rom_job, is_superseded_rom_load, rom_selection_preparing,
+        worker_async_feedback_is_current,
+    };
 
     #[test]
     fn newer_rom_selection_supersedes_success_and_error_from_older_load() {
@@ -9978,6 +10000,39 @@ mod rom_request_order_tests {
         assert!(is_rom_job("Open ROM"));
         assert!(!is_rom_job("Refresh Cheats"));
         assert!(!is_rom_job("Scan Library"));
+    }
+
+    #[test]
+    fn full_library_save_and_screenshot_guard_tracks_live_rom_preparation_only() {
+        let mut jobs = vec![JobRecord {
+            id: 41,
+            label: "Open ROM".to_owned(),
+            state: "queued",
+            detail: "Queued".to_owned(),
+        }];
+        assert!(rom_selection_preparing(&jobs, Some(41)));
+        jobs[0].state = "running";
+        assert!(rom_selection_preparing(&jobs, Some(41)));
+        jobs[0].state = "failed";
+        assert!(!rom_selection_preparing(&jobs, Some(41)));
+        jobs[0].state = "done";
+        assert!(!rom_selection_preparing(&jobs, Some(41)));
+        jobs.push(JobRecord {
+            id: 42,
+            label: "Refresh Covers".to_owned(),
+            state: "running",
+            detail: "Running".to_owned(),
+        });
+        assert!(!rom_selection_preparing(&jobs, Some(42)));
+        assert!(!rom_selection_preparing(&jobs, None));
+        jobs.push(JobRecord {
+            id: 43,
+            label: "Load Game".to_owned(),
+            state: "queued",
+            detail: "Queued".to_owned(),
+        });
+        assert!(rom_selection_preparing(&jobs, Some(43)));
+        assert!(!rom_selection_preparing(&jobs, Some(41)));
     }
 
     #[test]

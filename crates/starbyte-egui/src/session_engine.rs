@@ -1044,6 +1044,15 @@ impl EmulatorScheduler<OwnedSession, PublishedGameFrame> {
         })
     }
 
+    /// Paused gameplay produces no new video frames, but output devices and
+    /// speaker-test counters can still change on the independent audio thread.
+    /// Keep that observation asynchronous and separate from game rendering.
+    pub fn queue_audio_diagnostics(
+        &self,
+    ) -> Result<Receiver<Result<WorkerAudioDiagnostics, String>>, String> {
+        self.submit_transaction(|engine| Ok(engine.audio_diagnostics()))
+    }
+
     /// Synchronous on-demand query for non-GUI diagnostics/tests; never use
     /// this method from an egui redraw callback.
     pub fn read_sound_diagnostics(&self) -> Result<SessionSoundDiagnostics, String> {

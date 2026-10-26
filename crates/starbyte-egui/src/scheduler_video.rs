@@ -81,6 +81,12 @@ impl WorkerDisplay {
         self.audio
     }
 
+    /// Update live mixer/device counters without replacing the paused frame
+    /// or falsely claiming a new video presentation.
+    pub fn update_audio_diagnostics(&mut self, audio: WorkerAudioDiagnostics) {
+        self.audio = audio;
+    }
+
     pub fn input_diagnostics(&self) -> SessionInputDiagnostics {
         self.input
     }
@@ -141,5 +147,14 @@ mod tests {
         assert_eq!(display.status().unwrap().frame, 42);
         assert!(display.texture().is_none());
         assert_eq!(display.last_audio_pairs(), (532, 200));
+        display.update_audio_diagnostics(WorkerAudioDiagnostics {
+            expired_test_tones: 2,
+            stream_failures: 1,
+            ..WorkerAudioDiagnostics::default()
+        });
+        assert_eq!(display.audio_diagnostics().expired_test_tones, 2);
+        assert_eq!(display.audio_diagnostics().stream_failures, 1);
+        assert_eq!(display.status().unwrap().frame, 42);
+        assert!(display.texture().is_none());
     }
 }

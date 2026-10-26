@@ -32,8 +32,8 @@ use crate::{
     scheduler::EmulatorScheduler,
     scheduler_video::WorkerDisplay,
     session_engine::{
-        InputPort, OwnedSession, PublishedGameFrame, RenderPort, WorkerLaunchResponse,
-        WorkerSaveResponse,
+        InputPort, OwnedSession, PublishedGameFrame, RenderPort, WorkerAudioDiagnostics,
+        WorkerLaunchResponse, WorkerSaveResponse,
     },
     worker::{AppWorker, WorkerCommand, WorkerCommandKind, WorkerEvent},
 };
@@ -74,6 +74,10 @@ enum PendingOperation {
     AudioReopen {
         epoch: u64,
         reply: Receiver<Result<(), String>>,
+    },
+    AudioDiagnostics {
+        owner_epoch: u64,
+        reply: Receiver<Result<WorkerAudioDiagnostics, String>>,
     },
     ClearCheats {
         epoch: u64,
@@ -129,6 +133,7 @@ pub struct ThreadedPreviewApp {
     loaded_rom_path: Option<PathBuf>,
     status_note: Option<String>,
     pending: Vec<PendingOperation>,
+    last_audio_diagnostics_poll: Instant,
     /// Selection intent controls status and error feedback, including while
     /// preparing an archive that may never install.
     session_epoch: u64,
@@ -225,6 +230,7 @@ impl ThreadedPreviewApp {
             loaded_rom_path: None,
             status_note: None,
             pending: Vec::new(),
+            last_audio_diagnostics_poll: Instant::now(),
             session_epoch: 0,
             owner_epoch: 0,
             pending_next_launch: None,
@@ -546,6 +552,29 @@ impl ThreadedPreviewApp {
         }
     }
 
+    /// A paused worker does not publish video snapshots. Poll its live audio
+    /// counters at most once a second without synchronously waiting on the
+    /// GUI thread or forcing an emulated game frame.
+    fn poll_paused_audio_diagnostics(&mut self) {
+        if !self.audio_enabled
+            || self.playing && !(self.pause_when_unfocused && !self.focused)
+            || self.last_audio_diagnostics_poll.elapsed() < Duration::from_secs(1)
+            || self
+                .pending
+                .iter()
+                .any(|op| matches!(op, PendingOperation::AudioDiagnostics { .. }))
+        {
+            return;
+        }
+        self.last_audio_diagnostics_poll = Instant::now();
+        if let Ok(reply) = self.engine.queue_audio_diagnostics() {
+            self.pending.push(PendingOperation::AudioDiagnostics {
+                owner_epoch: self.owner_epoch,
+                reply,
+            });
+        }
+    }
+
     fn write_screenshot_async(
         &mut self,
         capture: SessionScreenshot,
@@ -629,6 +658,21 @@ impl ThreadedPreviewApp {
                         self.last_error = Some("Cheat command worker stopped".to_owned());
                     }
                 },
+                PendingOperation::AudioDiagnostics { owner_epoch, .. }
+                    if owner_epoch != self.owner_epoch
+                        || self.playing && !(self.pause_when_unfocused && !self.focused) => {}
+                PendingOperation::AudioDiagnostics { owner_epoch, reply } => {
+                    match reply.try_recv() {
+                        Ok(Ok(audio)) => self.display.update_audio_diagnostics(audio),
+                        Ok(Err(_)) | Err(TryRecvError::Disconnected) => {}
+                        Err(TryRecvError::Empty) => {
+                            still_pending.push(PendingOperation::AudioDiagnostics {
+                                owner_epoch,
+                                reply,
+                            });
+                        }
+                    }
+                }
                 PendingOperation::AudioReopen { epoch, .. } if epoch != self.session_epoch => {}
                 PendingOperation::AudioReopen { epoch, reply } => match reply.try_recv() {
                     Ok(Ok(())) => {
@@ -652,7 +696,7 @@ impl ThreadedPreviewApp {
                 PendingOperation::SpeakerCheck { epoch, reply } => match reply.try_recv() {
                     Ok(Ok(())) => {
                         self.status_note =
-                            Some("Speaker check submitted to the game audio sink".to_owned());
+                            Some("Speaker check queued; mixer delivery and audibility are not yet verified".to_owned());
                         self.last_error = None;
                     }
                     Ok(Err(error)) => self.last_error = Some(error),
@@ -827,6 +871,137 @@ mod pitch_mode_tests {
         assert!(!app.controls.session.has_rom);
         assert!(app.show_library);
         assert!(app.loaded_rom_path.is_none());
+    }
+
+    #[test]
+    fn paused_audio_diagnostics_update_without_emulating_or_replacing_video() {
+        let temp = tempfile::tempdir().unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(temp.path().join("saves")),
+            state_dir: Some(temp.path().join("states")),
+            cache_dir: Some(temp.path().join("cache")),
+            config_path: None,
+        };
+        let mut app = ThreadedPreviewApp::new(
+            assets,
+            &RuntimeConfig::default(),
+            None,
+            None,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+        assert!(!app.playing);
+        let (tx, reply) = mpsc::channel();
+        app.pending.push(PendingOperation::AudioDiagnostics {
+            owner_epoch: app.owner_epoch,
+            reply,
+        });
+        tx.send(Ok(WorkerAudioDiagnostics {
+            expired_test_tones: 3,
+            stream_failures: 1,
+            ..WorkerAudioDiagnostics::default()
+        }))
+        .unwrap();
+        app.poll_operations(&egui::Context::default());
+        assert_eq!(app.display.audio_diagnostics().expired_test_tones, 3);
+        assert_eq!(app.display.audio_diagnostics().stream_failures, 1);
+        assert!(app.display.status().is_none());
+        assert!(app.display.texture().is_none());
+    }
+
+    #[test]
+    fn stale_paused_audio_diagnostics_cannot_override_a_replaced_owner() {
+        let temp = tempfile::tempdir().unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(temp.path().join("saves")),
+            state_dir: Some(temp.path().join("states")),
+            cache_dir: Some(temp.path().join("cache")),
+            config_path: None,
+        };
+        let mut app = ThreadedPreviewApp::new(
+            assets,
+            &RuntimeConfig::default(),
+            None,
+            None,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+        let (tx, reply) = mpsc::channel();
+        app.pending.push(PendingOperation::AudioDiagnostics {
+            owner_epoch: app.owner_epoch,
+            reply,
+        });
+        app.owner_epoch = app.owner_epoch.wrapping_add(1);
+        tx.send(Ok(WorkerAudioDiagnostics {
+            stream_failures: 99,
+            ..WorkerAudioDiagnostics::default()
+        }))
+        .unwrap();
+        app.poll_operations(&egui::Context::default());
+        assert_eq!(app.display.audio_diagnostics().stream_failures, 0);
+        assert!(
+            !app
+                .pending
+                .iter()
+                .any(|op| matches!(op, PendingOperation::AudioDiagnostics { .. }))
+        );
+    }
+
+    #[test]
+    fn paused_audio_diagnostics_request_is_bounded_without_a_device() {
+        let temp = tempfile::tempdir().unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(temp.path().join("saves")),
+            state_dir: Some(temp.path().join("states")),
+            cache_dir: Some(temp.path().join("cache")),
+            config_path: None,
+        };
+        let mut app = ThreadedPreviewApp::new(
+            assets,
+            &RuntimeConfig::default(),
+            None,
+            None,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+        app.last_audio_diagnostics_poll = Instant::now() - Duration::from_secs(2);
+        app.poll_paused_audio_diagnostics();
+        assert_eq!(
+            app.pending
+                .iter()
+                .filter(|op| matches!(op, PendingOperation::AudioDiagnostics { .. }))
+                .count(),
+            1
+        );
+        app.poll_paused_audio_diagnostics();
+        assert_eq!(
+            app.pending
+                .iter()
+                .filter(|op| matches!(op, PendingOperation::AudioDiagnostics { .. }))
+                .count(),
+            1
+        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while app.pending.iter().any(|op| matches!(op, PendingOperation::AudioDiagnostics { .. }))
+            && Instant::now() < deadline
+        {
+            app.poll_operations(&egui::Context::default());
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            !app.pending.iter().any(|op| matches!(op, PendingOperation::AudioDiagnostics { .. }))
+        );
+        assert!(app.display.audio_diagnostics().device_status.is_none());
+        assert_eq!(app.engine.completed_frames(), 0);
     }
 
     #[test]
@@ -1984,6 +2159,15 @@ impl eframe::App for ThreadedPreviewApp {
                             Err(error) => self.last_error = Some(error),
                         }
                     }
+                    let audio = self.display.audio_diagnostics();
+                    ui.label(format!(
+                        "Speaker tones at mixer: {}; expired: {} (audibility unverified)",
+                        audio.test_tones_submitted, audio.expired_test_tones
+                    ));
+                    ui.label(format!(
+                        "OS stream errors: {}; recovered after fault: {}",
+                        audio.stream_failures, audio.stream_recoveries
+                    ));
                     if ui
                         .add_enabled(
                             self.can_reselect_audio_output(),
@@ -2089,6 +2273,7 @@ impl eframe::App for ThreadedPreviewApp {
         {
             self.display.poll(ctx, &self.engine);
         }
+        self.poll_paused_audio_diagnostics();
         self.poll_operations(ctx);
         if self.repaint_gap_smoke_pending
             && self.engine.completed_frames() >= 10

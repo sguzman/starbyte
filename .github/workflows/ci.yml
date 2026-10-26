@@ -112,7 +112,37 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libudev-dev libasound2-dev weston libgl1-mesa-dri libegl1 wayland-utils bubblewrap xvfb xdotool x11-xkb-utils xkb-data x11-utils
+        shell: bash
+        run: |
+          set -euo pipefail
+          # GitHub-hosted mirrors have intermittently left apt in one
+          # download step for over 15 minutes. Bound network hangs before
+          # compiling; retry index refresh without interrupting dpkg.
+          updated=false
+          for attempt in 1 2 3; do
+            if timeout --signal=TERM --kill-after=5s 100s sudo apt-get \
+              -o Acquire::Retries=1 \
+              -o Acquire::http::Timeout=20 \
+              -o Acquire::https::Timeout=20 update; then
+              updated=true
+              break
+            fi
+            echo "STARBYTE_APT_UPDATE_RETRY attempt=$attempt" >&2
+            sleep 2
+          done
+          [[ "$updated" == true ]] || {
+            echo "STARBYTE_APT_DEPENDENCY_FAILED phase=update" >&2
+            exit 1
+          }
+          timeout --signal=TERM --kill-after=10s 300s \
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get \
+            -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=20 \
+            -o Acquire::https::Timeout=20 install -y --no-install-recommends \
+            pkg-config libudev-dev libasound2-dev weston libgl1-mesa-dri libegl1 \
+            wayland-utils bubblewrap xvfb xdotool x11-xkb-utils xkb-data x11-utils
+          echo STARBYTE_APT_DEPENDENCY_OK
+
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Test

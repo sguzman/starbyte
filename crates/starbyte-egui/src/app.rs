@@ -2759,6 +2759,7 @@ impl StarbyteApp {
             state: "queued",
             detail: "Queued".to_owned(),
         });
+        trim_job_history(&mut self.jobs, self.latest_rom_job_id);
         if job_status_may_replace_rom_feedback(
             &self.jobs,
             self.latest_rom_job_id,
@@ -10089,11 +10090,15 @@ mod rom_request_order_tests {
             jobs.push(JobRecord {
                 id,
                 label: "Refresh Covers".to_owned(),
-                state: "done",
-                detail: "Done".to_owned(),
+                state: "queued",
+                detail: "Queued".to_owned(),
             });
+            // Queue insertion, not only eventual worker receipts, must
+            // preserve the cap and the active cartridge preparation.
+            trim_job_history(&mut jobs, Some(10));
+            assert!(jobs.len() <= 24);
+            assert!(rom_selection_preparing(&jobs, Some(10)));
         }
-        trim_job_history(&mut jobs, Some(10));
         assert_eq!(jobs.len(), 24);
         assert_eq!(jobs[0].id, 10);
         assert!(rom_selection_preparing(&jobs, Some(10)));

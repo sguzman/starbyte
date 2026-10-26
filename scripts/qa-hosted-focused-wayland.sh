@@ -23,6 +23,10 @@ cat >"$root/guest.sh" <<'GUEST'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 runtime=/run/user/qa
+[[ -x /bin/sh && -x /usr/bin/xkbcomp ]] || {
+  echo STARBYTE_FOCUSED_SEAT_FAILED private_shell_or_xkb_compiler_missing >&2
+  exit 1
+}
 [[ ! -e /dev/input && ! -e /dev/dri && ! -e /tmp/.X11-unix ]] || {
   echo STARBYTE_FOCUSED_SEAT_FAILED host_device_or_socket_visible >&2
   exit 1
@@ -92,7 +96,7 @@ chmod 700 "$root/guest.sh"
 # namespace is the ephemeral hosted runner's network (CAP_NET_ADMIN is absent).
 timeout --signal=TERM --kill-after=2s 55s bwrap \
   --unshare-all --share-net --die-with-parent --new-session \
-  --ro-bind /usr /usr --symlink usr/lib /lib --symlink usr/lib64 /lib64 \
+  --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib64 /lib64 \
   --proc /proc --dev /dev --tmpfs /tmp --tmpfs /run --dir /run/user \
   --dir /var --dir /var/lib --dir /var/lib/xkb \
   --bind "$root" /run/user/qa --dir /home --dir /home/qa \

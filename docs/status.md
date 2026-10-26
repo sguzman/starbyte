@@ -1,5 +1,32 @@
 # Starbyte: current state
 
+## Hardware-free XDG compositor-protocol regressions (2026-10-25)
+
+The private guest's XDG wire code now has source-level regression coverage
+for frame sizes, registry binding, bounded protocol-error classifications,
+and a complete synthetic compositor configure/acknowledge round trip.
+[`ae7d13f`](https://github.com/sguzman/starbyte/commit/ae7d13f61d936af74583a5411d63518a990f8693)
+adds framing and classification tests,
+[`c879769`](https://github.com/sguzman/starbyte/commit/c8797694123777be75394f502a07ad3e9a87b71a)
+extracts the protocol exchange for socket-pair tests,
+[`7e60094`](https://github.com/sguzman/starbyte/commit/7e600948a1b94e8e22f2e4208992d2f9228b97d3)
+checks each request and the compositor callback with a mock peer,
+[`bb47a59`](https://github.com/sguzman/starbyte/commit/bb47a59a2a417f84e27d4be8e8d2f8875097cc3e)
+makes the diagnostic sanitization independently testable, and
+[`29e8556`](https://github.com/sguzman/starbyte/commit/29e85563bfe27cecef42b5e10a56c0ca4407a887)
+requires explicit failure on a private mock compositor's protocol error.
+No display server, physical input or host GPU is used in these tests.
+
+Both the private guest workflow ([`763cbe2`](https://github.com/sguzman/starbyte/commit/763cbe22b64bf67cdafbe05b2b942e9bbc9fa13c))
+and the ordinary Linux lint workflow ([`a940ec1`](https://github.com/sguzman/starbyte/commit/a940ec1fe88f9c173420496b2e5ccca3f69bdc3a))
+now invoke these tests directly with `rustc --test`. Their exact-code
+test outcomes are **not independently verified in this checkpoint**.
+Mock results never substitute for a live virtual Hyprland GUI, focused
+keyboard events, physical speaker/gamepad evidence or default-runtime
+cutover. The accepted scheduler ledger remains **71/77 (92.21%,
+delta +0.00 percentage points)** with P-18, P-19, C-16, D-12,
+D-13 and D-15 pending.
+
 ## Private XDG wire object-ID ordering repair (2026-10-25)
 
 [`f215754`](https://github.com/sguzman/starbyte/commit/f2157545f393dd6dc3a4498d4c18be77ab1b9279)

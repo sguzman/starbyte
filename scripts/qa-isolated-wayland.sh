@@ -277,7 +277,8 @@ if timeout --signal=TERM --kill-after=2s "$deadline" \
         "STARBYTE_FULL_LIBRARY_CLOCK_PACING_SMOKE_OK advanced_frames=" \
         "STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_OK advanced_frames="
       run_starbyte saves --exit-after-full-worker-saves \
-        "STARBYTE_FULL_LIBRARY_SAVE_SMOKE_OK frame="
+        "STARBYTE_FULL_LIBRARY_SAVE_SMOKE_OK frame=" \
+        "screenshot=true step_frames=60"
       echo PRIVATE_STARBYTE_GUEST_SMOKE_OK pacing=true saves=true screenshots=true
     fi
     cleanup

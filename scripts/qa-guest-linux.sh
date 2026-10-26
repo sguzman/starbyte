@@ -907,6 +907,607 @@ HYPR_CONFIG
           done
         fi
       fi
+      # Only bounded interface names and numeric protocol codes cross out of
+      # this disposable VM; Wayland's arbitrary error message stays private.
+      /bin/busybox grep -E '^STARBYTE_GUEST_XDG_ERROR_DIAG interface=(display|registry|sync|compositor|surface|xdg_wm_base|xdg_surface|xdg_toplevel|malformed|other) code=([0-9]|1[0-6]|other)
+      # Distinct from the Weston sample: prove focus under Hyprland itself.
+      hypr_focus_ready=0
+      hypr_focus_clean=0
+      hypr_focus_message=0
+      hypr_focus_compositor_alive=0
+      hypr_focus_status=not_run
+      if [ "$hypr_registry" = 1 ]; then
+        WAYLAND_DEBUG=client WAYLAND_DISPLAY="$hypr_display" \
+          /usr/bin/weston-simple-shm >/tmp/hypr-focus.log 2>/tmp/hypr-focus.err &
+        hypr_focus_pid=$!
+        # Only report readiness after wl_keyboard.enter, rather than a
+        # fixed three-second liveness check on an unfocused window.
+        for focus_probe in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+          if /bin/busybox grep -Eq 'wl_keyboard@[0-9]+\.enter\(' /tmp/hypr-focus.err 2>/dev/null &&
+             /bin/busybox kill -0 "$hypr_focus_pid" 2>/dev/null; then
+            hypr_focus_ready=1
+            echo 'STARBYTE_GUEST_HYPR_FOCUS_READY client=weston-simple-shm alive=1' >/dev/console
+            break
+          fi
+          if ! /bin/busybox kill -0 "$hypr_focus_pid" 2>/dev/null; then break; fi
+          /bin/busybox sleep 1
+        done
+        if [ "$hypr_focus_ready" = 1 ]; then
+          for focus_wait in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do
+            if /bin/busybox grep -Fq 'simple-shm exiting' /tmp/hypr-focus.err; then break; fi
+            if ! /bin/busybox kill -0 "$hypr_focus_pid" 2>/dev/null; then break; fi
+            /bin/busybox sleep 1
+          done
+        fi
+        if /bin/busybox kill -0 "$hypr_focus_pid" 2>/dev/null; then
+          /bin/busybox kill "$hypr_focus_pid" 2>/dev/null || :
+        fi
+        wait "$hypr_focus_pid" 2>/dev/null
+        hypr_focus_status=$?
+        if [ "$hypr_focus_status" = 0 ]; then hypr_focus_clean=1; fi
+        if /bin/busybox grep -Fq 'simple-shm exiting' /tmp/hypr-focus.err 2>/dev/null; then hypr_focus_message=1; fi
+        if /bin/busybox kill -0 "$hypr_pid" 2>/dev/null; then hypr_focus_compositor_alive=1; fi
+      fi
+      hypr_focus_stdout=0
+      hypr_focus_stderr=0
+      hypr_focus_connect=0
+      hypr_focus_library=0
+      hypr_focus_protocol=0
+      hypr_focus_xdg=0
+      hypr_focus_shm=0
+      hypr_focus_surface=0
+      hypr_focus_keyboard_enter=0
+      hypr_focus_keyboard_requested=0
+      hypr_focus_xdg_configure=0
+      hypr_focus_shm_advertised=0
+      hypr_focus_registry_requested=0
+      hypr_focus_create_surface=0
+      hypr_focus_create_xdg=0
+      hypr_focus_create_toplevel=0
+      hypr_focus_initial_commit=0
+      hypr_focus_display_error=0
+      hypr_focus_toplevel_close=0
+      if [ -s /tmp/hypr-focus.log ]; then hypr_focus_stdout=1; fi
+      if [ -s /tmp/hypr-focus.err ]; then hypr_focus_stderr=1; fi
+      for log in /tmp/hypr-focus.log /tmp/hypr-focus.err; do
+        [ -f "$log" ] || continue
+        if /bin/busybox grep -Eiq 'failed to connect|connection refused|cannot connect|No such file.*wayland' "$log"; then hypr_focus_connect=1; fi
+        if /bin/busybox grep -Eiq 'error while loading shared libraries|cannot open shared object|symbol lookup error' "$log"; then hypr_focus_library=1; fi
+        if /bin/busybox grep -Eiq 'protocol error|wl_display.*error|wayland.*error|display.*disconnected' "$log"; then hypr_focus_protocol=1; fi
+        if /bin/busybox grep -Eiq 'xdg_wm_base|xdg_surface|xdg_toplevel|xdg-shell' "$log"; then hypr_focus_xdg=1; fi
+        if /bin/busybox grep -Eiq 'wl_shm|shared memory|shm.*failed' "$log"; then hypr_focus_shm=1; fi
+        if /bin/busybox grep -Eiq 'failed to.*(surface|window)|surface.*failed|failed.*buffer' "$log"; then hypr_focus_surface=1; fi
+        if /bin/busybox grep -Eq 'wl_keyboard@[0-9]+\.enter\(' "$log"; then hypr_focus_keyboard_enter=1; fi
+        if /bin/busybox grep -Eq 'wl_seat@[0-9]+\.get_keyboard\(' "$log"; then hypr_focus_keyboard_requested=1; fi
+        if /bin/busybox grep -Eq 'xdg_toplevel@[0-9]+\.configure\(' "$log"; then hypr_focus_xdg_configure=1; fi
+        if /bin/busybox grep -Eq 'wl_registry@[0-9]+\.global.*wl_shm' "$log"; then hypr_focus_shm_advertised=1; fi
+        if /bin/busybox grep -Eq 'wl_display@[0-9]+\.get_registry\(' "$log"; then hypr_focus_registry_requested=1; fi
+        if /bin/busybox grep -Eq 'wl_compositor@[0-9]+\.create_surface\(' "$log"; then hypr_focus_create_surface=1; fi
+        if /bin/busybox grep -Eq 'xdg_wm_base@[0-9]+\.get_xdg_surface\(' "$log"; then hypr_focus_create_xdg=1; fi
+        if /bin/busybox grep -Eq 'xdg_surface@[0-9]+\.get_toplevel\(' "$log"; then hypr_focus_create_toplevel=1; fi
+        if /bin/busybox grep -Eq 'wl_surface@[0-9]+\.commit\(' "$log"; then hypr_focus_initial_commit=1; fi
+        if /bin/busybox grep -Eq 'wl_display@[0-9]+\.error\(' "$log"; then hypr_focus_display_error=1; fi
+        if /bin/busybox grep -Eq 'xdg_toplevel@[0-9]+\.close\(' "$log"; then hypr_focus_toplevel_close=1; fi
+      done
+      echo "STARBYTE_GUEST_HYPR_FOCUS_DIAG status=$hypr_focus_status stdout=$hypr_focus_stdout stderr=$hypr_focus_stderr connect=$hypr_focus_connect library=$hypr_focus_library protocol=$hypr_focus_protocol xdg=$hypr_focus_xdg shm=$hypr_focus_shm surface=$hypr_focus_surface keyboard_enter=$hypr_focus_keyboard_enter keyboard_requested=$hypr_focus_keyboard_requested xdg_configure=$hypr_focus_xdg_configure shm_advertised=$hypr_focus_shm_advertised registry_requested=$hypr_focus_registry_requested create_surface=$hypr_focus_create_surface create_xdg=$hypr_focus_create_xdg create_toplevel=$hypr_focus_create_toplevel initial_commit=$hypr_focus_initial_commit display_error=$hypr_focus_display_error toplevel_close=$hypr_focus_toplevel_close" >/dev/console
+      echo "STARBYTE_GUEST_HYPR_FOCUS_RESULT ready=$hypr_focus_ready clean_exit=$hypr_focus_clean exit_message=$hypr_focus_message hyprland_alive=$hypr_focus_compositor_alive" >/dev/console
+      if /bin/busybox kill -0 "$hypr_pid" 2>/dev/null; then hypr_alive=1; fi
+      for log in /tmp/hyprland.log /tmp/hyprland.err; do
+        [ -f "$log" ] || continue
+        if /bin/busybox grep -Eiq 'egl.*failed|failed.*egl|egl_not_initialized' "$log"; then hypr_egl_error=1; fi
+        if /bin/busybox grep -Eiq 'gbm.*failed|failed.*gbm|no allocator' "$log"; then hypr_gbm_error=1; fi
+        if /bin/busybox grep -Eiq 'libseat.*failed|seat.*failed|session inactive' "$log"; then hypr_seat_error=1; fi
+        if /bin/busybox grep -Eiq 'config.*failed|config.*error|parse.*error' "$log"; then hypr_config_error=1; fi
+        if /bin/busybox grep -Eiq 'error while loading shared libraries|cannot open shared object|failed.*shader' "$log"; then hypr_library_error=1; fi
+        if /bin/busybox grep -Eiq 'no monitor|no output|no suitable mode|failed to commit.*output|create.*head.*failed|mode.*not available|output.*disabled' "$log"; then hypr_monitor_error=1; fi
+        if /bin/busybox grep -Eiq 'superuser privileges|shall not be run as the root|privilege check is not omitted' "$log"; then hypr_root_guard=1; fi
+      done
+      # Reuse the original full-library GUI smoke with Hyprland as the
+      # Wayland server, never the owner's display. One exclusive worker
+      # must execute 30 demo frames without a shadow legacy session.
+      hypr_app_status=not_run
+      hypr_app_frames=0
+      hypr_app_single_owner=0
+      if [ "$hypr_registry" = 1 ] && [ "$hypr_seat" = 1 ]; then
+        # The private Hyprland test compared swrast with kms_swrast:
+        # both returned EGL_NOT_INITIALIZED. Retain the Weston-proven
+        # swrast client setting; no accepted guest GUI cutover is implied.
+        WAYLAND_DEBUG=client WAYLAND_DISPLAY="$hypr_display" \
+          RUST_BACKTRACE=1 \
+          STARBYTE_LOG=starbyte=info,eframe=trace,glutin=trace,winit=trace \
+          EGL_LOG_LEVEL=debug LIBGL_DEBUG=verbose \
+          WINIT_UNIX_BACKEND=wayland \
+          EGL_PLATFORM=wayland \
+          MESA_LOADER_DRIVER_OVERRIDE=swrast \
+          LIBGL_ALWAYS_SOFTWARE=1 \
+          GALLIUM_DRIVER=llvmpipe \
+          XDG_CONFIG_HOME=/tmp/starbyte-hyprland-app-config \
+          XDG_CACHE_HOME=/tmp/starbyte-hyprland-app-cache \
+          /bin/starbyte-egui --demo --native-worker-preview --exit-after-frames 30 \
+            --config /tmp/starbyte-hyprland-app-config.toml \
+            --cache-dir /tmp/starbyte-hyprland-cache \
+            >/tmp/starbyte-hyprland-app.log 2>/tmp/starbyte-hyprland-app.err
+        hypr_app_status=$?
+        if /bin/busybox grep -Fq 'STARBYTE_FULL_LIBRARY_WORKER_SMOKE_OK frame=' /tmp/starbyte-hyprland-app.log; then hypr_app_frames=1; fi
+        if /bin/busybox grep -Fq 'STARBYTE_FULL_LIBRARY_SINGLE_OWNER_SMOKE_OK legacy_session_absent=true worker_frame=' /tmp/starbyte-hyprland-app.log; then hypr_app_single_owner=1; fi
+      fi
+      hypr_app_stdout=0
+      hypr_app_stderr=0
+      hypr_app_egl=0
+      hypr_app_dri=0
+      hypr_app_context=0
+      hypr_app_wayland=0
+      hypr_app_winit=0
+      hypr_app_panic=0
+      hypr_app_library=0
+      hypr_app_config=0
+      hypr_app_render=0
+      hypr_app_permission=0
+      hypr_app_protocol=0
+      hypr_app_stack_eframe=0
+      hypr_app_stack_glutin=0
+      hypr_app_stack_winit=0
+      hypr_app_stack_starbyte=0
+      hypr_app_pixel_format=0
+      hypr_app_surface=0
+      hypr_app_missing_global=0
+      hypr_app_egl_bad_surface=0
+      hypr_app_egl_bad_native_window=0
+      hypr_app_egl_create_window_surface=0
+      hypr_app_surface_init_failure=0
+      hypr_app_xdg_configure=0
+      hypr_app_dmabuf_failed=0
+      hypr_app_dmabuf_params=0
+      hypr_app_wl_surface_attach=0
+      hypr_app_wl_drm=0
+      hypr_app_registry_requested=0
+      hypr_app_create_surface=0
+      hypr_app_create_xdg=0
+      hypr_app_create_toplevel=0
+      hypr_app_initial_commit=0
+      hypr_app_display_error=0
+      hypr_app_egl_bad_alloc=0
+      hypr_app_egl_bad_match=0
+      hypr_app_egl_not_initialized=0
+      hypr_app_glutin_error=0
+      hypr_app_surface_error=0
+      hypr_app_backtrace=0
+      hypr_app_panic_line=0
+      if [ -s /tmp/starbyte-hyprland-app.log ]; then hypr_app_stdout=1; fi
+      if [ -s /tmp/starbyte-hyprland-app.err ]; then hypr_app_stderr=1; fi
+      for log in /tmp/starbyte-hyprland-app.log /tmp/starbyte-hyprland-app.err; do
+        [ -f "$log" ] || continue
+        if /bin/busybox grep -Eiq 'egl.*failed|failed.*egl|EGL_NOT_INITIALIZED|EGL_BAD_DISPLAY|eglInitialize' "$log"; then hypr_app_egl=1; fi
+        if /bin/busybox grep -Eiq 'failed to load driver|failed to open.*dri|swrast_dri.so|MESA-LOADER' "$log"; then hypr_app_dri=1; fi
+        if /bin/busybox grep -Eiq 'NoAvailablePixelFormat|failed to create.*context|no matching config|eglCreateContext|eglMakeCurrent' "$log"; then hypr_app_context=1; fi
+        if /bin/busybox grep -Eiq 'wayland.*connection|failed to connect.*wayland|WaylandError|Wayland backend' "$log"; then hypr_app_wayland=1; fi
+        if /bin/busybox grep -Eiq 'EventLoopError|failed to create event loop|winit::|event loop.*failed' "$log"; then hypr_app_winit=1; fi
+        if /bin/busybox grep -Eiq "thread '.*' panicked at" "$log"; then hypr_app_panic=1; fi
+        if /bin/busybox grep -Eiq 'error while loading shared libraries|cannot open shared object|symbol lookup error' "$log"; then hypr_app_library=1; fi
+        if /bin/busybox grep -Eiq 'config.*error|config.*failed|permission denied.*config|read.only|no space left' "$log"; then hypr_app_config=1; fi
+        if /bin/busybox grep -Eiq 'glutin|OpenGL|surface.*error|renderer.*failed|failed.*renderer' "$log"; then hypr_app_render=1; fi
+        if /bin/busybox grep -Eiq 'Permission denied|Operation not permitted' "$log"; then hypr_app_permission=1; fi
+        if /bin/busybox grep -Eiq 'protocol error|xdg_wm_base|xdg_surface|xdg_toplevel|wl_display.*error' "$log"; then hypr_app_protocol=1; fi
+        if /bin/busybox grep -Eq '^[[:space:]]*[0-9]+:.*eframe::' "$log"; then hypr_app_stack_eframe=1; fi
+        if /bin/busybox grep -Eq '^[[:space:]]*[0-9]+:.*glutin::' "$log"; then hypr_app_stack_glutin=1; fi
+        if /bin/busybox grep -Eq '^[[:space:]]*[0-9]+:.*winit::' "$log"; then hypr_app_stack_winit=1; fi
+        if /bin/busybox grep -Eq '^[[:space:]]*[0-9]+:.*starbyte' "$log"; then hypr_app_stack_starbyte=1; fi
+        if /bin/busybox grep -Eiq 'pixel.*format|no matching.*config|no EGL.*config|failed to find.*config' "$log"; then hypr_app_pixel_format=1; fi
+        if /bin/busybox grep -Eiq 'EGL_BAD_SURFACE|EGL_BAD_NATIVE_WINDOW|eglCreateWindowSurface|surface.*init.*fail' "$log"; then hypr_app_surface=1; fi
+        if /bin/busybox grep -Eiq 'missing.*(global|extension)|does not support.*(protocol|interface)|required.*(global|extension)' "$log"; then hypr_app_missing_global=1; fi
+        if /bin/busybox grep -Fq 'EGL_BAD_SURFACE' "$log"; then hypr_app_egl_bad_surface=1; fi
+        if /bin/busybox grep -Fq 'EGL_BAD_NATIVE_WINDOW' "$log"; then hypr_app_egl_bad_native_window=1; fi
+        if /bin/busybox grep -Fq 'eglCreateWindowSurface' "$log"; then hypr_app_egl_create_window_surface=1; fi
+        if /bin/busybox grep -Eiq 'surface.*init.*fail' "$log"; then hypr_app_surface_init_failure=1; fi
+        if /bin/busybox grep -Eq 'xdg_toplevel@[0-9]+\.configure\(' "$log"; then hypr_app_xdg_configure=1; fi
+        if /bin/busybox grep -Eq 'zwp_linux_buffer_params_v1@[0-9]+\.failed\(' "$log"; then hypr_app_dmabuf_failed=1; fi
+        if /bin/busybox grep -Eq 'zwp_linux_buffer_params_v1@[0-9]+\.' "$log"; then hypr_app_dmabuf_params=1; fi
+        if /bin/busybox grep -Eq 'wl_surface@[0-9]+\.attach\(' "$log"; then hypr_app_wl_surface_attach=1; fi
+        if /bin/busybox grep -Fq 'wl_drm' "$log"; then hypr_app_wl_drm=1; fi
+        if /bin/busybox grep -Eq 'wl_display@[0-9]+\.get_registry\(' "$log"; then hypr_app_registry_requested=1; fi
+        if /bin/busybox grep -Eq 'wl_compositor@[0-9]+\.create_surface\(' "$log"; then hypr_app_create_surface=1; fi
+        if /bin/busybox grep -Eq 'xdg_wm_base@[0-9]+\.get_xdg_surface\(' "$log"; then hypr_app_create_xdg=1; fi
+        if /bin/busybox grep -Eq 'xdg_surface@[0-9]+\.get_toplevel\(' "$log"; then hypr_app_create_toplevel=1; fi
+        if /bin/busybox grep -Eq 'wl_surface@[0-9]+\.commit\(' "$log"; then hypr_app_initial_commit=1; fi
+        if /bin/busybox grep -Eq 'wl_display@[0-9]+\.error\(' "$log"; then hypr_app_display_error=1; fi
+        if /bin/busybox grep -Fq 'EGL_BAD_ALLOC' "$log"; then hypr_app_egl_bad_alloc=1; fi
+        if /bin/busybox grep -Fq 'EGL_BAD_MATCH' "$log"; then hypr_app_egl_bad_match=1; fi
+        if /bin/busybox grep -Fq 'EGL_NOT_INITIALIZED' "$log"; then hypr_app_egl_not_initialized=1; fi
+        if /bin/busybox grep -Eiq '(glutin|GL surface|GlSurface|gl_surface).*(error|fail)|Glutin\(' "$log"; then hypr_app_glutin_error=1; fi
+        if /bin/busybox grep -Eiq '(surface|window).*(creation|initialization|configure).*(fail|error)|failed to initialize a window' "$log"; then hypr_app_surface_error=1; fi
+        if /bin/busybox grep -Fq 'stack backtrace:' "$log"; then hypr_app_backtrace=1; fi
+        if /bin/busybox grep -Eiq "thread '.*' panicked at" "$log"; then hypr_app_panic_line=1; fi
+      done
+      # Map eframe 0.32's own GL launch messages to fixed stages. The
+      # original logs stay private; these flags do not weaken acceptance.
+      hypr_eframe_display_start=0
+      hypr_eframe_display_ready=0
+      hypr_eframe_context_start=0
+      hypr_eframe_surface_start=0
+      hypr_eframe_surface_ready=0
+      hypr_eframe_context_current=0
+      hypr_eframe_window_failure=0
+      for log in /tmp/starbyte-hyprland-app.log /tmp/starbyte-hyprland-app.err; do
+        [ -f "$log" ] || continue
+        if /bin/busybox grep -Fq 'trying to create glutin Display with config:' "$log"; then hypr_eframe_display_start=1; fi
+        if /bin/busybox grep -Fq 'successfully created GL Display with version' "$log"; then hypr_eframe_display_ready=1; fi
+        if /bin/busybox grep -Fq 'creating gl context using raw window handle:' "$log"; then hypr_eframe_context_start=1; fi
+        if /bin/busybox grep -Fq 'Creating a gl_surface for viewport' "$log"; then hypr_eframe_surface_start=1; fi
+        if /bin/busybox grep -Fq 'surface created successfully:' "$log"; then hypr_eframe_surface_ready=1; fi
+        if /bin/busybox grep -Fq 'made context current. setting swap interval' "$log"; then hypr_eframe_context_current=1; fi
+        if /bin/busybox grep -Fq 'Failed to initialize a window for viewport' "$log"; then hypr_eframe_window_failure=1; fi
+      done
+      echo "STARBYTE_GUEST_HYPR_EFRAME_DIAG display_start=$hypr_eframe_display_start display_ready=$hypr_eframe_display_ready context_start=$hypr_eframe_context_start surface_start=$hypr_eframe_surface_start surface_ready=$hypr_eframe_surface_ready context_current=$hypr_eframe_context_current window_failure=$hypr_eframe_window_failure" >/dev/console
+      # Match glutin 0.32 ErrorKind's fixed public display strings.
+      # Never print raw native errors, Wayland traces, paths or guest logs.
+      hypr_app_glutin_kind=unclassified
+      for log in /tmp/starbyte-hyprland-app.err /tmp/starbyte-hyprland-app.log; do
+        [ -f "$log" ] || continue
+        if /bin/busybox grep -Fqi 'argument does not refer to a valid native window' "$log"; then
+          hypr_app_glutin_kind=bad_native_window
+        elif /bin/busybox grep -Fqi 'argument does not name a valid surface' "$log"; then
+          hypr_app_glutin_kind=bad_surface
+        elif /bin/busybox grep -Fqi 'argument does not name a valid display' "$log"; then
+          hypr_app_glutin_kind=bad_display
+        elif /bin/busybox grep -Fqi 'argument does not name a valid config' "$log"; then
+          hypr_app_glutin_kind=bad_config
+        elif /bin/busybox grep -Fqi 'argument does not name a valid context' "$log"; then
+          hypr_app_glutin_kind=bad_context
+        elif /bin/busybox grep -Fqi 'arguments are inconsistent' "$log"; then
+          hypr_app_glutin_kind=bad_match
+        elif /bin/busybox grep -Fqi 'initialization failed' "$log"; then
+          hypr_app_glutin_kind=initialization_failed
+        elif /bin/busybox grep -Fqi 'access to the resource failed' "$log"; then
+          hypr_app_glutin_kind=bad_access
+        elif /bin/busybox grep -Fqi 'out of memory' "$log"; then
+          hypr_app_glutin_kind=out_of_memory
+        elif /bin/busybox grep -Fqi 'one or more argument values are invalid' "$log"; then
+          hypr_app_glutin_kind=bad_parameter
+        elif /bin/busybox grep -Fqi 'the context is in a bad state' "$log"; then
+          hypr_app_glutin_kind=bad_context_state
+        elif /bin/busybox grep -Fqi 'the current surface of the calling thread is no longer valid' "$log"; then
+          hypr_app_glutin_kind=bad_current_surface
+        elif /bin/busybox grep -Fqi 'context loss' "$log"; then
+          hypr_app_glutin_kind=context_lost
+        elif /bin/busybox grep -Fqi 'misc platform error' "$log"; then
+          hypr_app_glutin_kind=misc
+        elif /bin/busybox grep -Fqi 'glutin error:' "$log"; then
+          hypr_app_glutin_kind=other_glutin_error
+        elif /bin/busybox grep -Fqi 'winit error:' "$log"; then
+          hypr_app_glutin_kind=winit_error
+        elif /bin/busybox grep -Fqi 'app creation error:' "$log"; then
+          hypr_app_glutin_kind=app_creation_error
+        fi
+        if [ "$hypr_app_glutin_kind" != unclassified ]; then break; fi
+      done
+      # Only fixed Mesa failure categories may leave private guest RAM.
+      hypr_app_dri2_reason=none
+      hypr_app_egl_debug=0
+      for log in /tmp/starbyte-hyprland-app.err /tmp/starbyte-hyprland-app.log; do
+        [ -f "$log" ] || continue
+        if /bin/busybox grep -Eiq 'EGL debug|EGL warning|libEGL|DRI2:' "$log"; then hypr_app_egl_debug=1; fi
+        if /bin/busybox grep -Eiq 'DRI2: failed to load driver|failed to load driver: kms_swrast|kms_swrast.*failed to load' "$log"; then
+          hypr_app_dri2_reason=load_driver
+        elif /bin/busybox grep -Eiq 'DRI2: failed to create screen|failed to create dri screen' "$log"; then
+          hypr_app_dri2_reason=create_screen
+        elif /bin/busybox grep -Eiq 'failed to setup EGLDevice|failed to set up EGLDevice' "$log"; then
+          hypr_app_dri2_reason=setup_device
+        elif /bin/busybox grep -Eiq 'failed to find required DRI extensions' "$log"; then
+          hypr_app_dri2_reason=missing_extensions
+        elif /bin/busybox grep -Eiq 'display does not support prime' "$log"; then
+          hypr_app_dri2_reason=prime_unsupported
+        elif /bin/busybox grep -Eiq 'failed to add configs|failed to.*EGL.*config' "$log"; then
+          hypr_app_dri2_reason=configs
+        elif /bin/busybox grep -Eiq 'failed to authenti(cate|cation)|failed to open.*render' "$log"; then
+          hypr_app_dri2_reason=drm_access
+        elif /bin/busybox grep -Eiq 'failed to load.*swrast_dri|swrast_dri.so.*not found' "$log"; then
+          hypr_app_dri2_reason=missing_dri_library
+        fi
+        if [ "$hypr_app_dri2_reason" != none ]; then break; fi
+      done
+      echo "STARBYTE_GUEST_HYPRLAND_APP_DIAG stdout=$hypr_app_stdout stderr=$hypr_app_stderr egl=$hypr_app_egl dri=$hypr_app_dri context=$hypr_app_context wayland=$hypr_app_wayland winit=$hypr_app_winit panic=$hypr_app_panic library=$hypr_app_library config=$hypr_app_config render=$hypr_app_render permission=$hypr_app_permission protocol=$hypr_app_protocol stack_eframe=$hypr_app_stack_eframe stack_glutin=$hypr_app_stack_glutin stack_winit=$hypr_app_stack_winit stack_starbyte=$hypr_app_stack_starbyte pixel_format=$hypr_app_pixel_format surface=$hypr_app_surface missing_global=$hypr_app_missing_global egl_bad_surface=$hypr_app_egl_bad_surface egl_bad_native_window=$hypr_app_egl_bad_native_window egl_create_window_surface=$hypr_app_egl_create_window_surface surface_init_failure=$hypr_app_surface_init_failure xdg_configure=$hypr_app_xdg_configure dmabuf_failed=$hypr_app_dmabuf_failed dmabuf_params=$hypr_app_dmabuf_params wl_surface_attach=$hypr_app_wl_surface_attach wl_drm=$hypr_app_wl_drm registry_requested=$hypr_app_registry_requested create_surface=$hypr_app_create_surface create_xdg=$hypr_app_create_xdg create_toplevel=$hypr_app_create_toplevel initial_commit=$hypr_app_initial_commit display_error=$hypr_app_display_error egl_bad_alloc=$hypr_app_egl_bad_alloc egl_bad_match=$hypr_app_egl_bad_match egl_not_initialized=$hypr_app_egl_not_initialized glutin_error=$hypr_app_glutin_error surface_error=$hypr_app_surface_error backtrace=$hypr_app_backtrace panic_line=$hypr_app_panic_line glutin_kind=$hypr_app_glutin_kind mesa_driver=swrast egl_debug=$hypr_app_egl_debug dri2_reason=$hypr_app_dri2_reason" >/dev/console
+      # kill -0 alone also succeeds for zombies; require a non-zombie
+      # Hyprland process after the application has finished.
+      hypr_alive=0
+      if /bin/busybox kill -0 "$hypr_pid" 2>/dev/null && [ -r "/proc/$hypr_pid/stat" ]; then
+        hypr_state="$(/bin/busybox awk '{print $3}' "/proc/$hypr_pid/stat")"
+        if [ "$hypr_state" != Z ]; then hypr_alive=1; fi
+      fi
+      echo "STARBYTE_GUEST_HYPRLAND_APP_RESULT status=$hypr_app_status frames=$hypr_app_frames single_owner=$hypr_app_single_owner" >/dev/console
+      /bin/busybox kill "$hypr_pid" 2>/dev/null || :
+      wait "$hypr_pid" 2>/dev/null || :
+      echo "STARBYTE_GUEST_HYPRLAND_DIAG version=$hypr_version config_valid=$hypr_config_valid egl=$hypr_egl_error gbm=$hypr_gbm_error seat_error=$hypr_seat_error config_error=$hypr_config_error library_error=$hypr_library_error root_guard=$hypr_root_guard wire_attempts=$hypr_wire_attempts wire_connected=$hypr_wire_connected wire_sync=$hypr_wire_sync wire_reason=$hypr_wire_reason monitor_error=$hypr_monitor_error" >/dev/console
+      echo "STARBYTE_GUEST_HYPRLAND_RESULT executable=$hypr_executable socket=$hypr_socket registry=$hypr_registry compositor=$hypr_compositor seat=$hypr_seat alive=$hypr_alive" >/dev/console
+    fi
+  fi
+  if [ -e /etc/starbyte-input-smoke ]; then
+    /bin/input-probe >/dev/console 2>/dev/null
+    echo "STARBYTE_GUEST_INPUT_EXEC status=$?" >/dev/console
+  fi
+fi
+/bin/busybox reboot -f
+while :; do /bin/busybox sleep 1; done
+GUEST_INIT
+chmod 755 "$root/initfs/init"
+(cd "$root/initfs"; find . -print0 | cpio --null -o -H newc --quiet | gzip -9) >"$root/initramfs.gz"
+[[ -s "$root/initramfs.gz" ]] || fail 'initramfs_creation_failed'
+
+# Guest devices are entirely emulated. Never expose host DRM/input/files.
+guest_ram=384M
+if [[ "$mode" == --gbm-smoke ]]; then guest_ram=768M; fi
+if [[ "$mode" == --wayland-smoke ]]; then guest_ram=1536M; fi
+if [[ "$mode" == --starbyte-smoke || "$mode" == --hyprland-smoke ]]; then guest_ram=2048M; fi
+# -cpu max remains TCG-only; QEMU's default qemu64 CPU may lack instructions
+# needed by Ubuntu's x86-64-v3 static BusyBox, killing PID 1 before output.
+# The only synthetic keyboard injection path is this guest's private QMP
+# socket. Host input devices, displays and session IPC remain inaccessible.
+qmp_args=()
+injector_pid=''
+if [[ "$mode" == --input-smoke ]]; then
+  qmp_args=(-qmp "unix:$root/qmp.sock,server=on,wait=off")
+  guest_input_injector() {
+    local ready=false
+    for _ in {1..350}; do
+      if [[ -S "$root/qmp.sock" && -f "$root/serial.log" ]] \
+        && grep -Fq 'STARBYTE_GUEST_INPUT_READY evdev=present' "$root/serial.log"; then
+        ready=true
+        break
+      fi
+      sleep 0.1
+    done
+    [[ "$ready" == true ]] || { echo 'STARBYTE_GUEST_INPUT_QMP_BLOCKED guest_not_ready'; return 5; }
+    local qmp_status=0
+    {
+      printf '%s\n' '{"execute":"qmp_capabilities","id":"cap"}'
+      printf '%s\n' '{"execute":"input-send-event","arguments":{"events":[{"type":"key","data":{"down":true,"key":{"type":"qcode","data":"a"}}},{"type":"key","data":{"down":false,"key":{"type":"qcode","data":"a"}}}]},"id":"key"}'
+    } | timeout --signal=TERM --kill-after=1s 5s \
+      socat -T 3 STDIO "UNIX-CONNECT:$root/qmp.sock" \
+      >"$root/qmp.jsonl" 2>/dev/null || qmp_status=$?
+    [[ "$qmp_status" -eq 0 || "$qmp_status" -eq 1 ]] \
+      || { echo 'STARBYTE_GUEST_INPUT_QMP_BLOCKED transport'; return 5; }
+    jq -es '
+      any(.[]; .id == "cap" and .return == {}) and
+      any(.[]; .id == "key" and .return == {})
+    ' "$root/qmp.jsonl" >/dev/null \
+      || { echo 'STARBYTE_GUEST_INPUT_QMP_BLOCKED event_rejected'; return 5; }
+    echo 'STARBYTE_GUEST_INPUT_QMP_ACK key_a=sent'
+  }
+  guest_input_injector &
+  injector_pid=$!
+  trap 'kill "$injector_pid" 2>/dev/null || true; wait "$injector_pid" 2>/dev/null || true; rm -rf -- "$root"' EXIT
+fi
+if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --hyprland-smoke ]]; then
+  # Entirely virtual keyboard, private guest-only QMP socket.
+  qmp_args=(-qmp "unix:$root/qmp.sock,server=on,wait=off")
+  guest_focus_injector() {
+    local ready=false
+    # VM startup under TCG can exceed one minute on hosted runners.
+    # Remain bounded by the outer 200-second guest-QEMU deadline.
+    for _ in {1..2100}; do
+      if [[ -S "$root/qmp.sock" && -f "$root/serial.log" ]] \
+        && grep -Fq 'STARBYTE_GUEST_FOCUS_READY client=weston-simple-shm alive=1' "$root/serial.log"; then
+        ready=true
+        break
+      fi
+      sleep 0.1
+    done
+    [[ "$ready" == true ]] || { echo 'STARBYTE_GUEST_FOCUS_QMP_BLOCKED focused_client_not_ready'; return 5; }
+    local qmp_status=0
+    {
+      printf '%s\n' '{"execute":"qmp_capabilities","id":"cap"}'
+      printf '%s\n' '{"execute":"input-send-event","arguments":{"events":[{"type":"key","data":{"down":true,"key":{"type":"qcode","data":"esc"}}},{"type":"key","data":{"down":false,"key":{"type":"qcode","data":"esc"}}}]},"id":"escape"}'
+    } | timeout --signal=TERM --kill-after=1s 5s \
+      socat -T 3 STDIO "UNIX-CONNECT:$root/qmp.sock" \
+      >"$root/focus-qmp.jsonl" 2>/dev/null || qmp_status=$?
+    [[ "$qmp_status" -eq 0 || "$qmp_status" -eq 1 ]] || { echo 'STARBYTE_GUEST_FOCUS_QMP_BLOCKED transport'; return 5; }
+    jq -es 'any(.[]; .id == "cap" and .return == {}) and any(.[]; .id == "escape" and .return == {})' \
+      "$root/focus-qmp.jsonl" >/dev/null || { echo 'STARBYTE_GUEST_FOCUS_QMP_BLOCKED injection_rejected'; return 5; }
+    echo 'STARBYTE_GUEST_FOCUS_QMP_ACK escape=sent source=private_qmp'
+  }
+  guest_focus_injector &
+  injector_pid=$!
+  trap 'kill "$injector_pid" 2>/dev/null || true; wait "$injector_pid" 2>/dev/null || true; rm -rf -- "$root"' EXIT
+fi
+if [[ "$mode" == --hyprland-smoke ]]; then
+  # A second QMP connection after the Weston Escape test has completed.
+  # The acknowledgement is not enough: the focused client must exit.
+  guest_hypr_focus_injector() {
+    local ready=false qmp_status=0
+    for _ in {1..2900}; do
+      if [[ -S "$root/qmp.sock" && -f "$root/serial.log" ]]; then
+        if grep -Fq 'STARBYTE_GUEST_HYPR_FOCUS_READY client=weston-simple-shm alive=1' "$root/serial.log"; then
+          ready=true
+          break
+        fi
+        if grep -Fq 'STARBYTE_GUEST_HYPR_FOCUS_RESULT ' "$root/serial.log"; then
+          echo 'STARBYTE_GUEST_HYPR_FOCUS_QMP_BLOCKED focused_client_never_ready'
+          return 5
+        fi
+      fi
+      sleep 0.1
+    done
+    [[ "$ready" == true ]] || { echo 'STARBYTE_GUEST_HYPR_FOCUS_QMP_BLOCKED focused_client_not_ready'; return 5; }
+    {
+      printf '%s\n' '{"execute":"qmp_capabilities","id":"cap"}'
+      printf '%s\n' '{"execute":"input-send-event","arguments":{"events":[{"type":"key","data":{"down":true,"key":{"type":"qcode","data":"esc"}}},{"type":"key","data":{"down":false,"key":{"type":"qcode","data":"esc"}}}]},"id":"escape"}'
+    } | timeout --signal=TERM --kill-after=1s 5s \
+      socat -T 3 STDIO "UNIX-CONNECT:$root/qmp.sock" \
+      >"$root/hypr-focus-qmp.jsonl" 2>/dev/null || qmp_status=$?
+    [[ "$qmp_status" -eq 0 || "$qmp_status" -eq 1 ]] || { echo 'STARBYTE_GUEST_HYPR_FOCUS_QMP_BLOCKED transport'; return 5; }
+    jq -es 'any(.[]; .id == "cap" and .return == {}) and any(.[]; .id == "escape" and .return == {})' \
+      "$root/hypr-focus-qmp.jsonl" >/dev/null || { echo 'STARBYTE_GUEST_HYPR_FOCUS_QMP_BLOCKED injection_rejected'; return 5; }
+    echo 'STARBYTE_GUEST_HYPR_FOCUS_QMP_ACK escape=sent source=private_qmp'
+  }
+  guest_hypr_focus_injector &
+  hypr_injector_pid=$!
+  trap 'kill "$injector_pid" "$hypr_injector_pid" 2>/dev/null || true; wait "$injector_pid" "$hypr_injector_pid" 2>/dev/null || true; rm -rf -- "$root"' EXIT
+fi
+display_args=(-display none)
+if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --hyprland-smoke ]]; then
+  # Private Unix-only VNC display emulation advertises a KMS output.
+  # No TCP listener, physical display, viewer, or host desktop socket.
+  display_args=(-display "vnc=unix:$root/guest-vnc.sock")
+fi
+guest_timeout=125
+if [[ "$mode" == --wayland-smoke ]]; then guest_timeout=200; fi
+if [[ "$mode" == --starbyte-smoke ]]; then guest_timeout=340; fi
+if [[ "$mode" == --hyprland-smoke ]]; then guest_timeout=450; fi
+set +e
+HOME="$root" XDG_CONFIG_HOME="$root" \
+  timeout --signal=TERM --kill-after=2s "${guest_timeout}s" qemu-system-x86_64 \
+    -machine q35,accel=tcg -cpu max -m "$guest_ram" -smp 1 -no-reboot \
+    -nodefaults "${display_args[@]}" -vga none -net none \
+    -monitor none -parallel none -serial "file:$root/serial.log" \
+    -device virtio-gpu-pci,id=sb_gpu -device virtio-keyboard-pci,id=sb_keyboard \
+    "${qmp_args[@]}" \
+    -kernel "$root/vmlinuz-virt" -initrd "$root/initramfs.gz" \
+    -append 'console=ttyS0,115200 loglevel=3 panic=5' \
+    >"$root/qemu.log" 2>&1
+result=$?
+set -e
+if [[ "$mode" == --input-smoke ]]; then
+  wait "$injector_pid" || fail 'guest_private_qmp_injection_failed'
+  injector_pid=''
+fi
+focus_injector_ok=true
+if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --hyprland-smoke ]]; then
+  wait "$injector_pid" || focus_injector_ok=false
+  injector_pid=''
+fi
+hypr_injector_ok=true
+if [[ "$mode" == --hyprland-smoke ]]; then
+  wait "$hypr_injector_pid" || hypr_injector_ok=false
+  hypr_injector_pid=''
+fi
+# Never emit raw guest logs. Expose only three bounded diagnostic bits,
+# including on QEMU timeout, to distinguish boot from shutdown failure.
+[[ -f "$root/serial.log" ]] || : >"$root/serial.log"
+tr -d '\r' <"$root/serial.log" >"$root/serial-clean.log"
+boot=false
+pci=false
+panic=false
+if grep -Fqx 'STARBYTE_GUEST_LINUX_BOOT_OK initramfs=private console=serial' "$root/serial-clean.log"; then boot=true; fi
+if grep -Fqx 'STARBYTE_GUEST_PCI_RESULT virtio_gpu=1 virtio_keyboard=1' "$root/serial-clean.log"; then pci=true; fi
+if grep -Fq 'Kernel panic' "$root/serial-clean.log"; then panic=true; fi
+cause=none
+if [[ "$panic" == true ]]; then
+  cause=unclassified
+  if grep -Eq 'No working init found|Requested init /init failed|Failed to execute /init' "$root/serial-clean.log"; then
+    cause=init_exec
+  elif grep -Eq 'VFS: Unable to mount root fs|unable to mount root fs' "$root/serial-clean.log"; then
+    cause=root_filesystem
+  elif grep -Fq 'Attempted to kill init' "$root/serial-clean.log"; then
+    cause=init_exited
+  elif grep -Eq 'Fatal exception|Fatal signal' "$root/serial-clean.log"; then
+    cause=kernel_exception
+  fi
+fi
+printf 'STARBYTE_GUEST_LINUX_DIAG boot=%s pci=%s panic=%s cause=%s qemu_status=%s\n' "$boot" "$pci" "$panic" "$cause" "$result"
+[[ "$result" -eq 0 ]] || fail "guest_boot_failed_or_timed_out status=$result"
+[[ "$boot" == true ]] || fail 'boot_receipt_missing'
+[[ "$pci" == true ]] || fail 'guest_virtio_pci_devices_missing'
+if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-smoke || "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --hyprland-smoke ]]; then
+  driver=false
+  if grep -Fqx 'STARBYTE_GUEST_DRIVER_RESULT render=1 input=1 gpu_load=0 input_load=0 evdev_load=0' "$root/serial-clean.log"; then
+    driver=true
+  fi
+  printf 'STARBYTE_GUEST_DRIVER_DIAG render_and_input=%s\n' "$driver"
+  [[ "$driver" == true ]] || fail 'guest_driver_or_device_nodes_missing'
+  if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --hyprland-smoke ]]; then
+    # All receipts are bounded diagnostics; never disclose raw guest logs.
+    grep -E '^STARBYTE_GUEST_(WAYLAND_(RESULT|DIAG|WIRE_DIAG|WIRE_SELFTEST|BIN_DIAG|REGISTRY_DIAG)|WESTON_(EXEC|STAGE|EXIT)|TMP_WRITE_OK|TMP_MOUNT|TMP_IO_DIAG|RUN_MOUNT|UDEV_RESULT|XKB_DATA|FOCUS_RESULT|APP_RESULT|APP_DIAG|APP_ROOT_DIAG) ' "$root/serial-clean.log" || true
+    grep -Fqx 'STARBYTE_GUEST_TMP_MOUNT status=0' "$root/serial-clean.log" \
+      || fail 'guest_temporary_mount_unavailable'
+    grep -Fqx 'STARBYTE_GUEST_RUN_MOUNT status=0' "$root/serial-clean.log" \
+      || fail 'guest_run_mount_unavailable'
+    grep -Fqx 'STARBYTE_GUEST_UDEV_RESULT daemon=0 trigger=0 settle=0 event=1 keyboard=1' "$root/serial-clean.log" \
+      || fail 'guest_keyboard_udev_classification_missing'
+    grep -Fqx 'STARBYTE_GUEST_XKB_DATA rules=1 symbols=1' "$root/serial-clean.log" \
+      || fail 'guest_keyboard_xkb_data_unavailable'
+    grep -Fqx 'STARBYTE_GUEST_TMP_IO_DIAG write_status=0' "$root/serial-clean.log" \
+      || fail 'guest_temporary_file_write_failed'
+    grep -Fqx 'STARBYTE_GUEST_TMP_WRITE_OK result=1' "$root/serial-clean.log" \
+      || fail 'guest_temporary_file_io_unavailable'
+    grep -Fqx 'STARBYTE_GUEST_WAYLAND_WIRE_SELFTEST status=0 output=1 stderr=0 reason=none' "$root/serial-clean.log" \
+      || fail 'guest_wayland_wire_executable_unavailable'
+    grep -Fqx 'STARBYTE_GUEST_WESTON_EXEC status=0 stdout=1 stderr=0' "$root/serial-clean.log" \
+      || fail 'guest_weston_executable_unavailable'
+    grep -Fqx 'STARBYTE_GUEST_WAYLAND_RESULT socket=1 handshake=1 compositor=1 seat=1' "$root/serial-clean.log" \
+      || fail 'guest_drm_wayland_handshake_or_seat_missing'
+    grep -Eq '^STARBYTE_GUEST_WAYLAND_WIRE_DIAG connected=1 sync=1 output=1 attempts=[1-8] status=0 stderr=0 reason=none$' "$root/serial-clean.log" \
+      || fail 'guest_wayland_registry_sync_missing'
+    echo 'STARBYTE_GUEST_WAYLAND_OK drm=virtio compositor=weston client=rust_wire seat=present guest_only=true'
+    [[ "$focus_injector_ok" == true ]] || fail 'guest_private_focus_qmp_injection_failed'
+    grep -Fqx 'STARBYTE_GUEST_FOCUS_RESULT ready=1 clean_exit=1 exit_message=1 weston_alive=1' "$root/serial-clean.log" \
+      || fail 'guest_focused_wayland_keyboard_delivery_missing'
+    echo 'STARBYTE_GUEST_FOCUS_OK client=weston-simple-shm escape=received source=private_qmp guest_only=true'
+    if [[ "$mode" == --hyprland-smoke ]]; then
+      grep -E '^STARBYTE_GUEST_(HYPRLAND_(RESULT|DIAG|APP_RESULT|APP_DIAG)|HYPR_FOCUS_(RESULT|DIAG)|HYPR_OUTPUT_DIAG|HYPR_KMS_DIAG|HYPR_EFRAME_DIAG|HYPR_CAP_(BLOCKED|DIAG)|WAYLAND_CAP_RESULT|EGLINFO_DIAG|EGL_ATTACH_DIAG|EGL_ATTACHED_RESULT|EGL_TRACKED_RESULT|EGL_NONE_RESULT|HYPR_XDG_DIAG) ' "$root/serial-clean.log" || true
+      grep -Fqx 'STARBYTE_GUEST_HYPRLAND_RESULT executable=1 socket=1 registry=1 compositor=1 seat=1 alive=1' "$root/serial-clean.log" \
+        || fail 'guest_private_hyprland_registry_or_seat_missing'
+      echo 'STARBYTE_GUEST_HYPRLAND_OK drm=virtio compositor=hyprland seat=virtual guest_only=true'
+      grep -Fqx 'STARBYTE_GUEST_HYPRLAND_APP_RESULT status=0 frames=1 single_owner=1' "$root/serial-clean.log" \
+        || fail 'guest_real_starbyte_hyprland_window_and_worker_missing'
+      echo 'STARBYTE_GUEST_HYPRLAND_APP_OK shell=original_full_library emulator_owner=worker frames=30 guest_only=true'
+      grep -Fqx 'STARBYTE_GUEST_HYPR_FOCUS_RESULT ready=1 clean_exit=1 exit_message=1 hyprland_alive=1' "$root/serial-clean.log" \
+        || fail 'guest_private_hyprland_focused_keyboard_missing'
+      [[ "$hypr_injector_ok" == true ]] || fail 'guest_private_hyprland_focus_injector_failed'
+      echo 'STARBYTE_GUEST_HYPR_FOCUS_OK client=weston-simple-shm escape=received source=private_qmp guest_only=true'
+    fi
+    if [[ "$mode" == --starbyte-smoke ]]; then
+      grep -Fqx 'STARBYTE_GUEST_APP_RESULT launched=1 status=0 frames=1 single_owner=1' "$root/serial-clean.log" \
+        || fail 'guest_real_starbyte_window_and_worker_missing'
+      echo 'STARBYTE_GUEST_APP_OK shell=original_full_library emulator_owner=worker frames=30 guest_only=true'
+    fi
+  elif [[ "$mode" == --gbm-smoke ]]; then
+    render_node=false
+    render_device=false
+    render_buffer=false
+    card_node=false
+    card_device=false
+    card_buffer=false
+    grep -Fqx 'STARBYTE_GUEST_GBM_NODE_OPEN_OK node=render' "$root/serial-clean.log" && render_node=true
+    grep -Fqx 'STARBYTE_GUEST_GBM_NODE_OPEN_OK node=card' "$root/serial-clean.log" && card_node=true
+    grep -Fqx 'STARBYTE_GUEST_GBM_RESULT node=render device=1 buffer=0' "$root/serial-clean.log" && render_device=true
+    grep -Fqx 'STARBYTE_GUEST_GBM_RESULT node=card device=1 buffer=0' "$root/serial-clean.log" && card_device=true
+    if grep -Fqx 'STARBYTE_GUEST_GBM_RESULT node=render device=1 buffer=1' "$root/serial-clean.log"; then
+      render_device=true
+      render_buffer=true
+    fi
+    if grep -Fqx 'STARBYTE_GUEST_GBM_RESULT node=card device=1 buffer=1' "$root/serial-clean.log"; then
+      card_device=true
+      card_buffer=true
+    fi
+    printf 'STARBYTE_GUEST_GBM_DIAG render_open=%s render_device=%s render_buffer=%s card_open=%s card_device=%s card_buffer=%s\n' \
+      "$render_node" "$render_device" "$render_buffer" "$card_node" "$card_device" "$card_buffer"
+    grep -Fqx 'STARBYTE_GUEST_GBM_EXEC render_status=0' "$root/serial-clean.log" \
+      || fail 'guest_gbm_render_probe_failed'
+    grep -Fqx 'STARBYTE_GUEST_GBM_EXEC card_status=0' "$root/serial-clean.log" \
+      || fail 'guest_gbm_card_probe_failed'
+    [[ "$render_node" == true && "$card_node" == true ]] \
+      || fail 'guest_gbm_drm_node_open_failed'
+    if [[ "$render_buffer" == true ]]; then
+      echo 'STARBYTE_GUEST_GBM_OK node=render device=initialized buffer=rendering guest_only=true'
+    elif [[ "$card_buffer" == true ]]; then
+      echo 'STARBYTE_GUEST_GBM_OK node=card device=initialized buffer=rendering guest_only=true'
+    else
+      fail 'guest_gbm_allocator_unavailable'
+    fi
+  elif [[ "$mode" == --input-smoke ]]; then
+    grep -Fqx 'STARBYTE_GUEST_INPUT_READY evdev=present' "$root/serial-clean.log" \
+      || fail 'guest_input_listener_missing'
+    grep -Fqx 'STARBYTE_GUEST_INPUT_RESULT key_a=1' "$root/serial-clean.log" \
+      || fail 'guest_virtual_keypress_missing'
+    grep -Fqx 'STARBYTE_GUEST_INPUT_EXEC status=0' "$root/serial-clean.log" \
+      || fail 'guest_virtual_keypress_reader_failed'
+    echo 'STARBYTE_GUEST_INPUT_OK key_a=received source=private_qmp evdev=guest_only'
+  else
+    echo 'STARBYTE_GUEST_DRM_INPUT_OK drm_render_node=present evdev_input_node=present guest_only=true'
+  fi
+else
+  echo 'STARBYTE_GUEST_LINUX_PCI_OK gpu=virtio keyboard=virtio serial_only=true drm_render_node=not_tested input_seat=not_tested'
+fi
+ /tmp/hypr-xdg-probe.log >/dev/console || :
       echo "STARBYTE_GUEST_HYPR_XDG_DIAG status=$hypr_xdg_status configured=$hypr_xdg_configured reason=$hypr_xdg_reason" >/dev/console
       # Distinct from the Weston sample: prove focus under Hyprland itself.
       hypr_focus_ready=0

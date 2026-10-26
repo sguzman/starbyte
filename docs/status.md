@@ -1,5 +1,25 @@
 # Starbyte: current state
 
+## Private XDG wire object-ID ordering repair (2026-10-25)
+
+[`f215754`](https://github.com/sguzman/starbyte/commit/f2157545f393dd6dc3a4498d4c18be77ab1b9279)
+corrects a specific protocol error in the disposable guest XDG probe:
+the program allocated new client object ID 6 (`xdg_wm_base`) before
+creating object ID 5 (`wl_surface`). The core Wayland protocol
+requires densely allocated ascending client IDs, so the probe now
+uses `xdg_wm_base=5` and `wl_surface=6` in its actual creation
+order. The subsequent `xdg_surface=7`, `xdg_toplevel=8` and
+acknowledgement callback `9` remain ordered.
+[`dabac19`](https://github.com/sguzman/starbyte/commit/dabac196d108387f77e6150a7616ee4d6b659ae3)
+makes these object-ID relationships a compile-time assertion.
+
+This is a grounded source-level bug fix, **not yet a verified
+successful compositor handshake**. The guest still must confirm
+`xdg_surface.configure` and its ack callback, then establish
+Starbyte's actual 30-frame worker window and focused keyboard
+delivery in the isolated Hyprland VM. The six real-desktop and
+production acceptance gates remain **71/77 (92.21%, delta 0)**.
+
 ## Guest-only XDG diagnostic and shell repair (2026-10-25)
 
 The experimental Hyprland guest test temporarily acquired a malformed,

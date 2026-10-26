@@ -989,7 +989,49 @@ HYPR_CONFIG
         if /bin/busybox grep -Fq 'stack backtrace:' "$log"; then hypr_app_backtrace=1; fi
         if /bin/busybox grep -Eiq "thread '.*' panicked at" "$log"; then hypr_app_panic_line=1; fi
       done
-      echo "STARBYTE_GUEST_HYPRLAND_APP_DIAG stdout=$hypr_app_stdout stderr=$hypr_app_stderr egl=$hypr_app_egl dri=$hypr_app_dri context=$hypr_app_context wayland=$hypr_app_wayland winit=$hypr_app_winit panic=$hypr_app_panic library=$hypr_app_library config=$hypr_app_config render=$hypr_app_render permission=$hypr_app_permission protocol=$hypr_app_protocol stack_eframe=$hypr_app_stack_eframe stack_glutin=$hypr_app_stack_glutin stack_winit=$hypr_app_stack_winit stack_starbyte=$hypr_app_stack_starbyte pixel_format=$hypr_app_pixel_format surface=$hypr_app_surface missing_global=$hypr_app_missing_global egl_bad_surface=$hypr_app_egl_bad_surface egl_bad_native_window=$hypr_app_egl_bad_native_window egl_create_window_surface=$hypr_app_egl_create_window_surface surface_init_failure=$hypr_app_surface_init_failure xdg_configure=$hypr_app_xdg_configure dmabuf_failed=$hypr_app_dmabuf_failed dmabuf_params=$hypr_app_dmabuf_params wl_surface_attach=$hypr_app_wl_surface_attach wl_drm=$hypr_app_wl_drm registry_requested=$hypr_app_registry_requested create_surface=$hypr_app_create_surface create_xdg=$hypr_app_create_xdg create_toplevel=$hypr_app_create_toplevel initial_commit=$hypr_app_initial_commit display_error=$hypr_app_display_error egl_bad_alloc=$hypr_app_egl_bad_alloc egl_bad_match=$hypr_app_egl_bad_match egl_not_initialized=$hypr_app_egl_not_initialized glutin_error=$hypr_app_glutin_error surface_error=$hypr_app_surface_error backtrace=$hypr_app_backtrace panic_line=$hypr_app_panic_line" >/dev/console
+      # Match glutin 0.32 ErrorKind's fixed public display strings.
+      # Never print raw native errors, Wayland traces, paths or guest logs.
+      hypr_app_glutin_kind=unclassified
+      for log in /tmp/starbyte-hyprland-app.err /tmp/starbyte-hyprland-app.log; do
+        [ -f "$log" ] || continue
+        if /bin/busybox grep -Fqi 'argument does not refer to a valid native window' "$log"; then
+          hypr_app_glutin_kind=bad_native_window
+        elif /bin/busybox grep -Fqi 'argument does not name a valid surface' "$log"; then
+          hypr_app_glutin_kind=bad_surface
+        elif /bin/busybox grep -Fqi 'argument does not name a valid display' "$log"; then
+          hypr_app_glutin_kind=bad_display
+        elif /bin/busybox grep -Fqi 'argument does not name a valid config' "$log"; then
+          hypr_app_glutin_kind=bad_config
+        elif /bin/busybox grep -Fqi 'argument does not name a valid context' "$log"; then
+          hypr_app_glutin_kind=bad_context
+        elif /bin/busybox grep -Fqi 'arguments are inconsistent' "$log"; then
+          hypr_app_glutin_kind=bad_match
+        elif /bin/busybox grep -Fqi 'initialization failed' "$log"; then
+          hypr_app_glutin_kind=initialization_failed
+        elif /bin/busybox grep -Fqi 'access to the resource failed' "$log"; then
+          hypr_app_glutin_kind=bad_access
+        elif /bin/busybox grep -Fqi 'out of memory' "$log"; then
+          hypr_app_glutin_kind=out_of_memory
+        elif /bin/busybox grep -Fqi 'one or more argument values are invalid' "$log"; then
+          hypr_app_glutin_kind=bad_parameter
+        elif /bin/busybox grep -Fqi 'the context is in a bad state' "$log"; then
+          hypr_app_glutin_kind=bad_context_state
+        elif /bin/busybox grep -Fqi 'the current surface of the calling thread is no longer valid' "$log"; then
+          hypr_app_glutin_kind=bad_current_surface
+        elif /bin/busybox grep -Fqi 'context loss' "$log"; then
+          hypr_app_glutin_kind=context_lost
+        elif /bin/busybox grep -Fqi 'misc platform error' "$log"; then
+          hypr_app_glutin_kind=misc
+        elif /bin/busybox grep -Fqi 'glutin error:' "$log"; then
+          hypr_app_glutin_kind=other_glutin_error
+        elif /bin/busybox grep -Fqi 'winit error:' "$log"; then
+          hypr_app_glutin_kind=winit_error
+        elif /bin/busybox grep -Fqi 'app creation error:' "$log"; then
+          hypr_app_glutin_kind=app_creation_error
+        fi
+        if [ "$hypr_app_glutin_kind" != unclassified ]; then break; fi
+      done
+      echo "STARBYTE_GUEST_HYPRLAND_APP_DIAG stdout=$hypr_app_stdout stderr=$hypr_app_stderr egl=$hypr_app_egl dri=$hypr_app_dri context=$hypr_app_context wayland=$hypr_app_wayland winit=$hypr_app_winit panic=$hypr_app_panic library=$hypr_app_library config=$hypr_app_config render=$hypr_app_render permission=$hypr_app_permission protocol=$hypr_app_protocol stack_eframe=$hypr_app_stack_eframe stack_glutin=$hypr_app_stack_glutin stack_winit=$hypr_app_stack_winit stack_starbyte=$hypr_app_stack_starbyte pixel_format=$hypr_app_pixel_format surface=$hypr_app_surface missing_global=$hypr_app_missing_global egl_bad_surface=$hypr_app_egl_bad_surface egl_bad_native_window=$hypr_app_egl_bad_native_window egl_create_window_surface=$hypr_app_egl_create_window_surface surface_init_failure=$hypr_app_surface_init_failure xdg_configure=$hypr_app_xdg_configure dmabuf_failed=$hypr_app_dmabuf_failed dmabuf_params=$hypr_app_dmabuf_params wl_surface_attach=$hypr_app_wl_surface_attach wl_drm=$hypr_app_wl_drm registry_requested=$hypr_app_registry_requested create_surface=$hypr_app_create_surface create_xdg=$hypr_app_create_xdg create_toplevel=$hypr_app_create_toplevel initial_commit=$hypr_app_initial_commit display_error=$hypr_app_display_error egl_bad_alloc=$hypr_app_egl_bad_alloc egl_bad_match=$hypr_app_egl_bad_match egl_not_initialized=$hypr_app_egl_not_initialized glutin_error=$hypr_app_glutin_error surface_error=$hypr_app_surface_error backtrace=$hypr_app_backtrace panic_line=$hypr_app_panic_line glutin_kind=$hypr_app_glutin_kind" >/dev/console
       # kill -0 alone also succeeds for zombies; require a non-zombie
       # Hyprland process after the application has finished.
       hypr_alive=0

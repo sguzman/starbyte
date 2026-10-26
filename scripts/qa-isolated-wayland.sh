@@ -257,11 +257,13 @@ if timeout --signal=TERM --kill-after=2s "$deadline" \
       export XDG_STATE_HOME=/home/qa/.state
       # Source-generated cartridge: no host ROMs, audio or input devices.
       run_starbyte() {
-        local name="$1" flag="$2" marker="$3" second_marker="${4:-}"
-        local log="$XDG_RUNTIME_DIR/starbyte-$name.log"
-        # The guest has no host home, ROMs or user paths. On failures, show
-        # bounded logs before the throwaway namespace is destroyed; do not
-        # force a second run or make the developer retrieve a private file.
+        local name="$1" flag="$2" marker log
+        shift 2
+        local markers=("$@")
+        [[ "${#markers[@]}" -gt 0 ]] || return 1
+        log="$XDG_RUNTIME_DIR/starbyte-$name.log"
+        # All data, paths, ROMs and logs originate inside this guest. On a
+        # failure show bounded diagnostics before the guest is destroyed.
         if ! timeout --signal=TERM --kill-after=2s 70s "$STARBYTE_EGUI_BIN" \
           --demo --native-worker-preview "$flag" \
           --config "$XDG_CONFIG_HOME/$name.toml" \
@@ -270,17 +272,17 @@ if timeout --signal=TERM --kill-after=2s "$deadline" \
           tail -n 60 "$log" >&2
           return 1
         fi
-        if ! grep -Fq "$marker" "$log" \
-          || { [[ -n "$second_marker" ]] && ! grep -Fq "$second_marker" "$log"; }; then
-          echo "PRIVATE_STARBYTE_SMOKE_FAILED probe=$name reason=missing_acceptance_marker" >&2
-          grep -E "STARBYTE_.*(SMOKE|FAILED|CLOCK|REPAINT)" "$log" | tail -n 40 >&2 || true
-          return 1
-        fi
+        for marker in "${markers[@]}"; do
+          if ! grep -Fq "$marker" "$log"; then
+            echo "PRIVATE_STARBYTE_SMOKE_FAILED probe=$name reason=missing_acceptance_marker" >&2
+            grep -E "STARBYTE_.*(SMOKE|FAILED|CLOCK|REPAINT)" "$log" | tail -n 40 >&2 || true
+            return 1
+          fi
+        done
         echo "PRIVATE_STARBYTE_SMOKE_PASSED probe=$name"
-        grep -F "$marker" "$log" | tail -n 1
-        if [[ -n "$second_marker" ]]; then
-          grep -F "$second_marker" "$log" | tail -n 1
-        fi
+        for marker in "${markers[@]}"; do
+          grep -F "$marker" "$log" | tail -n 1
+        done
       }
       run_starbyte no-redraw --exit-after-full-worker-no-redraw \
         "STARBYTE_FULL_LIBRARY_CLOCK_PACING_SMOKE_OK advanced_frames=" \
@@ -288,7 +290,37 @@ if timeout --signal=TERM --kill-after=2s "$deadline" \
       run_starbyte saves --exit-after-full-worker-saves \
         "STARBYTE_FULL_LIBRARY_SAVE_SMOKE_OK frame=" \
         "screenshot=true step_frames=60"
-      echo PRIVATE_STARBYTE_GUEST_SMOKE_OK pacing=true saves=true screenshots=true
+      run_starbyte focus-pause --exit-after-full-worker-focus-pause \
+        "STARBYTE_FULL_LIBRARY_FOCUS_PAUSE_SMOKE_OK paused_frames="
+      run_starbyte owner-exit --exit-after-full-worker-panic \
+        "STARBYTE_FULL_LIBRARY_WORKER_EXIT_SMOKE_OK playback_stopped=true"
+      run_starbyte replacement --exit-after-full-worker-replacement \
+        "STARBYTE_FULL_LIBRARY_REPLACEMENT_SMOKE_OK retained_rom=true advanced_frames=" \
+        "STARBYTE_FULL_LIBRARY_RECEIPT_RACE_SMOKE_OK retained_rom=true screenshot_written=true step_uploaded=true pending_step_cleared=true" \
+        "STARBYTE_FULL_LIBRARY_SUPERSEDED_INSTALL_SMOKE_OK active_owner_synced=true newer_failure_reported=true"
+      run_starbyte shortcuts --exit-after-full-worker-shortcuts \
+        "STARBYTE_FULL_LIBRARY_SHORTCUT_SMOKE_OK f5=true f8=true f9=true escape=true frame=" \
+        "STARBYTE_FULL_LIBRARY_SHELL_SMOKE_OK menu=true recent_cards=true cover_texture=true library=true status_metrics=true view_toggles=true"
+      run_starbyte sound-mode-slots --exit-after-full-worker-modes \
+        "STARBYTE_FULL_LIBRARY_MODE_SMOKE_OK persistent_slot=true compatibility_slot=true separate_slots=true"
+      run_starbyte sram --exit-after-full-worker-sram \
+        "STARBYTE_FULL_LIBRARY_SRAM_SMOKE_OK persisted_byte=5A" \
+        "STARBYTE_FULL_LIBRARY_OWNER_SHUTDOWN_SMOKE_OK finalized=true audio_released=true"
+      if ! timeout --signal=TERM --kill-after=2s 30s "$STARBYTE_EGUI_BIN" \
+        --demo --verify-demo-sram-restart \
+        --config "$XDG_CONFIG_HOME/sram.toml" \
+        --cache-dir "$XDG_CACHE_HOME/sram" \
+        >"$XDG_RUNTIME_DIR/starbyte-sram-restart.log" 2>&1; then
+        echo PRIVATE_STARBYTE_SMOKE_FAILED probe=sram-restart reason=process_error >&2
+        tail -n 60 "$XDG_RUNTIME_DIR/starbyte-sram-restart.log" >&2
+        exit 1
+      fi
+      grep -F "STARBYTE_FULL_LIBRARY_SRAM_RESTART_OK persisted_byte=5A" \
+        "$XDG_RUNTIME_DIR/starbyte-sram-restart.log" || {
+          echo PRIVATE_STARBYTE_SMOKE_FAILED probe=sram-restart reason=missing_acceptance_marker >&2
+          exit 1
+        }
+      echo "PRIVATE_STARBYTE_GUEST_SMOKE_OK pacing=true saves=true screenshots=true focus_pause=true owner_exit=true rom_replacement=true menus=true slots=true sram_restart=true"
     fi
     cleanup
     trap - EXIT INT TERM HUP

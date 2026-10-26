@@ -239,4 +239,75 @@ mod tests {
         );
         assert_eq!(check_protocol_error(REGISTRY, 0, &raw), Ok(()));
     }
+
+    fn registry_global(name: u32, interface: &str) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&name.to_ne_bytes());
+        payload.extend_from_slice(&((interface.len() + 1) as u32).to_ne_bytes());
+        payload.extend_from_slice(interface.as_bytes());
+        payload.push(0);
+        while payload.len() % 4 != 0 {
+            payload.push(0);
+        }
+        payload.extend_from_slice(&1_u32.to_ne_bytes());
+        payload
+    }
+
+    #[test]
+    fn mock_compositor_completes_configure_and_ack() {
+        let (mut client, mut server) = UnixStream::pair().unwrap();
+        for socket in [&client, &server] {
+            socket.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            socket.set_write_timeout(Some(Duration::from_secs(3))).unwrap();
+        }
+        let compositor = std::thread::spawn(move || {
+            let (object, opcode, payload) = event(&mut server).unwrap();
+            assert_eq!((object, opcode, payload), (1, 1, REGISTRY.to_ne_bytes().to_vec()));
+            let (object, opcode, payload) = event(&mut server).unwrap();
+            assert_eq!((object, opcode, payload), (1, 0, REGISTRY_SYNC.to_ne_bytes().to_vec()));
+            send(&mut server, REGISTRY, 0, &registry_global(41, "wl_compositor")).unwrap();
+            send(&mut server, REGISTRY, 0, &registry_global(42, "xdg_wm_base")).unwrap();
+            send(&mut server, REGISTRY_SYNC, 0, &0_u32.to_ne_bytes()).unwrap();
+
+            for (name, new_id) in [(41_u32, COMPOSITOR), (42_u32, XDG_SHELL)] {
+                let (object, opcode, payload) = event(&mut server).unwrap();
+                assert_eq!((object, opcode), (REGISTRY, 0));
+                assert_eq!(u32::from_ne_bytes(payload[..4].try_into().unwrap()), name);
+                assert_eq!(
+                    u32::from_ne_bytes(payload[payload.len() - 4..].try_into().unwrap()),
+                    new_id
+                );
+            }
+            for (expected_object, expected_opcode, expected_id) in [
+                (COMPOSITOR, 0_u16, SURFACE),
+                (XDG_SHELL, 2_u16, XDG_SURFACE),
+                (XDG_SURFACE, 1_u16, XDG_TOPLEVEL),
+            ] {
+                let (object, opcode, payload) = event(&mut server).unwrap();
+                assert_eq!((object, opcode), (expected_object, expected_opcode));
+                assert_eq!(u32::from_ne_bytes(payload[..4].try_into().unwrap()), expected_id);
+            }
+            let (object, opcode, payload) = event(&mut server).unwrap();
+            assert_eq!((object, opcode), (SURFACE, 6));
+            assert!(payload.is_empty());
+
+            // This event pair is delivered only by the mock server, not
+            // inferred from an emitted request or from a running process.
+            send(&mut server, XDG_TOPLEVEL, 0, &[0; 12]).unwrap();
+            let serial = 77_u32.to_ne_bytes();
+            send(&mut server, XDG_SURFACE, 0, &serial).unwrap();
+            let (object, opcode, payload) = event(&mut server).unwrap();
+            assert_eq!((object, opcode, payload), (XDG_SURFACE, 4, serial.to_vec()));
+            let (object, opcode, payload) = event(&mut server).unwrap();
+            assert_eq!((object, opcode), (SURFACE, 6));
+            assert!(payload.is_empty());
+            let (object, opcode, payload) = event(&mut server).unwrap();
+            assert_eq!((object, opcode, payload), (1, 0, ACK_SYNC.to_ne_bytes().to_vec()));
+            send(&mut server, ACK_SYNC, 0, &0_u32.to_ne_bytes()).unwrap();
+        });
+        let outcome = exchange(&mut client);
+        drop(client);
+        compositor.join().unwrap();
+        assert_eq!(outcome, Ok(()));
+    }
 }

@@ -30,7 +30,9 @@ jobs:
       - name: Verify unattended physical-QA launcher syntax
         run: bash -n scripts/qa-native-hyprland.sh
       - name: Verify isolated QA launcher syntax
-        run: bash -n scripts/qa-isolated-wayland.sh
+        run: |
+          bash -n scripts/qa-isolated-wayland.sh
+          bash -n scripts/qa-hosted-focused-wayland.sh
       - name: Verify sealed Starbyte smoke fails closed without its runtime
         shell: bash
         run: |
@@ -110,7 +112,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libudev-dev libasound2-dev weston libgl1-mesa-dri libegl1 wayland-utils bubblewrap
+        run: sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libudev-dev libasound2-dev weston libgl1-mesa-dri libegl1 wayland-utils bubblewrap xvfb xdotool
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Test
@@ -395,6 +397,20 @@ jobs:
           bash scripts/qa-isolated-wayland.sh --check-only
           bash scripts/qa-isolated-wayland.sh --starbyte-smoke
           echo "STARBYTE_HOSTED_ISOLATED_WESTON_OK physical=not_tested"
+
+      # Experimental stronger focus test: independent Xvfb input seat fed
+      # through Weston to a real native Wayland window. Failures remain
+      # visible but do not invalidate already proven headless acceptance.
+      # Promote to blocking only after exact-revision hosted evidence passes.
+      - name: Experimental hosted native focus seat
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        shell: bash
+        env:
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          set -euo pipefail
+          bash scripts/qa-hosted-focused-wayland.sh --smoke
 
       # Make the tested source revision and complete native acceptance tools
       # available without compiling on the owner's machine. A tarball keeps

@@ -62,11 +62,20 @@ fn pitch_for(mode: AudioPitchMode, custom_percent: u16, speed: u16) -> f32 {
 }
 
 enum PendingOperation {
-    Save(Receiver<Result<WorkerSaveResponse, String>>),
+    Save {
+        epoch: u64,
+        reply: Receiver<Result<WorkerSaveResponse, String>>,
+    },
     SpeakerCheck(Receiver<Result<(), String>>),
     ClearCheats(Receiver<Result<(), String>>),
-    Screenshot(Receiver<Result<SessionScreenshot, String>>),
-    PngWrite(Receiver<Result<PathBuf, String>>),
+    Screenshot {
+        epoch: u64,
+        reply: Receiver<Result<SessionScreenshot, String>>,
+    },
+    PngWrite {
+        epoch: u64,
+        reply: Receiver<Result<PathBuf, String>>,
+    },
     LoadRom {
         path: PathBuf,
         reply: Receiver<Result<WorkerLaunchResponse, String>>,
@@ -108,6 +117,8 @@ pub struct ThreadedPreviewApp {
     loaded_rom_path: Option<PathBuf>,
     status_note: Option<String>,
     pending: Vec<PendingOperation>,
+    /// Invalidate any old game's asynchronous save/capture receipts on launch.
+    session_epoch: u64,
     /// Newest requested launch while the owner is installing a cartridge.
     pending_next_launch: Option<SessionLaunchRequest>,
     library_assets: AssetConfig,
@@ -197,6 +208,7 @@ impl ThreadedPreviewApp {
             loaded_rom_path: None,
             status_note: None,
             pending: Vec::new(),
+            session_epoch: 0,
             pending_next_launch: None,
             library_assets: assets,
             library_config: config.clone(),
@@ -251,7 +263,10 @@ impl ThreadedPreviewApp {
             return;
         }
         match self.engine.queue_save_action_with_frame(action) {
-            Ok(reply) => self.pending.push(PendingOperation::Save(reply)),
+            Ok(reply) => self.pending.push(PendingOperation::Save {
+                epoch: self.session_epoch,
+                reply,
+            }),
             Err(error) => self.last_error = Some(error),
         }
     }
@@ -298,6 +313,7 @@ impl ThreadedPreviewApp {
         let path = request.rom_path.clone();
         match self.engine.queue_launch_with_state(request) {
             Ok(reply) => {
+                self.session_epoch = self.session_epoch.wrapping_add(1);
                 self.input.clear();
                 self.status_note = Some(format!("Loading {}...", path.display()));
                 self.last_error = None;
@@ -432,7 +448,10 @@ impl ThreadedPreviewApp {
             return;
         }
         match self.engine.queue_screenshot_pixels() {
-            Ok(reply) => self.pending.push(PendingOperation::Screenshot(reply)),
+            Ok(reply) => self.pending.push(PendingOperation::Screenshot {
+                epoch: self.session_epoch,
+                reply,
+            }),
             Err(error) => self.last_error = Some(error),
         }
     }
@@ -529,7 +548,10 @@ impl ThreadedPreviewApp {
                             Some("Audio worker stopped before speaker check".to_owned());
                     }
                 },
-                PendingOperation::Save(reply) => match reply.try_recv() {
+                // A previous game's async acknowledgement must never publish
+                // controls, restored pixels, errors or status over a newer ROM.
+                PendingOperation::Save { epoch, .. } if epoch != self.session_epoch => {}
+                PendingOperation::Save { epoch, reply } => match reply.try_recv() {
                     Ok(Ok(response)) => {
                         self.controls = response.controls;
                         if let SessionSaveOutcome::SavedTo(path) = response.outcome {
@@ -545,35 +567,40 @@ impl ThreadedPreviewApp {
                     }
                     Ok(Err(error)) => self.last_error = Some(error),
                     Err(TryRecvError::Empty) => {
-                        still_pending.push(PendingOperation::Save(reply));
+                        still_pending.push(PendingOperation::Save { epoch, reply });
                     }
                     Err(TryRecvError::Disconnected) => {
                         self.last_error = Some("Save worker stopped unexpectedly".to_owned());
                     }
                 },
-                PendingOperation::Screenshot(reply) => match reply.try_recv() {
+                PendingOperation::Screenshot { epoch, .. } if epoch != self.session_epoch => {}
+                PendingOperation::Screenshot { epoch, reply } => match reply.try_recv() {
                     Ok(Ok(frame)) => match self.write_screenshot_async(frame) {
                         Ok(io_reply) => {
-                            still_pending.push(PendingOperation::PngWrite(io_reply));
+                            still_pending.push(PendingOperation::PngWrite {
+                                epoch,
+                                reply: io_reply,
+                            });
                         }
                         Err(error) => self.last_error = Some(error),
                     },
                     Ok(Err(error)) => self.last_error = Some(error),
                     Err(TryRecvError::Empty) => {
-                        still_pending.push(PendingOperation::Screenshot(reply));
+                        still_pending.push(PendingOperation::Screenshot { epoch, reply });
                     }
                     Err(TryRecvError::Disconnected) => {
                         self.last_error = Some("Screenshot worker stopped".to_owned());
                     }
                 },
-                PendingOperation::PngWrite(reply) => match reply.try_recv() {
+                PendingOperation::PngWrite { epoch, .. } if epoch != self.session_epoch => {}
+                PendingOperation::PngWrite { epoch, reply } => match reply.try_recv() {
                     Ok(Ok(path)) => {
                         self.status_note = Some(format!("Screenshot saved to {}", path.display()));
                         self.last_error = None;
                     }
                     Ok(Err(error)) => self.last_error = Some(error),
                     Err(TryRecvError::Empty) => {
-                        still_pending.push(PendingOperation::PngWrite(reply));
+                        still_pending.push(PendingOperation::PngWrite { epoch, reply });
                     }
                     Err(TryRecvError::Disconnected) => {
                         self.last_error = Some("Screenshot writer stopped".to_owned());
@@ -918,6 +945,68 @@ mod pitch_mode_tests {
     }
 
     #[test]
+    fn old_cartridge_save_and_capture_receipts_cannot_override_new_launch() {
+        let temp = tempfile::tempdir().unwrap();
+        let rom = temp.path().join("replacement.sfc");
+        std::fs::write(&rom, starbyte_core::testing::demo::demo_rom_bytes()).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(temp.path().join("saves")),
+            state_dir: Some(temp.path().join("states")),
+            cache_dir: Some(temp.path().join("cache")),
+            config_path: None,
+        };
+        let mut config = RuntimeConfig::default();
+        config.audio.enabled = false;
+        let mut app =
+            ThreadedPreviewApp::new(assets, &config, None, None, true, false, false).unwrap();
+
+        // Deliberately delay receipts belonging to the previous session.
+        let old_epoch = app.session_epoch;
+        let (save_sender, save_reply) = mpsc::channel();
+        let (capture_sender, capture_reply) = mpsc::channel();
+        let (png_sender, png_reply) = mpsc::channel();
+        app.pending.push(PendingOperation::Save {
+            epoch: old_epoch,
+            reply: save_reply,
+        });
+        app.pending.push(PendingOperation::Screenshot {
+            epoch: old_epoch,
+            reply: capture_reply,
+        });
+        app.pending.push(PendingOperation::PngWrite {
+            epoch: old_epoch,
+            reply: png_reply,
+        });
+        app.queue_rom_launch(SessionLaunchRequest {
+            rom_path: rom,
+            sound_mode: SoundSessionMode::Persistent,
+            cheats: Vec::new(),
+        });
+        assert_ne!(app.session_epoch, old_epoch);
+        assert!(app.last_error.is_none());
+        let loading_status = app.status_note.clone();
+        save_sender
+            .send(Ok(WorkerSaveResponse {
+                outcome: SessionSaveOutcome::SavedTo(temp.path().join("old-save")),
+                controls: app.controls.clone(),
+                restored_frame: None,
+            }))
+            .unwrap();
+        capture_sender.send(Err("old capture failure".to_owned())).unwrap();
+        png_sender.send(Err("old PNG failure".to_owned())).unwrap();
+        app.poll_operations(&egui::Context::default());
+        assert!(app.last_error.is_none());
+        assert_eq!(app.status_note, loading_status);
+        assert!(!app.pending.iter().any(|op| matches!(
+            op,
+            PendingOperation::Save { .. }
+                | PendingOperation::Screenshot { .. }
+                | PendingOperation::PngWrite { .. }
+        )));
+    }
+
+    #[test]
     fn save_controls_are_suppressed_during_cartridge_installation() {
         let temp = tempfile::tempdir().unwrap();
         let rom = temp.path().join("save-guard-demo.sfc");
@@ -945,7 +1034,7 @@ mod pitch_mode_tests {
         assert!(
             !app.pending
                 .iter()
-                .any(|op| matches!(op, PendingOperation::Save(_)))
+                .any(|op| matches!(op, PendingOperation::Save { .. }))
         );
     }
 

@@ -411,6 +411,20 @@ jobs:
           set -euo pipefail
           bash scripts/qa-hosted-focused-wayland.sh --smoke
 
+      # Native Wayland focus-loss/resume under a second kiosk client. Real
+      # compositor events, but NOT a physical Hyprland workspace or speaker.
+      # First run is observational to prevent experimental guest flakiness
+      # from hiding the already verified player and focused-clock results.
+      - name: Experimental virtual focus-loss and resume
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        shell: bash
+        env:
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          set -euo pipefail
+          bash scripts/qa-hosted-focused-wayland.sh --blur-smoke
+
       # Make the tested source revision and complete native acceptance tools
       # available without compiling on the owner's machine. A tarball keeps
       # executable permissions; the collector still refuses unsafe physical

@@ -3,13 +3,14 @@
 set -Eeuo pipefail
 umask 077
 fail() { printf 'STARBYTE_HOSTED_FOCUS_BLOCKED %s\n' "$1" >&2; exit 3; }
-[[ $# -eq 1 && "$1" == --smoke ]] || fail usage
+[[ $# -eq 1 && ( "$1" == --smoke || "$1" == --blur-smoke ) ]] || fail usage
+probe="$1"
 [[ "$GITHUB_ACTIONS" == true && "$RUNNER_ENVIRONMENT" == github-hosted ]] || fail hosted_only
 [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] || fail linux_only
 [[ ! -v DISPLAY && ! -v WAYLAND_DISPLAY && ! -v HYPRLAND_INSTANCE_SIGNATURE ]] || fail display_present
 [[ ! -v DBUS_SESSION_BUS_ADDRESS && ! -v XDG_SESSION_ID ]] || fail session_present
 [[ -d "$RUNNER_TEMP" ]] || fail temp_missing
-for binary in bwrap timeout realpath Xvfb xdotool xkbcomp weston wayland-info git; do
+for binary in bwrap timeout realpath Xvfb xdotool xkbcomp weston weston-simple-shm wayland-info git; do
   command -v "$binary" >/dev/null || fail "missing_$binary"
 done
 repo="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)" || fail checkout_missing
@@ -36,8 +37,10 @@ mkdir -p /home/qa/.config /home/qa/.cache /tmp/.X11-unix
   echo STARBYTE_FOCUSED_SEAT_FAILED private_xkb_cache_unavailable >&2
   exit 1
 }
-xvfb_pid='' weston_pid=''
+xvfb_pid='' weston_pid='' game_pid='' rival_pid=''
 cleanup() {
+  [[ -z "$rival_pid" ]] || { kill "$rival_pid" 2>/dev/null || :; wait "$rival_pid" 2>/dev/null || :; }
+  [[ -z "$game_pid" ]] || { kill "$game_pid" 2>/dev/null || :; wait "$game_pid" 2>/dev/null || :; }
   [[ -z "$weston_pid" ]] || { kill "$weston_pid" 2>/dev/null || :; wait "$weston_pid" 2>/dev/null || :; }
   [[ -z "$xvfb_pid" ]] || { kill "$xvfb_pid" 2>/dev/null || :; wait "$xvfb_pid" 2>/dev/null || :; }
 }
@@ -62,10 +65,13 @@ done
 timeout 5s wayland-info >"$runtime/info.log" 2>&1 || { cat "$runtime/info.log" >&2; exit 1; }
 grep -Fq wl_seat "$runtime/info.log" || { echo STARBYTE_FOCUSED_SEAT_FAILED virtual_seat_missing >&2; exit 1; }
 echo STARBYTE_PRIVATE_SEAT_CONNECTED input=xvfb host_devices=hidden
+game_args=(--demo --native-worker-preview --exit-after-full-worker-focused-clock)
+if [[ "$STARBYTE_FOCUS_PROBE" == --blur-smoke ]]; then
+  game_args=(--demo --native-worker-preview --exit-after-full-worker-physical-pause)
+fi
 timeout --signal=TERM --kill-after=2s 18s /run/user/qa/starbyte-egui \
-  --demo --native-worker-preview --exit-after-full-worker-focused-clock \
-  --config /home/qa/.config/starbyte.toml --cache-dir /home/qa/.cache/starbyte \
-  >"$runtime/game.log" 2>&1 &
+  "${game_args[@]}" --config /home/qa/.config/starbyte.toml \
+  --cache-dir /home/qa/.cache/starbyte >"$runtime/game.log" 2>&1 &
 game_pid=$!
 for _ in {1..65}; do
   window="$(DISPLAY=:99 xdotool search --onlyvisible --name Weston 2>/dev/null | head -n 1 || :)"
@@ -78,18 +84,55 @@ for _ in {1..65}; do
   kill -0 "$game_pid" 2>/dev/null || break
   sleep 0.1
 done
+if [[ "$STARBYTE_FOCUS_PROBE" == --blur-smoke ]]; then
+  # The app arms its real focus policy and publishes this marker *before*
+  # an external native Wayland client changes compositor keyboard focus.
+  for _ in {1..90}; do
+    grep -Fq 'STARBYTE_FULL_LIBRARY_REAL_PAUSE_BEGIN frame=' "$runtime/game.log" && break
+    kill -0 "$game_pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  grep -Fq 'STARBYTE_FULL_LIBRARY_REAL_PAUSE_BEGIN frame=' "$runtime/game.log" || {
+    echo STARBYTE_FOCUSED_SEAT_FAILED physical_pause_not_armed >&2
+    tail -n 35 "$runtime/game.log" >&2
+    exit 1
+  }
+  weston-simple-shm >"$runtime/rival.log" 2>&1 &
+  rival_pid=$!
+  sleep 2.65
+  kill -0 "$rival_pid" 2>/dev/null || {
+    echo STARBYTE_FOCUSED_SEAT_FAILED rival_wayland_client_exited >&2
+    tail -n 35 "$runtime/rival.log" >&2
+    exit 1
+  }
+  kill "$rival_pid" 2>/dev/null || :
+  wait "$rival_pid" 2>/dev/null || :
+  rival_pid=''
+  DISPLAY=:99 xdotool windowfocus "$window" 2>/dev/null || :
+  DISPLAY=:99 xdotool mousemove --window "$window" 55 55 click 1 2>/dev/null || :
+fi
 if ! wait "$game_pid"; then
   echo STARBYTE_FOCUSED_SEAT_FAILED game_exit >&2
   tail -n 55 "$runtime/game.log" >&2
   exit 1
 fi
-grep -F 'STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_OK fps=' "$runtime/game.log" || {
-  echo STARBYTE_FOCUSED_SEAT_FAILED focused_clock_missing >&2
-  grep -E 'STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_(BEGIN|FAILED|OK)' "$runtime/game.log" >&2 || :
-  tail -n 35 "$runtime/game.log" >&2
-  exit 1
-}
-echo STARBYTE_PRIVATE_FOCUSED_SEAT_OK compositor=weston_x11 seat=xvfb physical=not_tested
+if [[ "$STARBYTE_FOCUS_PROBE" == --blur-smoke ]]; then
+  grep -F 'STARBYTE_FULL_LIBRARY_REAL_PAUSE_SMOKE_OK advanced_away=' "$runtime/game.log" || {
+    echo STARBYTE_FOCUSED_SEAT_FAILED native_blur_resume_missing >&2
+    grep -E 'STARBYTE_FULL_LIBRARY_REAL_PAUSE_(BEGIN|SMOKE_FAILED|SMOKE_OK)' "$runtime/game.log" >&2 || :
+    tail -n 35 "$runtime/game.log" >&2
+    exit 1
+  }
+  echo STARBYTE_PRIVATE_BLUR_SEAT_OK compositor=weston_x11 seat=xvfb physical=not_tested
+else
+  grep -F 'STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_OK fps=' "$runtime/game.log" || {
+    echo STARBYTE_FOCUSED_SEAT_FAILED focused_clock_missing >&2
+    grep -E 'STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_(BEGIN|FAILED|OK)' "$runtime/game.log" >&2 || :
+    tail -n 35 "$runtime/game.log" >&2
+    exit 1
+  }
+  echo STARBYTE_PRIVATE_FOCUSED_SEAT_OK compositor=weston_x11 seat=xvfb physical=not_tested
+fi
 GUEST
 chmod 700 "$root/guest.sh"
 # X server lives strictly inside Bubblewrap's private /tmp. The only shared
@@ -104,6 +147,7 @@ timeout --signal=TERM --kill-after=2s 55s bwrap \
   --setenv XDG_RUNTIME_DIR /run/user/qa --setenv XDG_CONFIG_HOME /home/qa/.config \
   --setenv XDG_CACHE_HOME /home/qa/.cache \
   --setenv WAYLAND_DISPLAY starbyte-focus-wayland \
+  --setenv STARBYTE_FOCUS_PROBE "$probe" \
   --setenv WINIT_UNIX_BACKEND wayland --setenv LIBGL_ALWAYS_SOFTWARE 1 \
   /usr/bin/bash /run/user/qa/guest.sh || fail guest_failed
-echo STARBYTE_HOSTED_FOCUSED_WAYLAND_OK physical=not_tested desktop=untouched
+echo STARBYTE_HOSTED_FOCUSED_WAYLAND_OK probe="$probe" physical=not_tested desktop=untouched

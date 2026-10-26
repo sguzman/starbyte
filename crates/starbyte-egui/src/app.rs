@@ -9977,9 +9977,7 @@ fn is_superseded_rom_load(latest: Option<u64>, event_job: u64) -> bool {
 fn rom_selection_preparing(jobs: &[JobRecord], latest: Option<u64>) -> bool {
     latest.is_some_and(|id| {
         jobs.iter().any(|job| {
-            job.id == id
-                && is_rom_job(&job.label)
-                && matches!(job.state, "queued" | "running")
+            job.id == id && is_rom_job(&job.label) && matches!(job.state, "queued" | "running")
         })
     })
 }

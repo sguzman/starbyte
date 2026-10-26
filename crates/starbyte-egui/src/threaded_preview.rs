@@ -72,6 +72,22 @@ fn preview_game_shortcuts_allowed(
     focused && !wants_keyboard_input && can_modify_game
 }
 
+/// A manual Pause must not retain controller press edges until Resume.
+/// Keep polling Gilrs for releases, but never hand paused/unfocused inputs
+/// to the single-owner emulator.
+fn submit_preview_gameplay_input(
+    input: &InputPort,
+    focused_and_playing: bool,
+    held: ControllerState,
+    pressed: ControllerState,
+) {
+    if focused_and_playing {
+        input.submit(held, pressed);
+    } else {
+        input.clear();
+    }
+}
+
 enum PendingOperation {
     Save {
         epoch: u64,
@@ -856,6 +872,35 @@ impl ThreadedPreviewApp {
 #[cfg(test)]
 mod pitch_mode_tests {
     use super::*;
+
+    #[test]
+    fn paused_and_unfocused_input_edges_are_not_replayed_after_resume() {
+        let input = InputPort::default();
+        let pressed = ControllerState {
+            start: true,
+            ..ControllerState::default()
+        };
+        submit_preview_gameplay_input(&input, true, pressed, pressed);
+        assert!(input.take_frame_state_for_test().start);
+
+        // Manual Pause: drain GUI/controller events, but do not queue edges.
+        submit_preview_gameplay_input(&input, false, pressed, pressed);
+        assert!(!input.take_frame_state_for_test().start);
+        submit_preview_gameplay_input(&input, false, pressed, pressed);
+        submit_preview_gameplay_input(
+            &input,
+            true,
+            ControllerState::default(),
+            ControllerState::default(),
+        );
+        assert!(!input.take_frame_state_for_test().start);
+
+        // A genuinely held button after Resume is still respected.
+        submit_preview_gameplay_input(&input, true, pressed, pressed);
+        assert!(input.take_frame_state_for_test().start);
+        submit_preview_gameplay_input(&input, false, pressed, pressed);
+        assert!(!input.take_frame_state_for_test().start);
+    }
 
     #[test]
     fn game_shortcuts_do_not_intercept_library_search_or_unfocused_input() {
@@ -1995,17 +2040,13 @@ impl eframe::App for ThreadedPreviewApp {
         let (keyboard_enabled, gamepad_enabled) =
             controller_input_sources(self.input_mode, ctx.wants_keyboard_input(), false);
         let gamepad = self.gamepads.poll(focused && gamepad_enabled);
-        if focused {
-            let keyboard = if keyboard_enabled {
-                self.keyboard(ctx)
-            } else {
-                (ControllerState::default(), ControllerState::default())
-            };
-            let (held, pressed) = merge_sources(keyboard, gamepad);
-            self.input.submit(held, pressed);
+        let keyboard = if focused && keyboard_enabled {
+            self.keyboard(ctx)
         } else {
-            self.input.clear();
-        }
+            (ControllerState::default(), ControllerState::default())
+        };
+        let (held, pressed) = merge_sources(keyboard, gamepad);
+        submit_preview_gameplay_input(&self.input, focused && self.playing, held, pressed);
 
         if let Some(error) = self.engine.take_error() {
             self.last_error = Some(error);
@@ -2042,6 +2083,11 @@ impl eframe::App for ThreadedPreviewApp {
                         .clicked()
                     {
                         self.playing = !self.playing;
+                        if !self.playing {
+                            // The update loop may already have sampled a key
+                            // on the very frame the Pause menu was clicked.
+                            self.input.clear();
+                        }
                         self.engine.set_playing(self.playing);
                         ui.close();
                     }

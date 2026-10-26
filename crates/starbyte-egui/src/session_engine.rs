@@ -111,6 +111,11 @@ impl InputPort {
         controller_from_bits(held | edges)
     }
 
+    #[cfg(test)]
+    pub(crate) fn take_frame_state_for_test(&self) -> ControllerState {
+        self.take_frame_state()
+    }
+
     /// Flush held buttons and pending press edges on focus loss or ROM
     /// replacement. Background gameplay must not latch stale foreground keys.
     pub fn clear(&self) {

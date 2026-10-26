@@ -249,7 +249,7 @@ if timeout --signal=TERM --kill-after=2s "$deadline" \
       export XDG_CACHE_HOME=/home/qa/.cache
       export XDG_DATA_HOME=/home/qa/.data
       export XDG_STATE_HOME=/home/qa/.state
-      # Source-generated cartridge: no user's ROMs, audio or input devices.
+      # Source-generated cartridge: no host ROMs, audio or input devices.
       run_starbyte() {
         local name="$1" flag="$2" marker="$3" second_marker="${4:-}"
         local log="$XDG_RUNTIME_DIR/starbyte-$name.log"

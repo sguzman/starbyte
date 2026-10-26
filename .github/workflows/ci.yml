@@ -119,9 +119,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # GitHub-hosted mirrors have intermittently left apt in one
-          # download step for over 15 minutes. Bound network hangs before
-          # compiling; retry index refresh without interrupting dpkg.
+          # The Azure runner mirror has transferred normal apt dependencies
+          # at kilobytes/sec in repeated real CI logs. This change affects
+          # only the disposable hosted Linux GUI job, never the owner's OS.
+          if [[ -f /etc/apt/apt-mirrors.txt ]] &&
+             grep -Fq 'azure.archive.ubuntu.com/ubuntu' /etc/apt/apt-mirrors.txt; then
+            sudo sed -i 's#http://azure.archive.ubuntu.com/ubuntu#http://archive.ubuntu.com/ubuntu#g' /etc/apt/apt-mirrors.txt
+            echo STARBYTE_APT_ARCHIVE_MIRROR selected=archive.ubuntu.com
+          fi
+          # Bound network hangs before compiling; retry index refresh
+          # without interrupting dpkg.
           updated=false
           for attempt in 1 2 3; do
             if timeout --signal=TERM --kill-after=5s 100s sudo apt-get \

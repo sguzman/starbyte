@@ -2760,11 +2760,7 @@ impl StarbyteApp {
             detail: "Queued".to_owned(),
         });
         trim_job_history(&mut self.jobs, self.latest_rom_job_id);
-        if job_status_may_replace_rom_feedback(
-            &self.jobs,
-            self.latest_rom_job_id,
-            &label,
-        ) {
+        if job_status_may_replace_rom_feedback(&self.jobs, self.latest_rom_job_id, &label) {
             self.status_line = format!("{label} queued...");
         }
         self.worker.submit(WorkerCommand {

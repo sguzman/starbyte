@@ -600,7 +600,8 @@ impl ThreadedPreviewApp {
                 PendingOperation::PngWrite { epoch, reply } => match reply.try_recv() {
                     Ok(Ok(path)) => {
                         if epoch == self.session_epoch {
-                            self.status_note = Some(format!("Screenshot saved to {}", path.display()));
+                            self.status_note =
+                                Some(format!("Screenshot saved to {}", path.display()));
                             self.last_error = None;
                         }
                     }
@@ -1067,10 +1068,12 @@ mod pitch_mode_tests {
             written = std::fs::read_dir(&app.screenshot_root)
                 .ok()
                 .is_some_and(|mut files| files.next().is_some());
-            if written && !app.pending.iter().any(|op| matches!(
-                op,
-                PendingOperation::PngWrite { .. }
-            )) {
+            if written
+                && !app
+                    .pending
+                    .iter()
+                    .any(|op| matches!(op, PendingOperation::PngWrite { .. }))
+            {
                 break;
             }
             std::thread::sleep(Duration::from_millis(10));

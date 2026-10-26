@@ -2,6 +2,8 @@
 
 **North star:** a comfy, feature-rich Rust SNES emulator for Linux/Wayland. Real gameplay, responsiveness, accessibility and pleasant player features outrank hardware accuracy for its own sake.
 
+**Pause-controller acceptance checkpoint (2026-10-26):** Both worker-backed UIs now discard controller-held state and queued press edges during manual Pause and on focus loss, preventing deferred gameplay actions after Resume. [Exact-code four-job CI `40422242996`](https://github.com/sguzman/starbyte/actions/runs/40422242996) passed on `f658f4e` (Linux, Windows, Clippy, Rust 1.88). Hardware input acceptance remains open, as do P-18/P-19/D-12/D-13/D-15/C-16: **71/77 (92.21%, Δ 0.00)**.
+
 **Preview parity checkpoint (2026-10-26):** [CI run 40419507021](https://github.com/sguzman/starbyte/actions/runs/40419507021) verified `232ffa1` on Linux/Windows/Clippy/Rust 1.88. Preview F5/F8/F12 now respect text-editor keyboard focus; preview audio-output route reselection works with an already-started speaker worker even when no cartridge is installed, without overlapping commands. P-18/P-19/D-12/D-13/D-15 physical acceptance and C-16 cutover remain open at **71/77 (92.21%; delta +0.00)**.
 
 **Paused-preview audio diagnostics checkpoint (2026-10-26):** [All four CI jobs passed on `d1a5cc9`](https://github.com/sguzman/starbyte/actions/runs/40415283529). The preview queries speaker/device/stream-recovery counters asynchronously while paused, distinguishes queued speaker checks from verified mixer submissions, and protects the saved frame and replacement-cartridge owner. Four device-free regressions passed. No real Hyprland audio or controller proof; scheduler acceptance remains **71/77 (92.21%, delta +0.00)** with P-18/P-19/D-12/D-13/D-15/C-16 open.

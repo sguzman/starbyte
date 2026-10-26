@@ -1,5 +1,25 @@
 # Emulation scheduler migration
 
+## Manual Pause controller-edge isolation: verified (2026-10-26)
+
+[All four CI jobs in run 40422242996](https://github.com/sguzman/starbyte/actions/runs/40422242996)
+passed on the exact corrected [`f658f4e`](https://github.com/sguzman/starbyte/commit/f658f4e0f295fc29c35c37052c3620c4cb7e5ea8):
+Linux tests and private virtual-Wayland smoke, Windows tests,
+formatting/Clippy and Rust 1.88 compatibility.
+
+**D-15 / P-19:** On manual Pause and lost focus, both the opt-in threaded preview
+and the full worker-backed library window discard pending held and pressed
+controller bits instead of forwarding them to an emulator clock that is
+stopped. This also clears a key sampled on the same UI frame that invoked
+Pause. After Resume, fresh held states and legitimate presses still reach
+the worker. Device-free regressions prove old edges cannot be replayed;
+the renderer does not borrow or step the emulator to clear input.
+
+This is a software correctness improvement, **not** physical Hyprland or
+gamepad validation. The six pending gates remain P-18/P-19, D-12/D-13/D-15,
+and C-16; production-default cutover is still prohibited until physical
+acceptance. **Scheduler progress: 71/77 = 92.21%; delta +0.00 points.**
+
 ## Preview input and no-ROM audio recovery parity (2026-10-26)
 
 The exact code revision [`232ffa1`](https://github.com/sguzman/starbyte/commit/232ffa1f33d4c11a9fe040e471a6a5e70d866014)

@@ -605,7 +605,11 @@ impl ThreadedPreviewApp {
                                 reply: io_reply,
                             });
                         }
-                        Err(error) => self.last_error = Some(error),
+                        Err(error) => {
+                            if epoch == self.session_epoch {
+                                self.last_error = Some(error);
+                            }
+                        }
                     },
                     Ok(Err(error)) => {
                         if epoch == self.session_epoch {
@@ -985,16 +989,22 @@ mod pitch_mode_tests {
         let deadline = Instant::now() + Duration::from_secs(6);
         while Instant::now() < deadline {
             app.poll_operations(&egui::Context::default());
-            if app.pending.iter().all(|op| !matches!(op, PendingOperation::LoadRom { .. })) {
+            if app
+                .pending
+                .iter()
+                .all(|op| !matches!(op, PendingOperation::LoadRom { .. }))
+            {
                 break;
             }
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(app.controls.session.has_rom);
         assert!(app.playing);
-        assert!(app.status_note.as_deref().is_some_and(|status| {
-            status.starts_with("Preparing ")
-        }));
+        assert!(
+            app.status_note
+                .as_deref()
+                .is_some_and(|status| { status.starts_with("Preparing ") })
+        );
     }
 
     #[test]
@@ -1028,13 +1038,19 @@ mod pitch_mode_tests {
         app.queue_rom_load(next);
         assert!(app.pending_library_rom.is_some());
         assert_ne!(app.session_epoch, prior_epoch);
-        save_sender.send(Err("old save failure".to_owned())).unwrap();
-        load_sender.send(Err("old launch failure".to_owned())).unwrap();
+        save_sender
+            .send(Err("old save failure".to_owned()))
+            .unwrap();
+        load_sender
+            .send(Err("old launch failure".to_owned()))
+            .unwrap();
         app.poll_operations(&egui::Context::default());
         assert!(app.last_error.is_none());
-        assert!(app.status_note.as_deref().is_some_and(|status| {
-            status.starts_with("Preparing ")
-        }));
+        assert!(
+            app.status_note
+                .as_deref()
+                .is_some_and(|status| { status.starts_with("Preparing ") })
+        );
     }
 
     #[test]

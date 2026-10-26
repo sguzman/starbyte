@@ -238,6 +238,15 @@ if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --
       cp -a /usr/share/hyprland "$root/initfs/usr/share/" || fail 'guest_hyprland_assets_failed'
     fi
     : >"$root/initfs/etc/starbyte-hyprland-smoke"
+    # Independently test the exact staged Mesa EGL implementation inside
+    # the private VM, not a host display or the user's machine.
+    command -v eglinfo >/dev/null 2>&1 || fail 'guest_eglinfo_package_missing'
+    eglinfo_bin="$(readlink -f -- "$(command -v eglinfo)")"
+    [[ -x "$eglinfo_bin" ]] || fail 'guest_eglinfo_binary_missing'
+    cp -L "$eglinfo_bin" "$root/initfs/bin/eglinfo" \
+      || fail 'guest_eglinfo_stage_failed'
+    ldd "$eglinfo_bin" >>"$root/wayland-dependencies" \
+      || fail 'guest_eglinfo_dependency_scan_failed'
   fi
   grep -Fq 'not found' "$root/wayland-dependencies" && fail 'wayland_dependency_missing'
   while IFS= read -r dependency; do
@@ -808,6 +817,37 @@ HYPR_CONFIG
         fi
       fi
       echo "STARBYTE_GUEST_HYPR_CAP_DIAG status=$hypr_caps_status parsed=$hypr_caps_parsed" >/dev/console
+      # Mesa eglinfo probes both platforms with the same guest software
+      # renderer. Keep raw diagnostics inside the disposable VM.
+      hypr_eglinfo_status=not_run
+      hypr_eglinfo_wayland=0
+      hypr_eglinfo_surfaceless=0
+      if [ "$hypr_registry" = 1 ]; then
+        WAYLAND_DISPLAY="$hypr_display" EGL_PLATFORM=wayland \
+          MESA_LOADER_DRIVER_OVERRIDE=swrast LIBGL_ALWAYS_SOFTWARE=1 \
+          /bin/busybox timeout 20 /bin/eglinfo -B \
+          >/tmp/hypr-eglinfo.log 2>/tmp/hypr-eglinfo.err
+        hypr_eglinfo_status=$?
+        /bin/busybox awk '
+          /Wayland platform:/ { p = "wayland"; next }
+          /Surfaceless platform:/ { p = "surfaceless"; next }
+          /platform:/ { p = "other"; next }
+          /EGL API version:|EGL version string:/ {
+            if (p == "wayland") wayland = 1;
+            if (p == "surfaceless") surfaceless = 1;
+          }
+          END { printf "STARBYTE_GUEST_EGLINFO_RESULT wayland=%d surfaceless=%d\n", wayland, surfaceless; }
+        ' /tmp/hypr-eglinfo.log >/tmp/hypr-eglinfo-result.log
+        if /bin/busybox grep -Fqx 'STARBYTE_GUEST_EGLINFO_RESULT wayland=1 surfaceless=1' /tmp/hypr-eglinfo-result.log; then
+          hypr_eglinfo_wayland=1
+          hypr_eglinfo_surfaceless=1
+        elif /bin/busybox grep -Fqx 'STARBYTE_GUEST_EGLINFO_RESULT wayland=1 surfaceless=0' /tmp/hypr-eglinfo-result.log; then
+          hypr_eglinfo_wayland=1
+        elif /bin/busybox grep -Fqx 'STARBYTE_GUEST_EGLINFO_RESULT wayland=0 surfaceless=1' /tmp/hypr-eglinfo-result.log; then
+          hypr_eglinfo_surfaceless=1
+        fi
+      fi
+      echo "STARBYTE_GUEST_EGLINFO_DIAG status=$hypr_eglinfo_status wayland=$hypr_eglinfo_wayland surfaceless=$hypr_eglinfo_surfaceless" >/dev/console
       # Distinct from the Weston sample: prove focus under Hyprland itself.
       hypr_focus_ready=0
       hypr_focus_clean=0
@@ -1318,7 +1358,7 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
       || fail 'guest_focused_wayland_keyboard_delivery_missing'
     echo 'STARBYTE_GUEST_FOCUS_OK client=weston-simple-shm escape=received source=private_qmp guest_only=true'
     if [[ "$mode" == --hyprland-smoke ]]; then
-      grep -E '^STARBYTE_GUEST_(HYPRLAND_(RESULT|DIAG|APP_RESULT|APP_DIAG)|HYPR_FOCUS_(RESULT|DIAG)|HYPR_OUTPUT_DIAG|HYPR_CAP_(BLOCKED|DIAG)|WAYLAND_CAP_RESULT) ' "$root/serial-clean.log" || true
+      grep -E '^STARBYTE_GUEST_(HYPRLAND_(RESULT|DIAG|APP_RESULT|APP_DIAG)|HYPR_FOCUS_(RESULT|DIAG)|HYPR_OUTPUT_DIAG|HYPR_CAP_(BLOCKED|DIAG)|WAYLAND_CAP_RESULT|EGLINFO_DIAG) ' "$root/serial-clean.log" || true
       grep -Fqx 'STARBYTE_GUEST_HYPRLAND_RESULT executable=1 socket=1 registry=1 compositor=1 seat=1 alive=1' "$root/serial-clean.log" \
         || fail 'guest_private_hyprland_registry_or_seat_missing'
       echo 'STARBYTE_GUEST_HYPRLAND_OK drm=virtio compositor=hyprland seat=virtual guest_only=true'

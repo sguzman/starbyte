@@ -43,7 +43,7 @@ jobs:
           sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install -y --no-install-recommends \
             qemu-system-x86 socat jq busybox-static cpio curl squashfs-tools kmod \
             libgbm-dev libdrm-dev libgl1-mesa-dri libegl1 libegl-mesa0 libgles2 \
-            libwayland-egl1 libwayland-cursor0 weston wayland-utils \
+            libwayland-egl1 libwayland-cursor0 weston wayland-utils mesa-utils \
             libseat1 libinput10 binutils udev xkb-data hyprland
       - uses: dtolnay/rust-toolchain@stable
       - name: Install native GUI build dependencies

@@ -13,6 +13,20 @@ const XDG_SURFACE: u32 = 7;
 const XDG_TOPLEVEL: u32 = 8;
 const ACK_SYNC: u32 = 9;
 
+// This is the actual new-object request order below, including the initial
+// registry and sync callback. Wayland rejects gaps in client object IDs.
+// Fail the guest probe at compilation if someone reintroduces one.
+const _: () = assert!(
+    REGISTRY == 2
+        && REGISTRY_SYNC == REGISTRY + 1
+        && COMPOSITOR == REGISTRY_SYNC + 1
+        && XDG_SHELL == COMPOSITOR + 1
+        && SURFACE == XDG_SHELL + 1
+        && XDG_SURFACE == SURFACE + 1
+        && XDG_TOPLEVEL == XDG_SURFACE + 1
+        && ACK_SYNC == XDG_TOPLEVEL + 1
+);
+
 fn send(socket: &mut UnixStream, object: u32, opcode: u16, payload: &[u8])
     -> Result<(), &'static str>
 {

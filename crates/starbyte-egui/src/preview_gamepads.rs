@@ -24,15 +24,30 @@ struct Stick {
 impl Stick {
     fn virtual_dpad(self) -> BTreeSet<String> {
         let mut active = BTreeSet::new();
-        if self.x < -0.5 {
+        if self.x <= -0.5 {
             active.insert("DPadLeft".to_owned());
-        } else if self.x > 0.5 {
+        } else if self.x >= 0.5 {
             active.insert("DPadRight".to_owned());
         }
-        if self.y > 0.5 {
+        if self.y >= 0.5 {
             active.insert("DPadUp".to_owned());
-        } else if self.y < -0.5 {
+        } else if self.y <= -0.5 {
             active.insert("DPadDown".to_owned());
+        }
+        active
+    }
+
+    fn axis_bindings(self, prefix: &str) -> BTreeSet<String> {
+        let mut active = BTreeSet::new();
+        if self.x <= -0.5 {
+            active.insert(format!("{prefix}X-"));
+        } else if self.x >= 0.5 {
+            active.insert(format!("{prefix}X+"));
+        }
+        if self.y <= -0.5 {
+            active.insert(format!("{prefix}Y-"));
+        } else if self.y >= 0.5 {
+            active.insert(format!("{prefix}Y+"));
         }
         active
     }
@@ -41,6 +56,7 @@ impl Stick {
 #[derive(Default, Clone, Copy)]
 struct ControllerAxes {
     left: Stick,
+    right: Stick,
     dpad: Stick,
 }
 
@@ -52,6 +68,13 @@ impl ControllerAxes {
             .cloned()
             .collect()
     }
+
+    fn active_bindings(self) -> BTreeSet<String> {
+        let mut active = self.virtual_dpad();
+        active.extend(self.left.axis_bindings("LeftStick"));
+        active.extend(self.right.axis_bindings("RightStick"));
+        active
+    }
 }
 
 /// Multiple gamepads are supported; pressed edges survive a short tap between
@@ -60,7 +83,7 @@ impl ControllerAxes {
 pub struct PreviewGamepads {
     gilrs: Option<Gilrs>,
     held_by_id: HashMap<GamepadId, BTreeSet<String>>,
-    virtual_by_id: HashMap<GamepadId, BTreeSet<String>>,
+    axes_by_id: HashMap<GamepadId, BTreeSet<String>>,
     sticks_by_id: HashMap<GamepadId, ControllerAxes>,
     bindings: BTreeMap<String, String>,
     last_poll: Instant,
@@ -72,7 +95,7 @@ impl PreviewGamepads {
         Self {
             gilrs: Gilrs::new().ok(),
             held_by_id: HashMap::new(),
-            virtual_by_id: HashMap::new(),
+            axes_by_id: HashMap::new(),
             sticks_by_id: HashMap::new(),
             bindings,
             last_poll: Instant::now(),
@@ -82,7 +105,7 @@ impl PreviewGamepads {
 
     fn clear_held_controls(&mut self) {
         self.held_by_id.clear();
-        self.virtual_by_id.clear();
+        self.axes_by_id.clear();
         self.sticks_by_id.clear();
     }
 
@@ -126,13 +149,15 @@ impl PreviewGamepads {
                         match axis {
                             Axis::LeftStickX => axes.left.x = value,
                             Axis::LeftStickY => axes.left.y = value,
+                            Axis::RightStickX => axes.right.x = value,
+                            Axis::RightStickY => axes.right.y = value,
                             Axis::DPadX => axes.dpad.x = value,
                             Axis::DPadY => axes.dpad.y = value,
                             _ => continue,
                         }
-                        let next = axes.virtual_dpad();
+                        let next = axes.active_bindings();
                         let previous = self
-                            .virtual_by_id
+                            .axes_by_id
                             .insert(event.id, next.clone())
                             .unwrap_or_default();
                         if focused {
@@ -143,7 +168,7 @@ impl PreviewGamepads {
                     }
                     EventType::Disconnected => {
                         self.held_by_id.remove(&event.id);
-                        self.virtual_by_id.remove(&event.id);
+                        self.axes_by_id.remove(&event.id);
                         self.sticks_by_id.remove(&event.id);
                     }
                     _ => {}
@@ -161,13 +186,17 @@ impl PreviewGamepads {
                             x: state.left.0,
                             y: state.left.1,
                         },
+                        right: Stick {
+                            x: state.right.0,
+                            y: state.right.1,
+                        },
                         dpad: Stick {
                             x: state.dpad.0,
                             y: state.dpad.1,
                         },
                     };
                     self.held_by_id.insert(state.id, state.held);
-                    self.virtual_by_id.insert(state.id, axes.virtual_dpad());
+                    self.axes_by_id.insert(state.id, axes.active_bindings());
                     self.sticks_by_id.insert(state.id, axes);
                 }
             }
@@ -178,7 +207,7 @@ impl PreviewGamepads {
         let held_buttons = self
             .held_by_id
             .values()
-            .chain(self.virtual_by_id.values())
+            .chain(self.axes_by_id.values())
             .flat_map(|set| set.iter().cloned())
             .collect::<BTreeSet<_>>();
         let mut held = ControllerState::default();
@@ -225,10 +254,29 @@ mod tests {
         let axes = ControllerAxes {
             left: Stick { x: -0.95, y: 0.0 },
             dpad: Stick { x: 0.0, y: 0.91 },
+            ..ControllerAxes::default()
         };
         let active = axes.virtual_dpad();
         assert!(active.contains("DPadLeft"));
         assert!(active.contains("DPadUp"));
+    }
+
+    #[test]
+    fn persisted_stick_axis_bindings_match_full_library_player() {
+        let axes = ControllerAxes {
+            left: Stick { x: 0.75, y: 0.91 },
+            right: Stick { x: -0.95, y: -0.81 },
+            dpad: Stick::default(),
+        };
+        let active = axes.active_bindings();
+        assert!(active.contains("LeftStickX+"));
+        assert!(active.contains("LeftStickY+"));
+        assert!(active.contains("RightStickX-"));
+        assert!(active.contains("RightStickY-"));
+        assert!(active.contains("DPadRight"));
+        assert!(active.contains("DPadUp"));
+        assert!(!active.contains("DPadLeft"));
+        assert!(!active.contains("DPadDown"));
     }
 
     #[test]

@@ -28,6 +28,10 @@ runtime=/run/user/qa
   exit 1
 }
 mkdir -p /home/qa/.config /home/qa/.cache /tmp/.X11-unix
+[[ -d /var/lib/xkb && -w /var/lib/xkb ]] || {
+  echo STARBYTE_FOCUSED_SEAT_FAILED private_xkb_cache_unavailable >&2
+  exit 1
+}
 xvfb_pid='' weston_pid=''
 cleanup() {
   [[ -z "$weston_pid" ]] || { kill "$weston_pid" 2>/dev/null || :; wait "$weston_pid" 2>/dev/null || :; }
@@ -90,6 +94,7 @@ timeout --signal=TERM --kill-after=2s 55s bwrap \
   --unshare-all --share-net --die-with-parent --new-session \
   --ro-bind /usr /usr --symlink usr/lib /lib --symlink usr/lib64 /lib64 \
   --proc /proc --dev /dev --tmpfs /tmp --tmpfs /run --dir /run/user \
+  --dir /var --dir /var/lib --dir /var/lib/xkb \
   --bind "$root" /run/user/qa --dir /home --dir /home/qa \
   --clearenv --setenv PATH /usr/bin --setenv HOME /home/qa \
   --setenv XDG_RUNTIME_DIR /run/user/qa --setenv XDG_CONFIG_HOME /home/qa/.config \

@@ -13,14 +13,18 @@ private XDG runtime, HOME, config, cache and data paths. Host compositor
 sockets, X11 fallback, `/dev/input`, `/dev/dri`, host game libraries,
 session D-Bus and the owner's XDG configuration remain inaccessible.
 
-The guest automatically requires both the independent ~60 FPS worker
-clock marker **and** fresh texture delivery after the suppressed repaint
-interval. It also requires the original full-library save smoke, including
-quick/disk saves, screenshot PNG and sixty paused single steps. Each
-subprocess has a deadline; its log stays inside the disposable private
-runtime, and the guest compositor is terminated on both success and
-failure. This reuses acceptance behavior already exercised by hosted Weston
-CI rather than adding new product features.
+The guest requires both the independent ~60 FPS worker clock marker
+**and** fresh texture delivery after the suppressed repaint interval. It
+also runs the existing original full-library quick/disk save, screenshot
+and sixty-paused-step smoke; focus-policy pause/resume; unexpected owner
+exit; ROM replacement and superseded asynchronous replies; keyboard
+shortcuts and full shell/menu toggles; distinct sound-mode disk slots;
+and battery SRAM finalization followed by **a second process** reading
+the persisted battery data. Every subprocess has a deadline; successful
+receipts and bounded failure diagnostics go to Actions logs before its
+private runtime is destroyed. The guest compositor is terminated on both
+success and failure. This reuses acceptance behavior already exercised by
+hosted Weston CI rather than adding new product features.
 
 The source-only launcher does **not** establish that Bubblewrap plus Weston
 plus the game binary can run on a particular local host until executed there.

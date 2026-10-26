@@ -1,5 +1,34 @@
 # Starbyte: current state
 
+## Hosted virtual keyboard-transfer verdict (2026-10-26)
+
+The complete four-job CI run
+[40404350828](https://github.com/sguzman/starbyte/actions/runs/40404350828)
+passed on commit `7199c1a`: Linux, Windows, lint and the declared
+Rust 1.88 compiler floor. The required private Weston focused-clock check
+measured **60.115 completed emulated FPS, 181 worker frames over 3,010 ms**
+using a private Xvfb/Weston compositor. The tested Linux player and QA
+collector were packaged with verified SHA-256 checksums. None of this
+constitutes physical Hyprland or audible speaker acceptance.
+
+The separate, deliberately non-blocking native Wayland blur/resume
+experiment remains **unverified and failing**. Two distinct native Wayland
+surfaces started; the rival rendered at least 65 commits; Starbyte received
+initial `wl_keyboard.enter` events. Yet synthetic XTEST and targeted
+XSendEvent keyboard injection failed to produce `wl_keyboard.key` at the
+Starbyte client. An X11 keyboard monitor saw zero key events while the
+outer Weston X11 window was confirmed focused. The compositor never
+delivered a genuine native `wl_keyboard.leave`, so this experiment
+**cannot** assess suspension/resumption and must never count as D-13 or
+physical focus acceptance. Avoid repeating arbitrary Xvfb key timings;
+the next meaningful test requires a demonstrably independent compositor
+and input seat capable of actual native focus transitions.
+
+The scheduler ledger stays **71/77 (92.21%, delta +0.00 points)**.
+P-18, P-19, C-16, D-12, D-13 and D-15 remain open; production worker
+cutover is still gated by independent physical evidence. The owner's
+active Hyprland desktop was not accessed or reconfigured.
+
 ## Hardware-free XDG compositor-protocol regressions (2026-10-25)
 
 The private guest's XDG wire code now has source-level regression coverage

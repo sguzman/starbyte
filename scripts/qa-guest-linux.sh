@@ -1018,7 +1018,6 @@ HYPR_CONFIG
           STARBYTE_LOG=starbyte=info,eframe=trace,glutin=trace,winit=trace \
           EGL_LOG_LEVEL=debug LIBGL_DEBUG=verbose \
           WINIT_UNIX_BACKEND=wayland \
-          EGL_PLATFORM=wayland \
           MESA_LOADER_DRIVER_OVERRIDE=swrast \
           LIBGL_ALWAYS_SOFTWARE=1 \
           GALLIUM_DRIVER=llvmpipe \

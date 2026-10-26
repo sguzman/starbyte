@@ -251,7 +251,7 @@ if timeout --signal=TERM --kill-after=2s "$deadline" \
       export XDG_STATE_HOME=/home/qa/.state
       # Source-generated cartridge: no user's ROMs, audio or input devices.
       run_starbyte() {
-        local name="$1" flag="$2" marker="$3"
+        local name="$1" flag="$2" marker="$3" second_marker="${4:-}"
         local log="$XDG_RUNTIME_DIR/starbyte-$name.log"
         if ! timeout --signal=TERM --kill-after=2s 70s "$STARBYTE_EGUI_BIN" \
           --demo --native-worker-preview "$flag" \
@@ -260,14 +260,16 @@ if timeout --signal=TERM --kill-after=2s "$deadline" \
           echo "PRIVATE_STARBYTE_SMOKE_FAILED probe=$name reason=process_error" >&2
           return 1
         fi
-        if ! grep -Fq "$marker" "$log"; then
+        if ! grep -Fq "$marker" "$log" \
+          || { [[ -n "$second_marker" ]] && ! grep -Fq "$second_marker" "$log"; }; then
           echo "PRIVATE_STARBYTE_SMOKE_FAILED probe=$name reason=missing_acceptance_marker" >&2
           return 1
         fi
         echo "PRIVATE_STARBYTE_SMOKE_PASSED probe=$name"
       }
       run_starbyte no-redraw --exit-after-full-worker-no-redraw \
-        "STARBYTE_FULL_LIBRARY_CLOCK_PACING_SMOKE_OK advanced_frames="
+        "STARBYTE_FULL_LIBRARY_CLOCK_PACING_SMOKE_OK advanced_frames=" \
+        "STARBYTE_FULL_LIBRARY_NO_REPAINT_SMOKE_OK advanced_frames="
       run_starbyte saves --exit-after-full-worker-saves \
         "STARBYTE_FULL_LIBRARY_SAVE_SMOKE_OK frame="
       echo PRIVATE_STARBYTE_GUEST_SMOKE_OK pacing=true saves=true screenshots=true

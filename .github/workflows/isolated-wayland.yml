@@ -34,6 +34,10 @@ jobs:
         run: cargo build --locked -p starbyte-egui --bin starbyte-egui
       - name: Verify private compositor and game integration
         shell: bash
+        env:
+          # Only the ephemeral GitHub runner may share its own network.
+          # No device, display, compositor or D-Bus passthrough is allowed.
+          STARBYTE_QA_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: |
           set -euo pipefail
           export XDG_RUNTIME_DIR="$RUNNER_TEMP/starbyte-private-weston"

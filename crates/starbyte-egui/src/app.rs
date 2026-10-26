@@ -173,6 +173,21 @@ struct ControllerInputSample {
     pressed: ControllerState,
 }
 
+/// The full worker shell and the standalone threaded preview share a
+/// critical Pause invariant: neither held keys nor press edges may remain
+/// queued across a manual Pause/Resume transition.
+fn submit_full_worker_gameplay_input(
+    input: &InputPort,
+    focused_and_playing: bool,
+    sample: ControllerInputSample,
+) {
+    if focused_and_playing {
+        input.submit(sample.held, sample.pressed);
+    } else {
+        input.clear();
+    }
+}
+
 impl ControllerInputSample {
     fn combined(self) -> ControllerState {
         let held = self.held;
@@ -4465,6 +4480,11 @@ impl StarbyteApp {
         }
         self.is_playing = !self.is_playing;
         if !self.is_playing {
+            if let Some(worker) = &self.full_worker {
+                // Pause may have been clicked after this UI frame sampled
+                // a controller edge. Clear it before the worker can resume.
+                worker.input.clear();
+            }
             self.clear_audio();
         }
         self.frame_rate.reset();
@@ -6970,11 +6990,7 @@ impl eframe::App for StarbyteApp {
             let sample = self.effective_controller_sample(ctx);
             let speed = self.effective_speed_percent(ctx);
             if let Some(worker) = &mut self.full_worker {
-                if focused {
-                    worker.input.submit(sample.held, sample.pressed);
-                } else {
-                    worker.input.clear();
-                }
+                submit_full_worker_gameplay_input(&worker.input, focused && self.is_playing, sample);
                 if worker.last_focus != Some(focused) {
                     worker.engine.set_focused(focused);
                     worker.last_focus = Some(focused);
@@ -8325,7 +8341,33 @@ mod session_view_bridge_tests {
 
 #[cfg(test)]
 mod controller_sample_tests {
-    use super::{ControllerInputSample, ControllerState};
+    use super::{
+        ControllerInputSample, ControllerState, InputPort, submit_full_worker_gameplay_input,
+    };
+
+    #[test]
+    fn paused_full_worker_drops_edges_instead_of_replaying_them_on_resume() {
+        let input = InputPort::default();
+        let pressed = ControllerState {
+            start: true,
+            ..ControllerState::default()
+        };
+        let press = ControllerInputSample {
+            held: pressed,
+            pressed,
+        };
+        submit_full_worker_gameplay_input(&input, true, press);
+        assert!(input.take_frame_state_for_test().start);
+        // The full player still collects input for UI diagnostics while
+        // paused, but must not forward those press edges to emulation.
+        submit_full_worker_gameplay_input(&input, false, press);
+        submit_full_worker_gameplay_input(&input, false, press);
+        assert!(!input.take_frame_state_for_test().start);
+        submit_full_worker_gameplay_input(&input, true, ControllerInputSample::default());
+        assert!(!input.take_frame_state_for_test().start);
+        submit_full_worker_gameplay_input(&input, true, press);
+        assert!(input.take_frame_state_for_test().start);
+    }
 
     #[test]
     fn short_press_is_visible_even_when_button_was_released_before_frame() {

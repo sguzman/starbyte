@@ -63,10 +63,12 @@ fn scheduler_ledger_matches_checked_roadmap_and_declared_percentages() {
             accepted += u64::from(is_accepted);
         }
         let n = tasks.len() as u64;
-        let percent = (100 * accepted + n / 2) / n;
+        let hundredths = (10_000 * accepted + n / 2) / n;
+        let expected_percent = hundredths as f64 / 100.0;
         assert_eq!(milestone["accepted"].as_u64(), Some(accepted), "{id}");
         assert_eq!(milestone["total"].as_u64(), Some(n), "{id}");
-        assert_eq!(milestone["percent"].as_u64(), Some(percent), "{id}");
+        let recorded_percent = milestone["percent"].as_f64().expect("numeric milestone percent");
+        assert!((recorded_percent - expected_percent).abs() < 1e-9, "{id}: percentage drift");
         assert!(
             section
                 .lines()
@@ -79,12 +81,15 @@ fn scheduler_ledger_matches_checked_roadmap_and_declared_percentages() {
         completed += accepted;
     }
     assert_eq!(total, 77, "source task count unexpectedly changed");
-    let percent = (100 * completed + total / 2) / total;
+    let rounded_percent = (100 * completed + total / 2) / total;
+    let exact_hundredths = (10_000 * completed + total / 2) / total;
+    let expected_percent = exact_hundredths as f64 / 100.0;
     assert_eq!(ledger["overall"]["accepted"].as_u64(), Some(completed));
     assert_eq!(ledger["overall"]["total"].as_u64(), Some(total));
-    assert_eq!(ledger["overall"]["percent"].as_u64(), Some(percent));
+    let recorded_percent = ledger["overall"]["percent"].as_f64().expect("numeric overall percent");
+    assert!((recorded_percent - expected_percent).abs() < 1e-9, "overall percentage drift");
     assert!(
-        roadmap.contains(&format!("{completed}/{total} ({percent}%)")),
+        roadmap.contains(&format!("{completed}/{total} ({rounded_percent}%)")),
         "top-level Markdown progress differs from JSON"
     );
     // 2026-10-24 physical audit: local Codex ran the real Hyprland harness at

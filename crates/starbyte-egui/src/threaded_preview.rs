@@ -61,6 +61,17 @@ fn pitch_for(mode: AudioPitchMode, custom_percent: u16, speed: u16) -> f32 {
     }
 }
 
+/// Game controls must not intercept shortcuts while the library search field
+/// (or any other text editor) owns keyboard focus. The full library player
+/// applies the same policy to F5/F8/F12.
+fn preview_game_shortcuts_allowed(
+    focused: bool,
+    wants_keyboard_input: bool,
+    can_modify_game: bool,
+) -> bool {
+    focused && !wants_keyboard_input && can_modify_game
+}
+
 enum PendingOperation {
     Save {
         epoch: u64,
@@ -844,6 +855,14 @@ impl ThreadedPreviewApp {
 #[cfg(test)]
 mod pitch_mode_tests {
     use super::*;
+
+    #[test]
+    fn game_shortcuts_do_not_intercept_library_search_or_unfocused_input() {
+        assert!(preview_game_shortcuts_allowed(true, false, true));
+        assert!(!preview_game_shortcuts_allowed(true, true, true));
+        assert!(!preview_game_shortcuts_allowed(false, false, true));
+        assert!(!preview_game_shortcuts_allowed(true, false, false));
+    }
 
     #[test]
     fn library_preview_starts_with_no_cartridge_and_no_emulation() {
@@ -2245,24 +2264,22 @@ impl eframe::App for ThreadedPreviewApp {
                 ));
             });
         });
-        if focused
-            && self.can_modify_running_game()
-            && ctx.input(|input| input.key_pressed(egui::Key::F5))
-        {
+        let game_shortcuts_allowed = preview_game_shortcuts_allowed(
+            focused,
+            ctx.wants_keyboard_input(),
+            self.can_modify_running_game(),
+        );
+        if game_shortcuts_allowed && ctx.input(|input| input.key_pressed(egui::Key::F5)) {
             self.queue_save(SessionSaveAction::QuickSave);
         }
-        if focused
-            && self.can_modify_running_game()
+        if game_shortcuts_allowed
             && self.controls.has_quick_save
             && ctx.input(|input| input.key_pressed(egui::Key::F8))
         {
             self.queue_save(SessionSaveAction::QuickLoad);
         }
 
-        if focused
-            && self.can_modify_running_game()
-            && ctx.input(|input| input.key_pressed(egui::Key::F12))
-        {
+        if game_shortcuts_allowed && ctx.input(|input| input.key_pressed(egui::Key::F12)) {
             self.queue_screenshot();
         }
         // The worker may finish an intermediate cartridge while a newer

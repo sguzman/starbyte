@@ -54,6 +54,12 @@ jobs:
             libwayland-egl1 libwayland-cursor0 weston wayland-utils mesa-utils \
             libseat1 libinput10 binutils udev xkb-data hyprland
       - uses: dtolnay/rust-toolchain@stable
+      - name: Verify XDG wire framing and safe error handling without a display
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --edition=2021 --test scripts/qa-guest-xdg-surface.rs -o "$RUNNER_TEMP/starbyte-xdg-wire-tests"
+          "$RUNNER_TEMP/starbyte-xdg-wire-tests" --quiet
       - name: Install native GUI build dependencies
         run: sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install -y --no-install-recommends pkg-config libudev-dev libasound2-dev libegl-dev libwayland-dev
       - uses: Swatinem/rust-cache@v2

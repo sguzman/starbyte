@@ -573,7 +573,6 @@ impl ThreadedPreviewApp {
                         self.last_error = Some("Save worker stopped unexpectedly".to_owned());
                     }
                 },
-                PendingOperation::Screenshot { epoch, .. } if epoch != self.session_epoch => {}
                 PendingOperation::Screenshot { epoch, reply } => match reply.try_recv() {
                     Ok(Ok(frame)) => match self.write_screenshot_async(frame) {
                         Ok(io_reply) => {
@@ -584,26 +583,39 @@ impl ThreadedPreviewApp {
                         }
                         Err(error) => self.last_error = Some(error),
                     },
-                    Ok(Err(error)) => self.last_error = Some(error),
+                    Ok(Err(error)) => {
+                        if epoch == self.session_epoch {
+                            self.last_error = Some(error);
+                        }
+                    }
                     Err(TryRecvError::Empty) => {
                         still_pending.push(PendingOperation::Screenshot { epoch, reply });
                     }
                     Err(TryRecvError::Disconnected) => {
-                        self.last_error = Some("Screenshot worker stopped".to_owned());
+                        if epoch == self.session_epoch {
+                            self.last_error = Some("Screenshot worker stopped".to_owned());
+                        }
                     }
                 },
-                PendingOperation::PngWrite { epoch, .. } if epoch != self.session_epoch => {}
                 PendingOperation::PngWrite { epoch, reply } => match reply.try_recv() {
                     Ok(Ok(path)) => {
-                        self.status_note = Some(format!("Screenshot saved to {}", path.display()));
-                        self.last_error = None;
+                        if epoch == self.session_epoch {
+                            self.status_note = Some(format!("Screenshot saved to {}", path.display()));
+                            self.last_error = None;
+                        }
                     }
-                    Ok(Err(error)) => self.last_error = Some(error),
+                    Ok(Err(error)) => {
+                        if epoch == self.session_epoch {
+                            self.last_error = Some(error);
+                        }
+                    }
                     Err(TryRecvError::Empty) => {
                         still_pending.push(PendingOperation::PngWrite { epoch, reply });
                     }
                     Err(TryRecvError::Disconnected) => {
-                        self.last_error = Some("Screenshot writer stopped".to_owned());
+                        if epoch == self.session_epoch {
+                            self.last_error = Some("Screenshot writer stopped".to_owned());
+                        }
                     }
                 },
             }
@@ -1009,6 +1021,65 @@ mod pitch_mode_tests {
                 | PendingOperation::Screenshot { .. }
                 | PendingOperation::PngWrite { .. }
         )));
+    }
+
+    #[test]
+    fn screenshot_from_previous_cartridge_finishes_writing_without_old_feedback() {
+        let temp = tempfile::tempdir().unwrap();
+        let rom = temp.path().join("next.sfc");
+        std::fs::write(&rom, starbyte_core::testing::demo::demo_rom_bytes()).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(temp.path().join("saves")),
+            state_dir: Some(temp.path().join("states")),
+            cache_dir: Some(temp.path().join("cache")),
+            config_path: None,
+        };
+        let mut config = RuntimeConfig::default();
+        config.audio.enabled = false;
+        let mut app =
+            ThreadedPreviewApp::new(assets, &config, None, None, true, false, false).unwrap();
+        app.screenshot_root = temp.path().join("screenshots");
+        let previous_epoch = app.session_epoch;
+        let (sender, reply) = mpsc::channel();
+        app.pending.push(PendingOperation::Screenshot {
+            epoch: previous_epoch,
+            reply,
+        });
+        app.queue_rom_launch(SessionLaunchRequest {
+            rom_path: rom,
+            sound_mode: SoundSessionMode::Persistent,
+            cheats: Vec::new(),
+        });
+        sender
+            .send(Ok(SessionScreenshot {
+                frame: 12,
+                width: 1,
+                height: 1,
+                rgba: vec![255, 0, 0, 255],
+            }))
+            .unwrap();
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut written = false;
+        while Instant::now() < deadline {
+            app.poll_operations(&ctx);
+            written = std::fs::read_dir(&app.screenshot_root)
+                .ok()
+                .is_some_and(|mut files| files.next().is_some());
+            if written && !app.pending.iter().any(|op| matches!(
+                op,
+                PendingOperation::PngWrite { .. }
+            )) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(written, "previous session's requested screenshot was lost");
+        assert!(app.last_error.is_none());
+        assert!(app.status_note.as_deref().is_some_and(|status| {
+            status.starts_with("Loading ") || status.starts_with("Loaded ")
+        }));
     }
 
     #[test]

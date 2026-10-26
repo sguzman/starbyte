@@ -77,10 +77,11 @@ fn run() -> Result<(), &'static str> {
             let align = end.checked_add(3).ok_or("invalid_global")? & !3;
             if n == 0 || align + 4 > payload.len() { return Err("invalid_global"); }
             let version = u32::from_ne_bytes(payload[align..align+4].try_into().unwrap());
-            match &payload[8..end] {
-                b"wl_compositor\0" => compositor = Some((name, version)),
-                b"xdg_wm_base\0" => shell = Some((name, version)),
-                _ => {}
+            let interface = &payload[8..end];
+            if interface == b"wl_compositor\0" {
+                compositor = Some((name, version));
+            } else if interface == b"xdg_wm_base\0" {
+                shell = Some((name, version));
             }
         }
         if sender == REGISTRY_SYNC && opcode == 0 { synced = true; break; }

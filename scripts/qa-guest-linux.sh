@@ -924,7 +924,7 @@ HYPR_CONFIG
         # Only report readiness after wl_keyboard.enter, rather than a
         # fixed three-second liveness check on an unfocused window.
         for focus_probe in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-          if /bin/busybox grep -Eq 'wl_keyboard@[0-9]+\.enter\(' /tmp/hypr-focus.err 2>/dev/null &&
+          if /bin/busybox grep -Eq 'wl_keyboard[@#][0-9]+\.enter\(' /tmp/hypr-focus.err 2>/dev/null &&
              /bin/busybox kill -0 "$hypr_focus_pid" 2>/dev/null; then
             hypr_focus_ready=1
             echo 'STARBYTE_GUEST_HYPR_FOCUS_READY client=weston-simple-shm alive=1' >/dev/console
@@ -978,17 +978,17 @@ HYPR_CONFIG
         if /bin/busybox grep -Eiq 'xdg_wm_base|xdg_surface|xdg_toplevel|xdg-shell' "$log"; then hypr_focus_xdg=1; fi
         if /bin/busybox grep -Eiq 'wl_shm|shared memory|shm.*failed' "$log"; then hypr_focus_shm=1; fi
         if /bin/busybox grep -Eiq 'failed to.*(surface|window)|surface.*failed|failed.*buffer' "$log"; then hypr_focus_surface=1; fi
-        if /bin/busybox grep -Eq 'wl_keyboard@[0-9]+\.enter\(' "$log"; then hypr_focus_keyboard_enter=1; fi
-        if /bin/busybox grep -Eq 'wl_seat@[0-9]+\.get_keyboard\(' "$log"; then hypr_focus_keyboard_requested=1; fi
-        if /bin/busybox grep -Eq 'xdg_toplevel@[0-9]+\.configure\(' "$log"; then hypr_focus_xdg_configure=1; fi
-        if /bin/busybox grep -Eq 'wl_registry@[0-9]+\.global.*wl_shm' "$log"; then hypr_focus_shm_advertised=1; fi
-        if /bin/busybox grep -Eq 'wl_display@[0-9]+\.get_registry\(' "$log"; then hypr_focus_registry_requested=1; fi
-        if /bin/busybox grep -Eq 'wl_compositor@[0-9]+\.create_surface\(' "$log"; then hypr_focus_create_surface=1; fi
-        if /bin/busybox grep -Eq 'xdg_wm_base@[0-9]+\.get_xdg_surface\(' "$log"; then hypr_focus_create_xdg=1; fi
-        if /bin/busybox grep -Eq 'xdg_surface@[0-9]+\.get_toplevel\(' "$log"; then hypr_focus_create_toplevel=1; fi
-        if /bin/busybox grep -Eq 'wl_surface@[0-9]+\.commit\(' "$log"; then hypr_focus_initial_commit=1; fi
-        if /bin/busybox grep -Eq 'wl_display@[0-9]+\.error\(' "$log"; then hypr_focus_display_error=1; fi
-        if /bin/busybox grep -Eq 'xdg_toplevel@[0-9]+\.close\(' "$log"; then hypr_focus_toplevel_close=1; fi
+        if /bin/busybox grep -Eq 'wl_keyboard[@#][0-9]+\.enter\(' "$log"; then hypr_focus_keyboard_enter=1; fi
+        if /bin/busybox grep -Eq 'wl_seat[@#][0-9]+\.get_keyboard\(' "$log"; then hypr_focus_keyboard_requested=1; fi
+        if /bin/busybox grep -Eq 'xdg_toplevel[@#][0-9]+\.configure\(' "$log"; then hypr_focus_xdg_configure=1; fi
+        if /bin/busybox grep -Eq 'wl_registry[@#][0-9]+\.global.*wl_shm' "$log"; then hypr_focus_shm_advertised=1; fi
+        if /bin/busybox grep -Eq 'wl_display[@#][0-9]+\.get_registry\(' "$log"; then hypr_focus_registry_requested=1; fi
+        if /bin/busybox grep -Eq 'wl_compositor[@#][0-9]+\.create_surface\(' "$log"; then hypr_focus_create_surface=1; fi
+        if /bin/busybox grep -Eq 'xdg_wm_base[@#][0-9]+\.get_xdg_surface\(' "$log"; then hypr_focus_create_xdg=1; fi
+        if /bin/busybox grep -Eq 'xdg_surface[@#][0-9]+\.get_toplevel\(' "$log"; then hypr_focus_create_toplevel=1; fi
+        if /bin/busybox grep -Eq 'wl_surface[@#][0-9]+\.commit\(' "$log"; then hypr_focus_initial_commit=1; fi
+        if /bin/busybox grep -Eq 'wl_display[@#][0-9]+\.error\(' "$log"; then hypr_focus_display_error=1; fi
+        if /bin/busybox grep -Eq 'xdg_toplevel[@#][0-9]+\.close\(' "$log"; then hypr_focus_toplevel_close=1; fi
       done
       echo "STARBYTE_GUEST_HYPR_FOCUS_DIAG status=$hypr_focus_status stdout=$hypr_focus_stdout stderr=$hypr_focus_stderr connect=$hypr_focus_connect library=$hypr_focus_library protocol=$hypr_focus_protocol xdg=$hypr_focus_xdg shm=$hypr_focus_shm surface=$hypr_focus_surface keyboard_enter=$hypr_focus_keyboard_enter keyboard_requested=$hypr_focus_keyboard_requested xdg_configure=$hypr_focus_xdg_configure shm_advertised=$hypr_focus_shm_advertised registry_requested=$hypr_focus_registry_requested create_surface=$hypr_focus_create_surface create_xdg=$hypr_focus_create_xdg create_toplevel=$hypr_focus_create_toplevel initial_commit=$hypr_focus_initial_commit display_error=$hypr_focus_display_error toplevel_close=$hypr_focus_toplevel_close" >/dev/console
       echo "STARBYTE_GUEST_HYPR_FOCUS_RESULT ready=$hypr_focus_ready clean_exit=$hypr_focus_clean exit_message=$hypr_focus_message hyprland_alive=$hypr_focus_compositor_alive" >/dev/console
@@ -1099,17 +1099,17 @@ HYPR_CONFIG
         if /bin/busybox grep -Fq 'EGL_BAD_NATIVE_WINDOW' "$log"; then hypr_app_egl_bad_native_window=1; fi
         if /bin/busybox grep -Fq 'eglCreateWindowSurface' "$log"; then hypr_app_egl_create_window_surface=1; fi
         if /bin/busybox grep -Eiq 'surface.*init.*fail' "$log"; then hypr_app_surface_init_failure=1; fi
-        if /bin/busybox grep -Eq 'xdg_toplevel@[0-9]+\.configure\(' "$log"; then hypr_app_xdg_configure=1; fi
-        if /bin/busybox grep -Eq 'zwp_linux_buffer_params_v1@[0-9]+\.failed\(' "$log"; then hypr_app_dmabuf_failed=1; fi
-        if /bin/busybox grep -Eq 'zwp_linux_buffer_params_v1@[0-9]+\.' "$log"; then hypr_app_dmabuf_params=1; fi
-        if /bin/busybox grep -Eq 'wl_surface@[0-9]+\.attach\(' "$log"; then hypr_app_wl_surface_attach=1; fi
+        if /bin/busybox grep -Eq 'xdg_toplevel[@#][0-9]+\.configure\(' "$log"; then hypr_app_xdg_configure=1; fi
+        if /bin/busybox grep -Eq 'zwp_linux_buffer_params_v1[@#][0-9]+\.failed\(' "$log"; then hypr_app_dmabuf_failed=1; fi
+        if /bin/busybox grep -Eq 'zwp_linux_buffer_params_v1[@#][0-9]+\.' "$log"; then hypr_app_dmabuf_params=1; fi
+        if /bin/busybox grep -Eq 'wl_surface[@#][0-9]+\.attach\(' "$log"; then hypr_app_wl_surface_attach=1; fi
         if /bin/busybox grep -Fq 'wl_drm' "$log"; then hypr_app_wl_drm=1; fi
-        if /bin/busybox grep -Eq 'wl_display@[0-9]+\.get_registry\(' "$log"; then hypr_app_registry_requested=1; fi
-        if /bin/busybox grep -Eq 'wl_compositor@[0-9]+\.create_surface\(' "$log"; then hypr_app_create_surface=1; fi
-        if /bin/busybox grep -Eq 'xdg_wm_base@[0-9]+\.get_xdg_surface\(' "$log"; then hypr_app_create_xdg=1; fi
-        if /bin/busybox grep -Eq 'xdg_surface@[0-9]+\.get_toplevel\(' "$log"; then hypr_app_create_toplevel=1; fi
-        if /bin/busybox grep -Eq 'wl_surface@[0-9]+\.commit\(' "$log"; then hypr_app_initial_commit=1; fi
-        if /bin/busybox grep -Eq 'wl_display@[0-9]+\.error\(' "$log"; then hypr_app_display_error=1; fi
+        if /bin/busybox grep -Eq 'wl_display[@#][0-9]+\.get_registry\(' "$log"; then hypr_app_registry_requested=1; fi
+        if /bin/busybox grep -Eq 'wl_compositor[@#][0-9]+\.create_surface\(' "$log"; then hypr_app_create_surface=1; fi
+        if /bin/busybox grep -Eq 'xdg_wm_base[@#][0-9]+\.get_xdg_surface\(' "$log"; then hypr_app_create_xdg=1; fi
+        if /bin/busybox grep -Eq 'xdg_surface[@#][0-9]+\.get_toplevel\(' "$log"; then hypr_app_create_toplevel=1; fi
+        if /bin/busybox grep -Eq 'wl_surface[@#][0-9]+\.commit\(' "$log"; then hypr_app_initial_commit=1; fi
+        if /bin/busybox grep -Eq 'wl_display[@#][0-9]+\.error\(' "$log"; then hypr_app_display_error=1; fi
         if /bin/busybox grep -Fq 'EGL_BAD_ALLOC' "$log"; then hypr_app_egl_bad_alloc=1; fi
         if /bin/busybox grep -Fq 'EGL_BAD_MATCH' "$log"; then hypr_app_egl_bad_match=1; fi
         if /bin/busybox grep -Fq 'EGL_NOT_INITIALIZED' "$log"; then hypr_app_egl_not_initialized=1; fi

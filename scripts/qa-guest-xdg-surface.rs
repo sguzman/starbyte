@@ -104,6 +104,12 @@ fn run() -> Result<(), &'static str> {
     let mut socket = UnixStream::connect(path).map_err(|_| "connect_failed")?;
     socket.set_read_timeout(Some(Duration::from_secs(12))).map_err(|_| "timeout_failed")?;
     socket.set_write_timeout(Some(Duration::from_secs(12))).map_err(|_| "timeout_failed")?;
+    exchange(&mut socket)
+}
+
+// The socket-driven handshake is independently testable against a private
+// in-process protocol peer, with no host display or compositor access.
+fn exchange(mut socket: &mut UnixStream) -> Result<(), &'static str> {
     send(&mut socket, 1, 1, &REGISTRY.to_ne_bytes())?;
     send(&mut socket, 1, 0, &REGISTRY_SYNC.to_ne_bytes())?;
 

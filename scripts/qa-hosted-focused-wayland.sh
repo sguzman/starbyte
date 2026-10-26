@@ -122,17 +122,17 @@ if [[ "$STARBYTE_FOCUS_PROBE" == --blur-smoke ]]; then
     tail -n 45 "$runtime/weston.log" >&2
     exit 1
   }
-  # Verify an actual *new* wl_keyboard.leave delivered by Weston, not
-  # merely a focused X11 parent or a mapped second surface. Click several
-  # bounded positions inside only the guest's Xvfb Weston window.
+  # Desktop-shell defines Super+Tab to switch NATIVE Wayland surfaces.
+  # Coordinate guesses never delivered wl_keyboard.leave under Xvfb.
+  # Direct synthetic X11 keyboard input only to the sealed Weston window.
   leave_pattern='wl_keyboard[^[:space:]]*\.leave\('
   baseline_leave="$(grep -Ec "$leave_pattern" "$runtime/game.log" || :)"
   [[ "$baseline_leave" =~ ^[0-9]+$ ]] || baseline_leave=0
   native_blur_seen=false
-  for coords in "600 280" "640 400" "430 340" "310 220" "730 490"; do
-    read -r cx cy <<< "$coords"
-    DISPLAY=:99 xdotool mousemove --window "$window" "$cx" "$cy" click 1 2>/dev/null || :
-    sleep 0.25
+  DISPLAY=:99 xdotool windowfocus "$window" 2>/dev/null || :
+  for attempt in 1 2 3; do
+    DISPLAY=:99 xdotool key --clearmodifiers Super_L+Tab
+    sleep 0.35
     observed_leave="$(grep -Ec "$leave_pattern" "$runtime/game.log" || :)"
     [[ "$observed_leave" =~ ^[0-9]+$ ]] || observed_leave=0
     if (( observed_leave > baseline_leave )); then
@@ -146,12 +146,12 @@ if [[ "$STARBYTE_FOCUS_PROBE" == --blur-smoke ]]; then
     tail -n 35 "$runtime/weston.log" >&2
     exit 1
   fi
-  echo STARBYTE_PRIVATE_WAYLAND_KEYBOARD_LEAVE_OK shell=desktop
+  echo STARBYTE_PRIVATE_WAYLAND_KEYBOARD_LEAVE_OK shell=desktop binding=Super_Tab
   sleep 2.65
+  DISPLAY=:99 xdotool key --clearmodifiers Super_L+Tab
   kill "$rival_pid" 2>/dev/null || :
   wait "$rival_pid" 2>/dev/null || :
   rival_pid=''
-  DISPLAY=:99 xdotool mousemove --window "$window" 100 100 click 1 2>/dev/null || :
   echo STARBYTE_PRIVATE_NATIVE_RIVAL_CLOSED shell=desktop-shell
 fi
 if ! wait "$game_pid"; then

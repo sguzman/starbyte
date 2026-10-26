@@ -538,8 +538,9 @@ impl ThreadedPreviewApp {
     /// Reuse the original player's asynchronous reset path; the receipt only
     /// means the audio worker accepted the request, not that sound was heard.
     fn can_reselect_audio_output(&self) -> bool {
-        self.controls.session.has_rom
-            && self.display.audio_diagnostics().device_status.is_some()
+        // The speaker check can start an audio worker before the first ROM.
+        // Reselecting that output must not require installing a cartridge.
+        self.display.audio_diagnostics().device_status.is_some()
             && !self
                 .pending
                 .iter()
@@ -1043,6 +1044,15 @@ mod pitch_mode_tests {
             !app.can_reselect_audio_output(),
             "empty session has no output"
         );
+        // A preview speaker check can create an audio worker with no ROM.
+        // Mirror the full window: permit explicit route reselection anyway.
+        app.display
+            .update_audio_diagnostics(WorkerAudioDiagnostics {
+                device_status: Some(crate::audio::AudioDeviceStatus::NotAttempted),
+                ..WorkerAudioDiagnostics::default()
+            });
+        assert!(app.can_reselect_audio_output());
+        assert!(!app.controls.session.has_rom);
 
         // The GUI must track the asynchronous reply without blocking on a
         // speaker or an OS device. No real sound hardware is opened here.
@@ -1051,6 +1061,10 @@ mod pitch_mode_tests {
             epoch: app.session_epoch,
             reply: rx,
         });
+        assert!(
+            !app.can_reselect_audio_output(),
+            "an outstanding reset must disable duplicate requests"
+        );
         app.poll_operations(&egui::Context::default());
         assert!(
             app.pending

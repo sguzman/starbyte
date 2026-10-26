@@ -1,5 +1,29 @@
 # Emulation scheduler migration
 
+## Verified preview audio-output route parity (2026-10-26)
+
+[CI run 40410775805](https://github.com/sguzman/starbyte/actions/runs/40410775805)
+completed successfully on exact code revision
+[`7859d07`](https://github.com/sguzman/starbyte/commit/7859d0717b7a88cdf7c9a795130d364d927f77c1):
+Linux tests including hosted virtual-Wayland smoke, Windows tests,
+formatting and Clippy, and the Rust 1.88 minimum-toolchain build.
+
+The opt-in `--threaded-preview` Audio menu now offers the same
+**Reselect desktop audio output** action as the original window. It sends
+the existing nonblocking exclusive-worker command; only a cartridge with
+a previously reported output can request it, and overlapping requests
+are disabled while the first is pending. Its acknowledgement cannot
+overwrite the status of a newer ROM selection. Two hardware-free tests
+cover asynchronous UI completion and superseded replies. The command
+acknowledges queueing only, **not** successful OS routing or speaker sound.
+
+Acceptance remains **71/77 (92.21%; delta +0.00 points)**. The six
+unaccepted gates are P-18, P-19, C-16, D-12, D-13 and D-15. This
+change improves preview recovery ergonomics but does not satisfy P-18
+physical audio-quality/recovery acceptance, test the owner's Hyprland
+session, or authorize production default cutover. The desktop-focus
+fail-closed guards were left unchanged.
+
 ## Private focused Wayland input-seat acceptance — 2026-10-26
 
 GitHub-hosted Linux now runs `scripts/qa-hosted-focused-wayland.sh --smoke`

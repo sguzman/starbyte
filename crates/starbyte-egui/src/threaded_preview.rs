@@ -1328,7 +1328,10 @@ mod pitch_mode_tests {
             app.poll_library_events();
             app.poll_operations(&ctx);
             if app.pending_library_rom.is_none()
-                && app.pending.iter().all(|op| !matches!(op, PendingOperation::LoadRom { .. }))
+                && app
+                    .pending
+                    .iter()
+                    .all(|op| !matches!(op, PendingOperation::LoadRom { .. }))
             {
                 break;
             }
@@ -1339,9 +1342,11 @@ mod pitch_mode_tests {
         assert_eq!(app.loaded_rom_path.as_deref(), Some(first.as_path()));
         assert!(app.controls.session.has_rom);
         assert!(app.can_modify_running_game());
-        assert!(app.last_error.as_deref().is_some_and(|error| {
-            error.contains("Library ROM preparation failed")
-        }));
+        assert!(
+            app.last_error
+                .as_deref()
+                .is_some_and(|error| { error.contains("Library ROM preparation failed") })
+        );
         assert!(app.status_note.is_none());
     }
 

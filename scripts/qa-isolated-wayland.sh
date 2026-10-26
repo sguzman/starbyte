@@ -10,8 +10,8 @@ fail() {
 }
 
 mode="${1:-}"
-[[ $# -eq 1 && ( "$mode" == --check-only || "$mode" == --weston-smoke || "$mode" == --hyprland-headless-smoke || "$mode" == --hyprland-nested-smoke ) ]] \
-  || fail 'usage: --check-only|--weston-smoke|--hyprland-headless-smoke|--hyprland-nested-smoke'
+[[ $# -eq 1 && ( "$mode" == --check-only || "$mode" == --weston-smoke || "$mode" == --starbyte-smoke || "$mode" == --hyprland-headless-smoke || "$mode" == --hyprland-nested-smoke ) ]] \
+  || fail 'usage: --check-only|--weston-smoke|--starbyte-smoke|--hyprland-headless-smoke|--hyprland-nested-smoke'
 
 # Aquamarine v0.15.1 cannot construct a Wayland render allocator without
 # a DRM render node, even when a parent Wayland compositor is available.
@@ -30,13 +30,24 @@ command -v realpath >/dev/null 2>&1 || fail 'missing_realpath'
 [[ "$(uname -s)" == Linux ]] || fail 'linux_required'
 [[ -n "${XDG_RUNTIME_DIR:-}" && -d "$XDG_RUNTIME_DIR" ]] || fail 'private_runtime_parent_required'
 
+# Only the built game executable crosses into the private compositor.
+starbyte_binary=''
+if [[ "$mode" == --starbyte-smoke ]]; then
+  command -v git >/dev/null 2>&1 || fail 'missing_git'
+  checkout_root="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel 2>/dev/null)" \
+    || fail 'checkout_not_found'
+  starbyte_binary="${STARBYTE_EGUI_BINARY:-$checkout_root/target/debug/starbyte-egui}"
+  starbyte_binary="$(realpath -e -- "$starbyte_binary")" || fail 'starbyte_binary_missing'
+  [[ -f "$starbyte_binary" && -x "$starbyte_binary" ]] || fail 'starbyte_binary_not_executable'
+fi
+
 weston_bindings=()
 weston_bin=''
 weston_client=''
 wayland_info=''
 package_root=''
 weston_module_map=''
-if [[ "$mode" == --weston-smoke ]]; then
+if [[ "$mode" == --weston-smoke || "$mode" == --starbyte-smoke ]]; then
   if [[ -n "${STARBYTE_WESTON_PACKAGE_ROOT:-}" ]]; then
     package_root="$(realpath -e -- "$STARBYTE_WESTON_PACKAGE_ROOT")" \
       || fail 'weston_package_root_missing'
@@ -69,6 +80,10 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
+if [[ "$mode" == --starbyte-smoke ]]; then
+  # Do not expose the repository, HOME, active socket, or host input devices.
+  install -m 0700 "$starbyte_binary" "$runtime_root/starbyte-egui"
+fi
 if [[ -n "$package_root" ]]; then
   mkdir -p "$runtime_root/package"
   weston_bindings=(--ro-bind "$package_root" /run/user/qa/package)
@@ -132,6 +147,13 @@ weston_environment=(
   --setenv STARBYTE_WESTON_CLIENT "$weston_client"
   --setenv STARBYTE_WAYLAND_INFO "$wayland_info"
 )
+if [[ "$mode" == --starbyte-smoke ]]; then
+  weston_environment+=(
+    --setenv STARBYTE_EGUI_BIN /run/user/qa/starbyte-egui
+    --setenv LIBGL_ALWAYS_SOFTWARE 1
+    --setenv WINIT_UNIX_BACKEND wayland
+  )
+fi
 if [[ -n "$weston_module_map" ]]; then
   weston_environment+=(
     --setenv WESTON_MODULE_MAP "$weston_module_map"
@@ -144,7 +166,9 @@ fi
 # host input/DRM devices, system/session sockets, host DISPLAY, or user config.
 # A parent-level deadline also covers a stalled compositor/teardown and
 # relies on Bubblewrap's private PID namespace and --die-with-parent.
-if timeout --signal=TERM --kill-after=2s 20s \
+deadline=20s
+[[ "$mode" == --starbyte-smoke ]] && deadline=180s
+if timeout --signal=TERM --kill-after=2s "$deadline" \
   bwrap "${common[@]}" "${weston_bindings[@]}" "${weston_environment[@]}" \
     /usr/bin/bash -c '
     set -Eeuo pipefail
@@ -219,6 +243,35 @@ if timeout --signal=TERM --kill-after=2s 20s \
       exit 1
     }
     echo "PRIVATE_WESTON_SIMPLE_SHM_RAN status=$client_status"
+    if [[ -n "${STARBYTE_EGUI_BIN:-}" ]]; then
+      mkdir -p /home/qa/.config /home/qa/.cache /home/qa/.data /home/qa/.state
+      export XDG_CONFIG_HOME=/home/qa/.config
+      export XDG_CACHE_HOME=/home/qa/.cache
+      export XDG_DATA_HOME=/home/qa/.data
+      export XDG_STATE_HOME=/home/qa/.state
+      # Source-generated cartridge: no user's ROMs, audio or input devices.
+      run_starbyte() {
+        local name="$1" flag="$2" marker="$3"
+        local log="$XDG_RUNTIME_DIR/starbyte-$name.log"
+        if ! timeout --signal=TERM --kill-after=2s 70s "$STARBYTE_EGUI_BIN" \
+          --demo --native-worker-preview "$flag" \
+          --config "$XDG_CONFIG_HOME/$name.toml" \
+          --cache-dir "$XDG_CACHE_HOME/$name" >"$log" 2>&1; then
+          echo "PRIVATE_STARBYTE_SMOKE_FAILED probe=$name reason=process_error" >&2
+          return 1
+        fi
+        if ! grep -Fq "$marker" "$log"; then
+          echo "PRIVATE_STARBYTE_SMOKE_FAILED probe=$name reason=missing_acceptance_marker" >&2
+          return 1
+        fi
+        echo "PRIVATE_STARBYTE_SMOKE_PASSED probe=$name"
+      }
+      run_starbyte no-redraw --exit-after-full-worker-no-redraw \
+        "STARBYTE_FULL_LIBRARY_CLOCK_PACING_SMOKE_OK advanced_frames="
+      run_starbyte saves --exit-after-full-worker-saves \
+        "STARBYTE_FULL_LIBRARY_SAVE_SMOKE_OK frame="
+      echo PRIVATE_STARBYTE_GUEST_SMOKE_OK pacing=true saves=true screenshots=true
+    fi
     cleanup
     trap - EXIT INT TERM HUP
     [[ ! -e "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]] || {
@@ -227,7 +280,11 @@ if timeout --signal=TERM --kill-after=2s 20s \
     }
     echo PRIVATE_WESTON_TORN_DOWN
   '; then
-  printf 'STARBYTE_ISOLATED_WESTON_SMOKE_OK backend=headless renderer=pixman client=weston-simple-shm\n'
+  if [[ "$mode" == --starbyte-smoke ]]; then
+    printf 'STARBYTE_ISOLATED_APP_SMOKE_OK compositor=private_weston saves=true screenshot=true pacing=true physical=not_tested\n'
+  else
+    printf 'STARBYTE_ISOLATED_WESTON_SMOKE_OK backend=headless renderer=pixman client=weston-simple-shm\n'
+  fi
 else
   fail 'weston_smoke_failed_or_timed_out'
 fi

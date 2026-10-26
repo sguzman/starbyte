@@ -97,6 +97,35 @@ virtual DRM/seat prerequisite. The follow-on test additionally requires
 a real xdg-toplevel to receive private-QMP Escape while Hyprland is
 focused; it remains unaccepted until the matching CI run passes.
 
+### Original Starbyte-in-Hyprland integration: unresolved
+
+[Run 40244047890](https://github.com/sguzman/starbyte/actions/runs/40244047890)
+first attempted the original Starbyte GUI and exclusive emulator worker inside
+the private Hyprland guest. The GUI exited with status 1 before any accepted
+worker frames or single-owner receipt; the focused sample did not become ready.
+[Run 40245510283](https://github.com/sguzman/starbyte/actions/runs/40245510283)
+and [run 40246534678](https://github.com/sguzman/starbyte/actions/runs/40246534678)
+classified frontend rendering/surface initialization failure, with neither
+keyboard-enter nor XDG configure for the sample. Its generic successful exit
+and "simple-shm exiting" string do not establish focused Escape delivery.
+
+[Run 40247126854](https://github.com/sguzman/starbyte/actions/runs/40247126854)
+confirmed that the compositor advertises wl_output, xdg_wm_base and wl_shm,
+with no classified monitor error.
+[Run 40247720651](https://github.com/sguzman/starbyte/actions/runs/40247720651)
+narrowed the original application failure to initialization before
+wl_surface.attach: no XDG configure, no DMA-BUF submission or buffer-import
+rejection, and no worker frames. This does **not** conclusively identify the
+underlying error; do not ascribe it to missing output or DMA-BUF import.
+Standard Linux, Windows, lint and compiler-floor CI passed for this code in
+[run 40247720696](https://github.com/sguzman/starbyte/actions/runs/40247720696).
+The separate Weston full-GUI/worker workflow also previously passed.
+
+The remaining **virtual** prerequisite is a configured and focused Hyprland
+client surface, followed by the unchanged original Starbyte 30-frame
+exclusive-worker smoke. Do not weaken the gate, expose the active host DRM
+or input devices, or treat virtual proof as physical/cutover acceptance.
+
 A runner-packaged Hyprland version different from the owner's 0.56.2
 cannot establish exact-version parity; even a successful virtual compositor
 cannot establish physical focus, audible audio, gamepad input or the

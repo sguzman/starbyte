@@ -1,5 +1,31 @@
 # Starbyte: current state
 
+## Guest-only XDG diagnostic and shell repair (2026-10-25)
+
+The experimental Hyprland guest test temporarily acquired a malformed,
+unterminated `grep -E` expression in commit `3b7840f`, which duplicated
+large portions of the here-document script. A first repair `60430f6`
+also duplicated material, so it must **not** be used as a QA baseline.
+[`bcf6df5`](https://github.com/sguzman/starbyte/commit/bcf6df50da157d49b156aadea8b880d34e438543)
+restored the exact clean pre-regression guest script, kept one bounded
+XDG-error diagnostic line, and restored the Hyprland XDG status receipt.
+Post-commit source inspection confirmed the normal 1,511-line script,
+one Hyprland focus section and one XDG status receipt.
+
+[`13c98fb`](https://github.com/sguzman/starbyte/commit/13c98fbeac2966ff31ee6c3001bc587ed899ea7a)
+includes the XDG error interface and allowlisted numeric code in the
+hosted CI's sanitized summary; arbitrary protocol text and raw guest
+logs stay private. [`bbfffdf`](https://github.com/sguzman/starbyte/commit/bbfffdf12afd6cfb9055045ce5f2db85199ae2e1)
+adds a hosted preflight guard against duplicate guest sections before
+any disposable VM boots. The script is structurally repaired, but the
+specialized exact-revision guest CI outcome has **not** been verified
+here. Do not infer successful XDG configuration, actual Starbyte
+GUI rendering, keyboard focus, gameplay or physical hardware tests.
+
+**Acceptance unchanged: 71/77 (92.21%, delta 0).** P-18, P-19,
+C-16, D-12, D-13 and D-15 remain open until their specific evidence
+passes. Hosted virtual-VM results cannot satisfy physical acceptance.
+
 ## Private Hyprland EGL/XDG diagnostic checkpoint (2026-10-25)
 
 The production emulator remains unchanged and the acceptance ledger is

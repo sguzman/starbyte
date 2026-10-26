@@ -247,6 +247,11 @@ if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --
       || fail 'guest_eglinfo_stage_failed'
     ldd "$eglinfo_bin" >>"$root/wayland-dependencies" \
       || fail 'guest_eglinfo_dependency_scan_failed'
+    rustc --edition=2021 -C opt-level=1 scripts/qa-guest-egl.rs \
+      -o "$root/initfs/bin/egl-attach-probe" \
+      || fail 'guest_egl_attach_probe_compilation_failed'
+    ldd "$root/initfs/bin/egl-attach-probe" >>"$root/wayland-dependencies" \
+      || fail 'guest_egl_attach_probe_dependency_scan_failed'
   fi
   grep -Fq 'not found' "$root/wayland-dependencies" && fail 'wayland_dependency_missing'
   while IFS= read -r dependency; do
@@ -848,6 +853,22 @@ HYPR_CONFIG
         fi
       fi
       echo "STARBYTE_GUEST_EGLINFO_DIAG status=$hypr_eglinfo_status wayland=$hypr_eglinfo_wayland surfaceless=$hypr_eglinfo_surfaceless" >/dev/console
+      # Unlike eglinfo's EGL_DEFAULT_DISPLAY, pass a live wl_display pointer
+      # to EGL directly. This matches the compositor-facing GUI integration.
+      hypr_egl_attach_status=not_run
+      hypr_egl_attach_parsed=0
+      if [ "$hypr_registry" = 1 ]; then
+        STARBYTE_GUEST_EGL_PROBE=1 WAYLAND_DISPLAY="$hypr_display" \
+          MESA_LOADER_DRIVER_OVERRIDE=swrast LIBGL_ALWAYS_SOFTWARE=1 \
+          /bin/busybox timeout 20 /bin/egl-attach-probe \
+          >/tmp/hypr-egl-attach.log 2>/tmp/hypr-egl-attach.err
+        hypr_egl_attach_status=$?
+        if /bin/busybox grep -Eq '^STARBYTE_GUEST_EGL_ATTACHED_RESULT connected=[01] attached=[01] own=[01] surfaceless=[01] attached_error=0x[0-9a-f]{4} own_error=0x[0-9a-f]{4} surfaceless_error=0x[0-9a-f]{4}$' /tmp/hypr-egl-attach.log; then
+          hypr_egl_attach_parsed=1
+          /bin/busybox grep -E '^STARBYTE_GUEST_EGL_ATTACHED_RESULT connected=[01] attached=[01] own=[01] surfaceless=[01] attached_error=0x[0-9a-f]{4} own_error=0x[0-9a-f]{4} surfaceless_error=0x[0-9a-f]{4}$' /tmp/hypr-egl-attach.log >/dev/console
+        fi
+      fi
+      echo "STARBYTE_GUEST_EGL_ATTACH_DIAG status=$hypr_egl_attach_status parsed=$hypr_egl_attach_parsed" >/dev/console
       # Distinct from the Weston sample: prove focus under Hyprland itself.
       hypr_focus_ready=0
       hypr_focus_clean=0
@@ -1358,7 +1379,7 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
       || fail 'guest_focused_wayland_keyboard_delivery_missing'
     echo 'STARBYTE_GUEST_FOCUS_OK client=weston-simple-shm escape=received source=private_qmp guest_only=true'
     if [[ "$mode" == --hyprland-smoke ]]; then
-      grep -E '^STARBYTE_GUEST_(HYPRLAND_(RESULT|DIAG|APP_RESULT|APP_DIAG)|HYPR_FOCUS_(RESULT|DIAG)|HYPR_OUTPUT_DIAG|HYPR_CAP_(BLOCKED|DIAG)|WAYLAND_CAP_RESULT|EGLINFO_DIAG) ' "$root/serial-clean.log" || true
+      grep -E '^STARBYTE_GUEST_(HYPRLAND_(RESULT|DIAG|APP_RESULT|APP_DIAG)|HYPR_FOCUS_(RESULT|DIAG)|HYPR_OUTPUT_DIAG|HYPR_CAP_(BLOCKED|DIAG)|WAYLAND_CAP_RESULT|EGLINFO_DIAG|EGL_ATTACH_DIAG|EGL_ATTACHED_RESULT) ' "$root/serial-clean.log" || true
       grep -Fqx 'STARBYTE_GUEST_HYPRLAND_RESULT executable=1 socket=1 registry=1 compositor=1 seat=1 alive=1' "$root/serial-clean.log" \
         || fail 'guest_private_hyprland_registry_or_seat_missing'
       echo 'STARBYTE_GUEST_HYPRLAND_OK drm=virtio compositor=hyprland seat=virtual guest_only=true'

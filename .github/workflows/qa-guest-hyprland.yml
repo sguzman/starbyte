@@ -47,7 +47,7 @@ jobs:
             libseat1 libinput10 binutils udev xkb-data hyprland
       - uses: dtolnay/rust-toolchain@stable
       - name: Install native GUI build dependencies
-        run: sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install -y --no-install-recommends pkg-config libudev-dev libasound2-dev
+        run: sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install -y --no-install-recommends pkg-config libudev-dev libasound2-dev libegl-dev libwayland-dev
       - uses: Swatinem/rust-cache@v2
       - name: Build actual native Starbyte GUI for private Hyprland guest
         run: cargo build --locked -p starbyte-egui

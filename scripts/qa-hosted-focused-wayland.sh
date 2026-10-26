@@ -9,7 +9,7 @@ fail() { printf 'STARBYTE_HOSTED_FOCUS_BLOCKED %s\n' "$1" >&2; exit 3; }
 [[ ! -v DISPLAY && ! -v WAYLAND_DISPLAY && ! -v HYPRLAND_INSTANCE_SIGNATURE ]] || fail display_present
 [[ ! -v DBUS_SESSION_BUS_ADDRESS && ! -v XDG_SESSION_ID ]] || fail session_present
 [[ -d "$RUNNER_TEMP" ]] || fail temp_missing
-for binary in bwrap timeout realpath Xvfb xdotool weston wayland-info git; do
+for binary in bwrap timeout realpath Xvfb xdotool xkbcomp weston wayland-info git; do
   command -v "$binary" >/dev/null || fail "missing_$binary"
 done
 repo="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)" || fail checkout_missing

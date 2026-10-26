@@ -76,7 +76,13 @@ game_args=(--demo --native-worker-preview --exit-after-full-worker-focused-clock
 if [[ "$STARBYTE_FOCUS_PROBE" == --blur-smoke ]]; then
   game_args=(--demo --native-worker-preview --exit-after-full-worker-physical-pause)
 fi
-timeout --signal=TERM --kill-after=2s 18s /run/user/qa/starbyte-egui \
+# Observe raw wl_keyboard.leave/enter solely in the throwaway synthetic
+# game. The required clock probe retains its original performance settings.
+game_environment=()
+if [[ "$STARBYTE_FOCUS_PROBE" == --blur-smoke ]]; then
+  game_environment=(env WAYLAND_DEBUG=client)
+fi
+timeout --signal=TERM --kill-after=2s 18s "${game_environment[@]}" /run/user/qa/starbyte-egui \
   "${game_args[@]}" --config /home/qa/.config/starbyte.toml \
   --cache-dir /home/qa/.cache/starbyte >"$runtime/game.log" 2>&1 &
 game_pid=$!
@@ -116,10 +122,31 @@ if [[ "$STARBYTE_FOCUS_PROBE" == --blur-smoke ]]; then
     tail -n 45 "$runtime/weston.log" >&2
     exit 1
   }
-  # Send pointer focus via the PRIVATE Xvfb window to select Weston's new
-  # native client. Never send input to any host compositor or device.
-  DISPLAY=:99 xdotool mousemove --window "$window" 600 280 click 1 2>/dev/null || :
-  echo STARBYTE_PRIVATE_NATIVE_RIVAL_STARTED shell=desktop-shell
+  # Verify an actual *new* wl_keyboard.leave delivered by Weston, not
+  # merely a focused X11 parent or a mapped second surface. Click several
+  # bounded positions inside only the guest's Xvfb Weston window.
+  leave_pattern='wl_keyboard[^[:space:]]*\.leave\('
+  baseline_leave="$(grep -Ec "$leave_pattern" "$runtime/game.log" || :)"
+  [[ "$baseline_leave" =~ ^[0-9]+$ ]] || baseline_leave=0
+  native_blur_seen=false
+  for coords in "600 280" "640 400" "430 340" "310 220" "730 490"; do
+    read -r cx cy <<< "$coords"
+    DISPLAY=:99 xdotool mousemove --window "$window" "$cx" "$cy" click 1 2>/dev/null || :
+    sleep 0.25
+    observed_leave="$(grep -Ec "$leave_pattern" "$runtime/game.log" || :)"
+    [[ "$observed_leave" =~ ^[0-9]+$ ]] || observed_leave=0
+    if (( observed_leave > baseline_leave )); then
+      native_blur_seen=true
+      break
+    fi
+  done
+  if [[ "$native_blur_seen" != true ]]; then
+    echo STARBYTE_FOCUSED_SEAT_FAILED native_wayland_keyboard_leave_missing >&2
+    grep -E 'wl_keyboard[^[:space:]]*\.(enter|leave)\(' "$runtime/game.log" | tail -n 12 >&2 || :
+    tail -n 35 "$runtime/weston.log" >&2
+    exit 1
+  fi
+  echo STARBYTE_PRIVATE_WAYLAND_KEYBOARD_LEAVE_OK shell=desktop
   sleep 2.65
   kill "$rival_pid" 2>/dev/null || :
   wait "$rival_pid" 2>/dev/null || :

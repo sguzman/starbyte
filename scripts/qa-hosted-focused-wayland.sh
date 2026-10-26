@@ -101,14 +101,16 @@ if [[ "$STARBYTE_FOCUS_PROBE" == --blur-smoke ]]; then
   # client: kiosk-shell can retain the old keyboard seat for new surfaces.
   # Explicit XSetInputFocus to this private rival produces the real outer
   # compositor FocusOut / FocusIn sequence without touching host input.
-  DISPLAY=:99 xmessage -name starbyte-private-focus -geometry 320x100+350+240 \
+  DISPLAY=:99 xmessage -name starbyte-private-focus -title starbyte-private-rival -geometry 320x100+350+240 \
     "Private Starbyte compositor focus transition" >"$runtime/rival.log" 2>&1 &
   rival_pid=$!
   rival_window=''
   for _ in {1..45}; do
-    rival_window="$(DISPLAY=:99 xdotool search --onlyvisible --pid "$rival_pid" 2>/dev/null | head -n 1 || :)"
+    rival_window="$(DISPLAY=:99 xdotool search --onlyvisible --name 'starbyte-private-rival' 2>/dev/null | head -n 1 || :)"
     [[ -n "$rival_window" ]] ||
-      rival_window="$(DISPLAY=:99 xdotool search --onlyvisible --name 'xmessage' 2>/dev/null | head -n 1 || :)"
+      rival_window="$(DISPLAY=:99 xdotool search --onlyvisible --class 'Xmessage' 2>/dev/null | head -n 1 || :)"
+    [[ -n "$rival_window" ]] ||
+      rival_window="$(DISPLAY=:99 xdotool search --onlyvisible --pid "$rival_pid" 2>/dev/null | head -n 1 || :)"
     [[ -n "$rival_window" ]] && break
     kill -0 "$rival_pid" 2>/dev/null || break
     sleep 0.1
@@ -116,6 +118,7 @@ if [[ "$STARBYTE_FOCUS_PROBE" == --blur-smoke ]]; then
   if [[ -z "$rival_window" ]] || ! kill -0 "$rival_pid" 2>/dev/null; then
     echo STARBYTE_FOCUSED_SEAT_FAILED rival_x11_window_missing >&2
     tail -n 35 "$runtime/rival.log" >&2
+    DISPLAY=:99 xdotool search --onlyvisible --name . 2>&1 | head -n 15 >&2 || :
     exit 1
   fi
   timeout --signal=TERM 3s env DISPLAY=:99 xdotool windowfocus --sync "$rival_window" || {

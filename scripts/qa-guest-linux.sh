@@ -801,6 +801,18 @@ HYPR_CONFIG
         if /bin/busybox grep -q 'wl_shm' /tmp/hyprland-info.log /tmp/hyprland-info.err; then hypr_wl_shm=1; fi
       fi
       echo "STARBYTE_GUEST_HYPR_OUTPUT_DIAG info_status=$hypr_info_status output=$hypr_output xdg_shell=$hypr_xdg_shell shm=$hypr_wl_shm" >/dev/console
+      # A published wl_output may exist before the guest DRM connector is
+      # actively scan-out enabled. Inspect only synthetic guest sysfs nodes.
+      hypr_kms_connectors=0
+      hypr_kms_enabled=0
+      for state in /sys/class/drm/card*-*/enabled; do
+        [ -r "$state" ] || continue
+        hypr_kms_connectors=$((hypr_kms_connectors + 1))
+        if /bin/busybox grep -Fqx enabled "$state"; then
+          hypr_kms_enabled=$((hypr_kms_enabled + 1))
+        fi
+      done
+      echo "STARBYTE_GUEST_HYPR_KMS_DIAG connectors=$hypr_kms_connectors enabled=$hypr_kms_enabled" >/dev/console
       # Read actual wl_shm format events and wl_seat keyboard capability over
       # the private guest Wayland connection. Registry names alone are insufficient.
       hypr_caps_status=not_run
@@ -975,6 +987,7 @@ HYPR_CONFIG
         # swrast client setting; no accepted guest GUI cutover is implied.
         WAYLAND_DEBUG=client WAYLAND_DISPLAY="$hypr_display" \
           RUST_BACKTRACE=1 \
+          STARBYTE_LOG=starbyte=info,eframe=trace,glutin=trace,winit=trace \
           EGL_LOG_LEVEL=debug LIBGL_DEBUG=verbose \
           WINIT_UNIX_BACKEND=wayland \
           EGL_PLATFORM=wayland \
@@ -1077,6 +1090,26 @@ HYPR_CONFIG
         if /bin/busybox grep -Fq 'stack backtrace:' "$log"; then hypr_app_backtrace=1; fi
         if /bin/busybox grep -Eiq "thread '.*' panicked at" "$log"; then hypr_app_panic_line=1; fi
       done
+      # Map eframe 0.32's own GL launch messages to fixed stages. The
+      # original logs stay private; these flags do not weaken acceptance.
+      hypr_eframe_display_start=0
+      hypr_eframe_display_ready=0
+      hypr_eframe_context_start=0
+      hypr_eframe_surface_start=0
+      hypr_eframe_surface_ready=0
+      hypr_eframe_context_current=0
+      hypr_eframe_window_failure=0
+      for log in /tmp/starbyte-hyprland-app.log /tmp/starbyte-hyprland-app.err; do
+        [ -f "$log" ] || continue
+        if /bin/busybox grep -Fq 'trying to create glutin Display with config:' "$log"; then hypr_eframe_display_start=1; fi
+        if /bin/busybox grep -Fq 'successfully created GL Display with version' "$log"; then hypr_eframe_display_ready=1; fi
+        if /bin/busybox grep -Fq 'creating gl context using raw window handle:' "$log"; then hypr_eframe_context_start=1; fi
+        if /bin/busybox grep -Fq 'Creating a gl_surface for viewport' "$log"; then hypr_eframe_surface_start=1; fi
+        if /bin/busybox grep -Fq 'surface created successfully:' "$log"; then hypr_eframe_surface_ready=1; fi
+        if /bin/busybox grep -Fq 'made context current. setting swap interval' "$log"; then hypr_eframe_context_current=1; fi
+        if /bin/busybox grep -Fq 'Failed to initialize a window for viewport' "$log"; then hypr_eframe_window_failure=1; fi
+      done
+      echo "STARBYTE_GUEST_HYPR_EFRAME_DIAG display_start=$hypr_eframe_display_start display_ready=$hypr_eframe_display_ready context_start=$hypr_eframe_context_start surface_start=$hypr_eframe_surface_start surface_ready=$hypr_eframe_surface_ready context_current=$hypr_eframe_context_current window_failure=$hypr_eframe_window_failure" >/dev/console
       # Match glutin 0.32 ErrorKind's fixed public display strings.
       # Never print raw native errors, Wayland traces, paths or guest logs.
       hypr_app_glutin_kind=unclassified
@@ -1381,7 +1414,7 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
       || fail 'guest_focused_wayland_keyboard_delivery_missing'
     echo 'STARBYTE_GUEST_FOCUS_OK client=weston-simple-shm escape=received source=private_qmp guest_only=true'
     if [[ "$mode" == --hyprland-smoke ]]; then
-      grep -E '^STARBYTE_GUEST_(HYPRLAND_(RESULT|DIAG|APP_RESULT|APP_DIAG)|HYPR_FOCUS_(RESULT|DIAG)|HYPR_OUTPUT_DIAG|HYPR_CAP_(BLOCKED|DIAG)|WAYLAND_CAP_RESULT|EGLINFO_DIAG|EGL_ATTACH_DIAG|EGL_ATTACHED_RESULT|EGL_TRACKED_RESULT) ' "$root/serial-clean.log" || true
+      grep -E '^STARBYTE_GUEST_(HYPRLAND_(RESULT|DIAG|APP_RESULT|APP_DIAG)|HYPR_FOCUS_(RESULT|DIAG)|HYPR_OUTPUT_DIAG|HYPR_KMS_DIAG|HYPR_EFRAME_DIAG|HYPR_CAP_(BLOCKED|DIAG)|WAYLAND_CAP_RESULT|EGLINFO_DIAG|EGL_ATTACH_DIAG|EGL_ATTACHED_RESULT|EGL_TRACKED_RESULT) ' "$root/serial-clean.log" || true
       grep -Fqx 'STARBYTE_GUEST_HYPRLAND_RESULT executable=1 socket=1 registry=1 compositor=1 seat=1 alive=1' "$root/serial-clean.log" \
         || fail 'guest_private_hyprland_registry_or_seat_missing'
       echo 'STARBYTE_GUEST_HYPRLAND_OK drm=virtio compositor=hyprland seat=virtual guest_only=true'

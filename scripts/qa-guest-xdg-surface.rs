@@ -185,3 +185,52 @@ fn main() {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wire_frame_round_trip_keeps_object_opcode_and_payload() {
+        let (mut writer, mut reader) = UnixStream::pair().unwrap();
+        let serial = 0x1234_5678_u32.to_ne_bytes();
+        send(&mut writer, XDG_SURFACE, 4, &serial).unwrap();
+        let (object, opcode, payload) = event(&mut reader).unwrap();
+        assert_eq!((object, opcode), (XDG_SURFACE, 4));
+        assert_eq!(payload, serial);
+    }
+
+    #[test]
+    fn registry_bind_encodes_name_interface_version_and_new_id() {
+        let (mut writer, mut reader) = UnixStream::pair().unwrap();
+        bind(&mut writer, 42, "xdg_wm_base", 6, XDG_SHELL).unwrap();
+        let (object, opcode, payload) = event(&mut reader).unwrap();
+        assert_eq!((object, opcode), (REGISTRY, 0));
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&42_u32.to_ne_bytes());
+        expected.extend_from_slice(&12_u32.to_ne_bytes());
+        expected.extend_from_slice(b"xdg_wm_base\0");
+        expected.extend_from_slice(&1_u32.to_ne_bytes());
+        expected.extend_from_slice(&XDG_SHELL.to_ne_bytes());
+        assert_eq!(payload, expected);
+    }
+
+    #[test]
+    fn invalid_event_size_and_display_error_fail_closed() {
+        let (mut writer, mut reader) = UnixStream::pair().unwrap();
+        writer.write_all(&XDG_SURFACE.to_ne_bytes()).unwrap();
+        writer.write_all(&((7_u32 << 16) | 4).to_ne_bytes()).unwrap();
+        assert_eq!(event(&mut reader).unwrap_err(), "invalid_event");
+
+        // The arbitrary trailing error string must never reach diagnostics.
+        let mut raw = Vec::new();
+        raw.extend_from_slice(&SURFACE.to_ne_bytes());
+        raw.extend_from_slice(&99_u32.to_ne_bytes());
+        raw.extend_from_slice(b"private guest-only error message\0");
+        assert_eq!(
+            check_protocol_error(1, 0, &raw),
+            Err("protocol_error")
+        );
+        assert_eq!(check_protocol_error(REGISTRY, 0, &raw), Ok(()));
+    }
+}

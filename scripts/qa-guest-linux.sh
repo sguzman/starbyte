@@ -837,6 +837,13 @@ HYPR_CONFIG
       hypr_focus_keyboard_requested=0
       hypr_focus_xdg_configure=0
       hypr_focus_shm_advertised=0
+      hypr_focus_registry_requested=0
+      hypr_focus_create_surface=0
+      hypr_focus_create_xdg=0
+      hypr_focus_create_toplevel=0
+      hypr_focus_initial_commit=0
+      hypr_focus_display_error=0
+      hypr_focus_toplevel_close=0
       if [ -s /tmp/hypr-focus.log ]; then hypr_focus_stdout=1; fi
       if [ -s /tmp/hypr-focus.err ]; then hypr_focus_stderr=1; fi
       for log in /tmp/hypr-focus.log /tmp/hypr-focus.err; do
@@ -851,8 +858,15 @@ HYPR_CONFIG
         if /bin/busybox grep -Eq 'wl_seat@[0-9]+\.get_keyboard\(' "$log"; then hypr_focus_keyboard_requested=1; fi
         if /bin/busybox grep -Eq 'xdg_toplevel@[0-9]+\.configure\(' "$log"; then hypr_focus_xdg_configure=1; fi
         if /bin/busybox grep -Eq 'wl_registry@[0-9]+\.global.*wl_shm' "$log"; then hypr_focus_shm_advertised=1; fi
+        if /bin/busybox grep -Eq 'wl_display@[0-9]+\.get_registry\(' "$log"; then hypr_focus_registry_requested=1; fi
+        if /bin/busybox grep -Eq 'wl_compositor@[0-9]+\.create_surface\(' "$log"; then hypr_focus_create_surface=1; fi
+        if /bin/busybox grep -Eq 'xdg_wm_base@[0-9]+\.get_xdg_surface\(' "$log"; then hypr_focus_create_xdg=1; fi
+        if /bin/busybox grep -Eq 'xdg_surface@[0-9]+\.get_toplevel\(' "$log"; then hypr_focus_create_toplevel=1; fi
+        if /bin/busybox grep -Eq 'wl_surface@[0-9]+\.commit\(' "$log"; then hypr_focus_initial_commit=1; fi
+        if /bin/busybox grep -Eq 'wl_display@[0-9]+\.error\(' "$log"; then hypr_focus_display_error=1; fi
+        if /bin/busybox grep -Eq 'xdg_toplevel@[0-9]+\.close\(' "$log"; then hypr_focus_toplevel_close=1; fi
       done
-      echo "STARBYTE_GUEST_HYPR_FOCUS_DIAG status=$hypr_focus_status stdout=$hypr_focus_stdout stderr=$hypr_focus_stderr connect=$hypr_focus_connect library=$hypr_focus_library protocol=$hypr_focus_protocol xdg=$hypr_focus_xdg shm=$hypr_focus_shm surface=$hypr_focus_surface keyboard_enter=$hypr_focus_keyboard_enter keyboard_requested=$hypr_focus_keyboard_requested xdg_configure=$hypr_focus_xdg_configure shm_advertised=$hypr_focus_shm_advertised" >/dev/console
+      echo "STARBYTE_GUEST_HYPR_FOCUS_DIAG status=$hypr_focus_status stdout=$hypr_focus_stdout stderr=$hypr_focus_stderr connect=$hypr_focus_connect library=$hypr_focus_library protocol=$hypr_focus_protocol xdg=$hypr_focus_xdg shm=$hypr_focus_shm surface=$hypr_focus_surface keyboard_enter=$hypr_focus_keyboard_enter keyboard_requested=$hypr_focus_keyboard_requested xdg_configure=$hypr_focus_xdg_configure shm_advertised=$hypr_focus_shm_advertised registry_requested=$hypr_focus_registry_requested create_surface=$hypr_focus_create_surface create_xdg=$hypr_focus_create_xdg create_toplevel=$hypr_focus_create_toplevel initial_commit=$hypr_focus_initial_commit display_error=$hypr_focus_display_error toplevel_close=$hypr_focus_toplevel_close" >/dev/console
       echo "STARBYTE_GUEST_HYPR_FOCUS_RESULT ready=$hypr_focus_ready clean_exit=$hypr_focus_clean exit_message=$hypr_focus_message hyprland_alive=$hypr_focus_compositor_alive" >/dev/console
       if /bin/busybox kill -0 "$hypr_pid" 2>/dev/null; then hypr_alive=1; fi
       for log in /tmp/hyprland.log /tmp/hyprland.err; do
@@ -917,6 +931,19 @@ HYPR_CONFIG
       hypr_app_dmabuf_params=0
       hypr_app_wl_surface_attach=0
       hypr_app_wl_drm=0
+      hypr_app_registry_requested=0
+      hypr_app_create_surface=0
+      hypr_app_create_xdg=0
+      hypr_app_create_toplevel=0
+      hypr_app_initial_commit=0
+      hypr_app_display_error=0
+      hypr_app_egl_bad_alloc=0
+      hypr_app_egl_bad_match=0
+      hypr_app_egl_not_initialized=0
+      hypr_app_glutin_error=0
+      hypr_app_surface_error=0
+      hypr_app_backtrace=0
+      hypr_app_panic_line=0
       if [ -s /tmp/starbyte-hyprland-app.log ]; then hypr_app_stdout=1; fi
       if [ -s /tmp/starbyte-hyprland-app.err ]; then hypr_app_stderr=1; fi
       for log in /tmp/starbyte-hyprland-app.log /tmp/starbyte-hyprland-app.err; do
@@ -948,8 +975,21 @@ HYPR_CONFIG
         if /bin/busybox grep -Eq 'zwp_linux_buffer_params_v1@[0-9]+\.' "$log"; then hypr_app_dmabuf_params=1; fi
         if /bin/busybox grep -Eq 'wl_surface@[0-9]+\.attach\(' "$log"; then hypr_app_wl_surface_attach=1; fi
         if /bin/busybox grep -Fq 'wl_drm' "$log"; then hypr_app_wl_drm=1; fi
+        if /bin/busybox grep -Eq 'wl_display@[0-9]+\.get_registry\(' "$log"; then hypr_app_registry_requested=1; fi
+        if /bin/busybox grep -Eq 'wl_compositor@[0-9]+\.create_surface\(' "$log"; then hypr_app_create_surface=1; fi
+        if /bin/busybox grep -Eq 'xdg_wm_base@[0-9]+\.get_xdg_surface\(' "$log"; then hypr_app_create_xdg=1; fi
+        if /bin/busybox grep -Eq 'xdg_surface@[0-9]+\.get_toplevel\(' "$log"; then hypr_app_create_toplevel=1; fi
+        if /bin/busybox grep -Eq 'wl_surface@[0-9]+\.commit\(' "$log"; then hypr_app_initial_commit=1; fi
+        if /bin/busybox grep -Eq 'wl_display@[0-9]+\.error\(' "$log"; then hypr_app_display_error=1; fi
+        if /bin/busybox grep -Fq 'EGL_BAD_ALLOC' "$log"; then hypr_app_egl_bad_alloc=1; fi
+        if /bin/busybox grep -Fq 'EGL_BAD_MATCH' "$log"; then hypr_app_egl_bad_match=1; fi
+        if /bin/busybox grep -Fq 'EGL_NOT_INITIALIZED' "$log"; then hypr_app_egl_not_initialized=1; fi
+        if /bin/busybox grep -Eiq '(glutin|GL surface|GlSurface|gl_surface).*(error|fail)|Glutin\(' "$log"; then hypr_app_glutin_error=1; fi
+        if /bin/busybox grep -Eiq '(surface|window).*(creation|initialization|configure).*(fail|error)|failed to initialize a window' "$log"; then hypr_app_surface_error=1; fi
+        if /bin/busybox grep -Fq 'stack backtrace:' "$log"; then hypr_app_backtrace=1; fi
+        if /bin/busybox grep -Eiq "thread '.*' panicked at" "$log"; then hypr_app_panic_line=1; fi
       done
-      echo "STARBYTE_GUEST_HYPRLAND_APP_DIAG stdout=$hypr_app_stdout stderr=$hypr_app_stderr egl=$hypr_app_egl dri=$hypr_app_dri context=$hypr_app_context wayland=$hypr_app_wayland winit=$hypr_app_winit panic=$hypr_app_panic library=$hypr_app_library config=$hypr_app_config render=$hypr_app_render permission=$hypr_app_permission protocol=$hypr_app_protocol stack_eframe=$hypr_app_stack_eframe stack_glutin=$hypr_app_stack_glutin stack_winit=$hypr_app_stack_winit stack_starbyte=$hypr_app_stack_starbyte pixel_format=$hypr_app_pixel_format surface=$hypr_app_surface missing_global=$hypr_app_missing_global egl_bad_surface=$hypr_app_egl_bad_surface egl_bad_native_window=$hypr_app_egl_bad_native_window egl_create_window_surface=$hypr_app_egl_create_window_surface surface_init_failure=$hypr_app_surface_init_failure xdg_configure=$hypr_app_xdg_configure dmabuf_failed=$hypr_app_dmabuf_failed dmabuf_params=$hypr_app_dmabuf_params wl_surface_attach=$hypr_app_wl_surface_attach wl_drm=$hypr_app_wl_drm" >/dev/console
+      echo "STARBYTE_GUEST_HYPRLAND_APP_DIAG stdout=$hypr_app_stdout stderr=$hypr_app_stderr egl=$hypr_app_egl dri=$hypr_app_dri context=$hypr_app_context wayland=$hypr_app_wayland winit=$hypr_app_winit panic=$hypr_app_panic library=$hypr_app_library config=$hypr_app_config render=$hypr_app_render permission=$hypr_app_permission protocol=$hypr_app_protocol stack_eframe=$hypr_app_stack_eframe stack_glutin=$hypr_app_stack_glutin stack_winit=$hypr_app_stack_winit stack_starbyte=$hypr_app_stack_starbyte pixel_format=$hypr_app_pixel_format surface=$hypr_app_surface missing_global=$hypr_app_missing_global egl_bad_surface=$hypr_app_egl_bad_surface egl_bad_native_window=$hypr_app_egl_bad_native_window egl_create_window_surface=$hypr_app_egl_create_window_surface surface_init_failure=$hypr_app_surface_init_failure xdg_configure=$hypr_app_xdg_configure dmabuf_failed=$hypr_app_dmabuf_failed dmabuf_params=$hypr_app_dmabuf_params wl_surface_attach=$hypr_app_wl_surface_attach wl_drm=$hypr_app_wl_drm registry_requested=$hypr_app_registry_requested create_surface=$hypr_app_create_surface create_xdg=$hypr_app_create_xdg create_toplevel=$hypr_app_create_toplevel initial_commit=$hypr_app_initial_commit display_error=$hypr_app_display_error egl_bad_alloc=$hypr_app_egl_bad_alloc egl_bad_match=$hypr_app_egl_bad_match egl_not_initialized=$hypr_app_egl_not_initialized glutin_error=$hypr_app_glutin_error surface_error=$hypr_app_surface_error backtrace=$hypr_app_backtrace panic_line=$hypr_app_panic_line" >/dev/console
       # kill -0 alone also succeeds for zombies; require a non-zombie
       # Hyprland process after the application has finished.
       hypr_alive=0

@@ -252,6 +252,11 @@ if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --
       || fail 'guest_egl_attach_probe_compilation_failed'
     ldd "$root/initfs/bin/egl-attach-probe" >>"$root/wayland-dependencies" \
       || fail 'guest_egl_attach_probe_dependency_scan_failed'
+    rustc --edition=2021 -C opt-level=1 scripts/qa-guest-xdg-surface.rs \
+      -o "$root/initfs/bin/xdg-surface-probe" \
+      || fail 'guest_xdg_surface_probe_compilation_failed'
+    ldd "$root/initfs/bin/xdg-surface-probe" >>"$root/wayland-dependencies" \
+      || fail 'guest_xdg_surface_probe_dependency_scan_failed'
   fi
   grep -Fq 'not found' "$root/wayland-dependencies" && fail 'wayland_dependency_missing'
   while IFS= read -r dependency; do
@@ -884,6 +889,25 @@ HYPR_CONFIG
         /bin/busybox grep -E '^STARBYTE_GUEST_EGL_TRACKED_RESULT advertised=[01] initialized=[01] error=0x[0-9a-f]{4}$' /tmp/hypr-egl-attach.log >/dev/console || :
       fi
       echo "STARBYTE_GUEST_EGL_ATTACH_DIAG status=$hypr_egl_attach_status parsed=$hypr_egl_attach_parsed" >/dev/console
+      # Prove that the virtual compositor actually sends xdg_surface.configure,
+      # not merely that the registry advertises xdg_wm_base.
+      hypr_xdg_status=not_run
+      hypr_xdg_configured=0
+      hypr_xdg_reason=none
+      if [ "$hypr_registry" = 1 ]; then
+        STARBYTE_GUEST_XDG_PROBE=1 WAYLAND_DISPLAY="$hypr_display" \
+          /bin/busybox timeout 16 /bin/xdg-surface-probe \
+          >/tmp/hypr-xdg-probe.log 2>/tmp/hypr-xdg-probe.err
+        hypr_xdg_status=$?
+        if /bin/busybox grep -Fqx 'STARBYTE_GUEST_XDG_SURFACE_RESULT connected=1 xdg=1 committed=1 configured=1 acked=1' /tmp/hypr-xdg-probe.log; then
+          hypr_xdg_configured=1
+        else
+          for reason in private_guest_only missing_display unsafe_display_name connect_failed timeout_failed write_failed read_failed invalid_request invalid_event invalid_global protocol_error registry_timeout compositor_missing xdg_shell_missing configure_timeout; do
+            if /bin/busybox grep -Fqx "STARBYTE_GUEST_XDG_SURFACE_BLOCKED $reason" /tmp/hypr-xdg-probe.log; then hypr_xdg_reason=$reason; break; fi
+          done
+        fi
+      fi
+      echo "STARBYTE_GUEST_HYPR_XDG_DIAG status=$hypr_xdg_status configured=$hypr_xdg_configured reason=$hypr_xdg_reason" >/dev/console
       # Distinct from the Weston sample: prove focus under Hyprland itself.
       hypr_focus_ready=0
       hypr_focus_clean=0
@@ -1415,7 +1439,7 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
       || fail 'guest_focused_wayland_keyboard_delivery_missing'
     echo 'STARBYTE_GUEST_FOCUS_OK client=weston-simple-shm escape=received source=private_qmp guest_only=true'
     if [[ "$mode" == --hyprland-smoke ]]; then
-      grep -E '^STARBYTE_GUEST_(HYPRLAND_(RESULT|DIAG|APP_RESULT|APP_DIAG)|HYPR_FOCUS_(RESULT|DIAG)|HYPR_OUTPUT_DIAG|HYPR_KMS_DIAG|HYPR_EFRAME_DIAG|HYPR_CAP_(BLOCKED|DIAG)|WAYLAND_CAP_RESULT|EGLINFO_DIAG|EGL_ATTACH_DIAG|EGL_ATTACHED_RESULT|EGL_TRACKED_RESULT|EGL_NONE_RESULT) ' "$root/serial-clean.log" || true
+      grep -E '^STARBYTE_GUEST_(HYPRLAND_(RESULT|DIAG|APP_RESULT|APP_DIAG)|HYPR_FOCUS_(RESULT|DIAG)|HYPR_OUTPUT_DIAG|HYPR_KMS_DIAG|HYPR_EFRAME_DIAG|HYPR_CAP_(BLOCKED|DIAG)|WAYLAND_CAP_RESULT|EGLINFO_DIAG|EGL_ATTACH_DIAG|EGL_ATTACHED_RESULT|EGL_TRACKED_RESULT|EGL_NONE_RESULT|HYPR_XDG_DIAG) ' "$root/serial-clean.log" || true
       grep -Fqx 'STARBYTE_GUEST_HYPRLAND_RESULT executable=1 socket=1 registry=1 compositor=1 seat=1 alive=1' "$root/serial-clean.log" \
         || fail 'guest_private_hyprland_registry_or_seat_missing'
       echo 'STARBYTE_GUEST_HYPRLAND_OK drm=virtio compositor=hyprland seat=virtual guest_only=true'

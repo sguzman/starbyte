@@ -5,11 +5,13 @@ on:
     branches: [main]
     paths:
       - "scripts/qa-guest-linux.sh"
+      - "crates/starbyte-egui/Cargo.toml"
       - "scripts/qa-guest-wayland-wire.rs"
       - ".github/workflows/qa-guest-hyprland.yml"
   pull_request:
     paths:
       - "scripts/qa-guest-linux.sh"
+      - "crates/starbyte-egui/Cargo.toml"
       - "scripts/qa-guest-wayland-wire.rs"
       - ".github/workflows/qa-guest-hyprland.yml"
 

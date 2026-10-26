@@ -615,8 +615,7 @@ impl ThreadedPreviewApp {
                 // Selection intent and installed ownership are different.
                 // An earlier save can still belong to the live cartridge
                 // if a newly selected archive fails before installation.
-                PendingOperation::Save { owner_epoch, .. }
-                    if owner_epoch != self.owner_epoch => {}
+                PendingOperation::Save { owner_epoch, .. } if owner_epoch != self.owner_epoch => {}
                 PendingOperation::Save {
                     epoch,
                     owner_epoch,
@@ -626,8 +625,7 @@ impl ThreadedPreviewApp {
                         // Guard even a same-path ROM reload: owner_epoch is
                         // required in addition to the cartridge path.
                         if self.controls.session.has_rom
-                            && response.controls.session.rom_path
-                                == self.controls.session.rom_path
+                            && response.controls.session.rom_path == self.controls.session.rom_path
                         {
                             self.controls = response.controls;
                             if let Some(frame) = response.restored_frame {
@@ -639,7 +637,8 @@ impl ThreadedPreviewApp {
                         }
                         if epoch == self.session_epoch {
                             if let SessionSaveOutcome::SavedTo(path) = response.outcome {
-                                self.status_note = Some(format!("Saved state to {}", path.display()));
+                                self.status_note =
+                                    Some(format!("Saved state to {}", path.display()));
                             }
                             self.last_error = None;
                         }
@@ -1199,9 +1198,11 @@ mod pitch_mode_tests {
         .unwrap();
         app.poll_operations(&ctx);
         assert!(app.controls.has_quick_save);
-        assert!(app.status_note.as_deref().is_some_and(|status| {
-            status.starts_with("Preparing ")
-        }));
+        assert!(
+            app.status_note
+                .as_deref()
+                .is_some_and(|status| { status.starts_with("Preparing ") })
+        );
         let deadline = Instant::now() + Duration::from_secs(6);
         while Instant::now() < deadline {
             app.poll_library_events();
@@ -1210,9 +1211,11 @@ mod pitch_mode_tests {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(app.last_error.as_deref().is_some_and(|error| {
-            error.contains("Library ROM preparation failed")
-        }));
+        assert!(
+            app.last_error
+                .as_deref()
+                .is_some_and(|error| { error.contains("Library ROM preparation failed") })
+        );
         assert!(app.controls.has_quick_save);
         assert!(app.can_modify_running_game());
 

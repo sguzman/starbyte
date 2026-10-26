@@ -1017,6 +1017,7 @@ HYPR_CONFIG
           WINIT_UNIX_BACKEND=wayland \
           EGL_PLATFORM=wayland \
           MESA_LOADER_DRIVER_OVERRIDE=swrast \
+          LIBGL_ALWAYS_SOFTWARE=1 \
           GALLIUM_DRIVER=llvmpipe \
           XDG_CONFIG_HOME=/tmp/starbyte-hyprland-app-config \
           XDG_CACHE_HOME=/tmp/starbyte-hyprland-app-cache \

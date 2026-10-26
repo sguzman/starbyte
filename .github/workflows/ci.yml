@@ -395,3 +395,15 @@ jobs:
           bash scripts/qa-isolated-wayland.sh --check-only
           bash scripts/qa-isolated-wayland.sh --starbyte-smoke
           echo "STARBYTE_HOSTED_ISOLATED_WESTON_OK physical=not_tested"
+
+      # Preserve the exact hosted-tested binary for eventual hardware-only
+      # acceptance. This does not authorize running anything on the owner's
+      # machine, and no local compilation is required.
+      - name: Publish tested Linux player
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: starbyte-egui-linux-x86_64
+          path: target/debug/starbyte-egui
+          if-no-files-found: error
+          retention-days: 7

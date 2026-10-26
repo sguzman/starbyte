@@ -1,5 +1,28 @@
 # Emulation scheduler migration
 
+## Private focused Wayland input-seat acceptance — 2026-10-26
+
+GitHub-hosted Linux now runs `scripts/qa-hosted-focused-wayland.sh --smoke`
+after the headless acceptance probes. It starts an independent Xvfb server
+inside a Bubblewrap guest, then uses Weston's X11 backend to obtain a real
+Wayland input seat. Only this guest's Xvfb window receives the focus events.
+The game itself is required to use native Wayland. Host display sockets,
+the active Hyprland session, /dev/input, /dev/dri, DBus and the owner's
+HOME are not accessible.
+
+The initial hosted focus acceptance passed on source revision
+[`dbfc70c`](https://github.com/sguzman/starbyte/commit/dbfc70c8e44bf99b4fdda65ff02e802a60198bf7),
+[CI run 40385973114](https://github.com/sguzman/starbyte/actions/runs/40385973114),
+with the original application's receipt
+`STARBYTE_FULL_LIBRARY_FOCUSED_CLOCK_OK fps=60.009 callbacks=181
+presented=181 frames=181 wall_ms=3016` and the private-seat teardown
+success marker. The focused-seat check was subsequently made required
+rather than non-blocking. This tests an actual compositor focus event,
+not a fabricated FPS estimate. **It is virtual-seat evidence, not
+physical Hyprland evidence.** D-12, D-13 and the speaker/gamepad gates
+remain pending; production worker cutover is not authorized.
+
+
 
 ## Private Weston application acceptance — 2026-10-26
 

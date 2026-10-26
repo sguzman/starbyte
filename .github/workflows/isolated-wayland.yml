@@ -1,0 +1,45 @@
+name: isolated Weston application acceptance
+
+# This never uses a self-hosted or interactive desktop runner.
+# It verifies the worker-backed native GUI inside a private Bubblewrap guest.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: starbyte-isolated-weston-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  isolated-app:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install headless Weston and isolated runtime dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            pkg-config libudev-dev libasound2-dev \
+            weston wayland-utils bubblewrap libgl1-mesa-dri libegl1
+      - name: Build Starbyte (no owner config or ROMs)
+        run: cargo build --locked -p starbyte-egui --bin starbyte-egui
+      - name: Verify private compositor and game integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/starbyte-private-weston"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          bash -n scripts/qa-isolated-wayland.sh
+          bash scripts/qa-isolated-wayland.sh --check-only
+          bash scripts/qa-isolated-wayland.sh --starbyte-smoke
+          echo "STARBYTE_HOSTED_ISOLATED_WESTON_OK physical=not_tested"

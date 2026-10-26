@@ -903,9 +903,11 @@ mod pitch_mode_tests {
         let pending_count = app.pending.len();
         app.queue_screenshot();
         assert_eq!(app.pending.len(), pending_count);
-        assert!(app.last_error.as_deref().is_some_and(|error| {
-            error.contains("Finish pending screenshots")
-        }));
+        assert!(
+            app.last_error
+                .as_deref()
+                .is_some_and(|error| { error.contains("Finish pending screenshots") })
+        );
         drop(capture_tx);
         drop(png_tx);
     }

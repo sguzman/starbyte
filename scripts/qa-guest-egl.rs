@@ -1,12 +1,15 @@
 //! Compare Mesa EGL attached Wayland displays with separately connected EGL.
 //! Only allowed inside the disposable private Starbyte QEMU guest.
 use std::env;
-use std::ffi::{c_char, c_void};
+use std::ffi::{c_char, c_void, CStr};
 use std::ptr;
 
 const WAYLAND: u32 = 0x31D8; // EGL_PLATFORM_WAYLAND_EXT
 const SURFACELESS: u32 = 0x31DD; // EGL_PLATFORM_SURFACELESS_MESA
 const EGL_SUCCESS: i32 = 0x3000;
+const EGL_NONE: isize = 0x3038;
+const EGL_TRACK_REFERENCES_KHR: isize = 0x3352;
+const EGL_EXTENSIONS: i32 = 0x3055;
 
 #[link(name = "EGL")]
 unsafe extern "C" {
@@ -14,6 +17,7 @@ unsafe extern "C" {
     fn eglInitialize(display: *mut c_void, major: *mut i32, minor: *mut i32) -> u32;
     fn eglTerminate(display: *mut c_void) -> u32;
     fn eglGetError() -> i32;
+    fn eglQueryString(display: *mut c_void, name: i32) -> *const c_char;
 }
 
 #[link(name = "wayland-client")]
@@ -22,10 +26,10 @@ unsafe extern "C" {
     fn wl_display_disconnect(display: *mut c_void);
 }
 
-fn attempt(platform: u32, native: *mut c_void) -> (bool, i32) {
+fn attempt_with_attrs(platform: u32, native: *mut c_void, attrs: *const isize) -> (bool, i32) {
     // A native pointer is supplied only by the private guest's wl_display_connect.
     unsafe {
-        let display = eglGetPlatformDisplay(platform, native, ptr::null());
+        let display = eglGetPlatformDisplay(platform, native, attrs);
         if display.is_null() {
             return (false, eglGetError());
         }
@@ -37,6 +41,22 @@ fn attempt(platform: u32, native: *mut c_void) -> (bool, i32) {
             let _ = eglTerminate(display);
         }
         (initialized, code)
+    }
+}
+
+fn attempt(platform: u32, native: *mut c_void) -> (bool, i32) {
+    attempt_with_attrs(platform, native, ptr::null())
+}
+
+fn track_references_advertised() -> bool {
+    // Glutin checks the client extension string before adding this attribute.
+    unsafe {
+        let extensions = eglQueryString(ptr::null_mut(), EGL_EXTENSIONS);
+        !extensions.is_null()
+            && CStr::from_ptr(extensions)
+                .to_bytes()
+                .split(|b| *b == b' ')
+                .any(|name| name == b"EGL_KHR_display_reference")
     }
 }
 
@@ -55,10 +75,26 @@ fn main() {
         println!("STARBYTE_GUEST_EGL_ATTACHED_RESULT connected=0 attached=0 own=0 surfaceless=0 attached_error=0x3001 own_error=0x3001 surfaceless_error=0x3001");
         return;
     }
+    let track_advertised = track_references_advertised();
+    // glutin 0.32 optionally sets EGL_TRACK_REFERENCES_KHR=EGL_TRUE;
+    // unlike eglinfo and the previous probe, which use a NULL attribute list.
+    // Run tracked first so a prior initialized display cannot mask its failure.
+    let tracked_attrs = [EGL_TRACK_REFERENCES_KHR, 1, EGL_NONE];
+    let (tracked, tracked_error) = if track_advertised {
+        attempt_with_attrs(WAYLAND, connected_display, tracked_attrs.as_ptr())
+    } else {
+        (false, EGL_SUCCESS)
+    };
     let (attached, attached_error) = attempt(WAYLAND, connected_display);
     let (own, own_error) = attempt(WAYLAND, ptr::null_mut());
     let (surfaceless, surfaceless_error) = attempt(SURFACELESS, ptr::null_mut());
     unsafe { wl_display_disconnect(connected_display) };
+    println!(
+        "STARBYTE_GUEST_EGL_TRACKED_RESULT advertised={} initialized={} error=0x{:04x}",
+        u8::from(track_advertised),
+        u8::from(tracked),
+        tracked_error,
+    );
     println!(
         "STARBYTE_GUEST_EGL_ATTACHED_RESULT connected=1 attached={} own={} surfaceless={} attached_error=0x{:04x} own_error=0x{:04x} surfaceless_error=0x{:04x}",
         u8::from(attached),

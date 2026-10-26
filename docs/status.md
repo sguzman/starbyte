@@ -1,5 +1,33 @@
 # Starbyte: current state
 
+## Private Hyprland EGL/XDG diagnostic checkpoint (2026-10-25)
+
+The production emulator remains unchanged and the acceptance ledger is
+**71/77 (92.21%, no newly accepted gate)**. The disposable Hyprland VM
+still requires a verified original-window worker result before claiming
+successful guest GUI initialization, and guest results cannot substitute
+for real speaker, controller, focus or production-cutover evidence.
+
+- [`e5f63e3`](https://github.com/sguzman/starbyte/commit/e5f63e31fe26fe489eef53c899249fb507995790) aligns the guest
+  Starbyte process with the standalone EGL probes' software-rendering
+  setting (`LIBGL_ALWAYS_SOFTWARE=1`).
+- [`67d8772`](https://github.com/sguzman/starbyte/commit/67d8772c45289f951cc204f3d15ea691ddd16255) includes all
+  `scripts/qa-guest-*.rs` sources in the private Hyprland push/PR
+  workflow trigger instead of silently missing the EGL probe.
+- [`08b2fe2`](https://github.com/sguzman/starbyte/commit/08b2fe26ddb134d735899960a6155cc8fdc2b538) runs tracked
+  EGL initialization before the untracked attempts, as its diagnostic
+  contract specifies.
+- [`dd40531`](https://github.com/sguzman/starbyte/commit/dd405312f1a7bc572190b511fadea4a6a59de36f)
+  and [`40950e9`](https://github.com/sguzman/starbyte/commit/40950e9b8f7dec96511a19c242ca399d44269a4f)
+  require an XDG configure-ack/commit sync callback and classify a
+  missing acknowledgement round trip separately.
+
+These are source/diagnostic changes; **their specialized Actions results
+are not independently verified at this checkpoint**. Do not mark guest
+focus, Glutin/EGL window creation, 30 worker frames or any of P-18,
+P-19, C-16, D-12, D-13 and D-15 accepted from these commits alone.
+No host-compositor or keyboard access is involved.
+
 
 ## Wayland-only EGL diagnostic (2026-10-25)
 

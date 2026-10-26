@@ -1,0 +1,61 @@
+name: qa-hyprland-wayland-only-experiment
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/qa-hyprland-wayland-only.yml"
+
+# An independent, private-virtio guest; never start GUI tests on the owner's
+# desktop and never substitute this evidence for physical Hyprland acceptance.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  experimental-wayland-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 19
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify guest-only safety preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/qa-guest-linux.sh
+          if output="$(DISPLAY=:0 bash scripts/qa-guest-linux.sh --check-only 2>&1)"; then exit 1; fi
+          grep -Fq 'STARBYTE_GUEST_LINUX_BLOCKED graphical_session_present' <<<"$output"
+          if output="$(RUNNER_ENVIRONMENT=self-hosted bash scripts/qa-guest-linux.sh --check-only 2>&1)"; then exit 1; fi
+          grep -Fq 'STARBYTE_GUEST_LINUX_BLOCKED github_hosted_runner_only' <<<"$output"
+          bash scripts/qa-guest-linux.sh --check-only
+      - name: Install guest emulation and graphics dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install -y --no-install-recommends \
+            qemu-system-x86 socat jq busybox-static cpio curl squashfs-tools kmod \
+            libgbm-dev libdrm-dev libgl1-mesa-dri libegl1 libegl-mesa0 libgles2 \
+            libwayland-egl1 libwayland-cursor0 weston wayland-utils mesa-utils \
+            libseat1 libinput10 binutils udev xkb-data hyprland
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install native GUI build dependencies
+        run: sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install -y --no-install-recommends pkg-config libudev-dev libasound2-dev libegl-dev libwayland-dev
+      - uses: Swatinem/rust-cache@v2
+      # This is an explicitly non-acceptance experiment. It changes only
+      # the disposable runner checkout and never edits the repository lock.
+      - name: Build temporary Wayland-only Starbyte variant
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fetch --locked
+          original='features = ["default_fonts", "glow", "wayland", "x11"]'
+          replacement='features = ["default_fonts", "glow", "wayland"]'
+          grep -Fq "$original" crates/starbyte-egui/Cargo.toml
+          sed -i "s/\\\"x11\\\"\\]/\\]/" crates/starbyte-egui/Cargo.toml
+          grep -Fq "$replacement" crates/starbyte-egui/Cargo.toml
+          cargo build --offline -p starbyte-egui
+          echo 'STARBYTE_EXPERIMENT_WAYLAND_ONLY_BUILD_OK ephemeral=true'
+      - name: Probe temporary Wayland-only binary in disposable Hyprland guest
+        shell: bash
+        run: bash scripts/qa-guest-linux.sh --hyprland-smoke

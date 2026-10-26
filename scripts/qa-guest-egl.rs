@@ -80,15 +80,15 @@ fn main() {
     // unlike eglinfo and the previous probe, which use a NULL attribute list.
     // Run tracked first so a prior initialized display cannot mask its failure.
     let tracked_attrs = [EGL_TRACK_REFERENCES_KHR, 1, EGL_NONE];
-    // Match the non-null EGL_NONE attribute list used by Glutin 0.32.
-    let none_attrs = [EGL_NONE];
-    let (egl_none, egl_none_error) =
-        attempt_with_attrs(WAYLAND, connected_display, none_attrs.as_ptr());
     let (tracked, tracked_error) = if track_advertised {
         attempt_with_attrs(WAYLAND, connected_display, tracked_attrs.as_ptr())
     } else {
         (false, EGL_SUCCESS)
     };
+    // Match the non-null EGL_NONE attribute list used by Glutin 0.32.
+    let none_attrs = [EGL_NONE];
+    let (egl_none, egl_none_error) =
+        attempt_with_attrs(WAYLAND, connected_display, none_attrs.as_ptr());
     let (attached, attached_error) = attempt(WAYLAND, connected_display);
     let (own, own_error) = attempt(WAYLAND, ptr::null_mut());
     let (surfaceless, surfaceless_error) = attempt(SURFACELESS, ptr::null_mut());

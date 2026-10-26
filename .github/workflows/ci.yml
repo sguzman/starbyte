@@ -21,6 +21,12 @@ jobs:
       # formatter failures should surface early during rapid main updates.
       - name: Format
         run: cargo fmt --all -- --check
+      - name: Verify private XDG wire protocol without a display
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --edition=2021 --test scripts/qa-guest-xdg-surface.rs -o "$RUNNER_TEMP/starbyte-xdg-wire-tests"
+          "$RUNNER_TEMP/starbyte-xdg-wire-tests" --quiet
       - name: Verify unattended physical-QA launcher syntax
         run: bash -n scripts/qa-native-hyprland.sh
       - name: Verify isolated QA launcher syntax

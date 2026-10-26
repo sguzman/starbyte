@@ -66,8 +66,14 @@ enum PendingOperation {
         epoch: u64,
         reply: Receiver<Result<WorkerSaveResponse, String>>,
     },
-    SpeakerCheck(Receiver<Result<(), String>>),
-    ClearCheats(Receiver<Result<(), String>>),
+    SpeakerCheck {
+        epoch: u64,
+        reply: Receiver<Result<(), String>>,
+    },
+    ClearCheats {
+        epoch: u64,
+        reply: Receiver<Result<(), String>>,
+    },
     Screenshot {
         epoch: u64,
         reply: Receiver<Result<SessionScreenshot, String>>,
@@ -520,20 +526,22 @@ impl ThreadedPreviewApp {
                         }
                     }
                 },
-                PendingOperation::ClearCheats(reply) => match reply.try_recv() {
+                PendingOperation::ClearCheats { epoch, .. } if epoch != self.session_epoch => {}
+                PendingOperation::ClearCheats { epoch, reply } => match reply.try_recv() {
                     Ok(Ok(())) => {
                         self.status_note = Some("Runtime cheats disabled".to_owned());
                         self.last_error = None;
                     }
                     Ok(Err(error)) => self.last_error = Some(error),
                     Err(TryRecvError::Empty) => {
-                        still_pending.push(PendingOperation::ClearCheats(reply));
+                        still_pending.push(PendingOperation::ClearCheats { epoch, reply });
                     }
                     Err(TryRecvError::Disconnected) => {
                         self.last_error = Some("Cheat command worker stopped".to_owned());
                     }
                 },
-                PendingOperation::SpeakerCheck(reply) => match reply.try_recv() {
+                PendingOperation::SpeakerCheck { epoch, .. } if epoch != self.session_epoch => {}
+                PendingOperation::SpeakerCheck { epoch, reply } => match reply.try_recv() {
                     Ok(Ok(())) => {
                         self.status_note =
                             Some("Speaker check submitted to the game audio sink".to_owned());
@@ -541,7 +549,7 @@ impl ThreadedPreviewApp {
                     }
                     Ok(Err(error)) => self.last_error = Some(error),
                     Err(TryRecvError::Empty) => {
-                        still_pending.push(PendingOperation::SpeakerCheck(reply));
+                        still_pending.push(PendingOperation::SpeakerCheck { epoch, reply });
                     }
                     Err(TryRecvError::Disconnected) => {
                         self.last_error =
@@ -958,7 +966,7 @@ mod pitch_mode_tests {
     }
 
     #[test]
-    fn old_cartridge_save_and_capture_receipts_cannot_override_new_launch() {
+    fn old_cartridge_async_receipts_cannot_override_new_launch() {
         let temp = tempfile::tempdir().unwrap();
         let rom = temp.path().join("replacement.sfc");
         std::fs::write(&rom, starbyte_core::testing::demo::demo_rom_bytes()).unwrap();
@@ -979,6 +987,16 @@ mod pitch_mode_tests {
         let (save_sender, save_reply) = mpsc::channel();
         let (capture_sender, capture_reply) = mpsc::channel();
         let (png_sender, png_reply) = mpsc::channel();
+        let (cheat_sender, cheat_reply) = mpsc::channel();
+        let (speaker_sender, speaker_reply) = mpsc::channel();
+        app.pending.push(PendingOperation::ClearCheats {
+            epoch: old_epoch,
+            reply: cheat_reply,
+        });
+        app.pending.push(PendingOperation::SpeakerCheck {
+            epoch: old_epoch,
+            reply: speaker_reply,
+        });
         app.pending.push(PendingOperation::Save {
             epoch: old_epoch,
             reply: save_reply,
@@ -1009,6 +1027,8 @@ mod pitch_mode_tests {
             .send(Err("old capture failure".to_owned()))
             .unwrap();
         png_sender.send(Err("old PNG failure".to_owned())).unwrap();
+        cheat_sender.send(Ok(())).unwrap();
+        speaker_sender.send(Ok(())).unwrap();
         app.poll_operations(&egui::Context::default());
         assert!(app.last_error.is_none());
         // The replacement may have finished loading while we polled: either
@@ -1021,6 +1041,8 @@ mod pitch_mode_tests {
             PendingOperation::Save { .. }
                 | PendingOperation::Screenshot { .. }
                 | PendingOperation::PngWrite { .. }
+                | PendingOperation::ClearCheats { .. }
+                | PendingOperation::SpeakerCheck { .. }
         )));
     }
 
@@ -1363,7 +1385,10 @@ impl eframe::App for ThreadedPreviewApp {
                         {
                             match self.engine.queue_clear_cheats() {
                                 Ok(reply) => {
-                                    self.pending.push(PendingOperation::ClearCheats(reply));
+                                    self.pending.push(PendingOperation::ClearCheats {
+                                        epoch: self.session_epoch,
+                                        reply,
+                                    });
                                 }
                                 Err(error) => self.last_error = Some(error),
                             }
@@ -1460,7 +1485,10 @@ impl eframe::App for ThreadedPreviewApp {
                     {
                         match self.engine.queue_speaker_check() {
                             Ok(reply) => {
-                                self.pending.push(PendingOperation::SpeakerCheck(reply));
+                                self.pending.push(PendingOperation::SpeakerCheck {
+                                    epoch: self.session_epoch,
+                                    reply,
+                                });
                             }
                             Err(error) => self.last_error = Some(error),
                         }

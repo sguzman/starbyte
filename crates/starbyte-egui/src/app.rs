@@ -2924,10 +2924,7 @@ impl StarbyteApp {
                 detail: detail.to_owned(),
             });
         }
-        if self.jobs.len() > 24 {
-            let excess = self.jobs.len().saturating_sub(24);
-            self.jobs.drain(0..excess);
-        }
+        trim_job_history(&mut self.jobs, self.latest_rom_job_id);
     }
 
     /// UI-facing session data gateway. Keep the legacy source here until
@@ -9982,11 +9979,26 @@ fn rom_selection_preparing(jobs: &[JobRecord], latest: Option<u64>) -> bool {
     })
 }
 
+/// Job history is display bookkeeping, but the save/screenshot gate also
+/// reads the pending ROM job from it. Never evict that one live record when
+/// unrelated library jobs fill the bounded 24-item status list.
+fn trim_job_history(jobs: &mut Vec<JobRecord>, latest: Option<u64>) {
+    let protect = latest.filter(|&id| rom_selection_preparing(jobs, Some(id)));
+    while jobs.len() > 24 {
+        let index = if jobs.first().is_some_and(|job| Some(job.id) == protect) {
+            1
+        } else {
+            0
+        };
+        jobs.remove(index);
+    }
+}
+
 #[cfg(test)]
 mod rom_request_order_tests {
     use super::{
         JobRecord, is_rom_job, is_superseded_rom_load, rom_selection_preparing,
-        worker_async_feedback_is_current,
+        trim_job_history, worker_async_feedback_is_current,
     };
 
     #[test]
@@ -10031,6 +10043,43 @@ mod rom_request_order_tests {
         });
         assert!(rom_selection_preparing(&jobs, Some(43)));
         assert!(!rom_selection_preparing(&jobs, Some(41)));
+    }
+
+    #[test]
+    fn pending_cartridge_survives_job_history_eviction_until_it_finishes() {
+        let mut jobs = vec![JobRecord {
+            id: 10,
+            label: "Open ROM".to_owned(),
+            state: "running",
+            detail: "Extracting".to_owned(),
+        }];
+        for id in 11..50 {
+            jobs.push(JobRecord {
+                id,
+                label: "Refresh Covers".to_owned(),
+                state: "done",
+                detail: "Done".to_owned(),
+            });
+        }
+        trim_job_history(&mut jobs, Some(10));
+        assert_eq!(jobs.len(), 24);
+        assert_eq!(jobs[0].id, 10);
+        assert!(rom_selection_preparing(&jobs, Some(10)));
+        assert_eq!(jobs.last().unwrap().id, 49);
+
+        jobs[0].state = "failed";
+        trim_job_history(&mut jobs, Some(10));
+        assert!(!rom_selection_preparing(&jobs, Some(10)));
+        // Finished ROM jobs are no longer protected from normal eviction.
+        jobs.push(JobRecord {
+            id: 50,
+            label: "Scan Library".to_owned(),
+            state: "done",
+            detail: "Done".to_owned(),
+        });
+        trim_job_history(&mut jobs, Some(10));
+        assert_eq!(jobs.len(), 24);
+        assert!(!jobs.iter().any(|job| job.id == 10));
     }
 
     #[test]

@@ -127,10 +127,11 @@ fn capabilities() -> Result<(bool, bool, bool, u32), &'static str> {
                 return Err("invalid_registry_global");
             }
             let version = u32::from_ne_bytes(payload[aligned..aligned + 4].try_into().unwrap());
-            match &payload[8..next] {
-                b"wl_seat\0" => seat_global = Some((name_id, version)),
-                b"wl_shm\0" => shm_global = Some((name_id, version)),
-                _ => {}
+            let interface = &payload[8..next];
+            if interface == b"wl_seat\0" {
+                seat_global = Some((name_id, version));
+            } else if interface == b"wl_shm\0" {
+                shm_global = Some((name_id, version));
             }
         }
         if sender == SYNC_ID && opcode == 0 {

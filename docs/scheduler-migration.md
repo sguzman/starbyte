@@ -1,5 +1,38 @@
 # Emulation scheduler migration
 
+
+## Private Weston application acceptance — 2026-10-26
+
+The existing `scripts/qa-isolated-wayland.sh` now accepts `--starbyte-smoke`.
+It requires an already built `target/debug/starbyte-egui` (or a binary
+explicitly selected by `STARBYTE_EGUI_BINARY`). It copies that executable
+into its existing Bubblewrap guest and runs the original full-window,
+worker-owned `--demo` application against headless Weston with the Pixman
+compositor renderer and software graphics. The guest receives only a
+private XDG runtime, HOME, config, cache and data paths. Host compositor
+sockets, X11 fallback, `/dev/input`, `/dev/dri`, host game libraries,
+session D-Bus and the owner's XDG configuration remain inaccessible.
+
+The guest automatically requires both the independent ~60 FPS worker
+clock marker **and** fresh texture delivery after the suppressed repaint
+interval. It also requires the original full-library save smoke, including
+quick/disk saves, screenshot PNG and sixty paused single steps. Each
+subprocess has a deadline; its log stays inside the disposable private
+runtime, and the guest compositor is terminated on both success and
+failure. This reuses acceptance behavior already exercised by hosted Weston
+CI rather than adding new product features.
+
+The source-only launcher does **not** establish that Bubblewrap plus Weston
+plus the game binary can run on a particular local host until executed there.
+The ordinary GitHub Actions native Weston jobs remain the automatically
+executed, independently hosted verification path. No physical keyboard focus,
+Hyprland workspace, actual speaker audibility, sound route recovery, real
+gamepad or hardware display pacing is demonstrated by a headless Weston
+guest. Thus P-18, P-19, D-12, D-13, D-15 and C-16 remain pending under
+their existing acceptance definitions. Never use the legacy physical
+Hyprland collector on the active desktop as a workaround.
+
+
 ## Expose rejected tone counts in both player UI paths — 2026-10-25
 
 The Sound menu previously showed only successful test-tone submissions.

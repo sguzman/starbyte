@@ -398,13 +398,12 @@ jobs:
           bash scripts/qa-isolated-wayland.sh --starbyte-smoke
           echo "STARBYTE_HOSTED_ISOLATED_WESTON_OK physical=not_tested"
 
-      # Experimental stronger focus test: independent Xvfb input seat fed
-      # through Weston to a real native Wayland window. Failures remain
-      # visible but do not invalidate already proven headless acceptance.
-      # Promote to blocking only after exact-revision hosted evidence passes.
-      - name: Experimental hosted native focus seat
+      # Required native focused-clock acceptance in a private virtual
+      # Xvfb input seat behind Weston. Run only on GitHub-hosted Linux:
+      # no owner keyboard focus, live Hyprland, hardware devices or DBus.
+      # Exact-source evidence: run 40385973114, 60.009 FPS / 181 frames.
+      - name: Private focused Wayland worker acceptance
         if: runner.os == 'Linux'
-        continue-on-error: true
         shell: bash
         env:
           RUNNER_ENVIRONMENT: ${{ runner.environment }}

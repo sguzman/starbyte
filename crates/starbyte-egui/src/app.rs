@@ -9997,8 +9997,8 @@ fn trim_job_history(jobs: &mut Vec<JobRecord>, latest: Option<u64>) {
 #[cfg(test)]
 mod rom_request_order_tests {
     use super::{
-        JobRecord, is_rom_job, is_superseded_rom_load, rom_selection_preparing,
-        trim_job_history, worker_async_feedback_is_current,
+        JobRecord, is_rom_job, is_superseded_rom_load, rom_selection_preparing, trim_job_history,
+        worker_async_feedback_is_current,
     };
 
     #[test]

@@ -19,7 +19,9 @@ on:
 # desktop and never substitute this evidence for physical Hyprland acceptance.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Finish an expensive in-flight private VM diagnosis before queuing newer
+  # revisions; frequent diagnostic commits must not discard its evidence.
+  cancel-in-progress: false
 
 jobs:
   isolated-hyprland:

@@ -137,7 +137,9 @@ if [[ "$STARBYTE_FOCUS_PROBE" == --blur-smoke ]]; then
   key_pattern='wl_keyboard[^[:space:]]*\.key\('
   baseline_keys="$(grep -Ec "$key_pattern" "$runtime/game.log" || :)"
   [[ "$baseline_keys" =~ ^[0-9]+$ ]] || baseline_keys=0
-  DISPLAY=:99 xdotool key --clearmodifiers a
+  # Target Weston with XSendEvent: Xvfb/XTEST focused-window events were
+  # absent even when XGetInputFocus confirmed this exact window.
+  DISPLAY=:99 xdotool key --window "$window" a
   sleep 0.3
   observed_keys="$(grep -Ec "$key_pattern" "$runtime/game.log" || :)"
   [[ "$observed_keys" =~ ^[0-9]+$ ]] || observed_keys=0
@@ -168,14 +170,9 @@ if [[ "$STARBYTE_FOCUS_PROBE" == --blur-smoke ]]; then
     exit 1
   }
   for attempt in 1 2 3; do
-    # Weston's desktop switcher is modal while Super is held. Give the
-    # compositor time to process a real keydown, Tab and Super release
-    # instead of sending a zero-duration synthetic chord.
-    DISPLAY=:99 xdotool keydown --clearmodifiers Super_L
-    sleep 0.12
-    DISPLAY=:99 xdotool key Tab
-    sleep 0.18
-    DISPLAY=:99 xdotool keyup Super_L
+    # Targeted SendEvent is a fallback for the XTEST input-delivery
+    # failure in the disposable Xvfb seat; this is still virtual QA.
+    DISPLAY=:99 xdotool key --window "$window" Super_L+Tab
     sleep 0.35
     observed_leave="$(grep -Ec "$leave_pattern" "$runtime/game.log" || :)"
     [[ "$observed_leave" =~ ^[0-9]+$ ]] || observed_leave=0
@@ -192,7 +189,7 @@ if [[ "$STARBYTE_FOCUS_PROBE" == --blur-smoke ]]; then
   fi
   echo STARBYTE_PRIVATE_WAYLAND_KEYBOARD_LEAVE_OK shell=desktop binding=Super_Tab
   sleep 2.65
-  DISPLAY=:99 xdotool key --clearmodifiers Super_L+Tab
+  DISPLAY=:99 xdotool key --window "$window" Super_L+Tab
   kill "$rival_pid" 2>/dev/null || :
   wait "$rival_pid" 2>/dev/null || :
   rival_pid=''

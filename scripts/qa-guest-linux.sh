@@ -886,15 +886,15 @@ HYPR_CONFIG
       hypr_app_frames=0
       hypr_app_single_owner=0
       if [ "$hypr_registry" = 1 ] && [ "$hypr_seat" = 1 ]; then
-        # The virtual Hyprland renderer uses kms_swrast on guest DRM.
-        # Unlike the already-green Weston path, use the matching Mesa
-        # KMS software driver for this client's EGL initialization.
+        # The private Hyprland test compared swrast with kms_swrast:
+        # both returned EGL_NOT_INITIALIZED. Retain the Weston-proven
+        # swrast client setting; no accepted guest GUI cutover is implied.
         WAYLAND_DEBUG=client WAYLAND_DISPLAY="$hypr_display" \
           RUST_BACKTRACE=1 \
           EGL_LOG_LEVEL=debug LIBGL_DEBUG=verbose \
           WINIT_UNIX_BACKEND=wayland \
           EGL_PLATFORM=wayland \
-          MESA_LOADER_DRIVER_OVERRIDE=kms_swrast \
+          MESA_LOADER_DRIVER_OVERRIDE=swrast \
           GALLIUM_DRIVER=llvmpipe \
           XDG_CONFIG_HOME=/tmp/starbyte-hyprland-app-config \
           XDG_CACHE_HOME=/tmp/starbyte-hyprland-app-cache \
@@ -957,7 +957,7 @@ HYPR_CONFIG
         if /bin/busybox grep -Eiq 'NoAvailablePixelFormat|failed to create.*context|no matching config|eglCreateContext|eglMakeCurrent' "$log"; then hypr_app_context=1; fi
         if /bin/busybox grep -Eiq 'wayland.*connection|failed to connect.*wayland|WaylandError|Wayland backend' "$log"; then hypr_app_wayland=1; fi
         if /bin/busybox grep -Eiq 'EventLoopError|failed to create event loop|winit::|event loop.*failed' "$log"; then hypr_app_winit=1; fi
-        if /bin/busybox grep -Eiq 'panicked at|thread.*panicked|stack backtrace' "$log"; then hypr_app_panic=1; fi
+        if /bin/busybox grep -Eiq "thread '.*' panicked at" "$log"; then hypr_app_panic=1; fi
         if /bin/busybox grep -Eiq 'error while loading shared libraries|cannot open shared object|symbol lookup error' "$log"; then hypr_app_library=1; fi
         if /bin/busybox grep -Eiq 'config.*error|config.*failed|permission denied.*config|read.only|no space left' "$log"; then hypr_app_config=1; fi
         if /bin/busybox grep -Eiq 'glutin|OpenGL|surface.*error|renderer.*failed|failed.*renderer' "$log"; then hypr_app_render=1; fi
@@ -1060,7 +1060,7 @@ HYPR_CONFIG
         fi
         if [ "$hypr_app_dri2_reason" != none ]; then break; fi
       done
-      echo "STARBYTE_GUEST_HYPRLAND_APP_DIAG stdout=$hypr_app_stdout stderr=$hypr_app_stderr egl=$hypr_app_egl dri=$hypr_app_dri context=$hypr_app_context wayland=$hypr_app_wayland winit=$hypr_app_winit panic=$hypr_app_panic library=$hypr_app_library config=$hypr_app_config render=$hypr_app_render permission=$hypr_app_permission protocol=$hypr_app_protocol stack_eframe=$hypr_app_stack_eframe stack_glutin=$hypr_app_stack_glutin stack_winit=$hypr_app_stack_winit stack_starbyte=$hypr_app_stack_starbyte pixel_format=$hypr_app_pixel_format surface=$hypr_app_surface missing_global=$hypr_app_missing_global egl_bad_surface=$hypr_app_egl_bad_surface egl_bad_native_window=$hypr_app_egl_bad_native_window egl_create_window_surface=$hypr_app_egl_create_window_surface surface_init_failure=$hypr_app_surface_init_failure xdg_configure=$hypr_app_xdg_configure dmabuf_failed=$hypr_app_dmabuf_failed dmabuf_params=$hypr_app_dmabuf_params wl_surface_attach=$hypr_app_wl_surface_attach wl_drm=$hypr_app_wl_drm registry_requested=$hypr_app_registry_requested create_surface=$hypr_app_create_surface create_xdg=$hypr_app_create_xdg create_toplevel=$hypr_app_create_toplevel initial_commit=$hypr_app_initial_commit display_error=$hypr_app_display_error egl_bad_alloc=$hypr_app_egl_bad_alloc egl_bad_match=$hypr_app_egl_bad_match egl_not_initialized=$hypr_app_egl_not_initialized glutin_error=$hypr_app_glutin_error surface_error=$hypr_app_surface_error backtrace=$hypr_app_backtrace panic_line=$hypr_app_panic_line glutin_kind=$hypr_app_glutin_kind mesa_driver=kms_swrast egl_debug=$hypr_app_egl_debug dri2_reason=$hypr_app_dri2_reason" >/dev/console
+      echo "STARBYTE_GUEST_HYPRLAND_APP_DIAG stdout=$hypr_app_stdout stderr=$hypr_app_stderr egl=$hypr_app_egl dri=$hypr_app_dri context=$hypr_app_context wayland=$hypr_app_wayland winit=$hypr_app_winit panic=$hypr_app_panic library=$hypr_app_library config=$hypr_app_config render=$hypr_app_render permission=$hypr_app_permission protocol=$hypr_app_protocol stack_eframe=$hypr_app_stack_eframe stack_glutin=$hypr_app_stack_glutin stack_winit=$hypr_app_stack_winit stack_starbyte=$hypr_app_stack_starbyte pixel_format=$hypr_app_pixel_format surface=$hypr_app_surface missing_global=$hypr_app_missing_global egl_bad_surface=$hypr_app_egl_bad_surface egl_bad_native_window=$hypr_app_egl_bad_native_window egl_create_window_surface=$hypr_app_egl_create_window_surface surface_init_failure=$hypr_app_surface_init_failure xdg_configure=$hypr_app_xdg_configure dmabuf_failed=$hypr_app_dmabuf_failed dmabuf_params=$hypr_app_dmabuf_params wl_surface_attach=$hypr_app_wl_surface_attach wl_drm=$hypr_app_wl_drm registry_requested=$hypr_app_registry_requested create_surface=$hypr_app_create_surface create_xdg=$hypr_app_create_xdg create_toplevel=$hypr_app_create_toplevel initial_commit=$hypr_app_initial_commit display_error=$hypr_app_display_error egl_bad_alloc=$hypr_app_egl_bad_alloc egl_bad_match=$hypr_app_egl_bad_match egl_not_initialized=$hypr_app_egl_not_initialized glutin_error=$hypr_app_glutin_error surface_error=$hypr_app_surface_error backtrace=$hypr_app_backtrace panic_line=$hypr_app_panic_line glutin_kind=$hypr_app_glutin_kind mesa_driver=swrast egl_debug=$hypr_app_egl_debug dri2_reason=$hypr_app_dri2_reason" >/dev/console
       # kill -0 alone also succeeds for zombies; require a non-zombie
       # Hyprland process after the application has finished.
       hypr_alive=0

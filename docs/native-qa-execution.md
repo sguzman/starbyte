@@ -121,6 +121,26 @@ Standard Linux, Windows, lint and compiler-floor CI passed for this code in
 [run 40247720696](https://github.com/sguzman/starbyte/actions/runs/40247720696).
 The separate Weston full-GUI/worker workflow also previously passed.
 
+[Run 40249400601](https://github.com/sguzman/starbyte/actions/runs/40249400601)
+and [run 40250100222](https://github.com/sguzman/starbyte/actions/runs/40250100222)
+narrowed the eframe return error to Glutin's `initialization_failed`, which
+[pinned Glutin 0.32.3 maps to `EGL_NOT_INITIALIZED`](https://github.com/rust-windowing/glutin/blob/v0.32.3/glutin/src/api/egl/mod.rs#L106).
+This is an EGL initialization failure, **not a Rust panic**: the earlier
+panic category overcounted a returned error's diagnostic text. The
+focused sample also exited without proof of XDG configure or keyboard enter.
+
+[Run 40250916583](https://github.com/sguzman/starbyte/actions/runs/40250916583)
+tested a DRM-matched `kms_swrast` client instead of `swrast`; EGL still
+returned `EGL_NOT_INITIALIZED`. Mesa debug logging identified no narrower
+DRI2 error category. That failed override was reverted to the original
+guest-client setting. Neither the Wayland registry check nor the separate
+successful Weston-based virtual regression implies native Hyprland GUI
+acceptance. [Virtual-device run 40250916586](https://github.com/sguzman/starbyte/actions/runs/40250916586)
+passed, as did [standard Linux, Windows, lint and MSRV CI
+40250916608](https://github.com/sguzman/starbyte/actions/runs/40250916608)
+for the driver experiment commit. The cleanup commit must be checked on
+its own CI run before claiming verification of that revision.
+
 The remaining **virtual** prerequisite is a configured and focused Hyprland
 client surface, followed by the unchanged original Starbyte 30-frame
 exclusive-worker smoke. Do not weaken the gate, expose the active host DRM

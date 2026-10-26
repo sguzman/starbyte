@@ -10,7 +10,7 @@ probe="$1"
 [[ ! -v DISPLAY && ! -v WAYLAND_DISPLAY && ! -v HYPRLAND_INSTANCE_SIGNATURE ]] || fail display_present
 [[ ! -v DBUS_SESSION_BUS_ADDRESS && ! -v XDG_SESSION_ID ]] || fail session_present
 [[ -d "$RUNNER_TEMP" ]] || fail temp_missing
-for binary in bwrap timeout realpath Xvfb xdotool xmessage xkbcomp weston wayland-info git; do
+for binary in bwrap timeout realpath Xvfb xdotool xkbcomp weston weston-simple-shm wayland-info git; do
   command -v "$binary" >/dev/null || fail "missing_$binary"
 done
 repo="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)" || fail checkout_missing
@@ -53,7 +53,14 @@ for _ in {1..70}; do
   sleep 0.1
 done
 [[ -S /tmp/.X11-unix/X99 ]] || { tail -n 50 "$runtime/xvfb.log" >&2; exit 1; }
-DISPLAY=:99 weston --backend=x11 --renderer=pixman --shell=kiosk-shell.so \
+# Kiosk shell is correct for the required focused-clock baseline, but it
+# retains native surface focus when a rival client appears. The experimental
+# blur test needs a real native-window compositor focus policy.
+weston_shell=kiosk-shell.so
+if [[ "$STARBYTE_FOCUS_PROBE" == --blur-smoke ]]; then
+  weston_shell=desktop-shell.so
+fi
+DISPLAY=:99 weston --backend=x11 --renderer=pixman --shell="$weston_shell" \
   --no-config --socket="$WAYLAND_DISPLAY" --idle-time=0 >"$runtime/weston.log" 2>&1 &
 weston_pid=$!
 for _ in {1..100}; do
@@ -97,50 +104,28 @@ if [[ "$STARBYTE_FOCUS_PROBE" == --blur-smoke ]]; then
     tail -n 35 "$runtime/game.log" >&2
     exit 1
   }
-  # Use a separate X11 surface *inside Xvfb*, not an extra Weston
-  # client: kiosk-shell can retain the old keyboard seat for new surfaces.
-  # Explicit XSetInputFocus to this private rival produces the real outer
-  # compositor FocusOut / FocusIn sequence without touching host input.
-  DISPLAY=:99 xmessage -name starbyte-private-focus -title starbyte-private-rival -geometry 320x100+350+240 \
-    "Private Starbyte compositor focus transition" >"$runtime/rival.log" 2>&1 &
+  # Focus must change between two NATIVE WAYLAND surfaces. Moving the
+  # outer X11 focus leaves Weston free to keep wl_keyboard on Starbyte.
+  # Desktop-shell supports native surface focus; kiosk-shell does not.
+  weston-simple-shm >"$runtime/rival.log" 2>&1 &
   rival_pid=$!
-  rival_window=''
-  for _ in {1..45}; do
-    rival_window="$(DISPLAY=:99 xdotool search --onlyvisible --name 'starbyte-private-rival' 2>/dev/null | head -n 1 || :)"
-    [[ -n "$rival_window" ]] ||
-      rival_window="$(DISPLAY=:99 xdotool search --onlyvisible --class 'Xmessage' 2>/dev/null | head -n 1 || :)"
-    [[ -n "$rival_window" ]] ||
-      rival_window="$(DISPLAY=:99 xdotool search --onlyvisible --pid "$rival_pid" 2>/dev/null | head -n 1 || :)"
-    [[ -n "$rival_window" ]] && break
-    kill -0 "$rival_pid" 2>/dev/null || break
-    sleep 0.1
-  done
-  if [[ -z "$rival_window" ]] || ! kill -0 "$rival_pid" 2>/dev/null; then
-    echo STARBYTE_FOCUSED_SEAT_FAILED rival_x11_window_missing >&2
-    tail -n 35 "$runtime/rival.log" >&2
-    DISPLAY=:99 xdotool search --onlyvisible --name . 2>&1 | head -n 15 >&2 || :
-    exit 1
-  fi
-  timeout --signal=TERM 3s env DISPLAY=:99 xdotool windowfocus --sync "$rival_window" || {
-    echo STARBYTE_FOCUSED_SEAT_FAILED private_rival_focus_failed >&2
+  sleep 0.55
+  kill -0 "$rival_pid" 2>/dev/null || {
+    echo STARBYTE_FOCUSED_SEAT_FAILED native_rival_exited >&2
+    tail -n 45 "$runtime/rival.log" >&2
+    tail -n 45 "$runtime/weston.log" >&2
     exit 1
   }
-  observed_focus="$(DISPLAY=:99 xdotool getwindowfocus)"
-  [[ "$observed_focus" == "$rival_window" ]] || {
-    echo STARBYTE_FOCUSED_SEAT_FAILED private_rival_not_focused >&2
-    exit 1
-  }
-  echo STARBYTE_PRIVATE_FOCUS_OUT outer_x11=rival
+  # Send pointer focus via the PRIVATE Xvfb window to select Weston's new
+  # native client. Never send input to any host compositor or device.
+  DISPLAY=:99 xdotool mousemove --window "$window" 600 280 click 1 2>/dev/null || :
+  echo STARBYTE_PRIVATE_NATIVE_RIVAL_STARTED shell=desktop-shell
   sleep 2.65
-  timeout --signal=TERM 3s env DISPLAY=:99 xdotool windowfocus --sync "$window" || {
-    echo STARBYTE_FOCUSED_SEAT_FAILED private_weston_refocus_failed >&2
-    exit 1
-  }
-  DISPLAY=:99 xdotool mousemove --window "$window" 55 55 click 1 2>/dev/null || :
   kill "$rival_pid" 2>/dev/null || :
   wait "$rival_pid" 2>/dev/null || :
   rival_pid=''
-  echo STARBYTE_PRIVATE_FOCUS_IN outer_x11=weston
+  DISPLAY=:99 xdotool mousemove --window "$window" 100 100 click 1 2>/dev/null || :
+  echo STARBYTE_PRIVATE_NATIVE_RIVAL_CLOSED shell=desktop-shell
 fi
 if ! wait "$game_pid"; then
   echo STARBYTE_FOCUSED_SEAT_FAILED game_exit >&2

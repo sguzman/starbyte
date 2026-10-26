@@ -64,6 +64,7 @@ fn pitch_for(mode: AudioPitchMode, custom_percent: u16, speed: u16) -> f32 {
 enum PendingOperation {
     Save {
         epoch: u64,
+        owner_epoch: u64,
         reply: Receiver<Result<WorkerSaveResponse, String>>,
     },
     SpeakerCheck {
@@ -124,8 +125,13 @@ pub struct ThreadedPreviewApp {
     loaded_rom_path: Option<PathBuf>,
     status_note: Option<String>,
     pending: Vec<PendingOperation>,
-    /// Invalidate any old game's asynchronous save/capture receipts on launch.
+    /// Selection intent controls status and error feedback, including while
+    /// preparing an archive that may never install.
     session_epoch: u64,
+    /// Advances only after a cartridge was actually installed on the owner.
+    /// An old quick-save may finish during a failed ROM preparation without
+    /// losing the surviving cartridge's menu state.
+    owner_epoch: u64,
     /// Newest requested launch while the owner is installing a cartridge.
     pending_next_launch: Option<SessionLaunchRequest>,
     library_assets: AssetConfig,
@@ -216,6 +222,7 @@ impl ThreadedPreviewApp {
             status_note: None,
             pending: Vec::new(),
             session_epoch: 0,
+            owner_epoch: 0,
             pending_next_launch: None,
             library_assets: assets,
             library_config: config.clone(),
@@ -280,6 +287,7 @@ impl ThreadedPreviewApp {
         match self.engine.queue_save_action_with_frame(action) {
             Ok(reply) => self.pending.push(PendingOperation::Save {
                 epoch: self.session_epoch,
+                owner_epoch: self.owner_epoch,
                 reply,
             }),
             Err(error) => self.last_error = Some(error),
@@ -545,6 +553,7 @@ impl ThreadedPreviewApp {
                         // a newer selection is being prepared. Keep controls
                         // and pixels synchronized with that owner; only the
                         // superseded status message must be discarded.
+                        self.owner_epoch = self.owner_epoch.wrapping_add(1);
                         self.controls = response.controls;
                         self.display.import_frame(ctx, response.frame);
                         self.loaded_rom_path = Some(path.clone());
@@ -603,29 +612,54 @@ impl ThreadedPreviewApp {
                             Some("Audio worker stopped before speaker check".to_owned());
                     }
                 },
-                // A previous game's async acknowledgement must never publish
-                // controls, restored pixels, errors or status over a newer ROM.
-                PendingOperation::Save { epoch, .. } if epoch != self.session_epoch => {}
-                PendingOperation::Save { epoch, reply } => match reply.try_recv() {
+                // Selection intent and installed ownership are different.
+                // An earlier save can still belong to the live cartridge
+                // if a newly selected archive fails before installation.
+                PendingOperation::Save { owner_epoch, .. }
+                    if owner_epoch != self.owner_epoch => {}
+                PendingOperation::Save {
+                    epoch,
+                    owner_epoch,
+                    reply,
+                } => match reply.try_recv() {
                     Ok(Ok(response)) => {
-                        self.controls = response.controls;
-                        if let SessionSaveOutcome::SavedTo(path) = response.outcome {
-                            self.status_note = Some(format!("Saved state to {}", path.display()));
+                        // Guard even a same-path ROM reload: owner_epoch is
+                        // required in addition to the cartridge path.
+                        if self.controls.session.has_rom
+                            && response.controls.session.rom_path
+                                == self.controls.session.rom_path
+                        {
+                            self.controls = response.controls;
+                            if let Some(frame) = response.restored_frame {
+                                // A restored still frame reflects the actual
+                                // running owner, even during newer preparation.
+                                let _ = self.engine.take_latest_frame();
+                                self.display.import_frame(ctx, frame);
+                            }
                         }
-                        if let Some(frame) = response.restored_frame {
-                            // Discard any framebuffer from before this
-                            // restore, including while manually paused.
-                            let _ = self.engine.take_latest_frame();
-                            self.display.import_frame(ctx, frame);
+                        if epoch == self.session_epoch {
+                            if let SessionSaveOutcome::SavedTo(path) = response.outcome {
+                                self.status_note = Some(format!("Saved state to {}", path.display()));
+                            }
+                            self.last_error = None;
                         }
-                        self.last_error = None;
                     }
-                    Ok(Err(error)) => self.last_error = Some(error),
+                    Ok(Err(error)) => {
+                        if epoch == self.session_epoch {
+                            self.last_error = Some(error);
+                        }
+                    }
                     Err(TryRecvError::Empty) => {
-                        still_pending.push(PendingOperation::Save { epoch, reply });
+                        still_pending.push(PendingOperation::Save {
+                            epoch,
+                            owner_epoch,
+                            reply,
+                        });
                     }
                     Err(TryRecvError::Disconnected) => {
-                        self.last_error = Some("Save worker stopped unexpectedly".to_owned());
+                        if epoch == self.session_epoch {
+                            self.last_error = Some("Save worker stopped unexpectedly".to_owned());
+                        }
                     }
                 },
                 PendingOperation::Screenshot { epoch, reply } => match reply.try_recv() {
@@ -1087,6 +1121,7 @@ mod pitch_mode_tests {
         let (load_sender, load_reply) = mpsc::channel();
         app.pending.push(PendingOperation::Save {
             epoch: prior_epoch,
+            owner_epoch: app.owner_epoch,
             reply: save_reply,
         });
         app.pending.push(PendingOperation::LoadRom {
@@ -1110,6 +1145,110 @@ mod pitch_mode_tests {
                 .as_deref()
                 .is_some_and(|status| { status.starts_with("Preparing ") })
         );
+    }
+
+    #[test]
+    fn save_receipt_retains_surviving_owner_controls_during_failed_preparation() {
+        let temp = tempfile::tempdir().unwrap();
+        let rom = temp.path().join("surviving.sfc");
+        std::fs::write(&rom, starbyte_core::testing::demo::demo_rom_bytes()).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(temp.path().join("saves")),
+            state_dir: Some(temp.path().join("states")),
+            cache_dir: Some(temp.path().join("cache")),
+            config_path: None,
+        };
+        let mut config = RuntimeConfig::default();
+        config.audio.enabled = false;
+        let mut app =
+            ThreadedPreviewApp::new(assets, &config, None, None, true, false, false).unwrap();
+        app.queue_rom_launch(SessionLaunchRequest {
+            rom_path: rom.clone(),
+            sound_mode: SoundSessionMode::Persistent,
+            cheats: Vec::new(),
+        });
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(6);
+        while Instant::now() < deadline {
+            app.poll_operations(&ctx);
+            if app.loaded_rom_path.as_deref() == Some(rom.as_path()) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(app.controls.session.has_rom);
+        assert!(!app.controls.has_quick_save);
+        let old_selection = app.session_epoch;
+        let installed_owner = app.owner_epoch;
+        let (tx, rx) = mpsc::channel();
+        app.pending.push(PendingOperation::Save {
+            epoch: old_selection,
+            owner_epoch: installed_owner,
+            reply: rx,
+        });
+        let mut saved_controls = app.controls.clone();
+        saved_controls.has_quick_save = true;
+        app.queue_rom_load(temp.path().join("missing.zip"));
+        assert_ne!(app.session_epoch, old_selection);
+        tx.send(Ok(WorkerSaveResponse {
+            outcome: SessionSaveOutcome::Completed,
+            controls: saved_controls,
+            restored_frame: None,
+        }))
+        .unwrap();
+        app.poll_operations(&ctx);
+        assert!(app.controls.has_quick_save);
+        assert!(app.status_note.as_deref().is_some_and(|status| {
+            status.starts_with("Preparing ")
+        }));
+        let deadline = Instant::now() + Duration::from_secs(6);
+        while Instant::now() < deadline {
+            app.poll_library_events();
+            if app.pending_library_rom.is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(app.last_error.as_deref().is_some_and(|error| {
+            error.contains("Library ROM preparation failed")
+        }));
+        assert!(app.controls.has_quick_save);
+        assert!(app.can_modify_running_game());
+
+        // Reinstall the same path. A receipt tied to the old installation
+        // cannot mutate the fresh owner's quick-load state.
+        let (old_tx, old_rx) = mpsc::channel();
+        app.pending.push(PendingOperation::Save {
+            epoch: old_selection,
+            owner_epoch: installed_owner,
+            reply: old_rx,
+        });
+        app.queue_rom_launch(SessionLaunchRequest {
+            rom_path: rom.clone(),
+            sound_mode: SoundSessionMode::Persistent,
+            cheats: Vec::new(),
+        });
+        let deadline = Instant::now() + Duration::from_secs(6);
+        while Instant::now() < deadline {
+            app.poll_operations(&ctx);
+            if app.owner_epoch != installed_owner {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_ne!(app.owner_epoch, installed_owner);
+        let mut stale_controls = app.controls.clone();
+        stale_controls.has_quick_save = true;
+        old_tx
+            .send(Ok(WorkerSaveResponse {
+                outcome: SessionSaveOutcome::Completed,
+                controls: stale_controls,
+                restored_frame: None,
+            }))
+            .unwrap();
+        app.poll_operations(&ctx);
+        assert!(!app.controls.has_quick_save);
     }
 
     #[test]
@@ -1146,6 +1285,7 @@ mod pitch_mode_tests {
         });
         app.pending.push(PendingOperation::Save {
             epoch: old_epoch,
+            owner_epoch: app.owner_epoch,
             reply: save_reply,
         });
         app.pending.push(PendingOperation::Screenshot {

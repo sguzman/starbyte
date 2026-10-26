@@ -2,6 +2,8 @@
 
 **North star:** a comfy, feature-rich Rust SNES emulator for Linux/Wayland. Real gameplay, responsiveness, accessibility and pleasant player features outrank hardware accuracy for its own sake.
 
+**Paused-preview audio diagnostics checkpoint (2026-10-26):** [All four CI jobs passed on `d1a5cc9`](https://github.com/sguzman/starbyte/actions/runs/40415283529). The preview queries speaker/device/stream-recovery counters asynchronously while paused, distinguishes queued speaker checks from verified mixer submissions, and protects the saved frame and replacement-cartridge owner. Four device-free regressions passed. No real Hyprland audio or controller proof; scheduler acceptance remains **71/77 (92.21%, delta +0.00)** with P-18/P-19/D-12/D-13/D-15/C-16 open.
+
 **Latest scheduler checkpoint (2026-10-26):** 71/77 accepted (92.21%, delta +0.00). The threaded preview now shares the full player's nonblocking audio-output reselection action, verified by [four-job CI 40410775805](https://github.com/sguzman/starbyte/actions/runs/40410775805) on `7859d07`. Physical P-18/P-19/D-12/D-13/D-15 remain open, and C-16 production cutover remains blocked. The owner's desktop focus is protected; hosted virtual compositor evidence cannot close those gates.
 
 ## P0 — reach a genuinely playable game

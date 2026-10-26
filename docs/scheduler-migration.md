@@ -1,5 +1,31 @@
 # Emulation scheduler migration
 
+## Paused preview audio diagnostics: exact-code CI verified (2026-10-26)
+
+[Four-job CI 40415283529](https://github.com/sguzman/starbyte/actions/runs/40415283529)
+passed on [`d1a5cc9`](https://github.com/sguzman/starbyte/commit/d1a5cc9d5799522ffab784490b511e75cf9d6be3):
+Linux workspace tests and private virtual-Wayland smoke, Windows tests,
+formatting/Clippy and the declared Rust 1.88 minimum compiler.
+
+The opt-in `--threaded-preview` player now obtains live mixer, speaker
+check and stream-recovery diagnostics asynchronously from its single
+emulation owner while manual Pause or the configured focus policy
+suspends frames. The bounded poll does not advance the game, replace a
+paused frame or cross a newer cartridge owner. The Audio menu displays
+tones actually submitted to Rodio's mixer, expired tone requests,
+observed OS stream errors and recoveries. A successful speaker-check
+worker receipt is now labeled **queued**, not falsely reported as
+mixer delivery or physical audibility. Four device-free regression
+tests cover no-video counter updates, stale owner acknowledgements,
+bounded query behavior and frame preservation.
+
+**Physical acceptance remains 71/77 (92.21%, delta +0.00 percentage
+points)**: P-18/P-19, C-16, D-12/D-13/D-15 remain pending. Tests were
+performed only in CI/private virtual environments; no owner's desktop,
+audio device or gamepad was opened. This improves P-18 diagnosis but
+does not verify hardware output, sound quality or recovery under actual
+Hyprland. Production worker default cutover remains blocked.
+
 ## Verified preview audio-output route parity (2026-10-26)
 
 [CI run 40410775805](https://github.com/sguzman/starbyte/actions/runs/40410775805)

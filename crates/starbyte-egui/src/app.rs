@@ -2778,7 +2778,13 @@ impl StarbyteApp {
                         continue;
                     }
                     self.update_job(job_id, &label, "running", "Running");
-                    self.status_line = format!("{label} in progress...");
+                    if job_status_may_replace_rom_feedback(
+                        &self.jobs,
+                        self.latest_rom_job_id,
+                        &label,
+                    ) {
+                        self.status_line = format!("{label} in progress...");
+                    }
                 }
                 WorkerEvent::SnapshotReady {
                     job_id,
@@ -2811,7 +2817,9 @@ impl StarbyteApp {
                     self.update_snapshot_cheat_flags();
                     self.sync_loaded_game_cheats();
                     self.update_job(job_id, "Library", "done", &status);
-                    self.status_line = status;
+                    if !rom_selection_preparing(&self.jobs, self.latest_rom_job_id) {
+                        self.status_line = status;
+                    }
                 }
                 WorkerEvent::RomReady {
                     job_id,
@@ -2905,7 +2913,13 @@ impl StarbyteApp {
                         continue;
                     }
                     self.update_job(job_id, &label, "failed", &error);
-                    self.status_line = error;
+                    if job_status_may_replace_rom_feedback(
+                        &self.jobs,
+                        self.latest_rom_job_id,
+                        &label,
+                    ) {
+                        self.status_line = error;
+                    }
                 }
             }
         }
@@ -9979,6 +9993,17 @@ fn rom_selection_preparing(jobs: &[JobRecord], latest: Option<u64>) -> bool {
     })
 }
 
+/// Background scan, artwork, and cheat job events must not replace the
+/// latest ROM's preparation/installation status. Record their job outcomes
+/// normally; the feedback priority is independent of the worker queue.
+fn job_status_may_replace_rom_feedback(
+    jobs: &[JobRecord],
+    latest: Option<u64>,
+    label: &str,
+) -> bool {
+    is_rom_job(label) || !rom_selection_preparing(jobs, latest)
+}
+
 /// Job history is display bookkeeping, but the save/screenshot gate also
 /// reads the pending ROM job from it. Never evict that one live record when
 /// unrelated library jobs fill the bounded 24-item status list.
@@ -9997,8 +10022,8 @@ fn trim_job_history(jobs: &mut Vec<JobRecord>, latest: Option<u64>) {
 #[cfg(test)]
 mod rom_request_order_tests {
     use super::{
-        JobRecord, is_rom_job, is_superseded_rom_load, rom_selection_preparing, trim_job_history,
-        worker_async_feedback_is_current,
+        JobRecord, is_rom_job, is_superseded_rom_load, job_status_may_replace_rom_feedback,
+        rom_selection_preparing, trim_job_history, worker_async_feedback_is_current,
     };
 
     #[test]
@@ -10080,6 +10105,48 @@ mod rom_request_order_tests {
         trim_job_history(&mut jobs, Some(10));
         assert_eq!(jobs.len(), 24);
         assert!(!jobs.iter().any(|job| job.id == 10));
+    }
+
+    #[test]
+    fn background_library_events_do_not_hide_selected_rom_loading_status() {
+        let mut jobs = vec![JobRecord {
+            id: 31,
+            label: "Load Game".to_owned(),
+            state: "queued",
+            detail: "Queued".to_owned(),
+        }];
+        assert!(job_status_may_replace_rom_feedback(
+            &jobs,
+            Some(31),
+            "Load Game"
+        ));
+        assert!(!job_status_may_replace_rom_feedback(
+            &jobs,
+            Some(31),
+            "Refresh Covers"
+        ));
+        assert!(!job_status_may_replace_rom_feedback(
+            &jobs,
+            Some(31),
+            "Refresh Cheats"
+        ));
+        jobs[0].state = "running";
+        assert!(!job_status_may_replace_rom_feedback(
+            &jobs,
+            Some(31),
+            "Scan Library"
+        ));
+        jobs[0].state = "failed";
+        assert!(job_status_may_replace_rom_feedback(
+            &jobs,
+            Some(31),
+            "Scan Library"
+        ));
+        assert!(job_status_may_replace_rom_feedback(
+            &jobs,
+            None,
+            "Refresh Covers"
+        ));
     }
 
     #[test]

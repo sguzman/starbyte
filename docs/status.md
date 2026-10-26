@@ -1,5 +1,31 @@
 # Starbyte: current state
 
+## Preview input and no-ROM audio recovery parity (2026-10-26)
+
+The exact code revision [`232ffa1`](https://github.com/sguzman/starbyte/commit/232ffa1f33d4c11a9fe040e471a6a5e70d866014)
+passed [all four CI jobs in run 40419507021](https://github.com/sguzman/starbyte/actions/runs/40419507021):
+Linux tests and virtual Wayland smoke, Windows tests,
+formatting/Clippy, and Rust 1.88 compatibility.
+
+**P-19/D-15:** The opt-in threaded preview now follows the original
+full-window input policy: F5/F8/F12 gameplay shortcuts cannot intercept
+keyboard focus from the installed-library search or another text editor.
+Focused gameplay shortcuts continue working without a text editor; a
+device-free regression tests the focus/editing and game-loading guards.
+
+**P-18:** Preview speaker checks can start a software audio worker before
+a cartridge is loaded. The **Reselect desktop audio output** control now
+allows resetting that already-started output without an installed ROM,
+matching the full-window runtime, while disabling duplicate pending resets.
+Its regression checks the no-ROM/known-worker and outstanding-request
+states. A queued audio reset is not verification that physical sound
+reached a speaker.
+
+No owner desktop/input seat or physical sound/gamepad was exercised.
+**Acceptance remains 71/77 = 92.21% (delta +0.00 percentage points)**:
+P-18/P-19, D-12/D-13/D-15 and C-16 remain open. C-16 default
+production worker cutover is still blocked on hardware acceptance.
+
 ## Paused preview audio diagnostics: exact-code CI verified (2026-10-26)
 
 [Four-job CI 40415283529](https://github.com/sguzman/starbyte/actions/runs/40415283529)

@@ -147,6 +147,55 @@ jobs:
             wayland-utils bubblewrap xvfb xdotool x11-xkb-utils xkb-data x11-utils
           echo STARBYTE_APT_DEPENDENCY_OK
 
+      # Ubuntu 24.04's AppArmor profile denies bwrap uid mapping by default.
+      # Permit only the hosted runner's /usr/bin/bwrap to create private user
+      # namespaces; do not disable the system-wide AppArmor restriction.
+      - name: Allow private Bubblewrap user namespaces on hosted CI
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_ACTIONS" == true && "$RUNNER_ENVIRONMENT" == github-hosted ]] || {
+            echo "STARBYTE_PRIVATE_BWRAP_BLOCKED hosted_only" >&2
+            exit 1
+          }
+          probe=(bwrap --unshare-all --share-net --ro-bind /usr /usr
+            --proc /proc --dev /dev /usr/bin/true)
+          if ! timeout 10s "${probe[@]}" >/dev/null 2>&1; then
+            [[ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]] || {
+              echo "STARBYTE_PRIVATE_BWRAP_BLOCKED apparmor_state_unavailable" >&2
+              exit 1
+            }
+            [[ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" == 1 ]] || {
+              echo "STARBYTE_PRIVATE_BWRAP_BLOCKED unexpected_namespace_denial" >&2
+              exit 1
+            }
+            command -v apparmor_parser >/dev/null || {
+              echo "STARBYTE_PRIVATE_BWRAP_BLOCKED apparmor_parser_unavailable" >&2
+              exit 1
+            }
+            [[ ! -e /etc/apparmor.d/starbyte-ci-bwrap ]] || {
+              echo "STARBYTE_PRIVATE_BWRAP_BLOCKED profile_already_exists" >&2
+              exit 1
+            }
+            cat > "$RUNNER_TEMP/starbyte-ci-bwrap" <<'PROFILE'
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile starbyte_ci_bwrap /usr/bin/bwrap flags=(unconfined) {
+            userns,
+          }
+          PROFILE
+            sudo install -m 0644 "$RUNNER_TEMP/starbyte-ci-bwrap" /etc/apparmor.d/starbyte-ci-bwrap
+            sudo apparmor_parser -r /etc/apparmor.d/starbyte-ci-bwrap
+            timeout 10s "${probe[@]}" >/dev/null || {
+              echo "STARBYTE_PRIVATE_BWRAP_BLOCKED after_scoped_profile" >&2
+              exit 1
+            }
+          fi
+          echo STARBYTE_PRIVATE_BWRAP_READY namespace=private policy=per_executable
+
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Test

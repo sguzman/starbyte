@@ -92,7 +92,7 @@ fi
 common=(
   --unshare-all --die-with-parent --new-session
   --ro-bind /usr /usr
-  --symlink usr/lib /lib --symlink usr/lib /lib64
+  --symlink usr/lib /lib --symlink usr/lib64 /lib64
   --proc /proc --dev /dev
   --tmpfs /tmp --tmpfs /run --dir /run/user
   --bind "$runtime_root" /run/user/qa

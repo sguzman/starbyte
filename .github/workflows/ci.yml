@@ -31,6 +31,15 @@ jobs:
         run: bash -n scripts/qa-native-hyprland.sh
       - name: Verify isolated QA launcher syntax
         run: bash -n scripts/qa-isolated-wayland.sh
+      - name: Verify sealed Starbyte smoke fails closed without its runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          if output="$(env -u XDG_RUNTIME_DIR bash scripts/qa-isolated-wayland.sh --starbyte-smoke 2>&1)"; then
+            echo "Unisolated Starbyte GUI probe unexpectedly permitted" >&2
+            exit 1
+          fi
+          grep -Fq 'STARBYTE_ISOLATED_WAYLAND_BLOCKED' <<<"$output"
       - name: Verify impossible nested startup fails before any side effect
         shell: bash
         run: |

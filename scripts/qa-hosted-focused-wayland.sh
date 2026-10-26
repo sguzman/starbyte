@@ -129,9 +129,19 @@ if [[ "$STARBYTE_FOCUS_PROBE" == --blur-smoke ]]; then
   baseline_leave="$(grep -Ec "$leave_pattern" "$runtime/game.log" || :)"
   [[ "$baseline_leave" =~ ^[0-9]+$ ]] || baseline_leave=0
   native_blur_seen=false
-  DISPLAY=:99 xdotool windowfocus "$window" 2>/dev/null || :
+  DISPLAY=:99 xdotool windowfocus "$window" || {
+    echo STARBYTE_FOCUSED_SEAT_FAILED outer_weston_focus_failed >&2
+    exit 1
+  }
   for attempt in 1 2 3; do
-    DISPLAY=:99 xdotool key --clearmodifiers Super_L+Tab
+    # Weston's desktop switcher is modal while Super is held. Give the
+    # compositor time to process a real keydown, Tab and Super release
+    # instead of sending a zero-duration synthetic chord.
+    DISPLAY=:99 xdotool keydown --clearmodifiers Super_L
+    sleep 0.12
+    DISPLAY=:99 xdotool key Tab
+    sleep 0.18
+    DISPLAY=:99 xdotool keyup Super_L
     sleep 0.35
     observed_leave="$(grep -Ec "$leave_pattern" "$runtime/game.log" || :)"
     [[ "$observed_leave" =~ ^[0-9]+$ ]] || observed_leave=0

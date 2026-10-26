@@ -6,15 +6,13 @@ on:
     paths:
       - "scripts/qa-guest-linux.sh"
       - "crates/starbyte-egui/Cargo.toml"
-      - "scripts/qa-guest-wayland-wire.rs"
-      - "scripts/qa-guest-xdg-surface.rs"
+      - "scripts/qa-guest-*.rs"
       - ".github/workflows/qa-guest-hyprland.yml"
   pull_request:
     paths:
       - "scripts/qa-guest-linux.sh"
       - "crates/starbyte-egui/Cargo.toml"
-      - "scripts/qa-guest-wayland-wire.rs"
-      - "scripts/qa-guest-xdg-surface.rs"
+      - "scripts/qa-guest-*.rs"
       - ".github/workflows/qa-guest-hyprland.yml"
 
 # An independent, private-virtio guest; never start GUI tests on the owner's

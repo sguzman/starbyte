@@ -34,6 +34,32 @@ fn event(socket: &mut UnixStream) -> Result<(u32, u16, Vec<u8>), &'static str> {
     Ok((sender, (word & 0xffff) as u16, payload))
 }
 
+// wl_display.error contains only the failed object ID, protocol code and a
+// message. Do not disclose the freeform message or guest raw Wayland trace.
+fn check_protocol_error(sender: u32, opcode: u16, payload: &[u8]) -> Result<(), &'static str> {
+    if sender != 1 || opcode != 0 { return Ok(()); }
+    let (interface, code_label) = if payload.len() < 8 {
+        ("malformed", "other".to_owned())
+    } else {
+        let id = u32::from_ne_bytes(payload[..4].try_into().unwrap());
+        let code = u32::from_ne_bytes(payload[4..8].try_into().unwrap());
+        let interface = match id {
+            1 => "display",
+            REGISTRY => "registry",
+            REGISTRY_SYNC | ACK_SYNC => "sync",
+            COMPOSITOR => "compositor",
+            SURFACE => "surface",
+            XDG_SHELL => "xdg_wm_base",
+            XDG_SURFACE => "xdg_surface",
+            XDG_TOPLEVEL => "xdg_toplevel",
+            _ => "other",
+        };
+        (interface, if code <= 16 { code.to_string() } else { "other".to_owned() })
+    };
+    println!("STARBYTE_GUEST_XDG_ERROR_DIAG interface={interface} code={code_label}");
+    Err("protocol_error")
+}
+
 fn bind(socket: &mut UnixStream, name: u32, iface: &str, version: u32, new_id: u32)
     -> Result<(), &'static str>
 {
@@ -70,7 +96,7 @@ fn run() -> Result<(), &'static str> {
     let mut synced = false;
     for _ in 0..256 {
         let (sender, opcode, payload) = event(&mut socket)?;
-        if sender == 1 && opcode == 0 { return Err("protocol_error"); }
+        check_protocol_error(sender, opcode, &payload)?;
         if sender == REGISTRY && opcode == 0 && payload.len() >= 12 {
             let name = u32::from_ne_bytes(payload[0..4].try_into().unwrap());
             let n = u32::from_ne_bytes(payload[4..8].try_into().unwrap()) as usize;
@@ -105,7 +131,7 @@ fn run() -> Result<(), &'static str> {
     let mut configured = false;
     for _ in 0..256 {
         let (sender, opcode, payload) = event(&mut socket)?;
-        if sender == 1 && opcode == 0 { return Err("protocol_error"); }
+        check_protocol_error(sender, opcode, &payload)?;
         if sender == XDG_SHELL && opcode == 0 && payload.len() >= 4 {
             send(&mut socket, XDG_SHELL, 3, &payload[..4])?;
         }
@@ -123,7 +149,7 @@ fn run() -> Result<(), &'static str> {
     if !configured { return Err("configure_timeout"); }
     for _ in 0..256 {
         let (sender, opcode, payload) = event(&mut socket)?;
-        if sender == 1 && opcode == 0 { return Err("protocol_error"); }
+        check_protocol_error(sender, opcode, &payload)?;
         if sender == XDG_SHELL && opcode == 0 && payload.len() >= 4 {
             send(&mut socket, XDG_SHELL, 3, &payload[..4])?;
         }

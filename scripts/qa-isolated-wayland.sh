@@ -259,19 +259,28 @@ if timeout --signal=TERM --kill-after=2s "$deadline" \
       run_starbyte() {
         local name="$1" flag="$2" marker="$3" second_marker="${4:-}"
         local log="$XDG_RUNTIME_DIR/starbyte-$name.log"
+        # The guest has no host home, ROMs or user paths. On failures, show
+        # bounded logs before the throwaway namespace is destroyed; do not
+        # force a second run or make the developer retrieve a private file.
         if ! timeout --signal=TERM --kill-after=2s 70s "$STARBYTE_EGUI_BIN" \
           --demo --native-worker-preview "$flag" \
           --config "$XDG_CONFIG_HOME/$name.toml" \
           --cache-dir "$XDG_CACHE_HOME/$name" >"$log" 2>&1; then
           echo "PRIVATE_STARBYTE_SMOKE_FAILED probe=$name reason=process_error" >&2
+          tail -n 60 "$log" >&2
           return 1
         fi
         if ! grep -Fq "$marker" "$log" \
           || { [[ -n "$second_marker" ]] && ! grep -Fq "$second_marker" "$log"; }; then
           echo "PRIVATE_STARBYTE_SMOKE_FAILED probe=$name reason=missing_acceptance_marker" >&2
+          grep -E "STARBYTE_.*(SMOKE|FAILED|CLOCK|REPAINT)" "$log" | tail -n 40 >&2 || true
           return 1
         fi
         echo "PRIVATE_STARBYTE_SMOKE_PASSED probe=$name"
+        grep -F "$marker" "$log" | tail -n 1
+        if [[ -n "$second_marker" ]]; then
+          grep -F "$second_marker" "$log" | tail -n 1
+        fi
       }
       run_starbyte no-redraw --exit-after-full-worker-no-redraw \
         "STARBYTE_FULL_LIBRARY_CLOCK_PACING_SMOKE_OK advanced_frames=" \

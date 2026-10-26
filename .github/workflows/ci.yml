@@ -162,6 +162,7 @@ jobs:
             exit 1
           }
           probe=(bwrap --unshare-all --share-net --ro-bind /usr /usr
+            --symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib64 /lib64
             --proc /proc --dev /dev /usr/bin/true)
           if ! timeout 10s "${probe[@]}" >/dev/null 2>&1; then
             [[ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]] || {

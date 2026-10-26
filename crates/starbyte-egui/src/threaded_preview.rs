@@ -256,14 +256,20 @@ impl ThreadedPreviewApp {
         }
     }
 
-    fn can_modify_running_game(&self) -> bool {
+    fn can_control_playback(&self) -> bool {
+        // Keep Pause/Resume available while a new ROM is only being
+        // prepared on the I/O lane: the previous cartridge still owns
+        // the clock. Never toggle during an actual owner installation.
         self.controls.session.has_rom
-            && self.pending_library_rom.is_none()
             && self.pending_next_launch.is_none()
             && !self
                 .pending
                 .iter()
                 .any(|op| matches!(op, PendingOperation::LoadRom { .. }))
+    }
+
+    fn can_modify_running_game(&self) -> bool {
+        self.can_control_playback() && self.pending_library_rom.is_none()
     }
 
     fn queue_save(&mut self, action: SessionSaveAction) {
@@ -937,6 +943,10 @@ mod pitch_mode_tests {
         }
         assert_eq!(app.loaded_rom_path.as_deref(), Some(good.as_path()));
         app.queue_rom_load(missing);
+        // The installed game's clock can still be paused, but do not
+        // save into a cartridge namespace during a pending replacement.
+        assert!(app.can_control_playback());
+        assert!(!app.can_modify_running_game());
         let deadline = Instant::now() + Duration::from_secs(6);
         while Instant::now() < deadline {
             app.poll_library_events();
@@ -1497,7 +1507,7 @@ impl eframe::App for ThreadedPreviewApp {
                 ui.menu_button("Game", |ui| {
                     if ui
                         .add_enabled(
-                            self.can_modify_running_game(),
+                            self.can_control_playback(),
                             egui::Button::new(if self.playing { "Pause" } else { "Resume" }),
                         )
                         .clicked()

@@ -902,7 +902,7 @@ HYPR_CONFIG
         if /bin/busybox grep -Fqx 'STARBYTE_GUEST_XDG_SURFACE_RESULT connected=1 xdg=1 committed=1 configured=1 acked=1' /tmp/hypr-xdg-probe.log; then
           hypr_xdg_configured=1
         else
-          for reason in private_guest_only missing_display unsafe_display_name connect_failed timeout_failed write_failed read_failed invalid_request invalid_event invalid_global protocol_error registry_timeout compositor_missing xdg_shell_missing configure_timeout; do
+          for reason in private_guest_only missing_display unsafe_display_name connect_failed timeout_failed write_failed read_failed invalid_request invalid_event invalid_global protocol_error registry_timeout compositor_missing xdg_shell_missing configure_timeout ack_timeout; do
             if /bin/busybox grep -Fqx "STARBYTE_GUEST_XDG_SURFACE_BLOCKED $reason" /tmp/hypr-xdg-probe.log; then hypr_xdg_reason=$reason; break; fi
           done
         fi

@@ -843,7 +843,10 @@ mod pitch_mode_tests {
         config.audio.enabled = false;
         let mut app =
             ThreadedPreviewApp::new(assets, &config, None, None, false, false, false).unwrap();
-        assert!(!app.can_reselect_audio_output(), "empty session has no output");
+        assert!(
+            !app.can_reselect_audio_output(),
+            "empty session has no output"
+        );
 
         // The GUI must track the asynchronous reply without blocking on a
         // speaker or an OS device. No real sound hardware is opened here.
@@ -853,11 +856,23 @@ mod pitch_mode_tests {
             reply: rx,
         });
         app.poll_operations(&egui::Context::default());
-        assert!(app.pending.iter().any(|op| matches!(op, PendingOperation::AudioReopen { .. })));
+        assert!(
+            app.pending
+                .iter()
+                .any(|op| matches!(op, PendingOperation::AudioReopen { .. }))
+        );
         tx.send(Ok(())).unwrap();
         app.poll_operations(&egui::Context::default());
-        assert!(!app.pending.iter().any(|op| matches!(op, PendingOperation::AudioReopen { .. })));
-        assert!(app.status_note.as_deref().is_some_and(|note| note.contains("Audio route reset queued")));
+        assert!(
+            !app.pending
+                .iter()
+                .any(|op| matches!(op, PendingOperation::AudioReopen { .. }))
+        );
+        assert!(
+            app.status_note
+                .as_deref()
+                .is_some_and(|note| note.contains("Audio route reset queued"))
+        );
         assert!(app.last_error.is_none());
     }
 
@@ -882,11 +897,19 @@ mod pitch_mode_tests {
         });
         app.session_epoch = app.session_epoch.wrapping_add(1);
         app.status_note = Some("Preparing newer cartridge".to_owned());
-        tx.send(Err("stale output route failure".to_owned())).unwrap();
+        tx.send(Err("stale output route failure".to_owned()))
+            .unwrap();
         app.poll_operations(&egui::Context::default());
-        assert_eq!(app.status_note.as_deref(), Some("Preparing newer cartridge"));
+        assert_eq!(
+            app.status_note.as_deref(),
+            Some("Preparing newer cartridge")
+        );
         assert!(app.last_error.is_none());
-        assert!(!app.pending.iter().any(|op| matches!(op, PendingOperation::AudioReopen { .. })));
+        assert!(
+            !app.pending
+                .iter()
+                .any(|op| matches!(op, PendingOperation::AudioReopen { .. }))
+        );
     }
 
     #[test]

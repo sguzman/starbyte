@@ -71,6 +71,10 @@ enum PendingOperation {
         epoch: u64,
         reply: Receiver<Result<(), String>>,
     },
+    AudioReopen {
+        epoch: u64,
+        reply: Receiver<Result<(), String>>,
+    },
     ClearCheats {
         epoch: u64,
         reply: Receiver<Result<(), String>>,
@@ -513,6 +517,35 @@ impl ThreadedPreviewApp {
         }
     }
 
+    /// A changed OS default output may not generate a CPAL stream fault.
+    /// Reuse the original player's asynchronous reset path; the receipt only
+    /// means the audio worker accepted the request, not that sound was heard.
+    fn can_reselect_audio_output(&self) -> bool {
+        self.controls.session.has_rom
+            && self.display.audio_diagnostics().device_status.is_some()
+            && !self
+                .pending
+                .iter()
+                .any(|op| matches!(op, PendingOperation::AudioReopen { .. }))
+    }
+
+    fn queue_audio_reopen(&mut self) {
+        if !self.can_reselect_audio_output() {
+            return;
+        }
+        match self.engine.queue_audio_reopen() {
+            Ok(reply) => {
+                self.pending.push(PendingOperation::AudioReopen {
+                    epoch: self.session_epoch,
+                    reply,
+                });
+                self.status_note = Some("Requesting desktop audio route reset...".to_owned());
+                self.last_error = None;
+            }
+            Err(error) => self.last_error = Some(format!("Audio route reset failed: {error}")),
+        }
+    }
+
     fn write_screenshot_async(
         &mut self,
         capture: SessionScreenshot,
@@ -594,6 +627,25 @@ impl ThreadedPreviewApp {
                     }
                     Err(TryRecvError::Disconnected) => {
                         self.last_error = Some("Cheat command worker stopped".to_owned());
+                    }
+                },
+                PendingOperation::AudioReopen { epoch, .. } if epoch != self.session_epoch => {}
+                PendingOperation::AudioReopen { epoch, reply } => match reply.try_recv() {
+                    Ok(Ok(())) => {
+                        self.status_note = Some(
+                            "Audio route reset queued; fresh PCM or a speaker check will open the current output. Audibility unverified."
+                                .to_owned(),
+                        );
+                        self.last_error = None;
+                    }
+                    Ok(Err(error)) => {
+                        self.last_error = Some(format!("Audio route reset failed: {error}"));
+                    }
+                    Err(TryRecvError::Empty) => {
+                        still_pending.push(PendingOperation::AudioReopen { epoch, reply });
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        self.last_error = Some("Audio route reset worker stopped".to_owned());
                     }
                 },
                 PendingOperation::SpeakerCheck { epoch, .. } if epoch != self.session_epoch => {}
@@ -775,6 +827,66 @@ mod pitch_mode_tests {
         assert!(!app.controls.session.has_rom);
         assert!(app.show_library);
         assert!(app.loaded_rom_path.is_none());
+    }
+
+    #[test]
+    fn audio_reselection_acknowledgement_is_nonblocking_and_cannot_overlap() {
+        let temp = tempfile::tempdir().unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(temp.path().join("saves")),
+            state_dir: Some(temp.path().join("states")),
+            cache_dir: Some(temp.path().join("cache")),
+            config_path: None,
+        };
+        let mut config = RuntimeConfig::default();
+        config.audio.enabled = false;
+        let mut app =
+            ThreadedPreviewApp::new(assets, &config, None, None, false, false, false).unwrap();
+        assert!(!app.can_reselect_audio_output(), "empty session has no output");
+
+        // The GUI must track the asynchronous reply without blocking on a
+        // speaker or an OS device. No real sound hardware is opened here.
+        let (tx, rx) = mpsc::channel();
+        app.pending.push(PendingOperation::AudioReopen {
+            epoch: app.session_epoch,
+            reply: rx,
+        });
+        app.poll_operations(&egui::Context::default());
+        assert!(app.pending.iter().any(|op| matches!(op, PendingOperation::AudioReopen { .. })));
+        tx.send(Ok(())).unwrap();
+        app.poll_operations(&egui::Context::default());
+        assert!(!app.pending.iter().any(|op| matches!(op, PendingOperation::AudioReopen { .. })));
+        assert!(app.status_note.as_deref().is_some_and(|note| note.contains("Audio route reset queued")));
+        assert!(app.last_error.is_none());
+    }
+
+    #[test]
+    fn superseded_audio_route_reply_cannot_replace_new_cartridge_status() {
+        let temp = tempfile::tempdir().unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(temp.path().join("saves")),
+            state_dir: Some(temp.path().join("states")),
+            cache_dir: Some(temp.path().join("cache")),
+            config_path: None,
+        };
+        let mut config = RuntimeConfig::default();
+        config.audio.enabled = false;
+        let mut app =
+            ThreadedPreviewApp::new(assets, &config, None, None, false, false, false).unwrap();
+        let (tx, rx) = mpsc::channel();
+        app.pending.push(PendingOperation::AudioReopen {
+            epoch: app.session_epoch,
+            reply: rx,
+        });
+        app.session_epoch = app.session_epoch.wrapping_add(1);
+        app.status_note = Some("Preparing newer cartridge".to_owned());
+        tx.send(Err("stale output route failure".to_owned())).unwrap();
+        app.poll_operations(&egui::Context::default());
+        assert_eq!(app.status_note.as_deref(), Some("Preparing newer cartridge"));
+        assert!(app.last_error.is_none());
+        assert!(!app.pending.iter().any(|op| matches!(op, PendingOperation::AudioReopen { .. })));
     }
 
     #[test]
@@ -1848,6 +1960,18 @@ impl eframe::App for ThreadedPreviewApp {
                             }
                             Err(error) => self.last_error = Some(error),
                         }
+                    }
+                    if ui
+                        .add_enabled(
+                            self.can_reselect_audio_output(),
+                            egui::Button::new("Reselect desktop audio output"),
+                        )
+                        .on_hover_text(
+                            "Release the existing audio route even if the OS reported no stream fault. Fresh game PCM or a speaker check will select the current default. This does not establish physical audibility.",
+                        )
+                        .clicked()
+                    {
+                        self.queue_audio_reopen();
                     }
                     ui.separator();
                     ui.label("Pitch");

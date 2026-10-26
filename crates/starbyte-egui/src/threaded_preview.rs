@@ -479,6 +479,23 @@ impl ThreadedPreviewApp {
         if !self.can_modify_running_game() {
             return;
         }
+        // Match the full-library worker's bound: two captures or PNG writes
+        // can be pending at once. Repeated F12 must not spawn unbounded
+        // screenshot writers or exhaust memory during slow filesystem I/O.
+        let outstanding = self
+            .pending
+            .iter()
+            .filter(|operation| {
+                matches!(
+                    operation,
+                    PendingOperation::Screenshot { .. } | PendingOperation::PngWrite { .. }
+                )
+            })
+            .count();
+        if outstanding >= 2 {
+            self.last_error = Some("Finish pending screenshots before taking another".to_owned());
+            return;
+        }
         match self.engine.queue_screenshot_pixels() {
             Ok(reply) => self.pending.push(PendingOperation::Screenshot {
                 epoch: self.session_epoch,
@@ -869,6 +886,28 @@ mod pitch_mode_tests {
         assert_eq!(app.loaded_rom_path.as_deref(), Some(rom.as_path()));
         assert!(app.controls.session.has_rom);
         assert!(app.display.texture().is_some());
+
+        // This is an actual installed owner. Synthetic held receipts model
+        // slow capture/PNG disk I/O without writing into the filesystem.
+        let (capture_tx, capture_rx) = mpsc::channel();
+        let (png_tx, png_rx) = mpsc::channel();
+        app.pending.push(PendingOperation::Screenshot {
+            epoch: app.session_epoch,
+            reply: capture_rx,
+        });
+        app.pending.push(PendingOperation::PngWrite {
+            epoch: app.session_epoch,
+            reply: png_rx,
+        });
+        assert!(app.can_modify_running_game());
+        let pending_count = app.pending.len();
+        app.queue_screenshot();
+        assert_eq!(app.pending.len(), pending_count);
+        assert!(app.last_error.as_deref().is_some_and(|error| {
+            error.contains("Finish pending screenshots")
+        }));
+        drop(capture_tx);
+        drop(png_tx);
     }
 
     #[test]

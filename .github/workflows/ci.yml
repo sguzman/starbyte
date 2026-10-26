@@ -110,7 +110,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libudev-dev libasound2-dev weston libgl1-mesa-dri libegl1
+        run: sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libudev-dev libasound2-dev weston libgl1-mesa-dri libegl1 wayland-utils bubblewrap
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Test
@@ -376,3 +376,22 @@ jobs:
             }
           cat "$RUNNER_TEMP/starbyte-no-redraw.log"
           grep -F "STARBYTE_NO_REPAINT_SMOKE_OK advanced_frames=" "$RUNNER_TEMP/starbyte-no-redraw.log"
+
+      # Reuse this job's existing Rust build, private runner, and Weston
+      # installation instead of a second costly hosted package download.
+      # The bwrap guest still receives no owner home, display, DBus, input
+      # or DRM device. Exit nonzero if any native GUI acceptance probe fails.
+      - name: Strict isolated Weston application acceptance
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          STARBYTE_QA_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          set -euo pipefail
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/starbyte-sealed"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          bash -n scripts/qa-isolated-wayland.sh
+          bash scripts/qa-isolated-wayland.sh --check-only
+          bash scripts/qa-isolated-wayland.sh --starbyte-smoke
+          echo "STARBYTE_HOSTED_ISOLATED_WESTON_OK physical=not_tested"

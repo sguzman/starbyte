@@ -34,6 +34,10 @@ jobs:
         run: |
           set -euo pipefail
           bash -n scripts/qa-guest-linux.sh
+          # The guest heredoc must contain exactly one focus section and one
+          # XDG status receipt. A past malformed grep duplicated whole sections.
+          [[ "$(grep -Fc 'hypr_focus_ready=0' scripts/qa-guest-linux.sh)" -eq 1 ]]
+          [[ "$(grep -Fc 'STARBYTE_GUEST_HYPR_XDG_DIAG status=$hypr_xdg_status' scripts/qa-guest-linux.sh)" -eq 1 ]]
           if output="$(DISPLAY=:0 bash scripts/qa-guest-linux.sh --check-only 2>&1)"; then exit 1; fi
           grep -Fq 'STARBYTE_GUEST_LINUX_BLOCKED graphical_session_present' <<<"$output"
           if output="$(RUNNER_ENVIRONMENT=self-hosted bash scripts/qa-guest-linux.sh --check-only 2>&1)"; then exit 1; fi

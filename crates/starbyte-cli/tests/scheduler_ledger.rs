@@ -67,8 +67,13 @@ fn scheduler_ledger_matches_checked_roadmap_and_declared_percentages() {
         let expected_percent = hundredths as f64 / 100.0;
         assert_eq!(milestone["accepted"].as_u64(), Some(accepted), "{id}");
         assert_eq!(milestone["total"].as_u64(), Some(n), "{id}");
-        let recorded_percent = milestone["percent"].as_f64().expect("numeric milestone percent");
-        assert!((recorded_percent - expected_percent).abs() < 1e-9, "{id}: percentage drift");
+        let recorded_percent = milestone["percent"]
+            .as_f64()
+            .expect("numeric milestone percent");
+        assert!(
+            (recorded_percent - expected_percent).abs() < 1e-9,
+            "{id}: percentage drift"
+        );
         assert!(
             section
                 .lines()
@@ -86,8 +91,13 @@ fn scheduler_ledger_matches_checked_roadmap_and_declared_percentages() {
     let expected_percent = exact_hundredths as f64 / 100.0;
     assert_eq!(ledger["overall"]["accepted"].as_u64(), Some(completed));
     assert_eq!(ledger["overall"]["total"].as_u64(), Some(total));
-    let recorded_percent = ledger["overall"]["percent"].as_f64().expect("numeric overall percent");
-    assert!((recorded_percent - expected_percent).abs() < 1e-9, "overall percentage drift");
+    let recorded_percent = ledger["overall"]["percent"]
+        .as_f64()
+        .expect("numeric overall percent");
+    assert!(
+        (recorded_percent - expected_percent).abs() < 1e-9,
+        "overall percentage drift"
+    );
     assert!(
         roadmap.contains(&format!("{completed}/{total} ({rounded_percent}%)")),
         "top-level Markdown progress differs from JSON"

@@ -872,7 +872,7 @@ HYPR_CONFIG
       hypr_app_frames=0
       hypr_app_single_owner=0
       if [ "$hypr_registry" = 1 ] && [ "$hypr_seat" = 1 ]; then
-        WAYLAND_DISPLAY="$hypr_display" \
+        WAYLAND_DEBUG=client WAYLAND_DISPLAY="$hypr_display" \
           RUST_BACKTRACE=1 \
           WINIT_UNIX_BACKEND=wayland \
           EGL_PLATFORM=wayland \
@@ -908,6 +908,15 @@ HYPR_CONFIG
       hypr_app_pixel_format=0
       hypr_app_surface=0
       hypr_app_missing_global=0
+      hypr_app_egl_bad_surface=0
+      hypr_app_egl_bad_native_window=0
+      hypr_app_egl_create_window_surface=0
+      hypr_app_surface_init_failure=0
+      hypr_app_xdg_configure=0
+      hypr_app_dmabuf_failed=0
+      hypr_app_dmabuf_params=0
+      hypr_app_wl_surface_attach=0
+      hypr_app_wl_drm=0
       if [ -s /tmp/starbyte-hyprland-app.log ]; then hypr_app_stdout=1; fi
       if [ -s /tmp/starbyte-hyprland-app.err ]; then hypr_app_stderr=1; fi
       for log in /tmp/starbyte-hyprland-app.log /tmp/starbyte-hyprland-app.err; do
@@ -930,8 +939,17 @@ HYPR_CONFIG
         if /bin/busybox grep -Eiq 'pixel.*format|no matching.*config|no EGL.*config|failed to find.*config' "$log"; then hypr_app_pixel_format=1; fi
         if /bin/busybox grep -Eiq 'EGL_BAD_SURFACE|EGL_BAD_NATIVE_WINDOW|eglCreateWindowSurface|surface.*init.*fail' "$log"; then hypr_app_surface=1; fi
         if /bin/busybox grep -Eiq 'missing.*(global|extension)|does not support.*(protocol|interface)|required.*(global|extension)' "$log"; then hypr_app_missing_global=1; fi
+        if /bin/busybox grep -Fq 'EGL_BAD_SURFACE' "$log"; then hypr_app_egl_bad_surface=1; fi
+        if /bin/busybox grep -Fq 'EGL_BAD_NATIVE_WINDOW' "$log"; then hypr_app_egl_bad_native_window=1; fi
+        if /bin/busybox grep -Fq 'eglCreateWindowSurface' "$log"; then hypr_app_egl_create_window_surface=1; fi
+        if /bin/busybox grep -Eiq 'surface.*init.*fail' "$log"; then hypr_app_surface_init_failure=1; fi
+        if /bin/busybox grep -Eq 'xdg_toplevel@[0-9]+\.configure\(' "$log"; then hypr_app_xdg_configure=1; fi
+        if /bin/busybox grep -Eq 'zwp_linux_buffer_params_v1@[0-9]+\.failed\(' "$log"; then hypr_app_dmabuf_failed=1; fi
+        if /bin/busybox grep -Eq 'zwp_linux_buffer_params_v1@[0-9]+\.' "$log"; then hypr_app_dmabuf_params=1; fi
+        if /bin/busybox grep -Eq 'wl_surface@[0-9]+\.attach\(' "$log"; then hypr_app_wl_surface_attach=1; fi
+        if /bin/busybox grep -Fq 'wl_drm' "$log"; then hypr_app_wl_drm=1; fi
       done
-      echo "STARBYTE_GUEST_HYPRLAND_APP_DIAG stdout=$hypr_app_stdout stderr=$hypr_app_stderr egl=$hypr_app_egl dri=$hypr_app_dri context=$hypr_app_context wayland=$hypr_app_wayland winit=$hypr_app_winit panic=$hypr_app_panic library=$hypr_app_library config=$hypr_app_config render=$hypr_app_render permission=$hypr_app_permission protocol=$hypr_app_protocol stack_eframe=$hypr_app_stack_eframe stack_glutin=$hypr_app_stack_glutin stack_winit=$hypr_app_stack_winit stack_starbyte=$hypr_app_stack_starbyte pixel_format=$hypr_app_pixel_format surface=$hypr_app_surface missing_global=$hypr_app_missing_global" >/dev/console
+      echo "STARBYTE_GUEST_HYPRLAND_APP_DIAG stdout=$hypr_app_stdout stderr=$hypr_app_stderr egl=$hypr_app_egl dri=$hypr_app_dri context=$hypr_app_context wayland=$hypr_app_wayland winit=$hypr_app_winit panic=$hypr_app_panic library=$hypr_app_library config=$hypr_app_config render=$hypr_app_render permission=$hypr_app_permission protocol=$hypr_app_protocol stack_eframe=$hypr_app_stack_eframe stack_glutin=$hypr_app_stack_glutin stack_winit=$hypr_app_stack_winit stack_starbyte=$hypr_app_stack_starbyte pixel_format=$hypr_app_pixel_format surface=$hypr_app_surface missing_global=$hypr_app_missing_global egl_bad_surface=$hypr_app_egl_bad_surface egl_bad_native_window=$hypr_app_egl_bad_native_window egl_create_window_surface=$hypr_app_egl_create_window_surface surface_init_failure=$hypr_app_surface_init_failure xdg_configure=$hypr_app_xdg_configure dmabuf_failed=$hypr_app_dmabuf_failed dmabuf_params=$hypr_app_dmabuf_params wl_surface_attach=$hypr_app_wl_surface_attach wl_drm=$hypr_app_wl_drm" >/dev/console
       # kill -0 alone also succeeds for zombies; require a non-zombie
       # Hyprland process after the application has finished.
       hypr_alive=0

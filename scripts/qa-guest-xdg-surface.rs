@@ -317,4 +317,27 @@ mod tests {
         compositor.join().unwrap();
         assert_eq!(outcome, Ok(()));
     }
+
+    #[test]
+    fn mock_compositor_protocol_error_fails_closed() {
+        let (mut client, mut server) = UnixStream::pair().unwrap();
+        client.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        server.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let compositor = std::thread::spawn(move || {
+            let (object, opcode, _) = event(&mut server).unwrap();
+            assert_eq!((object, opcode), (1, 1));
+            let (object, opcode, _) = event(&mut server).unwrap();
+            assert_eq!((object, opcode), (1, 0));
+
+            let mut raw = Vec::new();
+            raw.extend_from_slice(&SURFACE.to_ne_bytes());
+            raw.extend_from_slice(&99_u32.to_ne_bytes());
+            raw.extend_from_slice(b"guest-only freeform diagnostic\0");
+            send(&mut server, 1, 0, &raw).unwrap();
+        });
+        let outcome = exchange(&mut client);
+        drop(client);
+        compositor.join().unwrap();
+        assert_eq!(outcome, Err("protocol_error"));
+    }
 }

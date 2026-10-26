@@ -83,6 +83,7 @@ enum PendingOperation {
         reply: Receiver<Result<PathBuf, String>>,
     },
     LoadRom {
+        epoch: u64,
         path: PathBuf,
         reply: Receiver<Result<WorkerLaunchResponse, String>>,
     },
@@ -307,6 +308,9 @@ impl ThreadedPreviewApp {
             .iter()
             .any(|operation| matches!(operation, PendingOperation::LoadRom { .. }))
         {
+            // A queued replacement supersedes the current launch's UI
+            // acknowledgements immediately, even before worker handoff.
+            self.session_epoch = self.session_epoch.wrapping_add(1);
             self.status_note = Some(format!(
                 "Queued newer cartridge: {}",
                 request.rom_path.display()
@@ -323,7 +327,11 @@ impl ThreadedPreviewApp {
                 self.input.clear();
                 self.status_note = Some(format!("Loading {}...", path.display()));
                 self.last_error = None;
-                self.pending.push(PendingOperation::LoadRom { path, reply });
+                self.pending.push(PendingOperation::LoadRom {
+                    epoch: self.session_epoch,
+                    path,
+                    reply,
+                });
             }
             Err(error) => self.last_error = Some(error),
         }
@@ -341,6 +349,10 @@ impl ThreadedPreviewApp {
         // AppWorker coalesces pending archive jobs; only the latest prepared
         // selection may reach the emulation worker.
         self.pending_library_rom = Some(job_id);
+        // Invalidate old-game replies as soon as a new selection enters the
+        // ROM preparation lane, not only when its worker launch begins.
+        self.session_epoch = self.session_epoch.wrapping_add(1);
+        self.status_note = Some(status.clone());
         self.library_status = status;
         self.last_error = None;
         self.library_worker.as_ref().unwrap().submit(WorkerCommand {
@@ -494,33 +506,37 @@ impl ThreadedPreviewApp {
         let mut launch_finished = false;
         for operation in std::mem::take(&mut self.pending) {
             match operation {
-                PendingOperation::LoadRom { path, reply } => match reply.try_recv() {
+                PendingOperation::LoadRom { epoch, path, reply } => match reply.try_recv() {
                     Ok(Ok(response)) => {
                         launch_finished = true;
                         let _ = self.engine.take_latest_frame();
-                        if self.pending_next_launch.is_none() {
-                            self.controls = response.controls;
-                            self.display.import_frame(ctx, response.frame);
-                            self.loaded_rom_path = Some(path.clone());
-                            self.engine.set_playing(true);
-                            self.playing = true;
+                        // Successful installs change the actual owner even if
+                        // a newer selection is being prepared. Keep controls
+                        // and pixels synchronized with that owner; only the
+                        // superseded status message must be discarded.
+                        self.controls = response.controls;
+                        self.display.import_frame(ctx, response.frame);
+                        self.loaded_rom_path = Some(path.clone());
+                        self.engine.set_playing(true);
+                        self.playing = true;
+                        if epoch == self.session_epoch && self.pending_next_launch.is_none() {
                             self.status_note = Some(format!("Loaded {}", path.display()));
                             self.last_error = None;
                         }
                     }
                     Ok(Err(error)) => {
                         launch_finished = true;
-                        if self.pending_next_launch.is_none() {
+                        if epoch == self.session_epoch && self.pending_next_launch.is_none() {
                             self.last_error = Some(format!("ROM load failed: {error}"));
                             self.status_note = None;
                         }
                     }
                     Err(TryRecvError::Empty) => {
-                        still_pending.push(PendingOperation::LoadRom { path, reply });
+                        still_pending.push(PendingOperation::LoadRom { epoch, path, reply });
                     }
                     Err(TryRecvError::Disconnected) => {
                         launch_finished = true;
-                        if self.pending_next_launch.is_none() {
+                        if epoch == self.session_epoch && self.pending_next_launch.is_none() {
                             self.last_error = Some("ROM loader worker stopped".to_owned());
                             self.status_note = None;
                         }
@@ -963,6 +979,62 @@ mod pitch_mode_tests {
         app.queue_rom_load(next);
         assert!(app.pending_library_rom.is_some());
         assert!(app.last_error.is_none());
+        // A previous launch can install successfully while the new ROM is
+        // still being prepared. The UI must follow the actual owner without
+        // overwriting the newer selection's progress indicator.
+        let deadline = Instant::now() + Duration::from_secs(6);
+        while Instant::now() < deadline {
+            app.poll_operations(&egui::Context::default());
+            if app.pending.iter().all(|op| !matches!(op, PendingOperation::LoadRom { .. })) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(app.controls.session.has_rom);
+        assert!(app.playing);
+        assert!(app.status_note.as_deref().is_some_and(|status| {
+            status.starts_with("Preparing ")
+        }));
+    }
+
+    #[test]
+    fn selecting_next_cartridge_rejects_old_acknowledgements_during_preparation() {
+        let temp = tempfile::tempdir().unwrap();
+        let next = temp.path().join("next.sfc");
+        std::fs::write(&next, starbyte_core::testing::demo::demo_rom_bytes()).unwrap();
+        let assets = AssetConfig {
+            spc700_ipl: None,
+            save_dir: Some(temp.path().join("saves")),
+            state_dir: Some(temp.path().join("states")),
+            cache_dir: Some(temp.path().join("cache")),
+            config_path: None,
+        };
+        let mut config = RuntimeConfig::default();
+        config.audio.enabled = false;
+        let mut app =
+            ThreadedPreviewApp::new(assets, &config, None, None, true, false, false).unwrap();
+        let prior_epoch = app.session_epoch;
+        let (save_sender, save_reply) = mpsc::channel();
+        let (load_sender, load_reply) = mpsc::channel();
+        app.pending.push(PendingOperation::Save {
+            epoch: prior_epoch,
+            reply: save_reply,
+        });
+        app.pending.push(PendingOperation::LoadRom {
+            epoch: prior_epoch,
+            path: temp.path().join("old.sfc"),
+            reply: load_reply,
+        });
+        app.queue_rom_load(next);
+        assert!(app.pending_library_rom.is_some());
+        assert_ne!(app.session_epoch, prior_epoch);
+        save_sender.send(Err("old save failure".to_owned())).unwrap();
+        load_sender.send(Err("old launch failure".to_owned())).unwrap();
+        app.poll_operations(&egui::Context::default());
+        assert!(app.last_error.is_none());
+        assert!(app.status_note.as_deref().is_some_and(|status| {
+            status.starts_with("Preparing ")
+        }));
     }
 
     #[test]

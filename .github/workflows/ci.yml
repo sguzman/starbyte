@@ -78,7 +78,21 @@ jobs:
       - name: Verify ephemeral local QA runner syntax
         run: bash -n scripts/qa-runner-ephemeral.sh
       - name: Install Linux dependencies
-        run: sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libudev-dev libasound2-dev
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The ephemeral runner's Azure archive has repeatedly throttled
+          # normal systemd dependencies; match the verified GUI-job mirror.
+          if [[ -f /etc/apt/apt-mirrors.txt ]] &&
+             grep -Fq 'azure.archive.ubuntu.com/ubuntu' /etc/apt/apt-mirrors.txt; then
+            sudo sed -i 's#http://azure.archive.ubuntu.com/ubuntu#http://archive.ubuntu.com/ubuntu#g' /etc/apt/apt-mirrors.txt
+          fi
+          timeout --signal=TERM --kill-after=5s 120s sudo apt-get \
+            -o Acquire::Retries=1 -o Acquire::http::Timeout=20 update
+          timeout --signal=TERM --kill-after=5s 300s sudo env \
+            DEBIAN_FRONTEND=noninteractive apt-get \
+            -o Acquire::Retries=2 -o Acquire::http::Timeout=20 \
+            install -y --no-install-recommends pkg-config libudev-dev libasound2-dev
       - uses: Swatinem/rust-cache@v2
       - name: Chrono diagnostic script syntax and CLI
         run: |
@@ -93,7 +107,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux dependencies
-        run: sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libudev-dev libasound2-dev
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The ephemeral runner's Azure archive has repeatedly throttled
+          # normal systemd dependencies; match the verified GUI-job mirror.
+          if [[ -f /etc/apt/apt-mirrors.txt ]] &&
+             grep -Fq 'azure.archive.ubuntu.com/ubuntu' /etc/apt/apt-mirrors.txt; then
+            sudo sed -i 's#http://azure.archive.ubuntu.com/ubuntu#http://archive.ubuntu.com/ubuntu#g' /etc/apt/apt-mirrors.txt
+          fi
+          timeout --signal=TERM --kill-after=5s 120s sudo apt-get \
+            -o Acquire::Retries=1 -o Acquire::http::Timeout=20 update
+          timeout --signal=TERM --kill-after=5s 300s sudo env \
+            DEBIAN_FRONTEND=noninteractive apt-get \
+            -o Acquire::Retries=2 -o Acquire::http::Timeout=20 \
+            install -y --no-install-recommends pkg-config libudev-dev libasound2-dev
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.88.0"

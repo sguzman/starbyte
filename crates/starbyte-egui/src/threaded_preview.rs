@@ -666,10 +666,8 @@ impl ThreadedPreviewApp {
                         Ok(Ok(audio)) => self.display.update_audio_diagnostics(audio),
                         Ok(Err(_)) | Err(TryRecvError::Disconnected) => {}
                         Err(TryRecvError::Empty) => {
-                            still_pending.push(PendingOperation::AudioDiagnostics {
-                                owner_epoch,
-                                reply,
-                            });
+                            still_pending
+                                .push(PendingOperation::AudioDiagnostics { owner_epoch, reply });
                         }
                     }
                 }
@@ -946,8 +944,7 @@ mod pitch_mode_tests {
         app.poll_operations(&egui::Context::default());
         assert_eq!(app.display.audio_diagnostics().stream_failures, 0);
         assert!(
-            !app
-                .pending
+            !app.pending
                 .iter()
                 .any(|op| matches!(op, PendingOperation::AudioDiagnostics { .. }))
         );
@@ -991,14 +988,19 @@ mod pitch_mode_tests {
             1
         );
         let deadline = Instant::now() + Duration::from_secs(2);
-        while app.pending.iter().any(|op| matches!(op, PendingOperation::AudioDiagnostics { .. }))
+        while app
+            .pending
+            .iter()
+            .any(|op| matches!(op, PendingOperation::AudioDiagnostics { .. }))
             && Instant::now() < deadline
         {
             app.poll_operations(&egui::Context::default());
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(
-            !app.pending.iter().any(|op| matches!(op, PendingOperation::AudioDiagnostics { .. }))
+            !app.pending
+                .iter()
+                .any(|op| matches!(op, PendingOperation::AudioDiagnostics { .. }))
         );
         assert!(app.display.audio_diagnostics().device_status.is_none());
         assert_eq!(app.engine.completed_frames(), 0);

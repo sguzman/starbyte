@@ -106,7 +106,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # Pin the GUI/test runner to stable Ubuntu LTS: the floating 26.04
+        # image pulled 111 packages (including a systemd upgrade) from a
+        # severely throttled mirror and exhausted the bounded 300s install.
+        # Keep this fixed until the hosted focus acceptance is verified.
+        os: [ubuntu-24.04, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

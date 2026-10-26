@@ -52,7 +52,7 @@ jobs:
           original='features = ["default_fonts", "glow", "wayland", "x11"]'
           replacement='features = ["default_fonts", "glow", "wayland"]'
           grep -Fq "$original" crates/starbyte-egui/Cargo.toml
-          sed -i "s/\\\"x11\\\"\\]/\\]/" crates/starbyte-egui/Cargo.toml
+          sed -i 's/, "x11"//' crates/starbyte-egui/Cargo.toml
           grep -Fq "$replacement" crates/starbyte-egui/Cargo.toml
           cargo build --offline -p starbyte-egui
           echo 'STARBYTE_EXPERIMENT_WAYLAND_ONLY_BUILD_OK ephemeral=true'

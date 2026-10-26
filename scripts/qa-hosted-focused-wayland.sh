@@ -113,7 +113,7 @@ if [[ "$STARBYTE_FOCUS_PROBE" == --blur-smoke ]]; then
   # Focus must change between two NATIVE WAYLAND surfaces. Moving the
   # outer X11 focus leaves Weston free to keep wl_keyboard on Starbyte.
   # Desktop-shell supports native surface focus; kiosk-shell does not.
-  weston-simple-shm >"$runtime/rival.log" 2>&1 &
+  env WAYLAND_DEBUG=client weston-simple-shm >"$runtime/rival.log" 2>&1 &
   rival_pid=$!
   sleep 0.55
   kill -0 "$rival_pid" 2>/dev/null || {
@@ -122,6 +122,26 @@ if [[ "$STARBYTE_FOCUS_PROBE" == --blur-smoke ]]; then
     tail -n 45 "$runtime/weston.log" >&2
     exit 1
   }
+  # Verify that synthetic X11 keyboard events are delivered to the
+  # actual native client before interpreting the Super+Tab result.
+  DISPLAY=:99 xdotool windowfocus "$window" || {
+    echo STARBYTE_FOCUSED_SEAT_FAILED outer_weston_focus_failed >&2
+    exit 1
+  }
+  key_pattern='wl_keyboard[^[:space:]]*\.key\('
+  baseline_keys="$(grep -Ec "$key_pattern" "$runtime/game.log" || :)"
+  [[ "$baseline_keys" =~ ^[0-9]+$ ]] || baseline_keys=0
+  DISPLAY=:99 xdotool key --clearmodifiers a
+  sleep 0.3
+  observed_keys="$(grep -Ec "$key_pattern" "$runtime/game.log" || :)"
+  [[ "$observed_keys" =~ ^[0-9]+$ ]] || observed_keys=0
+  if (( observed_keys <= baseline_keys )); then
+    echo STARBYTE_FOCUSED_SEAT_FAILED synthetic_keyboard_did_not_reach_native_client >&2
+    grep -E 'wl_keyboard[^[:space:]]*\.(enter|leave|key|modifiers)\(' "$runtime/game.log" | tail -n 15 >&2 || :
+    echo STARBYTE_NATIVE_RIVAL_COMMIT_COUNT="$(grep -Ec 'wl_surface[^[:space:]]*\.commit\(' "$runtime/rival.log" || :)"
+    exit 1
+  fi
+  echo STARBYTE_PRIVATE_NATIVE_KEYBOARD_OK events=$((observed_keys - baseline_keys))
   # Desktop-shell defines Super+Tab to switch NATIVE Wayland surfaces.
   # Coordinate guesses never delivered wl_keyboard.leave under Xvfb.
   # Direct synthetic X11 keyboard input only to the sealed Weston window.

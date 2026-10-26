@@ -37,9 +37,17 @@ proved dependency downloads exceeded its 25-minute deadline. Only on
 GitHub-hosted ephemeral runners, Bubblewrap shares that runner's network
 namespace because unprivileged network configuration is blocked; it still
 shares no input devices, DRM, host HOME, display or DBus. Local runs retain
-strict network isolation. The CI step is **not accepted evidence** until
-its exact-revision run succeeds. No self-hosted runner, local Codex, owner
-desktop or manual gameplay QA is involved.
+strict network isolation. The sealed runner passed on GitHub Actions at revision
+`b273f8a570bbe65c80288fd6b8aa882d5590fa8e`, run
+[40376317212](https://github.com/sguzman/starbyte/actions/runs/40376317212).
+The run emitted `PRIVATE_STARBYTE_GUEST_SMOKE_OK`,
+`PRIVATE_WESTON_TORN_DOWN`, and
+`STARBYTE_HOSTED_ISOLATED_WESTON_OK physical=not_tested`. The Linux job
+also publishes the tested binary as a short-retention Actions artifact
+for final hardware-specific acceptance without a local rebuild. This
+is **virtual-compositor evidence**, not physical Hyprland, speaker or
+gamepad acceptance. No self-hosted runner, local Codex, owner desktop or
+manual gameplay QA was involved.
 No physical keyboard focus,
 Hyprland workspace, actual speaker audibility, sound route recovery, real
 gamepad or hardware display pacing is demonstrated by a headless Weston

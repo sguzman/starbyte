@@ -186,7 +186,13 @@ if timeout --signal=TERM --kill-after=2s "$deadline" \
         echo compositor_exited
       fi
     }
-    "$STARBYTE_WESTON_BIN" --backend=headless --renderer=pixman --shell=kiosk-shell.so --no-config \
+    # Ubuntu 22.04 Weston 9 uses module names and --use-pixman,
+    # while current Arch Weston supports short backend/renderer selectors.
+    weston_args=(--backend=headless-backend.so --use-pixman)
+    if "$STARBYTE_WESTON_BIN" --help 2>&1 | grep -q -- "--renderer"; then
+      weston_args=(--backend=headless --renderer=pixman)
+    fi
+    "$STARBYTE_WESTON_BIN" "${weston_args[@]}" --shell=kiosk-shell.so --no-config \
       --socket="$WAYLAND_DISPLAY" --idle-time=0 \
       --log="$XDG_RUNTIME_DIR/weston.log" &
     weston_pid=$!

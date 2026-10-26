@@ -5722,6 +5722,7 @@ impl StarbyteApp {
         // command channel. No GUI borrow of Emulator is needed for this menu.
         let controls = self.session_controls();
         let game_ready = controls.session.has_rom
+            && !rom_selection_preparing(&self.jobs, self.latest_rom_job_id)
             && self
                 .full_worker
                 .as_ref()

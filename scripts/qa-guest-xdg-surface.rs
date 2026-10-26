@@ -5,8 +5,10 @@ use std::{env, io::{Read, Write}, os::unix::net::UnixStream, path::PathBuf, time
 const REGISTRY: u32 = 2;
 const REGISTRY_SYNC: u32 = 3;
 const COMPOSITOR: u32 = 4;
-const SURFACE: u32 = 5;
-const XDG_SHELL: u32 = 6;
+// Wayland client IDs must be allocated in ascending order. The shell bind
+// runs before create_surface, so its ID must precede the surface's ID.
+const XDG_SHELL: u32 = 5;
+const SURFACE: u32 = 6;
 const XDG_SURFACE: u32 = 7;
 const XDG_TOPLEVEL: u32 = 8;
 const ACK_SYNC: u32 = 9;

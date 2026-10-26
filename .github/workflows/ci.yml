@@ -396,14 +396,44 @@ jobs:
           bash scripts/qa-isolated-wayland.sh --starbyte-smoke
           echo "STARBYTE_HOSTED_ISOLATED_WESTON_OK physical=not_tested"
 
-      # Preserve the exact hosted-tested binary for eventual hardware-only
-      # acceptance. This does not authorize running anything on the owner's
-      # machine, and no local compilation is required.
-      - name: Publish tested Linux player
+      # Make the tested source revision and complete native acceptance tools
+      # available without compiling on the owner's machine. A tarball keeps
+      # executable permissions; the collector still refuses unsafe physical
+      # probes until a genuinely independent input seat is established.
+      - name: Package hosted-tested Linux player and QA collector
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked -p starbyte-egui --bins
+          dist="$RUNNER_TEMP/starbyte-native-distribution"
+          mkdir -p "$dist"
+          install -m 0755 target/debug/starbyte-egui "$dist/starbyte-egui"
+          install -m 0755 target/debug/starbyte-native-qa "$dist/starbyte-native-qa"
+          printf '%s\n' "$GITHUB_SHA" > "$dist/SOURCE_COMMIT"
+          (
+            cd "$dist"
+            sha256sum starbyte-egui starbyte-native-qa > SHA256SUMS
+          )
+          tar -czf "$RUNNER_TEMP/starbyte-native-linux-x86_64.tar.gz" -C "$dist" \
+            starbyte-egui starbyte-native-qa SOURCE_COMMIT SHA256SUMS
+          verify="$(mktemp -d "$RUNNER_TEMP/starbyte-archive-check.XXXXXXXX")"
+          tar -xzf "$RUNNER_TEMP/starbyte-native-linux-x86_64.tar.gz" -C "$verify"
+          (
+            cd "$verify"
+            sha256sum --check --status SHA256SUMS
+            test "$(cat SOURCE_COMMIT)" = "$GITHUB_SHA"
+            test -x starbyte-egui
+            test -x starbyte-native-qa
+            ./starbyte-egui --help >/dev/null
+            ./starbyte-native-qa --help >/dev/null
+          )
+          echo "STARBYTE_HOSTED_NATIVE_ARCHIVE_OK sha=$GITHUB_SHA binaries=2 checksums=true physical=not_tested"
+      - name: Publish hosted-tested native Linux QA bundle
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
-          name: starbyte-egui-linux-x86_64
-          path: target/debug/starbyte-egui
+          name: starbyte-native-linux-x86_64
+          path: ${{ runner.temp }}/starbyte-native-linux-x86_64.tar.gz
           if-no-files-found: error
           retention-days: 7

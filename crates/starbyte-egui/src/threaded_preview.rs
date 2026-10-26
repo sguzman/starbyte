@@ -985,7 +985,6 @@ mod pitch_mode_tests {
         });
         assert_ne!(app.session_epoch, old_epoch);
         assert!(app.last_error.is_none());
-        let loading_status = app.status_note.clone();
         save_sender
             .send(Ok(WorkerSaveResponse {
                 outcome: SessionSaveOutcome::SavedTo(temp.path().join("old-save")),
@@ -999,7 +998,11 @@ mod pitch_mode_tests {
         png_sender.send(Err("old PNG failure".to_owned())).unwrap();
         app.poll_operations(&egui::Context::default());
         assert!(app.last_error.is_none());
-        assert_eq!(app.status_note, loading_status);
+        // The replacement may have finished loading while we polled: either
+        // launch status is valid, but an old save's feedback is never valid.
+        assert!(app.status_note.as_deref().is_some_and(|status| {
+            status.starts_with("Loading ") || status.starts_with("Loaded ")
+        }));
         assert!(!app.pending.iter().any(|op| matches!(
             op,
             PendingOperation::Save { .. }

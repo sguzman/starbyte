@@ -10,7 +10,7 @@ probe="$1"
 [[ ! -v DISPLAY && ! -v WAYLAND_DISPLAY && ! -v HYPRLAND_INSTANCE_SIGNATURE ]] || fail display_present
 [[ ! -v DBUS_SESSION_BUS_ADDRESS && ! -v XDG_SESSION_ID ]] || fail session_present
 [[ -d "$RUNNER_TEMP" ]] || fail temp_missing
-for binary in bwrap timeout realpath Xvfb xdotool xkbcomp weston weston-simple-shm wayland-info git; do
+for binary in bwrap timeout realpath Xvfb xdotool xev stdbuf xkbcomp weston weston-simple-shm wayland-info git; do
   command -v "$binary" >/dev/null || fail "missing_$binary"
 done
 repo="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)" || fail checkout_missing
@@ -128,6 +128,12 @@ if [[ "$STARBYTE_FOCUS_PROBE" == --blur-smoke ]]; then
     echo STARBYTE_FOCUSED_SEAT_FAILED outer_weston_focus_failed >&2
     exit 1
   }
+  # Xvfb's own event monitor distinguishes an XTEST delivery problem
+  # from a compositor-to-Wayland input translation failure. It is confined
+  # to the sealed Weston X11 window inside the hosted Bubblewrap guest.
+  DISPLAY=:99 timeout 3s stdbuf -oL xev -id "$window" -event keyboard >"$runtime/xevent.log" 2>&1 &
+  xevent_pid=$!
+  sleep 0.15
   key_pattern='wl_keyboard[^[:space:]]*\.key\('
   baseline_keys="$(grep -Ec "$key_pattern" "$runtime/game.log" || :)"
   [[ "$baseline_keys" =~ ^[0-9]+$ ]] || baseline_keys=0
@@ -135,6 +141,14 @@ if [[ "$STARBYTE_FOCUS_PROBE" == --blur-smoke ]]; then
   sleep 0.3
   observed_keys="$(grep -Ec "$key_pattern" "$runtime/game.log" || :)"
   [[ "$observed_keys" =~ ^[0-9]+$ ]] || observed_keys=0
+  x11_key_events="$(grep -Ec 'Key(Press|Release) event' "$runtime/xevent.log" || :)"
+  [[ "$x11_key_events" =~ ^[0-9]+$ ]] || x11_key_events=0
+  focused_x11_window="$(DISPLAY=:99 xdotool getwindowfocus 2>/dev/null || :)"
+  x11_focus_match=false
+  [[ "$focused_x11_window" == "$window" ]] && x11_focus_match=true
+  echo "STARBYTE_PRIVATE_X11_KEY_DELIVERY events=$x11_key_events focus_match=$x11_focus_match"
+  kill "$xevent_pid" 2>/dev/null || :
+  wait "$xevent_pid" 2>/dev/null || :
   if (( observed_keys <= baseline_keys )); then
     echo STARBYTE_FOCUSED_SEAT_FAILED synthetic_keyboard_did_not_reach_native_client >&2
     grep -E 'wl_keyboard[^[:space:]]*\.(enter|leave|key|modifiers)\(' "$runtime/game.log" | tail -n 15 >&2 || :

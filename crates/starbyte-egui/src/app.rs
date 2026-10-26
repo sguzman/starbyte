@@ -2759,7 +2759,13 @@ impl StarbyteApp {
             state: "queued",
             detail: "Queued".to_owned(),
         });
-        self.status_line = format!("{label} queued...");
+        if job_status_may_replace_rom_feedback(
+            &self.jobs,
+            self.latest_rom_job_id,
+            &label,
+        ) {
+            self.status_line = format!("{label} queued...");
+        }
         self.worker.submit(WorkerCommand {
             job_id,
             config: self.config.clone(),
@@ -10129,6 +10135,19 @@ mod rom_request_order_tests {
             &jobs,
             Some(31),
             "Refresh Cheats"
+        ));
+        // Queuing a background job while the ROM is pending must preserve
+        // "Load Game queued...", not just its later started/failed events.
+        jobs.push(JobRecord {
+            id: 32,
+            label: "Refresh Covers".to_owned(),
+            state: "queued",
+            detail: "Queued".to_owned(),
+        });
+        assert!(!job_status_may_replace_rom_feedback(
+            &jobs,
+            Some(31),
+            "Refresh Covers"
         ));
         jobs[0].state = "running";
         assert!(!job_status_may_replace_rom_feedback(

@@ -9,6 +9,7 @@ const SURFACE: u32 = 5;
 const XDG_SHELL: u32 = 6;
 const XDG_SURFACE: u32 = 7;
 const XDG_TOPLEVEL: u32 = 8;
+const ACK_SYNC: u32 = 9;
 
 fn send(socket: &mut UnixStream, object: u32, opcode: u16, payload: &[u8])
     -> Result<(), &'static str>
@@ -101,6 +102,7 @@ fn run() -> Result<(), &'static str> {
     // Initial empty commit is the XDG shell requirement for first configure.
     send(&mut socket, SURFACE, 6, &[])?;
 
+    let mut configured = false;
     for _ in 0..256 {
         let (sender, opcode, payload) = event(&mut socket)?;
         if sender == 1 && opcode == 0 { return Err("protocol_error"); }
@@ -110,10 +112,26 @@ fn run() -> Result<(), &'static str> {
         if sender == XDG_SURFACE && opcode == 0 && payload.len() >= 4 {
             send(&mut socket, XDG_SURFACE, 4, &payload[..4])?;
             send(&mut socket, SURFACE, 6, &[])?;
+            // Do not claim the compositor accepted our ack based only on
+            // socket writes. The sync callback proves the requests were
+            // dispatched; any intervening wl_display.error fails the probe.
+            send(&mut socket, 1, 0, &ACK_SYNC.to_ne_bytes())?;
+            configured = true;
+            break;
+        }
+    }
+    if !configured { return Err("configure_timeout"); }
+    for _ in 0..256 {
+        let (sender, opcode, payload) = event(&mut socket)?;
+        if sender == 1 && opcode == 0 { return Err("protocol_error"); }
+        if sender == XDG_SHELL && opcode == 0 && payload.len() >= 4 {
+            send(&mut socket, XDG_SHELL, 3, &payload[..4])?;
+        }
+        if sender == ACK_SYNC && opcode == 0 && payload.len() >= 4 {
             return Ok(());
         }
     }
-    Err("configure_timeout")
+    Err("ack_timeout")
 }
 
 fn main() {

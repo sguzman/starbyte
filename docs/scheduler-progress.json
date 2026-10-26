@@ -5,8 +5,8 @@
   "source": "docs/scheduler-migration.md",
   "interpretation": "Accepted status mirrors the human-reviewed source checklist. A passing virtual Weston job does not establish physical Hyprland, audible speakers, gamepad, or production cutover.",
   "last_verified_code": {
-    "commit": "f0731104ea5f1352c1fd5fb27489b6729abb8b20",
-    "ci_run": 40250916608,
+    "commit": "e2f21c61732b83aedcc49cd11a9e2c0dffae888d",
+    "ci_run": 40264810625,
     "jobs": [
       "test (ubuntu-latest)",
       "test (windows-latest)",
@@ -18,7 +18,7 @@
   "overall": {
     "accepted": 71,
     "total": 77,
-    "percent": 92
+    "percent": 92.21
   },
   "milestones": [
     {
@@ -286,7 +286,7 @@
       "title": "native GUI migration",
       "accepted": 15,
       "total": 16,
-      "percent": 94,
+      "percent": 93.75,
       "acceptance_scope": "checklist-backed; unverified physical acceptance remains pending",
       "tasks": [
         {

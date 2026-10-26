@@ -1,5 +1,28 @@
 # Starbyte: current state
 
+
+## Wayland-only EGL diagnostic (2026-10-25)
+
+The isolated [Hyprland experiment 40259397090](https://github.com/sguzman/starbyte/actions/runs/40259397090)
+on `cbb4dcd` successfully built a temporary Wayland-only
+`starbyte-egui` binary **without altering the production crate manifest**
+and passed the hosted-only guest safety preflight. Its private guest
+again initialized virtual DRM/KMS, Hyprland, the Wayland registry and
+seat, `wl_shm` formats, standalone attached Wayland EGL and surfaceless
+EGL. However, the original GUI path still failed while initializing
+Glutin/EGL (`display_start=1 display_ready=0`; zero accepted worker
+frames), and the Hyprland shared-memory client still produced no verified
+`wl_keyboard.enter` focus event. Removing the X11 feature alone is
+therefore **not** a verified remedy. No raw guest logs or personal
+desktop data were committed. The experiment uses only disposable GitHub
+VM hardware; it does **not** close any of the physical scheduler gates,
+which remain **71/77 (92.2%)**.
+
+A subsequent guest-only XDG handshake probe at `a7d8c12` tests whether
+Hyprland sends `xdg_surface.configure` after a genuine empty initial
+commit. This is a diagnostic probe, not evidence of keyboard focus or
+Starbyte GUI readiness until its specialized CI outcome is verified.
+
 ## Private QMP key delivery into guest evdev (2026-10-25)
 
 A new hosted-only `--input-smoke` runs a statically linked Rust

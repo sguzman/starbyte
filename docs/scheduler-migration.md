@@ -28,15 +28,19 @@ hosted Weston CI rather than adding new product features.
 
 The source-only launcher does **not** establish that Bubblewrap plus Weston
 plus the game binary can run on a particular local host until executed there.
-An independent GitHub-hosted workflow now builds the application and runs the
-sealed test on Ubuntu 22.04 on each main-branch push:
-[isolated Weston application acceptance](../.github/workflows/isolated-wayland.yml).
-It first checks the Bubblewrap namespace contract, then the app's pacing,
-texture, save and screenshot markers. The job is **not accepted evidence**
-until its exact-revision run finishes successfully. It uses no self-hosted
-runner, local Codex, owner desktop or manual gameplay QA.
-The ordinary GitHub Actions native Weston jobs remain the established
-independently hosted verification path. No physical keyboard focus,
+The GitHub-hosted Linux matrix job in
+[CI](../.github/workflows/ci.yml) now reuses its existing application build
+and Weston installation to execute `--check-only` and `--starbyte-smoke`.
+This avoids a duplicate network-heavy Ubuntu setup that timed out before
+building. The previous standalone workflow was removed after the logs
+proved dependency downloads exceeded its 25-minute deadline. Only on
+GitHub-hosted ephemeral runners, Bubblewrap shares that runner's network
+namespace because unprivileged network configuration is blocked; it still
+shares no input devices, DRM, host HOME, display or DBus. Local runs retain
+strict network isolation. The CI step is **not accepted evidence** until
+its exact-revision run succeeds. No self-hosted runner, local Codex, owner
+desktop or manual gameplay QA is involved.
+No physical keyboard focus,
 Hyprland workspace, actual speaker audibility, sound route recovery, real
 gamepad or hardware display pacing is demonstrated by a headless Weston
 guest. Thus P-18, P-19, D-12, D-13, D-15 and C-16 remain pending under

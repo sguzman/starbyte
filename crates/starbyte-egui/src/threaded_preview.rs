@@ -993,7 +993,9 @@ mod pitch_mode_tests {
                 restored_frame: None,
             }))
             .unwrap();
-        capture_sender.send(Err("old capture failure".to_owned())).unwrap();
+        capture_sender
+            .send(Err("old capture failure".to_owned()))
+            .unwrap();
         png_sender.send(Err("old PNG failure".to_owned())).unwrap();
         app.poll_operations(&egui::Context::default());
         assert!(app.last_error.is_none());

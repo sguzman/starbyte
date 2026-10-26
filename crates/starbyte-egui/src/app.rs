@@ -6990,7 +6990,11 @@ impl eframe::App for StarbyteApp {
             let sample = self.effective_controller_sample(ctx);
             let speed = self.effective_speed_percent(ctx);
             if let Some(worker) = &mut self.full_worker {
-                submit_full_worker_gameplay_input(&worker.input, focused && self.is_playing, sample);
+                submit_full_worker_gameplay_input(
+                    &worker.input,
+                    focused && self.is_playing,
+                    sample,
+                );
                 if worker.last_focus != Some(focused) {
                     worker.engine.set_focused(focused);
                     worker.last_focus = Some(focused);

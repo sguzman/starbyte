@@ -1,12 +1,56 @@
 //! Fail-closed guest-only Glutin/winit display selection diagnostic.
 //! Uses the same compiled rlibs as Starbyte; opens no GUI surface.
-use std::env;
+use std::{env, ffi::c_void};
 
 use glutin::config::ConfigTemplateBuilder;
 use glutin::display::{Display, DisplayApiPreference};
 use glutin::error::ErrorKind;
 use glutin::prelude::GlDisplay;
 use winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
+
+const EGL_WAYLAND_PLATFORM: u32 = 0x31D8;
+const EGL_NONE: isize = 0x3038;
+const EGL_SUCCESS: i32 = 0x3000;
+
+#[link(name = "EGL")]
+unsafe extern "C" {
+    fn eglGetPlatformDisplay(platform: u32, native: *mut c_void, attributes: *const isize) -> *mut c_void;
+    fn eglInitialize(display: *mut c_void, major: *mut i32, minor: *mut i32) -> u32;
+    fn eglTerminate(display: *mut c_void) -> u32;
+    fn eglGetError() -> i32;
+}
+
+/// Try the exact Wayland pointer that winit handed to Glutin, using the
+/// same raw EGL 1.5 entrypoint as the independently passing guest probe.
+/// This runs only after Glutin has already failed, so it cannot mask that
+/// error by preinitializing Mesa state. No pointer value leaves guest RAM.
+fn raw_egl_after_glutin_failure(handle: RawDisplayHandle) {
+    let RawDisplayHandle::Wayland(wayland) = handle else {
+        return;
+    };
+    unsafe {
+        let attrs = [EGL_NONE];
+        let display = eglGetPlatformDisplay(
+            EGL_WAYLAND_PLATFORM, wayland.display.as_ptr(), attrs.as_ptr()
+        );
+        let (initialized, error) = if display.is_null() {
+            (false, eglGetError())
+        } else {
+            let mut major = 0;
+            let mut minor = 0;
+            if eglInitialize(display, &mut major, &mut minor) == 0 {
+                (false, eglGetError())
+            } else {
+                let _ = eglTerminate(display);
+                (true, EGL_SUCCESS)
+            }
+        };
+        println!(
+            "STARBYTE_GUEST_GLUTIN_RAW_EGL_RESULT initialized={} error=0x{:04x}",
+            u8::from(initialized), error,
+        );
+    }
+}
 
 fn result(eventloop: bool, wayland: bool, display: bool, config: bool, reason: &str) {
     println!(
@@ -58,6 +102,7 @@ fn main() {
                 _ => "display_other",
             };
             result(true, true, false, false, reason);
+            raw_egl_after_glutin_failure(handle);
             return;
         }
     };

@@ -26,6 +26,13 @@ starbyte-frontend = { path = "../starbyte-frontend" }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 
+# The winit Wayland raw-display handle reaches Mesa/Glutin EGL as a native
+# wl_display pointer. The pure-Rust wayland-backend uses an incompatible
+# object-ID pointer; select the real libwayland-client backend on Linux.
+# dlopen keeps the Wayland client library optional for X11 fallback.
+[target.'cfg(target_os = "linux")'.dependencies]
+wayland-backend = { version = "=0.3.15", features = ["client_system", "dlopen"] }
+
 [dev-dependencies]
 tempfile = "3.23.0"
 

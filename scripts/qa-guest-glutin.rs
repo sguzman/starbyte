@@ -63,10 +63,13 @@ fn main() {
     };
     let configs = unsafe { display.find_configs(ConfigTemplateBuilder::new().build()) };
     match configs {
-        Ok(mut configs) if configs.next().is_some() => {
-            result(true, true, true, true, "none");
+        Ok(mut configs) => {
+            if configs.next().is_some() {
+                result(true, true, true, true, "none");
+            } else {
+                result(true, true, true, false, "config_empty");
+            }
         }
-        Ok(_) => result(true, true, true, false, "config_empty"),
         Err(_) => result(true, true, true, false, "config_other"),
     }
 }

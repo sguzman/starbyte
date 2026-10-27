@@ -1,0 +1,125 @@
+schema_version: 1
+job:
+  id: starbyte-safe-native-acceptance
+  project: Starbyte
+  repository: https://github.com/sguzman/starbyte
+  branch: main
+  role: local Codex QA and implementation agent
+  goal: >-
+    Advance the six remaining scheduler gates with reproducible evidence.
+    First establish whether a genuinely independent compositor and input
+    seat can be tested without interrupting the owner's active desktop.
+    Fix only verified defects that directly block these gates.
+  baseline:
+    accepted: 71
+    total: 77
+    percent: 92.21
+    pending: [P-18, P-19, C-16, D-12, D-13, D-15]
+    known_good_code: f658f4e0f295fc29c35c37052c3620c4cb7e5ea8
+    verified_ci: 40422242996
+    ledger: docs/scheduler-progress.json
+
+instructions:
+  authority:
+    - Read AGENTS.md, README.md, docs/status.md, and docs/roadmap.md.
+    - Read docs/qa-native-hyprland.md and docs/native-qa-execution.md.
+    - Treat the desktop-focus safety override and fail-closed guards as binding.
+    - Work directly on main with small scoped commits; no pull requests.
+    - Handle build, testing, diagnosis, fixes, and evidence yourself.
+    - Do not turn the human into an interactive test runner or IPC channel.
+
+  safety:
+    - >-
+      NEVER change the owner's active workspace, window focus, keyboard state,
+      Hyprland configuration, login session, or currently running applications.
+    - >-
+      A spare workspace, window rule, nested socket, or headless Weston instance
+      is NOT an independent compositor plus input seat.
+    - >-
+      Do not execute physical GUI probes or the normal/focused-only native-QA
+      modes. Do not launch the Starbyte GUI into the owner's session.
+    - >-
+      Do not invoke hyprctl dispatchers, inject input, or bypass the shell
+      and Rust QA guards via environment changes, direct binary launch,
+      code rollback, or one-off scripts.
+    - >-
+      Do not bind-mount host /dev/dri, /dev/input, live Wayland sockets, or
+      the user's D-Bus session into an experimental sandbox or VM.
+    - >-
+      No host-wide package changes, sudo, permanent services, runner install,
+      privileged device setup, or destructive git commands without approval.
+    - >-
+      Keep proprietary ROMs, audio, device IDs, host paths, credentials, and
+      raw desktop logs entirely private. Commit sanitized evidence only.
+    - >-
+      If genuine isolation cannot be demonstrated nonintrusively, STOP before
+      physical GUI execution and report the blocker, not a fabricated pass.
+
+  steps:
+    - id: synchronize
+      action: >-
+        Open or clone the Starbyte repository. Inspect git status and current
+        origin/main; fast-forward only if the checkout is clean. Never discard
+        local modifications. Check the latest main and completed CI before work.
+    - id: establish_safe_baseline
+      action: >-
+        Without opening any GUI window, run
+        'bash scripts/qa-native-hyprland.sh --check-only' and
+        'bash scripts/qa-isolated-wayland.sh --check-only'.
+        These are permitted noninteractive checks. Record exact exit status
+        and sanitized receipts; do not reinterpret them as physical acceptance.
+    - id: isolate_desktop
+      action: >-
+        Audit existing isolation machinery and the prior virtual-guest Hyprland
+        work before proposing changes. In particular inspect
+        'scripts/qa-virtual-devices.sh', '.github/workflows/qa-guest-hyprland.yml',
+        and the EGL_NOT_INITIALIZED guest-client blocker recorded in
+        'docs/native-qa-execution.md'. Select the narrowest evidence-backed
+        obstacle. Prefer a disposable VM with independently emulated DRM and
+        input seat; its socket and input must be inaccessible from the owner's
+        running login. Treat all VM results as virtual, never physical.
+    - id: fix_and_test
+      action: >-
+        If a concrete blocker or regression is found, make a narrowly scoped
+        implementation plus regression tests. Keep renderer/emulation ownership
+        and source/device privacy unchanged. Run formatting, Clippy, the
+        relevant Rust tests, and the existing safe isolated QA. Use GitHub
+        Actions to verify the exact committed revision; do not claim green
+        for a pending or superseded run.
+    - id: hardware_acceptance_barrier
+      action: >-
+        Perform physical Hyprland/audio/gamepad QA ONLY after an independently
+        isolated compositor AND independent input seat have been demonstrably
+        established without any interaction with the owner's active desktop,
+        and the existing fail-closed guards have been safely adapted and
+        verified for that particular isolated route. Merely observing a
+        compositor process or guest wl_seat is insufficient. Otherwise
+        leave all hardware gates pending.
+    - id: evidence_and_handoff
+      action: >-
+        Maintain an exact-SHA evidence table for each remaining gate:
+        test environment, method, expected result, observed result,
+        pass/fail/not_tested, and sanitized artifacts. Physical speaker
+        audibility and device unplug/recovery require real independent
+        observation, as does physical controller and save persistence.
+        Do not update accepted counts from synthetic results. Commit useful
+        code/tests/docs changes to main, then report the commit SHA, CI URL,
+        accepted count, and the first unresolved external prerequisite.
+
+  gate_policy:
+    P-18: physical background game sound and device-disconnect recovery
+    P-19: physical native menus, gamepad, screenshots, and save slots
+    D-12: physically focused Wayland window and measured ~60.1 emulated FPS
+    D-13: physical Hyprland workspace switch with continued game and sound
+    D-15: physical Pause, gamepad, cheats, screenshots, quick/disk saves, SRAM
+    C-16: >-
+      Change the default runtime only after the other five gates are accepted
+      with complete evidence and the normal player has no blocking regressions.
+
+  completion:
+    - No user manual QA requested.
+    - No desktop focus/workspace impact.
+    - No unsafe bypass or fake evidence.
+    - Every code change tested and committed directly on main.
+    - Every acceptance percentage supported by task-specific evidence.
+    - If blocked, provide an exact technical reason and stop safely.

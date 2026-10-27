@@ -18,6 +18,7 @@ unsafe extern "C" {
     fn eglTerminate(display: *mut c_void) -> u32;
     fn eglGetError() -> i32;
     fn eglQueryString(display: *mut c_void, name: i32) -> *const c_char;
+    fn eglGetProcAddress(name: *const c_char) -> *const c_void;
 }
 
 #[link(name = "wayland-client")]
@@ -48,15 +49,45 @@ fn attempt(platform: u32, native: *mut c_void) -> (bool, i32) {
     attempt_with_attrs(platform, native, ptr::null())
 }
 
-fn track_references_advertised() -> bool {
-    // Glutin checks the client extension string before adding this attribute.
+fn client_extension_advertised(name: &[u8]) -> bool {
+    // Glutin selects the core KHR or legacy EXT Wayland display API
+    // according to exactly these EGL client-extension names.
     unsafe {
         let extensions = eglQueryString(ptr::null_mut(), EGL_EXTENSIONS);
         !extensions.is_null()
             && CStr::from_ptr(extensions)
                 .to_bytes()
                 .split(|b| *b == b' ')
-                .any(|name| name == b"EGL_KHR_display_reference")
+                .any(|item| item == name)
+    }
+}
+
+/// Compare the legacy EGL_EXT_platform_base route with core EGL 1.5.
+/// Glutin may choose this route if the KHR client extension is absent.
+/// Resolve the extension entrypoint at runtime: linking directly against
+/// the optional symbol would cause an unrelated loader error.
+fn attempt_ext_wayland(native: *mut c_void) -> (bool, bool, i32) {
+    type PlatformDisplayExt =
+        unsafe extern "C" fn(u32, *mut c_void, *const i32) -> *mut c_void;
+    unsafe {
+        let symbol = eglGetProcAddress(c"eglGetPlatformDisplayEXT".as_ptr());
+        if symbol.is_null() {
+            return (false, false, EGL_SUCCESS);
+        }
+        let get_display: PlatformDisplayExt = std::mem::transmute(symbol);
+        let attrs = [EGL_NONE as i32];
+        let display = get_display(WAYLAND, native, attrs.as_ptr());
+        if display.is_null() {
+            return (true, false, eglGetError());
+        }
+        let mut major = 0_i32;
+        let mut minor = 0_i32;
+        let initialized = eglInitialize(display, &mut major, &mut minor) != 0;
+        let error = if initialized { EGL_SUCCESS } else { eglGetError() };
+        if initialized {
+            let _ = eglTerminate(display);
+        }
+        (true, initialized, error)
     }
 }
 
@@ -75,7 +106,9 @@ fn main() {
         println!("STARBYTE_GUEST_EGL_ATTACHED_RESULT connected=0 attached=0 own=0 surfaceless=0 attached_error=0x3001 own_error=0x3001 surfaceless_error=0x3001");
         return;
     }
-    let track_advertised = track_references_advertised();
+    let track_advertised = client_extension_advertised(b"EGL_KHR_display_reference");
+    let khr_wayland = client_extension_advertised(b"EGL_KHR_platform_wayland");
+    let ext_wayland = client_extension_advertised(b"EGL_EXT_platform_wayland");
     // glutin 0.32 optionally sets EGL_TRACK_REFERENCES_KHR=EGL_TRUE;
     // unlike eglinfo and the previous probe, which use a NULL attribute list.
     // Run tracked first so a prior initialized display cannot mask its failure.
@@ -89,10 +122,27 @@ fn main() {
     let none_attrs = [EGL_NONE];
     let (egl_none, egl_none_error) =
         attempt_with_attrs(WAYLAND, connected_display, none_attrs.as_ptr());
+    let (ext_symbol, ext_initialized, ext_error) = if ext_wayland {
+        attempt_ext_wayland(connected_display)
+    } else {
+        (false, false, EGL_SUCCESS)
+    };
     let (attached, attached_error) = attempt(WAYLAND, connected_display);
     let (own, own_error) = attempt(WAYLAND, ptr::null_mut());
     let (surfaceless, surfaceless_error) = attempt(SURFACELESS, ptr::null_mut());
     unsafe { wl_display_disconnect(connected_display) };
+    println!(
+        "STARBYTE_GUEST_EGL_EXTENSION_DIAG khr_wayland={} ext_wayland={}",
+        u8::from(khr_wayland),
+        u8::from(ext_wayland),
+    );
+    println!(
+        "STARBYTE_GUEST_EGL_EXT_RESULT advertised={} symbol={} initialized={} error=0x{:04x}",
+        u8::from(ext_wayland),
+        u8::from(ext_symbol),
+        u8::from(ext_initialized),
+        ext_error,
+    );
     println!(
         "STARBYTE_GUEST_EGL_NONE_RESULT initialized={} error=0x{:04x}",
         u8::from(egl_none),

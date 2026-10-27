@@ -24,6 +24,8 @@ unsafe extern "C" {
 unsafe extern "C" {
     fn wl_display_connect(name: *const std::ffi::c_char) -> *mut c_void;
     fn wl_display_disconnect(display: *mut c_void);
+    fn wl_display_get_fd(display: *mut c_void) -> i32;
+    fn wl_display_get_error(display: *mut c_void) -> i32;
 }
 
 /// Try the exact Wayland pointer that winit handed to Glutin, using the
@@ -35,6 +37,14 @@ fn raw_egl_winit_display(handle: RawDisplayHandle, before_glutin: bool) {
         return;
     };
     unsafe {
+        // Validate the native-display handle before calling EGL in this guest.
+        // Only publish booleans, never file descriptors or addresses.
+        let fd = wl_display_get_fd(wayland.display.as_ptr());
+        let error = wl_display_get_error(wayland.display.as_ptr());
+        println!(
+            "STARBYTE_GUEST_GLUTIN_WINIT_CONN_RESULT fd_ok={} error_clear={}",
+            u8::from(fd >= 0), u8::from(error == 0),
+        );
         let attrs = [EGL_NONE];
         let display = eglGetPlatformDisplay(
             EGL_WAYLAND_PLATFORM, wayland.display.as_ptr(), attrs.as_ptr()
@@ -74,6 +84,12 @@ fn fresh_c_connection_after_glutin_failure() {
             println!("STARBYTE_GUEST_GLUTIN_C_EGL_RESULT connected=0 initialized=0 error=0x3001");
             return;
         }
+        let fd = wl_display_get_fd(connection);
+        let error = wl_display_get_error(connection);
+        println!(
+            "STARBYTE_GUEST_GLUTIN_C_CONN_RESULT fd_ok={} error_clear={}",
+            u8::from(fd >= 0), u8::from(error == 0),
+        );
         let attrs = [EGL_NONE];
         let display = eglGetPlatformDisplay(EGL_WAYLAND_PLATFORM, connection, attrs.as_ptr());
         let (initialized, error) = if display.is_null() {

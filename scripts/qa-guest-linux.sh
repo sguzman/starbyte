@@ -252,6 +252,11 @@ if [[ "$mode" == --wayland-smoke || "$mode" == --starbyte-smoke || "$mode" == --
       || fail 'guest_egl_attach_probe_compilation_failed'
     ldd "$root/initfs/bin/egl-attach-probe" >>"$root/wayland-dependencies" \
       || fail 'guest_egl_attach_probe_dependency_scan_failed'
+    # The guest must execute the freshly compiled version, never a stale
+    # guest probe without the extension-path receipts under investigation.
+    grep -aFq 'STARBYTE_GUEST_EGL_EXTENSION_DIAG' "$root/initfs/bin/egl-attach-probe" \
+      || fail 'guest_egl_attach_probe_stale_binary'
+    echo 'STARBYTE_GUEST_EGL_PROBE_STAGE_OK extension_receipt=embedded'
     rustc --edition=2021 -C opt-level=1 scripts/qa-guest-xdg-surface.rs \
       -o "$root/initfs/bin/xdg-surface-probe" \
       || fail 'guest_xdg_surface_probe_compilation_failed'
@@ -886,8 +891,17 @@ HYPR_CONFIG
         fi
         # Compare the runtime EXT display path with the core/KHR path.
         # These numeric results are guest-only; no raw graphics logs escape.
-        /bin/busybox grep -E '^STARBYTE_GUEST_EGL_EXTENSION_DIAG khr_wayland=[01] ext_wayland=[01]$' /tmp/hypr-egl-attach.log >/dev/console || :
-        /bin/busybox grep -E '^STARBYTE_GUEST_EGL_EXT_RESULT advertised=[01] symbol=[01] initialized=[01] error=0x[0-9a-f]{4}$' /tmp/hypr-egl-attach.log >/dev/console || :
+        hypr_egl_extension_seen=0
+        hypr_egl_ext_result_seen=0
+        if /bin/busybox grep -Eq '^STARBYTE_GUEST_EGL_EXTENSION_DIAG khr_wayland=[01] ext_wayland=[01]$' /tmp/hypr-egl-attach.log; then
+          hypr_egl_extension_seen=1
+          /bin/busybox grep -E '^STARBYTE_GUEST_EGL_EXTENSION_DIAG khr_wayland=[01] ext_wayland=[01]$' /tmp/hypr-egl-attach.log >/dev/console
+        fi
+        if /bin/busybox grep -Eq '^STARBYTE_GUEST_EGL_EXT_RESULT advertised=[01] symbol=[01] initialized=[01] error=0x[0-9a-f]{4}$' /tmp/hypr-egl-attach.log; then
+          hypr_egl_ext_result_seen=1
+          /bin/busybox grep -E '^STARBYTE_GUEST_EGL_EXT_RESULT advertised=[01] symbol=[01] initialized=[01] error=0x[0-9a-f]{4}$' /tmp/hypr-egl-attach.log >/dev/console
+        fi
+        echo "STARBYTE_GUEST_EGL_EXTENSION_RECEIPT extension=$hypr_egl_extension_seen ext_result=$hypr_egl_ext_result_seen" >/dev/console
         # Test the EGL_KHR_display_reference attribute path used by Glutin.
         /bin/busybox grep -E '^STARBYTE_GUEST_EGL_NONE_RESULT initialized=[01] error=0x[0-9a-f]{4}$' /tmp/hypr-egl-attach.log >/dev/console || :
         /bin/busybox grep -E '^STARBYTE_GUEST_EGL_TRACKED_RESULT advertised=[01] initialized=[01] error=0x[0-9a-f]{4}$' /tmp/hypr-egl-attach.log >/dev/console || :

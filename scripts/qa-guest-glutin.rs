@@ -30,7 +30,7 @@ unsafe extern "C" {
 /// same raw EGL 1.5 entrypoint as the independently passing guest probe.
 /// This runs only after Glutin has already failed, so it cannot mask that
 /// error by preinitializing Mesa state. No pointer value leaves guest RAM.
-fn raw_egl_after_glutin_failure(handle: RawDisplayHandle) {
+fn raw_egl_winit_display(handle: RawDisplayHandle, before_glutin: bool) {
     let RawDisplayHandle::Wayland(wayland) = handle else {
         return;
     };
@@ -51,8 +51,13 @@ fn raw_egl_after_glutin_failure(handle: RawDisplayHandle) {
                 (true, EGL_SUCCESS)
             }
         };
+        let label = if before_glutin {
+            "STARBYTE_GUEST_GLUTIN_BEFORE_RESULT"
+        } else {
+            "STARBYTE_GUEST_GLUTIN_RAW_EGL_RESULT"
+        };
         println!(
-            "STARBYTE_GUEST_GLUTIN_RAW_EGL_RESULT initialized={} error=0x{:04x}",
+            "{label} initialized={} error=0x{:04x}",
             u8::from(initialized), error,
         );
     }
@@ -131,6 +136,13 @@ fn main() {
         result(true, false, false, false, "backend");
         return;
     }
+    // Run the independent pre-Glutin control in its own short-lived
+    // process: otherwise a successful eglTerminate would disturb Glutin's
+    // subsequent use of the shared EGLDisplay and confound the comparison.
+    if env::var("STARBYTE_GUEST_GLUTIN_PHASE").as_deref() == Ok("before") {
+        raw_egl_winit_display(handle, true);
+        return;
+    }
     // The Wayland raw handle is valid for the whole event_loop lifetime.
     let display = match unsafe { Display::new(handle, DisplayApiPreference::Egl) } {
         Ok(it) => it,
@@ -141,7 +153,7 @@ fn main() {
                 _ => "display_other",
             };
             result(true, true, false, false, reason);
-            raw_egl_after_glutin_failure(handle);
+            raw_egl_winit_display(handle, false);
             fresh_c_connection_after_glutin_failure();
             return;
         }

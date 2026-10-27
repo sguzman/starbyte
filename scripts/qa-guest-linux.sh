@@ -965,6 +965,25 @@ HYPR_CONFIG
         /bin/busybox grep -E '^STARBYTE_GUEST_GLUTIN_C_EGL_RESULT connected=[01] initialized=[01] error=0x[0-9a-f]{4}$' /tmp/hypr-glutin-probe.log >/dev/console || :
       fi
       echo "STARBYTE_GUEST_GLUTIN_DIAG status=$hypr_glutin_probe_status parsed=$hypr_glutin_probe_parsed" >/dev/console
+      # A separate process tests winit's own Wayland raw display pointer
+      # before any Glutin call. This prevents prior EGL failure/termination
+      # from contaminating the result and changes no host desktop state.
+      hypr_glutin_before_status=not_run
+      hypr_glutin_before_parsed=0
+      if [ "$hypr_registry" = 1 ]; then
+        STARBYTE_GUEST_GLUTIN_PROBE=1 STARBYTE_GUEST_GLUTIN_PHASE=before \
+          WAYLAND_DISPLAY="$hypr_display" WINIT_UNIX_BACKEND=wayland \
+          MESA_LOADER_DRIVER_OVERRIDE=swrast LIBGL_ALWAYS_SOFTWARE=1 \
+          GALLIUM_DRIVER=llvmpipe \
+          /bin/busybox timeout 20 /bin/glutin-display-probe \
+          >/tmp/hypr-glutin-before.log 2>/tmp/hypr-glutin-before.err
+        hypr_glutin_before_status=$?
+        if /bin/busybox grep -Eq '^STARBYTE_GUEST_GLUTIN_BEFORE_RESULT initialized=[01] error=0x[0-9a-f]{4}$' /tmp/hypr-glutin-before.log; then
+          hypr_glutin_before_parsed=1
+          /bin/busybox grep -E '^STARBYTE_GUEST_GLUTIN_BEFORE_RESULT initialized=[01] error=0x[0-9a-f]{4}$' /tmp/hypr-glutin-before.log >/dev/console
+        fi
+      fi
+      echo "STARBYTE_GUEST_GLUTIN_BEFORE_DIAG status=$hypr_glutin_before_status parsed=$hypr_glutin_before_parsed" >/dev/console
       # Prove that the virtual compositor actually sends xdg_surface.configure,
       # not merely that the registry advertises xdg_wm_base.
       hypr_xdg_status=not_run
@@ -1518,7 +1537,7 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
       || fail 'guest_focused_wayland_keyboard_delivery_missing'
     echo 'STARBYTE_GUEST_FOCUS_OK client=weston-simple-shm escape=received source=private_qmp guest_only=true'
     if [[ "$mode" == --hyprland-smoke ]]; then
-      grep -E '^STARBYTE_GUEST_(HYPRLAND_(RESULT|DIAG|APP_RESULT|APP_DIAG)|HYPR_FOCUS_(RESULT|DIAG)|HYPR_OUTPUT_DIAG|HYPR_KMS_DIAG|HYPR_EFRAME_DIAG|HYPR_CAP_(BLOCKED|DIAG)|WAYLAND_CAP_RESULT|EGLINFO_DIAG|EGL_ATTACH_DIAG|EGL_MATCHED_DIAG|EGL_ATTACHED_RESULT|EGL_TRACKED_RESULT|EGL_NONE_RESULT|EGL_EXTENSION_DIAG|EGL_EXT_RESULT|EGL_EXTENSION_RECEIPT|GLUTIN_DIAG|GLUTIN_RESULT|GLUTIN_RAW_EGL_RESULT|GLUTIN_C_EGL_RESULT|HYPR_XDG_DIAG|XDG_ERROR_DIAG) ' "$root/serial-clean.log" || true
+      grep -E '^STARBYTE_GUEST_(HYPRLAND_(RESULT|DIAG|APP_RESULT|APP_DIAG)|HYPR_FOCUS_(RESULT|DIAG)|HYPR_OUTPUT_DIAG|HYPR_KMS_DIAG|HYPR_EFRAME_DIAG|HYPR_CAP_(BLOCKED|DIAG)|WAYLAND_CAP_RESULT|EGLINFO_DIAG|EGL_ATTACH_DIAG|EGL_MATCHED_DIAG|EGL_ATTACHED_RESULT|EGL_TRACKED_RESULT|EGL_NONE_RESULT|EGL_EXTENSION_DIAG|EGL_EXT_RESULT|EGL_EXTENSION_RECEIPT|GLUTIN_DIAG|GLUTIN_RESULT|GLUTIN_RAW_EGL_RESULT|GLUTIN_C_EGL_RESULT|GLUTIN_BEFORE_RESULT|GLUTIN_BEFORE_DIAG|HYPR_XDG_DIAG|XDG_ERROR_DIAG) ' "$root/serial-clean.log" || true
       # These are fixed allowlisted numeric receipts, not guest raw logs.
       # Before this host filter was updated, the probe could run correctly
       # yet its newly added extension-path results were silently hidden.
@@ -1540,6 +1559,10 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
         grep -Eq '^STARBYTE_GUEST_GLUTIN_C_EGL_RESULT connected=[01] initialized=[01] error=0x[0-9a-f]{4}$' "$root/serial-clean.log" \
           || fail 'guest_glutin_fresh_c_connection_result_missing'
       fi
+      grep -Fqx 'STARBYTE_GUEST_GLUTIN_BEFORE_DIAG status=0 parsed=1' "$root/serial-clean.log" \
+        || fail 'guest_glutin_before_result_missing'
+      grep -Eq '^STARBYTE_GUEST_GLUTIN_BEFORE_RESULT initialized=[01] error=0x[0-9a-f]{4}$' "$root/serial-clean.log" \
+        || fail 'guest_glutin_before_result_malformed'
       grep -Fqx 'STARBYTE_GUEST_HYPRLAND_RESULT executable=1 socket=1 registry=1 compositor=1 seat=1 alive=1' "$root/serial-clean.log" \
         || fail 'guest_private_hyprland_registry_or_seat_missing'
       echo 'STARBYTE_GUEST_HYPRLAND_OK drm=virtio compositor=hyprland seat=virtual guest_only=true'

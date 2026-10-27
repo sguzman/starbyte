@@ -20,6 +20,12 @@ unsafe extern "C" {
     fn eglGetError() -> i32;
 }
 
+#[link(name = "wayland-client")]
+unsafe extern "C" {
+    fn wl_display_connect(name: *const std::ffi::c_char) -> *mut c_void;
+    fn wl_display_disconnect(display: *mut c_void);
+}
+
 /// Try the exact Wayland pointer that winit handed to Glutin, using the
 /// same raw EGL 1.5 entrypoint as the independently passing guest probe.
 /// This runs only after Glutin has already failed, so it cannot mask that
@@ -47,6 +53,39 @@ fn raw_egl_after_glutin_failure(handle: RawDisplayHandle) {
         };
         println!(
             "STARBYTE_GUEST_GLUTIN_RAW_EGL_RESULT initialized={} error=0x{:04x}",
+            u8::from(initialized), error,
+        );
+    }
+}
+
+/// Compare against an independent libwayland connection to the SAME guest
+/// compositor in this process, after Glutin's failure. Distinguishes the
+/// winit-provided display handle from process-wide EGL initialization issues.
+/// Never prints the socket name or either pointer.
+fn fresh_c_connection_after_glutin_failure() {
+    unsafe {
+        let connection = wl_display_connect(std::ptr::null());
+        if connection.is_null() {
+            println!("STARBYTE_GUEST_GLUTIN_C_EGL_RESULT connected=0 initialized=0 error=0x3001");
+            return;
+        }
+        let attrs = [EGL_NONE];
+        let display = eglGetPlatformDisplay(EGL_WAYLAND_PLATFORM, connection, attrs.as_ptr());
+        let (initialized, error) = if display.is_null() {
+            (false, eglGetError())
+        } else {
+            let mut major = 0;
+            let mut minor = 0;
+            if eglInitialize(display, &mut major, &mut minor) == 0 {
+                (false, eglGetError())
+            } else {
+                let _ = eglTerminate(display);
+                (true, EGL_SUCCESS)
+            }
+        };
+        wl_display_disconnect(connection);
+        println!(
+            "STARBYTE_GUEST_GLUTIN_C_EGL_RESULT connected=1 initialized={} error=0x{:04x}",
             u8::from(initialized), error,
         );
     }
@@ -103,6 +142,7 @@ fn main() {
             };
             result(true, true, false, false, reason);
             raw_egl_after_glutin_failure(handle);
+            fresh_c_connection_after_glutin_failure();
             return;
         }
     };

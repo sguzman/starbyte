@@ -962,6 +962,7 @@ HYPR_CONFIG
         # Print only numeric EGL result; do not reveal the raw Wayland
         # display pointer, socket, device, or runtime diagnostics.
         /bin/busybox grep -E '^STARBYTE_GUEST_GLUTIN_RAW_EGL_RESULT initialized=[01] error=0x[0-9a-f]{4}$' /tmp/hypr-glutin-probe.log >/dev/console || :
+        /bin/busybox grep -E '^STARBYTE_GUEST_GLUTIN_C_EGL_RESULT connected=[01] initialized=[01] error=0x[0-9a-f]{4}$' /tmp/hypr-glutin-probe.log >/dev/console || :
       fi
       echo "STARBYTE_GUEST_GLUTIN_DIAG status=$hypr_glutin_probe_status parsed=$hypr_glutin_probe_parsed" >/dev/console
       # Prove that the virtual compositor actually sends xdg_surface.configure,
@@ -1517,7 +1518,7 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
       || fail 'guest_focused_wayland_keyboard_delivery_missing'
     echo 'STARBYTE_GUEST_FOCUS_OK client=weston-simple-shm escape=received source=private_qmp guest_only=true'
     if [[ "$mode" == --hyprland-smoke ]]; then
-      grep -E '^STARBYTE_GUEST_(HYPRLAND_(RESULT|DIAG|APP_RESULT|APP_DIAG)|HYPR_FOCUS_(RESULT|DIAG)|HYPR_OUTPUT_DIAG|HYPR_KMS_DIAG|HYPR_EFRAME_DIAG|HYPR_CAP_(BLOCKED|DIAG)|WAYLAND_CAP_RESULT|EGLINFO_DIAG|EGL_ATTACH_DIAG|EGL_MATCHED_DIAG|EGL_ATTACHED_RESULT|EGL_TRACKED_RESULT|EGL_NONE_RESULT|EGL_EXTENSION_DIAG|EGL_EXT_RESULT|EGL_EXTENSION_RECEIPT|GLUTIN_DIAG|GLUTIN_RESULT|GLUTIN_RAW_EGL_RESULT|HYPR_XDG_DIAG|XDG_ERROR_DIAG) ' "$root/serial-clean.log" || true
+      grep -E '^STARBYTE_GUEST_(HYPRLAND_(RESULT|DIAG|APP_RESULT|APP_DIAG)|HYPR_FOCUS_(RESULT|DIAG)|HYPR_OUTPUT_DIAG|HYPR_KMS_DIAG|HYPR_EFRAME_DIAG|HYPR_CAP_(BLOCKED|DIAG)|WAYLAND_CAP_RESULT|EGLINFO_DIAG|EGL_ATTACH_DIAG|EGL_MATCHED_DIAG|EGL_ATTACHED_RESULT|EGL_TRACKED_RESULT|EGL_NONE_RESULT|EGL_EXTENSION_DIAG|EGL_EXT_RESULT|EGL_EXTENSION_RECEIPT|GLUTIN_DIAG|GLUTIN_RESULT|GLUTIN_RAW_EGL_RESULT|GLUTIN_C_EGL_RESULT|HYPR_XDG_DIAG|XDG_ERROR_DIAG) ' "$root/serial-clean.log" || true
       # These are fixed allowlisted numeric receipts, not guest raw logs.
       # Before this host filter was updated, the probe could run correctly
       # yet its newly added extension-path results were silently hidden.
@@ -1536,6 +1537,8 @@ if [[ "$mode" == --driver-smoke || "$mode" == --gbm-smoke || "$mode" == --input-
       if grep -Fqx 'STARBYTE_GUEST_GLUTIN_RESULT eventloop=1 wayland=1 display=0 config=0 reason=egl_init' "$root/serial-clean.log"; then
         grep -Eq '^STARBYTE_GUEST_GLUTIN_RAW_EGL_RESULT initialized=[01] error=0x[0-9a-f]{4}$' "$root/serial-clean.log" \
           || fail 'guest_glutin_raw_wayland_pointer_test_missing'
+        grep -Eq '^STARBYTE_GUEST_GLUTIN_C_EGL_RESULT connected=[01] initialized=[01] error=0x[0-9a-f]{4}$' "$root/serial-clean.log" \
+          || fail 'guest_glutin_fresh_c_connection_result_missing'
       fi
       grep -Fqx 'STARBYTE_GUEST_HYPRLAND_RESULT executable=1 socket=1 registry=1 compositor=1 seat=1 alive=1' "$root/serial-clean.log" \
         || fail 'guest_private_hyprland_registry_or_seat_missing'
